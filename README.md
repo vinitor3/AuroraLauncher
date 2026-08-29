@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/vinitor3/AuroraLauncher/releases/latest"><img alt="Baixar Aurora" src="https://img.shields.io/badge/BAIXAR-v0.1.0_ALPHA-e38cff?style=for-the-badge&logo=github&logoColor=white" /></a>
+  <a href="https://github.com/vinitor3/AuroraLauncher/releases/download/v0.1.0-alpha/Aurora-Smart-Launcher_0.1.0_x64-setup.exe"><img alt="Baixar Aurora" src="https://img.shields.io/badge/BAIXAR-v0.1.0_ALPHA-e38cff?style=for-the-badge&logo=github&logoColor=white" /></a>
 </p>
 
 > [!IMPORTANT]
