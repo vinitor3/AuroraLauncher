@@ -2,7 +2,12 @@
 
 1. Crie um projeto no Firebase e habilite **Authentication > Email/Password**.
 2. Crie um banco **Cloud Firestore** em modo de produção.
-3. Registre um aplicativo Web. Ao abrir o Aurora pela primeira vez, cole o objeto de configuração pública mostrado pelo Firebase na tela **Conecte o Firebase**. Ele fica em `firebase-public-config.json` dentro dos dados locais do aplicativo, fora do instalador e do código-fonte.
+3. Registre um aplicativo Web. A configuração pública do projeto oficial já é
+   empacotada no Aurora, então jogadores não precisam configurá-la na primeira
+   abertura. Para usar outro projeto em desenvolvimento, defina as variáveis
+   `VITE_FIREBASE_*` de `apps/desktop/.env.example` em um `.env.local`. Um
+   `firebase-public-config.json` antigo nos dados locais continua sendo aceito
+   como substituição para compatibilidade.
 4. Publique `firebase/firestore.rules` no Firestore. As regras permitem que cada pessoa leia e atualize apenas seu próprio perfil e tornam o registro de nick imutável. A biblioteca de skins fica no IndexedDB local do launcher; apenas a skin equipada permanece no perfil online.
 5. O destino principal de skins/capas é o Supabase via Worker. O Firebase
    Storage é apenas um fallback de migração opcional; a cópia local da skin

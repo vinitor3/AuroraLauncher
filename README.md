@@ -108,11 +108,16 @@ AuroraLauncher/
 ```powershell
 cd apps/desktop
 npm install
-Copy-Item .env.example .env.local
 npm run tauri dev
 ```
 
-Preencha `.env.local` somente com a configuração pública do Firebase e a URL do Worker. Chaves privadas de Gemini, CurseForge e Supabase pertencem aos secrets do backend e **não** devem entrar no aplicativo.
+O aplicativo já inclui a configuração pública do projeto Firebase Aurora e a
+URL pública do Worker, portanto clones e instaladores novos abrem direto no
+login. Para apontar um build de desenvolvimento para outro projeto, copie
+`.env.example` para `.env.local` e preencha as variáveis `VITE_*`.
+
+Chaves privadas de Gemini, CurseForge e Supabase pertencem aos secrets do
+backend e **não** devem entrar no aplicativo.
 
 ### Verificações
 

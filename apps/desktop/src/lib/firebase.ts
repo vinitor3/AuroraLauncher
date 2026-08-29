@@ -17,6 +17,18 @@ export type FirebaseServices = { config: FirebasePublicConfig; app: FirebaseApp;
 
 const bundledWorkerUrl = import.meta.env.VITE_AURORA_API_URL?.trim();
 
+// Estes valores identificam o aplicativo Web no Firebase e são públicos por
+// definição. Nunca inclua aqui chaves de conta de serviço ou tokens privados.
+export const bundledFirebaseConfig: FirebasePublicConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY?.trim() || "AIzaSyD4Sn9JkU0CGGz77Mj71QNwvYiFHPM-dvk",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN?.trim() || "auroralauncher.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID?.trim() || "auroralauncher",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET?.trim() || "auroralauncher.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID?.trim() || "246542594321",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID?.trim() || "1:246542594321:web:ae2a8206d599f2a4c45cb0",
+  workerUrl: bundledWorkerUrl || "https://aurora-api.aurora-edge-proxy.workers.dev",
+};
+
 export type AuroraSkinFavorite = {
   id: string;
   name: string;

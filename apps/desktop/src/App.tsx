@@ -7,6 +7,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { IdleAnimation, SkinViewer } from "skinview3d";
 import {
+  bundledFirebaseConfig,
   createFirebaseServices,
   clearRemoteSkinLibrary,
   loadAuroraProfile,
@@ -600,74 +601,6 @@ function AuthScreen({
   );
 }
 
-function FirebaseSetupScreen({
-  onConfigured,
-}: {
-  onConfigured: (services: FirebaseServices) => void;
-}) {
-  const example = JSON.stringify(
-    {
-      apiKey: "",
-      authDomain: "seu-projeto.firebaseapp.com",
-      projectId: "seu-projeto",
-      storageBucket: "seu-projeto.firebasestorage.app",
-      messagingSenderId: "",
-      appId: "",
-    },
-    null,
-    2,
-  );
-  const [configText, setConfigText] = useState(example);
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setMessage("");
-    try {
-      const config = JSON.parse(configText) as FirebasePublicConfig;
-      await invoke("save_firebase_config", { config });
-      onConfigured(createFirebaseServices(config));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <main className="auth-shell">
-      <section className="auth-card">
-        <div className="aurora-mark">✦</div>
-        <p className="eyebrow">CONFIGURAÇÃO NECESSÁRIA</p>
-        <h1>Conecte o Firebase.</h1>
-        <p className="lede">
-          Cole a configuração pública do seu aplicativo Web Firebase. Ela será
-          salva apenas nos dados locais do Aurora, fora do código e do
-          instalador.
-        </p>
-        <form onSubmit={submit} className="auth-form">
-          <label>
-            Configuração Firebase (JSON)
-            <textarea
-              value={configText}
-              onChange={(event) => setConfigText(event.target.value)}
-              spellCheck={false}
-            />
-          </label>
-          {message && <p className="form-error">{message}</p>}
-          <button disabled={busy} type="submit">
-            {busy ? "Salvando…" : "Salvar e conectar"}
-          </button>
-        </form>
-        <p className="muted">
-          Ative Email/Senha e publique as regras em{" "}
-          <code>docs/firebase-setup.md</code>.
-        </p>
-      </section>
-    </main>
-  );
-}
-
 function SkinPreviewCanvas({ skinModel, skinUrl }: { skinModel: "classic" | "slim"; skinUrl: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerRef = useRef<SkinViewer | null>(null);
@@ -722,7 +655,9 @@ function SkinPreviewCanvas({ skinModel, skinUrl }: { skinModel: "classic" | "sli
 }
 
 function LauncherApp() {
-  const [services, setServices] = useState<FirebaseServices>();
+  const [services, setServices] = useState<FirebaseServices>(() =>
+    createFirebaseServices(bundledFirebaseConfig),
+  );
   const [profile, setProfile] = useState<AuroraUserProfile>();
   const [status, setStatus] = useState<EngineStatus>();
   const [instances, setInstances] = useState<Instance[]>([]);
@@ -1807,7 +1742,6 @@ function LauncherApp() {
       setBusy(false);
     }
   }
-  if (!services) return <FirebaseSetupScreen onConfigured={setServices} />;
   if (!profile)
     return <AuthScreen services={services} onAuthenticated={setProfile} />;
   const filteredInstances = instances.filter((instance) =>
