@@ -1,0 +1,8 @@
+name = "aurora-api"
+main = "src/index.ts"
+compatibility_date = "2026-08-27"
+
+# Estes valores não são secretos. As chaves de Gemini e CurseForge são
+# adicionadas depois como secrets no painel/CLI do Cloudflare.
+[vars]
+FIREBASE_PROJECT_ID = "auroralauncher"

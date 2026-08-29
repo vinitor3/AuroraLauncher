@@ -1,0 +1,26 @@
+plugins { id "com.github.johnrengelman.shadow" }
+architectury { platformSetupLoomIde(); forge() }
+
+loom { forge { convertAccessWideners = true } }
+configurations { common; shadowCommon; compileClasspath.extendsFrom common; runtimeClasspath.extendsFrom common; developmentForge.extendsFrom common }
+
+dependencies {
+    forge "net.minecraftforge:forge:${rootProject.forge_version}"
+    common(project(path: ":common", configuration: "namedElements")) { transitive false }
+    shadowCommon(project(path: ":common", configuration: "transformProductionForge")) { transitive false }
+    shadowCommon "org.java-websocket:Java-WebSocket:1.5.6"
+}
+
+processResources {
+    inputs.properties "version": project.version, "minecraft_version": rootProject.minecraft_version, "java_version": rootProject.java_version, "forge_minecraft_range": rootProject.forge_minecraft_range, "forge_loader_range": rootProject.forge_loader_range
+    filesMatching("META-INF/mods.toml") {
+        expand "version": project.version, "minecraft_version": rootProject.minecraft_version, "java_version": rootProject.java_version, "forge_minecraft_range": rootProject.forge_minecraft_range, "forge_loader_range": rootProject.forge_loader_range
+    }
+}
+shadowJar {
+    exclude "fabric.mod.json"
+    configurations = [project.configurations.shadowCommon]
+    archiveClassifier = "dev-shadow"
+    manifest { attributes "MixinConfigs": "aurora_companion.mixins.json" }
+}
+remapJar { input.set shadowJar.archiveFile; dependsOn shadowJar }

@@ -1,0 +1,30 @@
+name: Ideia de recurso
+description: Proponha uma melhoria para o Aurora
+title: "[Ideia]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Que problema isso resolve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposta
+      description: Explique como você imagina a experiência.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Verificação
+      options:
+        - label: Li o roadmap e esta ideia ainda não está coberta.
+          required: true
+

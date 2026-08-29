@@ -1,0 +1,11 @@
+{
+  "name": "aurora-smart-launcher",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "desktop:dev": "npm --prefix apps/desktop run tauri dev",
+    "desktop:build": "npm --prefix apps/desktop run tauri build",
+    "desktop:test": "npm --prefix apps/desktop run build",
+    "companion:build": "cd apps/companion-mod && gradlew.bat build"
+  }
+}

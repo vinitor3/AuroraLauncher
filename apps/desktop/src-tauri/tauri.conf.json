@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Aurora Smart Launcher",
+  "version": "0.1.0",
+  "identifier": "com.aurora.smartlauncher",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Aurora Smart Launcher",
+        "width": 1240,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 620,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://api.modrinth.com https://aurora-api.aurora-edge-proxy.workers.dev https://minotar.net"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "shortDescription": "Launcher desktop Aurora para Minecraft Java Edition"
+  }
+}

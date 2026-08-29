@@ -1,0 +1,33 @@
+# Dependencies
+**/node_modules/
+**/.gradle/
+
+# Build outputs and caches
+**/target/
+**/dist/
+**/build/
+functions/lib/
+apps/companion-mod/.aurora-telemetry-classes/
+apps/edge-proxy/.wrangler/
+.firebase/
+.aurora/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.part
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,53 @@
+plugins {
+    id "java"
+    id "com.gradleup.shadow" version "8.3.6"
+}
+
+group = "com.aurora"
+version = "0.1.0"
+
+repositories {
+    mavenCentral()
+    maven { url "https://maven.fabricmc.net/" }
+    maven { url "https://maven.minecraftforge.net/" }
+}
+
+sourceSets {
+    main {
+        java.srcDirs "../../common/src/main/java", "../../shared-ui/src/main/java", "../../profile-appearance/src/main/java", "src/main/java", "src/forge-stubs/java"
+        java.exclude "com/aurora/mod/appearance/**", "com/aurora/mod/mixin/**"
+    }
+}
+
+java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
+tasks.withType(JavaCompile).configureEach { options.encoding = "UTF-8"; options.release = 17 }
+
+dependencies {
+    compileOnly "net.fabricmc:fabric-loader:0.16.10"
+    compileOnly "net.fabricmc:sponge-mixin:0.12.5+mixin.0.8.5"
+    implementation "org.java-websocket:Java-WebSocket:1.5.6"
+}
+
+tasks.register("fabricJar", com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
+    from sourceSets.main.output
+    from("src/fabric/resources")
+    configurations = [project.configurations.runtimeClasspath]
+    archiveBaseName = "aurora-companion-fabric-1.21.1"
+    archiveVersion = project.version
+    archiveClassifier = ""
+    exclude "net/minecraftforge/**"
+    manifest { attributes "MixinConfigs": "aurora_companion_121.mixins.json" }
+}
+
+tasks.register("forgeJar", com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
+    from sourceSets.main.output
+    from("src/forge/resources")
+    configurations = [project.configurations.runtimeClasspath]
+    archiveBaseName = "aurora-companion-forge-1.21.1"
+    archiveVersion = project.version
+    archiveClassifier = ""
+    exclude "net/minecraftforge/**"
+    manifest { attributes "MixinConfigs": "aurora_companion_121.mixins.json" }
+}
+
+tasks.build.dependsOn tasks.fabricJar, tasks.forgeJar

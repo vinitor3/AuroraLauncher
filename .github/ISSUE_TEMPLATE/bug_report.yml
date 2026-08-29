@@ -1,0 +1,47 @@
+name: Bug
+description: Relate um comportamento incorreto do Aurora
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Obrigado por ajudar a melhorar o Aurora. Remova nick, caminhos pessoais, tokens e outros dados sensíveis antes de enviar.
+  - type: textarea
+    id: description
+    attributes:
+      label: O que aconteceu?
+      description: Descreva o comportamento observado e o esperado.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área
+      options:
+        - Launcher desktop
+        - Instalação ou download
+        - Modrinth / CurseForge
+        - Companion in-game
+        - Skins e capas
+        - Assistente
+        - Outro
+    validations:
+      required: true
+  - type: input
+    id: minecraft
+    attributes:
+      label: Minecraft e loader
+      placeholder: Ex. 1.20.1 Fabric
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Como reproduzir
+      description: Liste os passos mínimos.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidências
+      description: Logs ou capturas sem dados sensíveis.
+

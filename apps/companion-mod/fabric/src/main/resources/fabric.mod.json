@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "aurora_companion",
+  "version": "${version}",
+  "name": "Aurora Companion",
+  "description": "Ponte local entre Minecraft e Aurora Smart Launcher.",
+  "environment": "client",
+  "entrypoints": { "main": ["com.aurora.mod.fabric.AuroraFabric"] },
+  "mixins": ["aurora_companion.mixins.json"],
+  "depends": { "fabricloader": ">=0.14.0", "minecraft": "${fabric_minecraft_range}", "java": ">=${java_version}" }
+}

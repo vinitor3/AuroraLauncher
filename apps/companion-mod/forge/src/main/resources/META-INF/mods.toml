@@ -1,0 +1,20 @@
+modLoader="javafml"
+loaderVersion="${forge_loader_range}"
+license="GPL-3.0-only"
+[[mods]]
+modId="aurora_companion"
+version="${version}"
+displayName="Aurora Companion"
+description='''Ponte local entre Minecraft e Aurora Smart Launcher.'''
+[[dependencies.aurora_companion]]
+modId="forge"
+mandatory=true
+versionRange="[47,)"
+ordering="NONE"
+side="CLIENT"
+[[dependencies.aurora_companion]]
+modId="minecraft"
+mandatory=true
+versionRange="${forge_minecraft_range}"
+ordering="NONE"
+side="CLIENT"
