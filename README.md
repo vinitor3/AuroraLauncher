@@ -14,6 +14,10 @@
   <img alt="Rust" src="https://img.shields.io/badge/Rust-core-a855f7?style=for-the-badge&logo=rust&logoColor=white" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/vinitor3/AuroraLauncher/releases/latest"><img alt="Baixar Aurora" src="https://img.shields.io/badge/BAIXAR-v0.1.0_ALPHA-e38cff?style=for-the-badge&logo=github&logoColor=white" /></a>
+</p>
+
 > [!IMPORTANT]
 > O Aurora está em **alpha privada**. O launcher já instala e executa instâncias, mas alguns recursos do Companion ainda aguardam homologação dentro do Minecraft. Consulte o [status técnico](docs/phase-0-status.md) antes de tratar uma combinação como validada.
 
@@ -151,4 +155,3 @@ Aurora Smart Launcher é um projeto independente e não é afiliado à Mojang St
 <p align="center">
   <sub>Feito com Rust, React e uma boa dose de luz roxa. ✦</sub>
 </p>
-
