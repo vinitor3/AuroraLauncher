@@ -98,7 +98,7 @@ AuroraLauncher/
 ### Pré-requisitos
 
 - Windows 10/11;
-- Node.js 20+ e npm;
+- Node.js 22+ e npm para o desktop/Edge (Functions mantém runtime Node 20);
 - Rust estável com Cargo;
 - WebView2;
 - JDK 8, 17 e 21 para trabalhar com toda a matriz do Companion.
