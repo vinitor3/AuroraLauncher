@@ -9,7 +9,7 @@ O alvo de referência é Minecraft 1.20.1 com Forge 47.4.23, a versão 1.20.1 ma
 
 ## Compatibilidade planejada
 
-O Companion é entregue apenas para Fabric e Forge. Todos os artefatos da tabela abaixo foram gerados; cada JAR leva o mesmo protocolo IPC local autenticado por nonce efêmero.
+O Companion 0.2.0 é entregue apenas para Fabric e Forge e requer Aurora Core 1.0.0 ou superior. Todos os artefatos da tabela abaixo foram gerados. O módulo usa a API IPC do Core e não abre uma segunda conexão.
 
 | Minecraft | Fabric | Forge | Java |
 | --- | --- | --- | --- |
@@ -30,16 +30,16 @@ NeoForge não está no escopo atual. O módulo 1.12.2 fica isolado dos módulos 
 
 O contrato do socket está em [`docs/companion-ipc.md`](../../docs/companion-ipc.md).
 
-O Launcher Core instala o JAR correspondente na pasta `mods` da instância. A Fase 0 define os entrypoints e o contrato via propriedades JVM:
+O Launcher instala primeiro o Core e depois o JAR correspondente do Companion na pasta `mods` da instância. As propriedades JVM pertencem ao Core:
 
 - `-Daurora.ipc.port=45882`
-- `-Daurora.session.nonce=<nonce-efêmero>` (Fase 1)
+- `-Daurora.session.nonce=<nonce-efêmero>`
 
 O mod nunca recebe JWT Firebase, senha ou chave de serviço pela linha de comando.
 
 ## Assistente e aparência
 
-O Companion conversa com o launcher pelo IPC autenticado. O protótipo atual do
+O Companion registra o módulo `aurora_companion` no Core e conversa com o launcher pelo IPC autenticado compartilhado. O protótipo atual do
 Assistente é uma janela Swing externa sobre o jogo; a substituição por uma tela
 e um HUD nativos do Minecraft ainda está pendente. `AltGr + /`, pedidos de voz,
 respostas e legendas do Edge TTS já usam o mesmo canal IPC.

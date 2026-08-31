@@ -8,7 +8,9 @@ O núcleo recebe uma especificação de versão já resolvida, uma identidade de
 2. instala o Aurora Companion no diretório `mods`;
 3. valida um Java isolado escolhido para a instância;
 4. monta o classpath na ordem informada pelo resolvedor de versões;
-5. constrói e inicia o processo Java.
+5. constrói, inicia e acompanha o processo Java enquanto o launcher estiver aberto;
+6. mantém metadados locais de apresentação e permite renomear uma instância
+   somente quando ela não está em execução.
 
 Baixar versões, resolver manifests Mojang/mod loaders, login, Firebase, telemetria e atualização pertencem a outros módulos. Separar esses limites impede que o processo de lançamento conheça senhas ou tokens de login.
 
@@ -16,6 +18,8 @@ Baixar versões, resolver manifests Mojang/mod loaders, login, Firebase, telemet
 
 - IDs de instância são normalizados e não podem conter separadores de caminho.
 - Caminhos de JAR e Java precisam existir antes do lançamento.
+- Instâncias em execução não podem ser iniciadas novamente, renomeadas ou
+  excluídas até o processo terminar.
 - A credencial de sessão é um valor opaco e nunca é registrada pelo núcleo.
 - Um JWT Firebase não deve ser passado na linha de comando: ela pode ser vista por outros processos e logs. A futura ponte com o Companion deve usar uma credencial efêmera de loopback, entregue após o jogo iniciar.
 - O produto final deve respeitar as licenças e regras de distribuição aplicáveis ao Minecraft, loaders e mods. O núcleo não valida posse do jogo; essa política deve ser tratada pelo módulo de identidade/distribuição antes do lançamento.

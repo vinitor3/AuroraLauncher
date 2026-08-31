@@ -1,0 +1,37 @@
+plugins {
+    id "java"
+    id "com.gradleup.shadow" version "8.3.6"
+}
+group = "com.aurora.core"
+version = "1.0.0"
+repositories {
+    mavenCentral()
+    maven { url "https://maven.minecraftforge.net/" }
+}
+java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
+tasks.withType(JavaCompile).configureEach { options.encoding = "UTF-8"; options.release = 8 }
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+sourceSets.main.java.srcDir "../../../api/src/main/java"
+sourceSets.main.java.srcDir "../../../runtime/src/main/java"
+dependencies {
+    compileOnly "net.minecraftforge:forge:1.12.2-14.23.5.2860:universal"
+    implementation "com.google.code.gson:gson:2.10.1"
+    implementation "org.java-websocket:Java-WebSocket:1.5.6"
+    implementation "org.slf4j:slf4j-api:1.7.36"
+    implementation "org.slf4j:slf4j-nop:1.7.36"
+}
+jar { archiveClassifier = "thin" }
+shadowJar {
+    archiveBaseName = "aurora-core-forge-1.12.2"
+    archiveClassifier = ""
+    archiveVersion = project.version
+    configurations = [project.configurations.runtimeClasspath]
+    relocate "com.google.gson", "com.aurora.core.shadow.gson"
+    relocate "org.java_websocket", "com.aurora.core.shadow.websocket"
+    relocate "org.slf4j", "com.aurora.core.shadow.slf4j"
+    exclude "META-INF/versions/**", "module-info.class"
+}
+tasks.build.dependsOn tasks.shadowJar

@@ -25,7 +25,7 @@
 
 O **Aurora Smart Launcher** é um launcher independente para Minecraft Java Edition. Ele reúne instâncias isoladas, descoberta de modpacks, gerenciamento de conteúdo, skins, runtimes Java e um assistente integrado em uma experiência desktop única.
 
-O projeto combina uma interface em **React**, um aplicativo **Tauri v2**, um núcleo de lançamento em **Rust**, serviços protegidos na edge e um **Companion** para integração com o jogo.
+O projeto combina uma interface em **React**, um aplicativo **Tauri v2**, um núcleo de lançamento em **Rust**, serviços protegidos na edge, o **Aurora Core** modular dentro do Minecraft e um **Companion** para o assistente.
 
 ## Uma experiência completa
 
@@ -50,6 +50,7 @@ O projeto combina uma interface em **React**, um aplicativo **Tauri v2**, um nú
 - **Conteúdo por instância:** mods, shaders e resource packs com seleção múltipla, ativação, desativação e remoção.
 - **Guarda-roupa:** skins locais, favoritos, busca por nick, modelo Classic/Slim, capa e visualização 3D.
 - **Aurora Companion:** builds para Forge 1.12.2 e Fabric/Forge 1.16.5, 1.19.2, 1.20.1 e 1.21.1.
+- **Aurora Core:** menu modular no jogo, avatar 3D, sessão pública, eventos, configuração versionada e instalação assinada nos mesmos nove alvos.
 - **Assistente integrado:** conversa autenticada com Gemini, entrada por texto/voz, Edge TTS e legendas.
 - **IPC seguro:** comunicação local via WebSocket em `127.0.0.1`, porta efêmera e nonce renovado a cada execução.
 
@@ -60,7 +61,8 @@ O projeto combina uma interface em **React**, um aplicativo **Tauri v2**, um nú
 | Fundação e identidade | ✅ | Tauri + React, núcleo Rust, autenticação, instâncias e instalador Windows |
 | Launcher 1.1 | 🟣 | Downloads concorrentes, seleção múltipla, fluxo CurseForge e estabilização |
 | Companion 1.2 | 🟡 | IPC, assistente, TTS e aparência implementados; homologação visual em andamento |
-| Interface nativa in-game | ⏳ | Substituir a janela externa por tela/HUD nativos nas combinações suportadas |
+| Aurora Core 1.0 | 🟡 | Fundação modular e menu nativo compilados em 9/9; homologação runtime pendente |
+| Interface nativa do Assistente | ⏳ | Substituir a janela externa do Companion por tela/HUD nativos nas combinações suportadas |
 | Atualizações de conteúdo | ⏳ | Detectar e atualizar mods e modpacks preservando versão e loader |
 | Cosméticos e emotes | 🔭 | Expandir o guarda-roupa e a integração com o Companion |
 | Distribuição estável | 🔭 | Atualizador do launcher, releases assinadas e canal público estável |
@@ -73,7 +75,9 @@ O detalhamento e as evidências de validação ficam em [`docs/phase-0-status.md
 flowchart LR
     UI[React UI] -->|Tauri commands| CORE[Rust Launcher Core]
     CORE --> GAME[Minecraft + Loader]
-    CORE <-->|IPC local autenticado| COMP[Aurora Companion]
+    GAME --> AURORA[Aurora Core in-game]
+    CORE <-->|IPC local autenticado único| AURORA
+    COMP[Aurora Companion module] --> AURORA
     UI --> FIREBASE[Firebase Auth / Firestore]
     UI --> EDGE[Cloudflare Worker]
     EDGE --> MODS[Modrinth / CurseForge]
@@ -84,6 +88,7 @@ flowchart LR
 AuroraLauncher/
 ├── apps/
 │   ├── desktop/        # React + Tauri + núcleo Rust
+│   ├── aurora-core/    # APIs, runtime e adaptadores in-game
 │   ├── companion-mod/  # Companion Fabric e Forge
 │   └── edge-proxy/     # API protegida na Cloudflare
 ├── firebase/           # Regras de Firestore e Storage
@@ -128,6 +133,12 @@ npm --prefix apps/edge-proxy run check
 npm --prefix functions run lint
 ```
 
+Para testar e gerar toda a matriz do Aurora Core:
+
+```powershell
+npm run core:build
+```
+
 Para gerar os Companions:
 
 ```powershell
@@ -149,6 +160,7 @@ npm run companion:build
 - [Roadmap do produto](docs/ROADMAP.md)
 - [Launcher Core](docs/module-a.md)
 - [IPC do Companion](docs/companion-ipc.md)
+- [Aurora Core](docs/aurora-core.md)
 - [Backend CurseForge](docs/curseforge-backend.md)
 - [Configuração do Firebase](docs/firebase-setup.md)
 - [Armazenamento de aparências](docs/supabase-storage.md)

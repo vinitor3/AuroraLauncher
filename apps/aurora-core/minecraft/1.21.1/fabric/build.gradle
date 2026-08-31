@@ -1,0 +1,20 @@
+plugins {
+    id "dev.architectury.loom"
+}
+loom { silentMojangMappingsLicense() }
+sourceSets.main.java.srcDir rootProject.file("common/src/main/java")
+sourceSets.main.resources.srcDir rootProject.file("common/src/main/resources")
+dependencies {
+    minecraft "com.mojang:minecraft:${rootProject.minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
+    implementation project(":api")
+    implementation project(":runtime")
+    include project(":api")
+    include project(":runtime")
+    implementation "com.google.code.gson:gson:2.10.1"
+    implementation "org.java-websocket:Java-WebSocket:1.5.6"
+    include "org.java-websocket:Java-WebSocket:1.5.6"
+}
+processResources { inputs.property "version", project.version; filesMatching("fabric.mod.json") { expand "version": project.version } }
+jar { manifest { attributes "MixinConfigs": "aurora_core.mixins.json" } }

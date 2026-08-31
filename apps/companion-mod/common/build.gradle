@@ -3,8 +3,9 @@ architectury {
 }
 
 sourceSets.main.java.srcDir "../shared-ui/src/main/java"
+sourceSets.main.java.srcDir "../shared-core/src/main/java"
 
 dependencies {
-    implementation "org.java-websocket:Java-WebSocket:1.5.6"
+    compileOnly files(rootProject.file("../aurora-core/api/build/libs/aurora-core-api-1.0.0.jar"))
     compileOnly "net.fabricmc:sponge-mixin:0.12.5+mixin.0.8.5"
 }

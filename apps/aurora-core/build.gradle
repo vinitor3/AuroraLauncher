@@ -1,0 +1,53 @@
+plugins {
+    id "base"
+}
+
+allprojects {
+    group = "com.aurora.core"
+    version = "1.0.0"
+
+    repositories {
+        mavenCentral()
+    }
+}
+
+subprojects {
+    apply plugin: "java-library"
+
+    java {
+        toolchain { languageVersion = JavaLanguageVersion.of(17) }
+        withSourcesJar()
+    }
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = "UTF-8"
+        options.release = 8
+    }
+
+    tasks.withType(Test).configureEach {
+        useJUnitPlatform()
+        testLogging { events "failed", "skipped" }
+    }
+}
+
+tasks.register("verifyJava8Bytecode") {
+    dependsOn(":api:jar", ":runtime:jar")
+    doLast {
+        [project(":api"), project(":runtime")].each { module ->
+            def jar = module.tasks.named("jar").get().archiveFile.get().asFile
+            def invalid = zipTree(jar).matching { include "**/*.class" }.files.find { file ->
+                file.withInputStream { input ->
+                    byte[] header = new byte[8]
+                    input.read(header)
+                    int major = ((header[6] & 0xff) << 8) | (header[7] & 0xff)
+                    return major > 52
+                }
+            }
+            if (invalid != null) {
+                throw new GradleException("${jar.name} contém bytecode posterior ao Java 8: ${invalid.name}")
+            }
+        }
+    }
+}
+
+tasks.named("check") { dependsOn("verifyJava8Bytecode") }

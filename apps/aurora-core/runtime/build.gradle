@@ -1,0 +1,19 @@
+dependencies {
+    api project(":api")
+    implementation "com.google.code.gson:gson:2.10.1"
+    implementation "org.java-websocket:Java-WebSocket:1.5.6"
+
+    testImplementation "org.junit.jupiter:junit-jupiter:5.11.4"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+jar {
+    archiveBaseName = "aurora-core-runtime"
+    manifest {
+        attributes(
+            "Implementation-Title": "Aurora Core Runtime",
+            "Implementation-Version": project.version,
+            "Aurora-Core-Version": project.version
+        )
+    }
+}

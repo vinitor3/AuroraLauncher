@@ -1,0 +1,2 @@
+pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
+rootProject.name = "aurora-core-forge-1.12.2"

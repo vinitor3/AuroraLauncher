@@ -16,5 +16,6 @@
 | [012](ADR-012-creator-mvp.md) | recipes/datapack antes de suites fechadas | Proposta |
 | [013](ADR-013-distribution.md) | GitHub Releases imutáveis | Proposta |
 | [014](ADR-014-microsoft-auth.md) | entitlement antes de distribuição pública | Decisão: não por enquanto |
+| [015](ADR-015-aurora-core.md) | Core modular, IPC único e módulos isolados | Aceita |
 
 Estados mudam somente por novo ADR que substitua o anterior ou por revisão explícita deste arquivo.

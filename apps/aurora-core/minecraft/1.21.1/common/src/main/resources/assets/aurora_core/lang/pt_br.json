@@ -1,0 +1,8 @@
+{
+  "aurora_core.title": "AURORA", "aurora_core.options": "Opções Aurora", "aurora_core.modules": "MÓDULOS",
+  "aurora_core.welcome": "Seu espaço Aurora", "aurora_core.change_skin": "◇ Skins",
+  "aurora_core.change_skin.tooltip": "Alterar skin", "aurora_core.avatar_unavailable": "Avatar indisponível",
+  "aurora_core.session.offline": "Sessão Aurora offline", "aurora_core.launcher": "Launcher: %s",
+  "aurora_core.connected": "conectado", "aurora_core.disconnected": "desconectado",
+  "aurora_core.installed_modules": "Módulos instalados: %s"
+}

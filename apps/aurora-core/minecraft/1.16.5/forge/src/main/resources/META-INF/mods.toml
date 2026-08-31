@@ -1,0 +1,20 @@
+modLoader="javafml"
+loaderVersion="${loader_range}"
+license="GPL-3.0-only"
+[[mods]]
+modId="aurora_core"
+version="${version}"
+displayName="Aurora Core"
+description='''Infraestrutura compartilhada dos módulos oficiais Aurora.'''
+[[dependencies.aurora_core]]
+modId="forge"
+mandatory=true
+versionRange="${loader_range}"
+ordering="NONE"
+side="CLIENT"
+[[dependencies.aurora_core]]
+modId="minecraft"
+mandatory=true
+versionRange="${minecraft_range}"
+ordering="NONE"
+side="CLIENT"

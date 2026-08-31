@@ -7,6 +7,12 @@ version="${version}"
 displayName="Aurora Companion"
 description='''Ponte local entre Minecraft e Aurora Smart Launcher.'''
 [[dependencies.aurora_companion]]
+modId="aurora_core"
+mandatory=true
+versionRange="[1.0.0,)"
+ordering="AFTER"
+side="CLIENT"
+[[dependencies.aurora_companion]]
 modId="forge"
 mandatory=true
 versionRange="[47,)"

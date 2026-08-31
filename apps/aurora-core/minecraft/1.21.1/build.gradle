@@ -1,0 +1,64 @@
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+
+plugins {
+    id "dev.architectury.loom" version "1.17.491" apply false
+}
+
+def normalizeNestedJar = { File archive ->
+    File normalized = new File(archive.parentFile, archive.name + ".normalized")
+    byte[] buffer = new byte[8192]
+    new ZipInputStream(new BufferedInputStream(new FileInputStream(archive))).withCloseable { input ->
+        new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(normalized))).withCloseable { output ->
+            ZipEntry source
+            while ((source = input.nextEntry) != null) {
+                ZipEntry target = new ZipEntry(source.name)
+                target.time = 315532800000L
+                target.method = source.method
+                if (source.method == ZipEntry.STORED) {
+                    target.size = source.size
+                    target.crc = source.crc
+                }
+                output.putNextEntry(target)
+                int read
+                while ((read = input.read(buffer)) >= 0) {
+                    if (read > 0) output.write(buffer, 0, read)
+                }
+                output.closeEntry()
+                input.closeEntry()
+            }
+        }
+    }
+    Files.move(normalized.toPath(), archive.toPath(), StandardCopyOption.REPLACE_EXISTING)
+}
+
+allprojects {
+    apply plugin: "java-library"
+    version = rootProject.mod_version
+    group = rootProject.maven_group
+    repositories { mavenCentral() }
+    base { archivesName = rootProject.archives_base_name }
+    def isSharedCore = project.name in ["api", "runtime"]
+    java { toolchain { languageVersion = JavaLanguageVersion.of(isSharedCore ? 17 : 21) } }
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = "UTF-8"
+        options.release = isSharedCore ? 8 : 21
+    }
+    tasks.withType(Test).configureEach {
+        useJUnitPlatform()
+    }
+    tasks.withType(AbstractArchiveTask).configureEach {
+        preserveFileTimestamps = false
+        reproducibleFileOrder = true
+    }
+    tasks.matching { it.name == "processIncludeJars" }.configureEach {
+        doLast {
+            fileTree(new File(buildDir, "processIncludeJars")) { include "*.jar" }
+                .files.sort { left, right -> left.name <=> right.name }
+                .each(normalizeNestedJar)
+        }
+    }
+}

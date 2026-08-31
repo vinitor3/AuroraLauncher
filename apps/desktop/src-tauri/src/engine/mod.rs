@@ -1,6 +1,7 @@
 //! Serviços de instância, Java e inicialização da JVM.
 
 mod companion;
+mod core;
 mod download;
 mod instance;
 mod ipc;
@@ -12,9 +13,13 @@ mod tts;
 mod version;
 
 pub use companion::{install_embedded_companion, CompanionError};
+pub use core::{
+    aurora_core_manifest, install_embedded_core, AuroraCoreBuild, AuroraCoreError,
+    AuroraCoreManifest,
+};
 pub use download::{TransferProgress, DEFAULT_DOWNLOAD_CONCURRENCY};
 pub use instance::{Instance, InstanceError, InstanceId, InstanceLayout};
-pub use ipc::{IpcEndpoint, IpcError, IpcEvent, IpcServer};
+pub use ipc::{IpcEndpoint, IpcError, IpcEvent, IpcServer, IpcSessionProfile};
 pub use jre::{
     discover_java_executables, ensure_managed_java, ensure_managed_java_with_progress,
     recommended_memory_mb, JavaRuntime, JavaRuntimeError,

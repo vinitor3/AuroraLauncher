@@ -1,6 +1,6 @@
 # Status da Fundação e da Fase 1
 
-Atualizado em 28 de agosto de 2026.
+Atualizado em 30 de agosto de 2026.
 
 ## Fase 0 — Fundação & Identidade
 
@@ -39,7 +39,17 @@ visual dentro do Minecraft para ser considerada encerrada:
   página oficial em uma janela WebView2, aguarda o disparo da própria página,
   captura em arquivo temporário, valida o SHA-1 e instala na pasta correta;
 - skin local para o Companion 1.20.1 e conversão correta do layout legado
-  64x32 para 64x64.
+  64x32 para 64x64;
+- foto pública do perfil renderizada a partir da face e da segunda camada da
+  única skin equipada online, com biblioteca não equipada mantida apenas localmente;
+  somente o documento mínimo `publicProfiles/{uid}` é compartilhado entre contas;
+- cards de instância com capa do modpack, início direto, seleção visual e
+  estado de processo em execução;
+- renomeação segura de instância pelo editor;
+- gerenciador de Java com inventário dos runtimes encontrados e instalação
+  verificada das linhas 8, 17 e 21;
+- normalização segura de Markdown/HTML legado do Modrinth, convertendo imagens,
+  links e vídeos sem mostrar tags cruas nem executar iframes.
 
 ## Fase 1.2 — Companion e Assistente nativos
 

@@ -121,17 +121,38 @@ impl Instance {
         filename: &str,
         contents: &[u8],
     ) -> Result<PathBuf, InstanceError> {
+        self.install_aurora_artifact_bytes(filename, contents)
+    }
+
+    /// Instala um JAR oficial Aurora com troca atômica e rollback local.
+    pub fn install_aurora_artifact_bytes(
+        &self,
+        filename: &str,
+        contents: &[u8],
+    ) -> Result<PathBuf, InstanceError> {
         if filename.is_empty() || filename.contains(['/', '\\']) || !filename.ends_with(".jar") {
             return Err(InstanceError::InvalidId(filename.to_owned()));
         }
         self.ensure_layout()?;
         let destination = self.mods_dir().join(filename);
         let temporary = destination.with_extension("aurora-writing");
+        let backup = destination.with_extension("aurora-backup");
         fs::write(&temporary, contents)?;
-        if destination.exists() {
-            fs::remove_file(&destination)?;
+        if backup.exists() {
+            fs::remove_file(&backup)?;
         }
-        fs::rename(&temporary, &destination)?;
+        if destination.exists() {
+            fs::rename(&destination, &backup)?;
+        }
+        if let Err(error) = fs::rename(&temporary, &destination) {
+            if backup.exists() {
+                let _ = fs::rename(&backup, &destination);
+            }
+            return Err(InstanceError::Io(error));
+        }
+        if backup.exists() {
+            fs::remove_file(backup)?;
+        }
         Ok(destination)
     }
 }
@@ -150,5 +171,26 @@ mod tests {
     fn accepts_safe_identifier() {
         let id = InstanceId::parse("all-the-mods_10.2").unwrap();
         assert_eq!(id.as_str(), "all-the-mods_10.2");
+    }
+
+    #[test]
+    fn atomically_replaces_an_aurora_artifact_without_leaving_work_files() {
+        let root = std::env::temp_dir().join(format!(
+            "aurora-artifact-replace-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let instance = InstanceLayout::new(&root).open(InstanceId::parse("replace-test").unwrap());
+        let installed = instance
+            .install_aurora_artifact_bytes("aurora-core-test.jar", b"old")
+            .unwrap();
+        instance
+            .install_aurora_artifact_bytes("aurora-core-test.jar", b"new")
+            .unwrap();
+
+        assert_eq!(fs::read(&installed).unwrap(), b"new");
+        assert!(!installed.with_extension("aurora-writing").exists());
+        assert!(!installed.with_extension("aurora-backup").exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }

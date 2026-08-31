@@ -51,6 +51,41 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /publicProfiles/{uid} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.uid == uid
+        && request.resource.data.username is string
+        && request.resource.data.username.size() >= 3
+        && request.resource.data.username.size() <= 16
+        && request.resource.data.username.matches('^[A-Za-z0-9_]+$')
+        && (request.resource.data.avatarUrl == null
+          || (request.resource.data.avatarUrl is string
+            && request.resource.data.avatarUrl.matches('^https://.+')))
+        && (request.resource.data.skinUrl == null
+          || (request.resource.data.skinUrl is string
+            && request.resource.data.skinUrl.matches('^https://.+')))
+        && request.resource.data.skinModel in ['classic', 'slim']
+        && request.resource.data.keys().hasOnly([
+          'uid', 'username', 'avatarUrl', 'skinUrl', 'skinModel', 'updatedAt'
+        ]);
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.username == resource.data.username
+        && (request.resource.data.avatarUrl == null
+          || (request.resource.data.avatarUrl is string
+            && request.resource.data.avatarUrl.matches('^https://.+')))
+        && (request.resource.data.skinUrl == null
+          || (request.resource.data.skinUrl is string
+            && request.resource.data.skinUrl.matches('^https://.+')))
+        && request.resource.data.skinModel in ['classic', 'slim']
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['avatarUrl', 'skinUrl', 'skinModel', 'updatedAt']);
+      allow delete: if false;
+    }
+
     match /usernames/{usernameLower} {
       allow read: if signedIn();
       allow create: if signedIn()

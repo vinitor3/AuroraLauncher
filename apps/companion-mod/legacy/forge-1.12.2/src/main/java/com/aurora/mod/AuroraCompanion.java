@@ -26,7 +26,16 @@ public final class AuroraCompanion {
         ipcClient = AuroraIpcClient.fromSystemProperties();
         if (ipcClient != null) {
             ipcClient.connect();
+            registerAuroraModule();
             startTelemetrySampler();
+        }
+    }
+
+    private static void registerAuroraModule() {
+        try {
+            com.aurora.core.api.Aurora.services().modules().register(new AuroraCompanionModule(ipcClient));
+        } catch (com.aurora.core.api.module.AuroraModuleRegistrationException error) {
+            System.err.println("[Aurora Companion] " + error.userMessage());
         }
     }
 

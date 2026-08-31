@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "com.aurora"
-version = "0.1.0"
+version = "0.2.0"
 
 repositories {
     mavenCentral()
@@ -23,13 +23,12 @@ tasks.withType(JavaCompile).configureEach {
 dependencies {
     // A API é fornecida pelo Forge dentro do jogo; ela não entra no JAR final.
     compileOnly "net.minecraftforge:forge:1.12.2-14.23.5.2860:universal"
-    implementation "org.java-websocket:Java-WebSocket:1.5.6"
-    implementation "org.slf4j:slf4j-api:1.7.36"
-    implementation "org.slf4j:slf4j-nop:1.7.36"
+    compileOnly files("../../../aurora-core/api/build/libs/aurora-core-api-1.0.0.jar")
 }
 
 sourceSets.main.java.srcDir "../../shared-ui/src/main/java"
 sourceSets.main.java.srcDir "../../profile-appearance/src/main/java"
+sourceSets.main.java.srcDir "../../shared-core/src/main/java"
 
 jar { archiveClassifier = "thin" }
 
@@ -38,11 +37,6 @@ shadowJar {
     archiveClassifier = ""
     archiveVersion = project.version
     configurations = [project.configurations.runtimeClasspath]
-    // O LaunchClassLoader do Forge 1.12.2 reserva alguns namespaces de
-    // logging. Manter as dependencias em um namespace privado evita que o
-    // SLF4J empacotado seja ocultado e também previne conflitos com mods.
-    relocate "org.java_websocket", "com.aurora.shadow.java_websocket"
-    relocate "org.slf4j", "com.aurora.shadow.slf4j"
     exclude "META-INF/versions/**"
     exclude "module-info.class"
 }

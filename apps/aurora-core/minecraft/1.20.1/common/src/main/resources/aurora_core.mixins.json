@@ -1,0 +1,8 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "com.aurora.core.minecraft.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "client": ["OptionsScreenMixin"],
+  "injectors": { "defaultRequire": 0 }
+}

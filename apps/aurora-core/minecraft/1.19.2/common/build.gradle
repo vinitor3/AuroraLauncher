@@ -1,0 +1,9 @@
+architectury { common(rootProject.enabled_platforms.split(",")) }
+
+dependencies {
+    implementation files(rootProject.file("../../api/build/libs/aurora-core-api-1.0.0.jar"))
+    implementation files(rootProject.file("../../runtime/build/libs/aurora-core-runtime-1.0.0.jar"))
+    implementation "com.google.code.gson:gson:2.10.1"
+    implementation "org.java-websocket:Java-WebSocket:1.5.6"
+    compileOnly "net.fabricmc:sponge-mixin:0.12.5+mixin.0.8.5"
+}

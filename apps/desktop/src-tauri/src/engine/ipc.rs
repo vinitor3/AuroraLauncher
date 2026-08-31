@@ -4,13 +4,14 @@
 //! Esse nonce identifica o processo iniciado pelo Aurora; não é uma credencial
 //! de conta e nunca deve ser persistido ou registrado em logs.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -29,6 +30,30 @@ pub enum IpcError {
 pub struct IpcEndpoint {
     pub port: u16,
     pub nonce: String,
+}
+
+/// Projeção pública da sessão enviada ao Core. Credenciais e tokens não fazem
+/// parte deste tipo por projeto.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IpcSessionProfile {
+    aurora_user_id: String,
+    minecraft_uuid: String,
+    username: String,
+    state: String,
+    scopes: Vec<String>,
+}
+
+impl IpcSessionProfile {
+    pub fn offline(minecraft_uuid: Uuid, username: impl Into<String>) -> Self {
+        Self {
+            aurora_user_id: String::new(),
+            minecraft_uuid: minecraft_uuid.to_string(),
+            username: username.into(),
+            state: "offline".to_owned(),
+            scopes: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -54,6 +79,12 @@ pub enum IpcEvent {
         used_memory_mb: u32,
         dimension: Option<String>,
     },
+    /// Evento extensível de um módulo. Campos com aparência de credencial são
+    /// recusados antes de o evento alcançar a interface do Launcher.
+    ModuleEvent {
+        name: String,
+        payload: serde_json::Value,
+    },
     Disconnected,
 }
 
@@ -70,6 +101,10 @@ pub struct IpcServer {
 impl IpcServer {
     /// Abre uma porta efêmera exclusivamente no loopback IPv4.
     pub fn start() -> Result<Self, IpcError> {
+        Self::start_with_session(None)
+    }
+
+    pub fn start_with_session(session: Option<IpcSessionProfile>) -> Result<Self, IpcError> {
         let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
@@ -90,6 +125,7 @@ impl IpcServer {
                 worker_endpoint,
                 sender,
                 outbound_receiver,
+                session,
                 worker_shutdown,
                 worker_connected,
             )
@@ -139,6 +175,7 @@ fn accept_connections(
     endpoint: IpcEndpoint,
     sender: SyncSender<IpcEvent>,
     outbound: Receiver<String>,
+    session: Option<IpcSessionProfile>,
     shutdown: Arc<AtomicBool>,
     connected: Arc<AtomicBool>,
 ) {
@@ -152,6 +189,7 @@ fn accept_connections(
                     expected_nonce,
                     event_sender,
                     &outbound,
+                    session.as_ref(),
                     &shutdown,
                     &connected,
                 );
@@ -170,6 +208,7 @@ fn handle_connection(
     expected_nonce: String,
     sender: SyncSender<IpcEvent>,
     outbound: &Receiver<String>,
+    session: Option<&IpcSessionProfile>,
     shutdown: &AtomicBool,
     connected: &AtomicBool,
 ) {
@@ -184,8 +223,13 @@ fn handle_connection(
         .get_mut()
         .set_read_timeout(Some(Duration::from_millis(75)));
     let mut authenticated = false;
+    let handshake_started = Instant::now();
 
     while !shutdown.load(Ordering::Acquire) {
+        if !authenticated && handshake_started.elapsed() > Duration::from_secs(5) {
+            let _ = socket.close(None);
+            return;
+        }
         if authenticated {
             while let Ok(outbound_message) = outbound.try_recv() {
                 if socket.send(Message::Text(outbound_message)).is_err() {
@@ -218,7 +262,14 @@ fn handle_connection(
         };
 
         if !authenticated {
-            if parsed.kind != "hello" || parsed.nonce.as_deref() != Some(expected_nonce.as_str()) {
+            if parsed.kind != "hello"
+                || parsed.nonce.as_deref() != Some(expected_nonce.as_str())
+                || parsed.protocol != Some(1)
+                || !parsed
+                    .core_version
+                    .as_deref()
+                    .is_some_and(|version| version.starts_with("1."))
+            {
                 eprintln!("[Aurora IPC] autenticação local recusada");
                 let _ = socket.close(None);
                 return;
@@ -226,10 +277,20 @@ fn handle_connection(
             authenticated = true;
             connected.store(true, Ordering::Release);
             let _ = socket.send(Message::Text(r#"{"kind":"accepted"}"#.into()));
+            if let Some(session) = session {
+                if let Ok(mut value) = serde_json::to_value(session) {
+                    value["kind"] = serde_json::Value::String("session".to_owned());
+                    let _ = socket.send(Message::Text(value.to_string()));
+                }
+            }
             let _ = sender.try_send(IpcEvent::Connected {
                 loader: parsed.loader.unwrap_or_else(|| "unknown".into()),
                 minecraft_version: parsed.minecraft_version.unwrap_or_else(|| "unknown".into()),
             });
+            continue;
+        }
+
+        if contains_sensitive_key(&parsed.payload) {
             continue;
         }
 
@@ -266,6 +327,14 @@ fn handle_connection(
                 used_memory_mb: parsed.used_memory_mb.unwrap_or_default(),
                 dimension: parsed.dimension,
             });
+        } else if valid_event_name(&parsed.kind)
+            && serde_json::to_vec(&parsed.payload).is_ok_and(|value| value.len() <= 65_536)
+            && !contains_sensitive_key(&parsed.payload)
+        {
+            let _ = sender.try_send(IpcEvent::ModuleEvent {
+                name: parsed.kind,
+                payload: serde_json::Value::Object(parsed.payload.into_iter().collect()),
+            });
         }
     }
 
@@ -273,6 +342,53 @@ fn handle_connection(
         connected.store(false, Ordering::Release);
         let _ = sender.try_send(IpcEvent::Disconnected);
     }
+}
+
+fn valid_event_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.chars().enumerate().all(|(index, character)| {
+            (index == 0 && character.is_ascii_alphabetic())
+                || (index > 0
+                    && (character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')))
+        })
+}
+
+fn contains_sensitive_key(fields: &BTreeMap<String, serde_json::Value>) -> bool {
+    fields.iter().any(|(key, value)| {
+        is_sensitive_key(key)
+            || match value {
+                serde_json::Value::Object(nested) => {
+                    nested.iter().any(|(nested_key, nested_value)| {
+                        is_sensitive_key(nested_key) || contains_sensitive_value(nested_value)
+                    })
+                }
+                _ => contains_sensitive_value(value),
+            }
+    })
+}
+
+fn contains_sensitive_value(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(nested) => nested
+            .iter()
+            .any(|(key, value)| is_sensitive_key(key) || contains_sensitive_value(value)),
+        serde_json::Value::Array(values) => values.iter().any(contains_sensitive_value),
+        _ => false,
+    }
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "token"
+            | "accesstoken"
+            | "refreshtoken"
+            | "password"
+            | "secret"
+            | "authorization"
+            | "cookie"
+    )
 }
 
 fn valid_request_id(value: Option<String>) -> Option<String> {
@@ -292,6 +408,8 @@ struct WireMessage {
     nonce: Option<String>,
     loader: Option<String>,
     minecraft_version: Option<String>,
+    core_version: Option<String>,
+    protocol: Option<u32>,
     fps: Option<f32>,
     mspt: Option<f32>,
     used_memory_mb: Option<u32>,
@@ -299,6 +417,8 @@ struct WireMessage {
     request_id: Option<String>,
     message: Option<String>,
     screenshot_base64: Option<String>,
+    #[serde(flatten)]
+    payload: BTreeMap<String, serde_json::Value>,
 }
 
 #[cfg(test)]
@@ -327,6 +447,8 @@ mod tests {
                     "nonce": endpoint.nonce,
                     "loader": "fabric",
                     "minecraftVersion": "1.20.1",
+                    "coreVersion": "1.0.0",
+                    "protocol": 1,
                 })
                 .to_string(),
             ))
@@ -390,5 +512,81 @@ mod tests {
             .to_text()
             .unwrap()
             .contains("assistantTranscript"));
+    }
+
+    #[test]
+    fn sends_public_session_without_credentials() {
+        let profile = IpcSessionProfile::offline(Uuid::nil(), "AuroraPlayer");
+        let server = IpcServer::start_with_session(Some(profile)).expect("IPC deve iniciar");
+        let endpoint = server.endpoint().clone();
+        let (mut client, _) = connect(format!("ws://127.0.0.1:{}/aurora", endpoint.port))
+            .expect("Core deve concluir o handshake");
+        client
+            .send(Message::Text(
+                serde_json::json!({
+                    "kind": "hello",
+                    "nonce": endpoint.nonce,
+                    "loader": "forge",
+                    "minecraftVersion": "1.21.1",
+                    "coreVersion": "1.0.0",
+                    "protocol": 1,
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        assert!(client
+            .read()
+            .unwrap()
+            .to_text()
+            .unwrap()
+            .contains("accepted"));
+        let session = client.read().unwrap().to_text().unwrap().to_owned();
+        assert!(session.contains("AuroraPlayer"));
+        assert!(session.contains("offline"));
+        assert!(!session.to_ascii_lowercase().contains("token"));
+    }
+
+    #[test]
+    fn rejects_invalid_nonce_or_protocol() {
+        let server = IpcServer::start().expect("IPC deve iniciar");
+        let endpoint = server.endpoint().clone();
+        let (mut client, _) = connect(format!("ws://127.0.0.1:{}/aurora", endpoint.port))
+            .expect("handshake WebSocket local");
+        client
+            .send(Message::Text(
+                serde_json::json!({
+                    "kind": "hello",
+                    "nonce": "00000000000000000000000000000000",
+                    "loader": "fabric",
+                    "minecraftVersion": "1.20.1",
+                    "coreVersion": "1.0.0",
+                    "protocol": 2,
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let _ = client.read();
+        assert!(!server.is_connected());
+        assert!(!matches!(server.try_recv(), Ok(IpcEvent::Connected { .. })));
+    }
+
+    #[test]
+    fn validates_extensible_event_names_and_sensitive_payloads() {
+        assert!(valid_event_name("skinChanged"));
+        assert!(valid_event_name("module.event-1"));
+        assert!(!valid_event_name("1invalid"));
+        assert!(!valid_event_name("invalid event"));
+
+        let safe = BTreeMap::from([(
+            "profile".to_owned(),
+            serde_json::json!({"username": "AuroraPlayer"}),
+        )]);
+        let sensitive = BTreeMap::from([(
+            "profile".to_owned(),
+            serde_json::json!({"accessToken": "must-not-cross-ipc"}),
+        )]);
+        assert!(!contains_sensitive_key(&safe));
+        assert!(contains_sensitive_key(&sensitive));
     }
 }

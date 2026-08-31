@@ -16,6 +16,7 @@ import {
   observeAuroraSession,
   registerAuroraUser,
   saveAuroraAppearance,
+  syncAuroraPublicProfile,
   uploadFirebaseAppearanceImage,
   type AuroraUserProfile,
   type FirebasePublicConfig,
@@ -25,8 +26,18 @@ import { askAuroraAssistant, requestCurseForgeCatalog, uploadAuroraAppearanceIma
 import { deleteLocalSkin, listLocalSkins, saveLocalSkin, type LocalSkin } from "./lib/localSkins";
 
 type EngineStatus = { dataDirectory: string; ready: boolean };
-type Instance = { id: string; path: string; hasModsDirectory: boolean; hasInstalledVersion: boolean };
+type Instance = {
+  id: string;
+  path: string;
+  hasModsDirectory: boolean;
+  hasInstalledVersion: boolean;
+  displayName?: string;
+  iconUrl?: string;
+  projectId?: string;
+};
 type JavaRuntime = { executable: string; version: string };
+type RunningInstance = { instanceId: string; processId: number };
+type AppearanceImage = { url: string; dataBase64: string };
 type InstallSummary = { minecraftVersion: string; versionId: string; clientJar: string; libraryCount: number; assetCount: number };
 type ModrinthPack = {
   projectId: string;
@@ -117,7 +128,12 @@ type ResolvedContentArtwork = ContentArtworkEntry & { filename: string };
 type LoaderChoice = "fabric" | "forge";
 type LauncherSection = "instances" | "discover" | "appearance" | "java";
 type CatalogSource = "modrinth" | "curseforge";
-type LaunchSummary = { processId: number; versionId: string; companionInstalled: boolean };
+type LaunchSummary = {
+  processId: number;
+  versionId: string;
+  coreInstalled: boolean;
+  companionInstalled: boolean;
+};
 type DownloadProgress = {
   label: string;
   percent: number;
@@ -245,6 +261,105 @@ async function validateAppearanceFile(kind: "skin" | "cape", file: File) {
   if (kind === "cape" && (width === 0 || height === 0 || width > 1024 || height > 1024)) {
     throw new Error(`As dimensões da capa são inválidas: ${width}x${height}.`);
   }
+}
+
+function SkinHeadAvatar({ source }: { source?: string | null }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [mode, setMode] = useState<"loading" | "head" | "image" | "empty">(source ? "loading" : "empty");
+  useEffect(() => {
+    let cancelled = false;
+    if (!source) {
+      setMode("empty");
+      return undefined;
+    }
+    setMode("loading");
+    const image = new Image();
+    image.onload = () => {
+      if (cancelled) return;
+      if (image.naturalWidth !== 64 || ![32, 64].includes(image.naturalHeight)) {
+        setMode("image");
+        return;
+      }
+      const canvas = canvasRef.current;
+      const context = canvas?.getContext("2d");
+      if (!canvas || !context) {
+        setMode("image");
+        return;
+      }
+      context.imageSmoothingEnabled = false;
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 8, 8, 8, 8, 0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 40, 8, 8, 8, 0, 0, canvas.width, canvas.height);
+      setMode("head");
+    };
+    image.onerror = () => {
+      if (!cancelled) setMode("empty");
+    };
+    image.src = source;
+    return () => {
+      cancelled = true;
+      image.onload = null;
+      image.onerror = null;
+    };
+  }, [source]);
+  return (
+    <span className="user-avatar" aria-hidden="true">
+      <canvas className={mode === "head" ? "" : "hidden"} height={64} ref={canvasRef} width={64} />
+      {mode === "image" ? <img alt="" src={source ?? ""} /> : null}
+      {mode === "loading" || mode === "empty" ? "✦" : null}
+    </span>
+  );
+}
+
+function safeHttpsUrl(value?: string | null) {
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeProjectMarkdown(value: string) {
+  if (!/[<&]|\\[<>]/.test(value)) return value;
+  const decoder = document.createElement("textarea");
+  decoder.innerHTML = value.replace(/\\([<>])/g, "$1");
+  const documentValue = new DOMParser().parseFromString(decoder.value, "text/html");
+  const renderNode = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+    if (!(node instanceof HTMLElement)) return "";
+    const tag = node.tagName.toLowerCase();
+    if (["script", "style", "object", "embed", "form"].includes(tag)) return "";
+    const children = Array.from(node.childNodes).map(renderNode).join("");
+    if (tag === "iframe") {
+      const source = safeHttpsUrl(node.getAttribute("src"));
+      return source ? `\n\n[▶ Assistir vídeo](${source})\n\n` : "";
+    }
+    if (tag === "img") {
+      const source = safeHttpsUrl(node.getAttribute("src"));
+      const alt = (node.getAttribute("alt") ?? "Imagem do projeto").replace(/[\[\]]/g, "");
+      return source ? `\n\n![${alt}](${source})\n\n` : "";
+    }
+    if (tag === "a") {
+      const href = safeHttpsUrl(node.getAttribute("href"));
+      return href ? `[${children.trim() || href}](${href})` : children;
+    }
+    if (["strong", "b"].includes(tag)) return children.trim() ? `**${children.trim()}**` : "";
+    if (["em", "i"].includes(tag)) return children.trim() ? `*${children.trim()}*` : "";
+    if (/^h[1-6]$/.test(tag)) return `\n\n${"#".repeat(Number(tag[1]))} ${children.trim()}\n\n`;
+    if (tag === "li") return `\n- ${children.trim()}`;
+    if (tag === "br") return "\n";
+    if (["p", "div", "center", "section", "ul", "ol", "blockquote"].includes(tag)) {
+      return `\n\n${children.trim()}\n\n`;
+    }
+    return children;
+  };
+  return Array.from(documentValue.body.childNodes)
+    .map(renderNode)
+    .join("")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function fileAsDataUrl(file: File) {
@@ -690,6 +805,9 @@ function LauncherApp() {
   const [instanceContent, setInstanceContent] = useState<InstanceContent>({ mods: [], shaderpacks: [], resourcepacks: [] });
   const [selectedContentNames, setSelectedContentNames] = useState<string[]>([]);
   const [javaPath, setJavaPath] = useState("");
+  const [javaRuntimes, setJavaRuntimes] = useState<JavaRuntime[]>([]);
+  const [javaInstallOpen, setJavaInstallOpen] = useState(false);
+  const [installingJavaMajor, setInstallingJavaMajor] = useState<number>();
   const [notice, setNotice] = useState("Preparando o núcleo Aurora…");
   const [noticeHovered, setNoticeHovered] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>();
@@ -711,7 +829,11 @@ function LauncherApp() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [instanceLog, setInstanceLog] = useState<{ id: string; log: InstanceLog }>();
+  const [runningInstances, setRunningInstances] = useState<RunningInstance[]>([]);
+  const [renameDraft, setRenameDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const avatarMigrationRef = useRef("");
+  const localAvatarMigrationRef = useRef("");
   const activeInstanceRef = useRef({ editingInstance, targetInstance });
   useEffect(() => {
     activeInstanceRef.current = { editingInstance, targetInstance };
@@ -723,6 +845,29 @@ function LauncherApp() {
     ]);
     setStatus(nextStatus);
     setInstances(nextInstances);
+    void hydrateInstanceArtwork(nextInstances);
+  }
+  async function hydrateInstanceArtwork(nextInstances: Instance[]) {
+    const missingArtwork = nextInstances.filter((instance) => instance.projectId && !instance.iconUrl);
+    if (missingArtwork.length === 0) return;
+    const hydrated = await Promise.all(missingArtwork.map(async (instance) => {
+      try {
+        const response = await fetch(`https://api.modrinth.com/v2/project/${encodeURIComponent(instance.projectId!)}`);
+        if (!response.ok) return undefined;
+        const project = await response.json() as { title?: string; icon_url?: string };
+        return await invoke<Instance>("set_instance_presentation", {
+          id: instance.id,
+          displayName: project.title?.trim() || instance.displayName || instance.id,
+          iconUrl: safeHttpsUrl(project.icon_url) || null,
+        });
+      } catch {
+        return undefined;
+      }
+    }));
+    const updates = new Map(hydrated.filter(Boolean).map((instance) => [instance!.id, instance!]));
+    if (updates.size > 0) {
+      setInstances((current) => current.map((instance) => updates.get(instance.id) ?? instance));
+    }
   }
   async function refreshLocalSkinLibrary(ownerId: string) {
     localPreviewUrls.current.forEach((url) => URL.revokeObjectURL(url));
@@ -745,14 +890,14 @@ function LauncherApp() {
   }, []);
   useEffect(() => {
     const savedJava = window.localStorage.getItem("aurora.javaExecutable");
-    if (savedJava) {
-      setJavaPath(savedJava);
-      return;
-    }
+    if (savedJava) setJavaPath(savedJava);
     invoke<JavaRuntime[]>("discover_java")
       .then((runtimes) => {
-        const selected = chooseJavaRuntime(runtimes, minecraftVersion);
-        if (selected) {
+        setJavaRuntimes(runtimes);
+        const selected = savedJava
+          ? runtimes.find((runtime) => runtime.executable === savedJava)
+          : chooseJavaRuntime(runtimes, minecraftVersion);
+        if (!savedJava && selected) {
           setJavaPath(selected.executable);
           window.localStorage.setItem("aurora.javaExecutable", selected.executable);
         }
@@ -837,6 +982,7 @@ function LauncherApp() {
   }, [services]);
   useEffect(() => {
     if (!profile || !services) return;
+    void syncAuroraPublicProfile(services, profile).catch(() => undefined);
     refresh()
       .then(() => {
         setNotice("Núcleo pronto. Crie uma instância para começar.");
@@ -852,6 +998,47 @@ function LauncherApp() {
     setSkinModel(profile.skinModel);
     setLocalSkinPath(window.localStorage.getItem(`aurora.localSkinPath.${profile.uid}`) ?? "");
   }, [profile]);
+  useEffect(() => {
+    if (!profile?.skinUrl || profile.avatarUrl === profile.skinUrl || !services) return;
+    const migrationKey = `${profile.uid}:${profile.skinUrl}`;
+    if (avatarMigrationRef.current === migrationKey) return;
+    avatarMigrationRef.current = migrationKey;
+    void (async () => {
+      try {
+        const next = await saveAuroraAppearance(services, profile, {
+          avatarUrl: profile.skinUrl,
+          skinUrl: profile.skinUrl,
+          capeUrl: profile.capeUrl,
+          skinModel: profile.skinModel,
+        });
+        setProfile(next);
+      } catch {
+        // O perfil continua utilizável; uma nova tentativa ocorre quando a skin for equipada novamente.
+      }
+    })();
+  }, [profile?.uid, profile?.skinUrl, profile?.avatarUrl, services]);
+  useEffect(() => {
+    if (!profile || profile.avatarUrl || profile.skinUrl || !localSkinPath || !services) return;
+    const migrationKey = `${profile.uid}:${localSkinPath}`;
+    if (localAvatarMigrationRef.current === migrationKey) return;
+    localAvatarMigrationRef.current = migrationKey;
+    void (async () => {
+      try {
+        const loaded = await invoke<AppearanceImage>("load_local_appearance", { userId: profile.uid, kind: "skin" });
+        const blob = await (await fetch(loaded.dataBase64)).blob();
+        const skinUrl = await uploadAppearanceImage("skin", new File([blob], "skin.png", { type: "image/png" }));
+        const next = await saveAuroraAppearance(services, profile, {
+          avatarUrl: skinUrl,
+          skinUrl,
+          capeUrl: profile.capeUrl,
+          skinModel: profile.skinModel,
+        });
+        setProfile(next);
+      } catch {
+        // A skin continua equipada localmente; o usuário pode sincronizá-la novamente no guarda-roupa.
+      }
+    })();
+  }, [profile?.uid, profile?.avatarUrl, profile?.skinUrl, localSkinPath, services]);
   useEffect(() => {
     if (!profile || !services) return;
     let cancelled = false;
@@ -951,7 +1138,14 @@ function LauncherApp() {
       recognition.onend = () => respond(null, "Nenhuma fala foi detectada.");
       recognition.start();
     }
+    const refreshRunningInstances = () => {
+      invoke<RunningInstance[]>("list_running_instances")
+        .then(setRunningInstances)
+        .catch(() => undefined);
+    };
+    refreshRunningInstances();
     const timer = window.setInterval(() => {
+      refreshRunningInstances();
       invoke<IpcSessionEvent[]>("poll_ipc_events")
         .then((sessionEvents) => {
           for (const { processId, event } of sessionEvents) {
@@ -1061,6 +1255,11 @@ function LauncherApp() {
         projectId: pack.projectId,
         minecraftVersion: packVersions[pack.projectId] ?? preferredPackVersion(pack, minecraftVersion),
       });
+      await invoke<Instance>("set_instance_presentation", {
+        id: targetInstance,
+        displayName: pack.title,
+        iconUrl: safeHttpsUrl(pack.iconUrl) || null,
+      }).catch(() => undefined);
       setInstalledVersionId(result.minecraft.versionId);
       setInstalledMinecraftVersion(result.minecraftVersion);
       setNotice(
@@ -1091,6 +1290,11 @@ function LauncherApp() {
         projectId: pack.projectId,
         minecraftVersion: selectedMinecraftVersion,
       });
+      await invoke<Instance>("set_instance_presentation", {
+        id: instance.id,
+        displayName: pack.title,
+        iconUrl: safeHttpsUrl(pack.iconUrl) || null,
+      }).catch(() => undefined);
       setTargetInstance(instance.id);
       setInstalledVersionId(result.minecraft.versionId);
       setInstalledMinecraftVersion(result.minecraftVersion);
@@ -1107,6 +1311,7 @@ function LauncherApp() {
   async function openEditor(id: string) {
     setActiveSection("instances");
     setEditingInstance(id);
+    setRenameDraft(id);
     setEditorView("installed");
     setSelectedContentNames([]);
     setInstalledContentFilter("");
@@ -1348,7 +1553,7 @@ function LauncherApp() {
       author: item.author,
       iconUrl: item.iconUrl,
       summary: item.description,
-      body: item.description,
+      body: item.source === "modrinth" ? normalizeProjectMarkdown(item.description) : item.description,
       bodyFormat: item.source === "modrinth" ? "markdown" : "html",
       gallery: item.gallery ?? [],
       websiteUrl: item.websiteUrl,
@@ -1368,7 +1573,7 @@ function LauncherApp() {
         };
         setProjectDetail((current) => current?.content?.projectId === item.projectId ? {
           ...current,
-          body: project.body ?? item.description,
+          body: normalizeProjectMarkdown(project.body ?? item.description),
           iconUrl: project.icon_url ?? item.iconUrl,
           gallery: (project.gallery ?? []).sort((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))).map((image) => image.url ?? "").filter(Boolean),
           websiteUrl: `https://modrinth.com/project/${item.slug || item.projectId}`,
@@ -1385,12 +1590,12 @@ function LauncherApp() {
   }
   async function openModpackDetail(pack: ModrinthPack) {
     setDetailLoading(true);
-    setProjectDetail({ source: "modrinth", kind: "modpack", title: pack.title, author: pack.author, iconUrl: pack.iconUrl, summary: pack.description, body: pack.description, bodyFormat: "markdown", gallery: [], websiteUrl: `https://modrinth.com/modpack/${pack.slug || pack.projectId}`, pack });
+    setProjectDetail({ source: "modrinth", kind: "modpack", title: pack.title, author: pack.author, iconUrl: pack.iconUrl, summary: pack.description, body: normalizeProjectMarkdown(pack.description), bodyFormat: "markdown", gallery: [], websiteUrl: `https://modrinth.com/modpack/${pack.slug || pack.projectId}`, pack });
     try {
       const response = await fetch(`https://api.modrinth.com/v2/project/${encodeURIComponent(pack.projectId)}`);
       if (!response.ok) throw new Error("A página do modpack não está disponível.");
       const project = await response.json() as { body?: string; icon_url?: string; gallery?: Array<{ url?: string; featured?: boolean }> };
-      setProjectDetail((current) => current?.pack?.projectId === pack.projectId ? { ...current, body: project.body ?? pack.description, iconUrl: project.icon_url ?? pack.iconUrl, gallery: (project.gallery ?? []).sort((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))).map((image) => image.url ?? "").filter(Boolean) } : current);
+      setProjectDetail((current) => current?.pack?.projectId === pack.projectId ? { ...current, body: normalizeProjectMarkdown(project.body ?? pack.description), iconUrl: project.icon_url ?? pack.iconUrl, gallery: (project.gallery ?? []).sort((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))).map((image) => image.url ?? "").filter(Boolean) } : current);
     } catch (error) {
       setNotice(`A descrição completa não pôde ser carregada: ${String(error)}`);
     } finally {
@@ -1476,16 +1681,29 @@ function LauncherApp() {
       setBusy(false);
     }
   }
-  async function launchMinecraft() {
-    if (!targetInstance || !installedVersionId) {
+  async function launchMinecraft(instanceId = targetInstance) {
+    if (!instanceId) {
       setNotice("Escolha uma instância que já tenha Minecraft instalado.");
       return;
     }
+    if (runningInstances.some((running) => running.instanceId === instanceId)) {
+      setNotice(`“${instanceId}” já está rodando.`);
+      return;
+    }
     setBusy(true);
-    setNotice("Montando o classpath e iniciando Minecraft…");
+    setNotice(`Montando “${instanceId}” e iniciando Minecraft…`);
     try {
+      const launchProfile = await invoke<InstanceLaunchProfile>("read_instance_launch_profile", { id: instanceId });
+      if (!launchProfile.versionId || !launchProfile.minecraftVersion) {
+        throw new Error("instale Fabric ou Forge nesta instância antes de iniciar");
+      }
+      const versionId = launchProfile.versionId;
+      const gameVersion = launchProfile.minecraftVersion;
+      setTargetInstance(instanceId);
+      setInstalledVersionId(versionId);
+      setInstalledMinecraftVersion(gameVersion);
+      setMinecraftVersion(gameVersion);
       let executable = javaPath.trim();
-      const gameVersion = installedMinecraftVersion || minecraftVersion;
       const requiredJava = requiredJavaMajor(gameVersion);
       if (executable) {
         try {
@@ -1500,13 +1718,14 @@ function LauncherApp() {
         const selected = runtimes.find((runtime) => javaMajor(runtime.version) === requiredJava)
           ?? await invoke<JavaRuntime>("ensure_java", { minecraftVersion: gameVersion });
         executable = selected.executable;
+        setJavaRuntimes(runtimes.some((runtime) => runtime.executable === selected.executable) ? runtimes : [...runtimes, selected]);
         setJavaPath(executable);
         window.localStorage.setItem("aurora.javaExecutable", executable);
       }
       const result = await invoke<LaunchSummary>("launch_instance", {
-        id: targetInstance,
-        versionId: installedVersionId,
-        minecraftVersion: installedMinecraftVersion,
+        id: instanceId,
+        versionId,
+        minecraftVersion: gameVersion,
         javaExecutable: executable,
         nickname: profile?.username ?? "",
         skinUrl: profile?.skinUrl ?? null,
@@ -1514,8 +1733,12 @@ function LauncherApp() {
         capeUrl: profile?.capeUrl ?? null,
         skinModel: profile?.skinModel ?? null,
       });
+      setRunningInstances((current) => [
+        ...current.filter((running) => running.instanceId !== instanceId),
+        { instanceId, processId: result.processId },
+      ]);
       setNotice(
-        `Minecraft iniciado (processo ${result.processId}) com o perfil ${result.versionId}${result.companionInstalled ? " e Aurora Companion" : ""}.`,
+        `“${instanceId}” está rodando (processo ${result.processId}) com o perfil ${result.versionId}${result.coreInstalled ? " e Aurora Core" : ""}${result.companionInstalled ? " + Companion" : ""}.`,
       );
     } catch (error) {
       setNotice(`Não foi possível iniciar Minecraft: ${String(error)}`);
@@ -1531,6 +1754,7 @@ function LauncherApp() {
     try {
       const selected = localSkins.find((skin) => skin.id === selectedLocalSkinId);
       let equippedSkinUrl = selected?.sourceUrl ?? skinUrl;
+      let equippedAvatarUrl = equippedSkinUrl || profile.avatarUrl || "";
       let equippedLocalPath = "";
       let onlineWarning = "";
       if (selected?.image) {
@@ -1545,19 +1769,24 @@ function LauncherApp() {
         window.localStorage.setItem(`aurora.localSkinPath.${profile.uid}`, equippedLocalPath);
         setSkinUrl(selected.previewUrl);
         try {
-          equippedSkinUrl = await uploadAppearanceImage("skin", file);
+          const onlineSkinUrl = await uploadAppearanceImage("skin", file);
+          equippedSkinUrl = onlineSkinUrl;
+          equippedAvatarUrl = onlineSkinUrl;
         } catch (error) {
           equippedSkinUrl = profile.skinUrl ?? "";
+          equippedAvatarUrl = profile.avatarUrl ?? "";
           onlineWarning = error instanceof Error ? error.message : String(error);
         }
       } else if (equippedSkinUrl) {
-        equippedSkinUrl = await invoke<string>("validate_appearance_url", { url: equippedSkinUrl, kind: "skin" });
+        const loaded = await invoke<AppearanceImage>("load_appearance_url", { url: equippedSkinUrl, kind: "skin" });
+        equippedSkinUrl = loaded.url;
+        equippedAvatarUrl = loaded.url;
       }
       const equippedCapeUrl = capeUrl
         ? await invoke<string>("validate_appearance_url", { url: capeUrl, kind: "cape" })
         : "";
       const next = await saveAuroraAppearance(services, profile, {
-        avatarUrl: profile.avatarUrl,
+        avatarUrl: equippedAvatarUrl || null,
         skinUrl: equippedSkinUrl || null,
         capeUrl: equippedCapeUrl || null,
         skinModel,
@@ -1687,6 +1916,33 @@ function LauncherApp() {
     setSkinUsername("");
     setNotice(`Skin pública de ${username} selecionada. Guarde-a localmente ou clique em Equipar.`);
   }
+  async function renameEditingInstance(event: FormEvent) {
+    event.preventDefault();
+    const oldId = editingInstance;
+    const newId = renameDraft.trim();
+    if (!oldId || !newId || oldId === newId) return;
+    setBusy(true);
+    try {
+      const renamed = await invoke<Instance>("rename_instance", { id: oldId, newId });
+      const oldArtworkKey = `aurora.contentArtwork.${oldId}`;
+      const storedArtwork = window.localStorage.getItem(oldArtworkKey);
+      if (storedArtwork) {
+        window.localStorage.setItem(`aurora.contentArtwork.${renamed.id}`, storedArtwork);
+        window.localStorage.removeItem(oldArtworkKey);
+      }
+      setEditingInstance(renamed.id);
+      setRenameDraft(renamed.id);
+      setTargetInstance(renamed.id);
+      setInstanceLog((current) => current?.id === oldId ? { ...current, id: renamed.id } : current);
+      await refresh();
+      await selectInstance(renamed.id);
+      setNotice(`Instância renomeada para “${renamed.id}”.`);
+    } catch (error) {
+      setNotice(`Não foi possível renomear a instância: ${String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function deleteInstance(id: string) {
     if (!window.confirm(`Excluir a instância “${id}” e todos os arquivos dela? Esta ação não pode ser desfeita.`)) return;
     setBusy(true);
@@ -1724,6 +1980,7 @@ function LauncherApp() {
     setBusy(true);
     try {
       const runtimes = await invoke<JavaRuntime[]>("discover_java");
+      setJavaRuntimes(runtimes);
       if (runtimes.length === 0) {
         setNotice(
           "Nenhum Java foi encontrado nos locais usuais. Informe o executável manualmente.",
@@ -1742,10 +1999,34 @@ function LauncherApp() {
       setBusy(false);
     }
   }
+  function selectJava(runtime: JavaRuntime) {
+    setJavaPath(runtime.executable);
+    window.localStorage.setItem("aurora.javaExecutable", runtime.executable);
+    setNotice(`${runtime.version} selecionado para o Aurora.`);
+  }
+  async function installJava(major: 8 | 17 | 21) {
+    const representativeVersion: Record<number, string> = { 8: "1.16.5", 17: "1.20.1", 21: "1.21.1" };
+    setBusy(true);
+    setInstallingJavaMajor(major);
+    setNotice(`Baixando e verificando Java ${major}…`);
+    try {
+      const runtime = await invoke<JavaRuntime>("ensure_java", { minecraftVersion: representativeVersion[major] });
+      const runtimes = await invoke<JavaRuntime[]>("discover_java");
+      setJavaRuntimes(runtimes.some((item) => item.executable === runtime.executable) ? runtimes : [...runtimes, runtime]);
+      selectJava(runtime);
+      setJavaInstallOpen(false);
+      setNotice(`Java ${major} instalado e pronto para usar.`);
+    } catch (error) {
+      setNotice(`Não foi possível instalar Java ${major}: ${String(error)}`);
+    } finally {
+      setInstallingJavaMajor(undefined);
+      setBusy(false);
+    }
+  }
   if (!profile)
     return <AuthScreen services={services} onAuthenticated={setProfile} />;
   const filteredInstances = instances.filter((instance) =>
-    instance.id.toLocaleLowerCase().includes(instanceFilter.trim().toLocaleLowerCase()),
+    `${instance.displayName ?? ""} ${instance.id}`.toLocaleLowerCase().includes(instanceFilter.trim().toLocaleLowerCase()),
   );
   const sectionTitles: Record<LauncherSection, string> = {
     instances: "Instâncias",
@@ -1764,6 +2045,7 @@ function LauncherApp() {
   const enabledContentCount = selectedContentFiles.filter((file) => file.enabled).length;
   const selectedInstalledCount = selectedContentFiles.filter((file) => selectedContentNames.includes(file.name)).length;
   const selectedVisibleCount = visibleInstalledContent.filter((file) => selectedContentNames.includes(file.name)).length;
+  const editingInstanceSummary = instances.find((instance) => instance.id === editingInstance);
   return (
     <>
     <main className="shell app-shell">
@@ -1776,7 +2058,7 @@ function LauncherApp() {
           </div>
         </div>
         <div className="sidebar-user" title={`Conta Aurora: ${profile.username}`}>
-          <span className="user-avatar" aria-hidden="true">{profile.username.slice(0, 1).toUpperCase()}</span>
+          <SkinHeadAvatar source={profile.skinUrl ?? profile.avatarUrl} />
           <span><strong>{profile.username}</strong><small>Conta Aurora</small></span>
         </div>
         <nav aria-label="Seções do launcher" className="app-nav">
@@ -1811,10 +2093,6 @@ function LauncherApp() {
             <p className="eyebrow">AURORA SMART LAUNCHER · {profile.username}</p>
             <h1>{sectionTitles[activeSection]}</h1>
           </div>
-          <div className="header-actions">
-            <span className="selected-instance">{targetInstance ? `Instância: ${targetInstance}` : "Nenhuma instância selecionada"}</span>
-            <button className="compact" disabled={busy || !targetInstance || !installedVersionId} onClick={launchMinecraft} type="button">▶ Iniciar</button>
-          </div>
         </header>
         <section className="workspace-grid">
           <div className="workspace-main">
@@ -1847,13 +2125,26 @@ function LauncherApp() {
             </div>
           ) : (
             <div className="instance-list instance-grid">
-              {filteredInstances.map((instance) => (
-                <div className="instance" key={instance.id}>
-                  <div className="orb">✦</div>
-                  <div>
-                    <strong>{instance.id}</strong>
+              {filteredInstances.map((instance) => {
+                const isRunning = runningInstances.some((running) => running.instanceId === instance.id);
+                return (
+                <div
+                  aria-current={targetInstance === instance.id ? "true" : undefined}
+                  className={`instance${targetInstance === instance.id ? " selected" : ""}${isRunning ? " running" : ""}`}
+                  key={instance.id}
+                  onClick={() => void selectInstance(instance.id)}
+                  onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void selectInstance(instance.id); } }}
+                  role="button"
+                  tabIndex={0}
+                >
+                  {instance.iconUrl ? <img className="instance-artwork" alt={`Imagem de ${instance.displayName || instance.id}`} src={instance.iconUrl} /> : <div className="orb">✦</div>}
+                  <div className="instance-copy">
+                    <strong>{instance.displayName || instance.id}</strong>
+                    {instance.displayName && instance.displayName !== instance.id && <small>{instance.id}</small>}
                     <span>
-                      {instance.hasModsDirectory
+                      {isRunning
+                        ? "Rodando agora"
+                        : instance.hasModsDirectory
                         ? instance.hasInstalledVersion
                           ? "Minecraft instalado"
                           : "Somente pastas — instale uma versão"
@@ -1862,37 +2153,24 @@ function LauncherApp() {
                   </div>
                   <div className="instance-actions">
                     <button
-                      className={targetInstance === instance.id ? "compact" : "secondary compact"}
-                      onClick={() => void selectInstance(instance.id)}
+                      className="compact"
+                      disabled={busy || !instance.hasInstalledVersion || isRunning}
+                      onClick={(event) => { event.stopPropagation(); void launchMinecraft(instance.id); }}
                       type="button"
                     >
-                      Selecionar
+                      {isRunning ? "● Rodando" : "▶ Iniciar"}
                     </button>
-                    <button className="secondary compact" onClick={() => void openEditor(instance.id)} type="button">
+                    <button className="secondary compact" onClick={(event) => { event.stopPropagation(); void openEditor(instance.id); }} type="button">
                       Editar
                     </button>
-                    <button className="danger compact" disabled={busy} onClick={() => void deleteInstance(instance.id)} type="button">
+                    <button className="secondary compact" disabled={busy} onClick={(event) => { event.stopPropagation(); void openInstanceLog(instance.id); }} type="button">Logs</button>
+                    <button className="danger compact" disabled={busy || isRunning} onClick={(event) => { event.stopPropagation(); void deleteInstance(instance.id); }} type="button">
                       Excluir
                     </button>
                   </div>
                 </div>
-              ))}
+              );})}
             </div>
-          )}
-          {targetInstance && (
-            <section className="selected-instance-panel">
-              <div>
-                <p className="eyebrow">INSTÂNCIA SELECIONADA</p>
-                <strong>{targetInstance}</strong>
-              </div>
-              <div className="instance-actions">
-                <button className="compact" disabled={busy || !installedVersionId} onClick={launchMinecraft} type="button">▶ Iniciar</button>
-                <button className="secondary compact" onClick={() => void openEditor(targetInstance)} type="button">Editar</button>
-                <button className="secondary compact" onClick={() => { setContentType("mod"); void openEditor(targetInstance); }} type="button">Mods</button>
-                <button className="secondary compact" disabled={busy} onClick={() => void openInstanceLog(targetInstance)} type="button">Logs</button>
-                <button className="danger compact" disabled={busy} onClick={() => void deleteInstance(targetInstance)} type="button">Excluir</button>
-              </div>
-            </section>
           )}
           {showCreateModal && (
             <section aria-label="Criar uma instância" className="create-modal" role="dialog" aria-modal="true">
@@ -1989,10 +2267,13 @@ function LauncherApp() {
             <section className="editor-panel">
               <div className="editor-heading">
                 <div className="editor-title">
-                  <span className="editor-instance-icon">◈</span>
+                  {editingInstanceSummary?.iconUrl ? <img className="editor-instance-artwork" alt="" src={editingInstanceSummary.iconUrl} /> : <span className="editor-instance-icon">◈</span>}
                   <div>
                   <p className="eyebrow">EDITANDO INSTÂNCIA</p>
-                  <h2>{editingInstance}</h2>
+                  <form className="editor-name-form" onSubmit={renameEditingInstance}>
+                    <input aria-label="Nome da instância" disabled={busy || runningInstances.some((running) => running.instanceId === editingInstance)} maxLength={64} onChange={(event) => setRenameDraft(event.target.value)} value={renameDraft} />
+                    <button className="secondary compact" disabled={busy || !renameDraft.trim() || renameDraft.trim() === editingInstance || runningInstances.some((running) => running.instanceId === editingInstance)} type="submit">Salvar nome</button>
+                  </form>
                     <span>{enabledContentCount} ativos · {selectedContentFiles.length} nesta categoria</span>
                   </div>
                 </div>
@@ -2130,30 +2411,27 @@ function LauncherApp() {
           </div>
         <aside className="side-stack">
           <article className="panel section-java">
-            <p className="eyebrow">JAVA ISOLADO</p>
-            <h2>Runtime da instância</h2>
-            <p className="muted">
-              O Aurora localiza instalações compatíveis e baixa automaticamente
-              um Java isolado quando a versão do Minecraft precisar.
-            </p>
-            <form onSubmit={verifyJava} className="java-form">
-              <input
-                value={javaPath}
-                onChange={(event) => { setJavaPath(event.target.value); window.localStorage.setItem("aurora.javaExecutable", event.target.value); }}
-                placeholder="C:\\Java\\bin\\java.exe"
-              />
-              <button className="secondary" disabled={busy} type="submit">
-                Validar Java
-              </button>
-            </form>
-            <button
-              className="text-button"
-              disabled={busy}
-              type="button"
-              onClick={discoverJava}
-            >
-              Localizar Java instalado
-            </button>
+            <div className="java-manager-heading">
+              <div><p className="eyebrow">JAVA & ENGINE</p><h2>Runtimes disponíveis</h2><p className="muted">O Aurora escolhe a versão compatível com cada Minecraft e pode manter Javas isolados sem alterar o restante do computador.</p></div>
+              <div className="java-manager-actions"><button className="secondary compact" disabled={busy} onClick={() => void discoverJava()} type="button">↻ Verificar novamente</button><button className="compact" disabled={busy} onClick={() => setJavaInstallOpen((current) => !current)} type="button">+ Instalar Java</button></div>
+            </div>
+            {javaInstallOpen && (
+              <section className="java-install-picker" aria-label="Versões de Java disponíveis para instalação">
+                {([8, 17, 21] as const).map((major) => (
+                  <button className="java-install-option" disabled={busy} key={major} onClick={() => void installJava(major)} type="button">
+                    <span>Java {major}</span><small>{major === 8 ? "Minecraft 1.12–1.16" : major === 17 ? "Minecraft 1.17–1.20.4" : "Minecraft 1.20.5 ou mais recente"}</small><strong>{installingJavaMajor === major ? "Instalando…" : "Instalar"}</strong>
+                  </button>
+                ))}
+              </section>
+            )}
+            <div className="java-runtime-list">
+              {javaRuntimes.length === 0 ? <div className="editor-empty compact-empty"><strong>Nenhum Java encontrado</strong><p>Use “Instalar Java” para baixar uma versão gerenciada pelo Aurora.</p></div> : javaRuntimes.map((runtime) => {
+                const selected = runtime.executable === javaPath;
+                const major = javaMajor(runtime.version);
+                return <button aria-pressed={selected} className={selected ? "java-runtime selected" : "java-runtime"} key={runtime.executable} onClick={() => selectJava(runtime)} type="button"><span className="java-version-mark">{major || "J"}</span><span><strong>{major ? `Java ${major}` : "Java detectado"}</strong><small>{runtime.version}</small><code title={runtime.executable}>{runtime.executable}</code></span><em>{selected ? "Em uso" : "Usar"}</em></button>;
+              })}
+            </div>
+            <details className="java-manual"><summary>Usar um executável manualmente</summary><form onSubmit={verifyJava} className="java-form"><input value={javaPath} onChange={(event) => { setJavaPath(event.target.value); window.localStorage.setItem("aurora.javaExecutable", event.target.value); }} placeholder="C:\\Java\\bin\\java.exe" /><button className="secondary" disabled={busy} type="submit">Validar Java</button></form></details>
           </article>
           <article className="panel section-appearance wardrobe-panel">
             <div className="wardrobe-heading">

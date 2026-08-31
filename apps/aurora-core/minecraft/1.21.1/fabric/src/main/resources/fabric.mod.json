@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "aurora_core",
+  "version": "${version}",
+  "name": "Aurora Core",
+  "description": "Infraestrutura compartilhada dos módulos oficiais Aurora.",
+  "environment": "client",
+  "entrypoints": { "client": ["com.aurora.core.minecraft.fabric.AuroraCoreFabric"] },
+  "mixins": ["aurora_core.mixins.json"],
+  "depends": { "fabricloader": ">=0.16.10", "minecraft": "~1.21.1", "java": ">=21" }
+}

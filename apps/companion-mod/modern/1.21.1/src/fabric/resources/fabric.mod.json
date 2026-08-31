@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "id": "aurora_companion",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "name": "Aurora Companion",
   "description": "Ponte local entre Minecraft e Aurora Smart Launcher.",
   "environment": "client",
-  "entrypoints": { "main": ["com.aurora.mod.fabric.AuroraFabric"] },
+  "entrypoints": { "client": ["com.aurora.mod.fabric.AuroraFabric"] },
   "mixins": ["aurora_companion_121.mixins.json"],
-  "depends": { "fabricloader": ">=0.16.10", "minecraft": "~1.21.1", "java": ">=21" }
+  "depends": { "fabricloader": ">=0.16.10", "minecraft": "~1.21.1", "java": ">=21", "aurora_core": ">=1.0.0" }
 }

@@ -77,6 +77,9 @@ Build de JAR não é homologação. Mudança no Companion deve registrar Minecra
 ## Releases e compatibilidade
 
 - SemVer com canais `alpha`, `beta`, `stable`; cada tag e artefato é imutável.
+- O instalador oficial deve ser gerado somente por `npm run desktop:build` na
+  raiz, após commit. O preflight bloqueia worktrees pendentes ou não integrados,
+  versões divergentes e reutilização de um nome de release.
 - Gerar SHA-256 e manifesto; assinatura/autoupdater só entram quando a verificação estiver implementada.
 - Não redistribuir Minecraft nem conteúdo sem permissão/licença. CurseForge sem URL direta mantém fluxo oficial autorizado.
 - NeoForge permanece fora do escopo até decisão explícita.
