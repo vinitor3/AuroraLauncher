@@ -3,12 +3,45 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
 
+    function validNewUser(uid) {
+      return request.resource.data.keys().hasAll([
+          'uid', 'username', 'usernameLower', 'email', 'avatarUrl',
+          'skinUrl', 'capeUrl', 'skinModel', 'role', 'createdAt', 'stats'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'uid', 'username', 'usernameLower', 'email', 'avatarUrl',
+          'skinUrl', 'capeUrl', 'skinModel', 'role', 'createdAt', 'stats'
+        ])
+        && request.resource.data.uid == uid
+        && request.resource.data.username is string
+        && request.resource.data.username.size() >= 3
+        && request.resource.data.username.size() <= 16
+        && request.resource.data.usernameLower is string
+        && request.resource.data.usernameLower.matches('^[a-z0-9_]{3,16}$')
+        && request.resource.data.email == request.resource.data.usernameLower + '@aurora.internal'
+        && request.resource.data.avatarUrl == null
+        && request.resource.data.skinUrl == null
+        && request.resource.data.capeUrl == null
+        && request.resource.data.skinModel == 'classic'
+        && request.resource.data.role == 'PLAYER'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.stats is map
+        && request.resource.data.stats.keys().hasAll([
+          'totalPlayTimeSeconds', 'questsCompleted', 'lastPlayedModpack'
+        ])
+        && request.resource.data.stats.keys().hasOnly([
+          'totalPlayTimeSeconds', 'questsCompleted', 'lastPlayedModpack'
+        ])
+        && request.resource.data.stats.totalPlayTimeSeconds == 0
+        && request.resource.data.stats.questsCompleted == 0
+        && request.resource.data.stats.lastPlayedModpack == null;
+    }
+
     match /users/{uid} {
       allow read: if signedIn() && request.auth.uid == uid;
       allow create: if signedIn()
         && request.auth.uid == uid
-        && request.resource.data.uid == uid
-        && request.resource.data.usernameLower is string;
+        && validNewUser(uid);
       allow update: if signedIn() && request.auth.uid == uid
         && request.resource.data.uid == resource.data.uid
         && request.resource.data.usernameLower == resource.data.usernameLower
@@ -22,6 +55,11 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create: if signedIn()
         && request.resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasAll(['uid', 'usernameLower', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['uid', 'usernameLower', 'createdAt'])
+        && request.resource.data.usernameLower == usernameLower
+        && request.resource.data.usernameLower.matches('^[a-z0-9_]{3,16}$')
+        && request.resource.data.createdAt == request.time
         && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.usernameLower == usernameLower;
       allow update, delete: if false;
     }

@@ -24,8 +24,9 @@ secrets do Worker e nunca são distribuídas no launcher.
 Esta etapa está **implementada e compilada**, mas ainda precisa de homologação
 visual dentro do Minecraft para ser considerada encerrada:
 
-- downloads com até oito transferências concorrentes, retomada, tentativas,
-  hash e publicação atômica;
+- downloads com até oito transferências concorrentes, retomada, tentativas e
+  hash. A troca usa arquivo temporário, mas ainda não é homologada como
+  transacional: o destino anterior pode ser perdido se o rename falhar;
 - deduplicação por arquivo de destino. Isso corrige a falha intermitente
   `os error 2` dos assets quando nomes lógicos diferentes apontam para o mesmo
   hash da Mojang;
@@ -117,6 +118,7 @@ O instalador usa um gerenciador único para Minecraft, Fabric, Forge, assets,
 modpacks, conteúdo individual e Java. Lotes independentes fazem até oito
 transferências simultâneas, com pool de conexões, retomada de arquivo parcial,
 três tentativas, gravação temporária e validação SHA-1/SHA-256/SHA-512 antes da
-troca atômica. A interface mostra separadamente a porcentagem da instalação e a
+troca. O roadmap P0 exige preservar o destino e realizar rollback em toda falha
+antes de chamar a operação de atômica. A interface mostra separadamente a porcentagem da instalação e a
 do arquivo atual, preservando o nome, a contagem de arquivos ativos, bytes e
 velocidade. Um teste HTTP local comprova concorrência real e integridade.

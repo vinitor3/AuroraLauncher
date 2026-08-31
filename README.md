@@ -19,7 +19,7 @@
 </p>
 
 > [!IMPORTANT]
-> O Aurora está em **alpha privada**. O launcher já instala e executa instâncias, mas alguns recursos do Companion ainda aguardam homologação dentro do Minecraft. Consulte o [status técnico](docs/phase-0-status.md) antes de tratar uma combinação como validada.
+> O Aurora está em **alpha experimental de desenvolvimento privado**. O launcher já instala e executa instâncias, mas ainda não possui autenticação Microsoft/Minecraft de produção, updater assinado nem homologação completa do Companion. Não use a build atual como substituta de um launcher oficial nem distribua uma versão pública sem entitlement válido. Consulte o [status técnico](docs/phase-0-status.md) e a [auditoria de engenharia](docs/engineering/README.md).
 
 ## ✦ O que é o Aurora?
 
@@ -46,7 +46,7 @@ O projeto combina uma interface em **React**, um aplicativo **Tauri v2**, um nú
 - **Minecraft e loaders:** suporte a Vanilla, Fabric e Forge com resolução automática de dependências.
 - **Java gerenciado:** detecção de runtimes compatíveis e download de um Java isolado quando necessário.
 - **Modpacks e conteúdo:** pesquisa e instalação por Modrinth e CurseForge.
-- **Gerenciador de downloads:** até oito transferências concorrentes, retomada, tentativas, hashes e publicação atômica.
+- **Gerenciador de downloads:** até oito transferências concorrentes, retomada, tentativas e hashes; a troca de destino ainda precisa do gate transacional descrito no roadmap.
 - **Conteúdo por instância:** mods, shaders e resource packs com seleção múltipla, ativação, desativação e remoção.
 - **Guarda-roupa:** skins locais, favoritos, busca por nick, modelo Classic/Slim, capa e visualização 3D.
 - **Aurora Companion:** builds para Forge 1.12.2 e Fabric/Forge 1.16.5, 1.19.2, 1.20.1 e 1.21.1.
@@ -65,7 +65,7 @@ O projeto combina uma interface em **React**, um aplicativo **Tauri v2**, um nú
 | Cosméticos e emotes | 🔭 | Expandir o guarda-roupa e a integração com o Companion |
 | Distribuição estável | 🔭 | Atualizador do launcher, releases assinadas e canal público estável |
 
-O detalhamento e as evidências de validação ficam em [`docs/phase-0-status.md`](docs/phase-0-status.md) e [`docs/ROADMAP.md`](docs/ROADMAP.md).
+O detalhamento e as evidências de validação ficam em [`docs/phase-0-status.md`](docs/phase-0-status.md), [`docs/ROADMAP.md`](docs/ROADMAP.md) e no [plano de engenharia auditado](docs/engineering/README.md).
 
 ## Arquitetura
 
@@ -145,6 +145,7 @@ npm run companion:build
 ## Documentação
 
 - [Status e homologação](docs/phase-0-status.md)
+- [Auditoria, arquitetura e execução Codex](docs/engineering/README.md)
 - [Roadmap do produto](docs/ROADMAP.md)
 - [Launcher Core](docs/module-a.md)
 - [IPC do Companion](docs/companion-ipc.md)
@@ -155,7 +156,7 @@ npm run companion:build
 
 ## Aviso legal
 
-Aurora Smart Launcher é um projeto independente e não é afiliado à Mojang Studios, Microsoft, Modrinth, CurseForge ou Google. Minecraft e suas marcas pertencem aos respectivos titulares. A distribuição deve respeitar as licenças e os termos dos jogos, loaders, mods e serviços integrados.
+Aurora Smart Launcher é um projeto não oficial, independente e não aprovado nem afiliado à Mojang Studios, Microsoft, Modrinth, CurseForge ou Google. Minecraft e suas marcas pertencem aos respectivos titulares. A distribuição deve respeitar as licenças e os termos dos jogos, loaders, mods e serviços integrados.
 
 <p align="center">
   <sub>Feito com Rust, React e uma boa dose de luz roxa. ✦</sub>

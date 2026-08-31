@@ -20,7 +20,8 @@ Baixar versões, resolver manifests Mojang/mod loaders, login, Firebase, telemet
 - Um JWT Firebase não deve ser passado na linha de comando: ela pode ser vista por outros processos e logs. A futura ponte com o Companion deve usar uma credencial efêmera de loopback, entregue após o jogo iniciar.
 - O produto final deve respeitar as licenças e regras de distribuição aplicáveis ao Minecraft, loaders e mods. O núcleo não valida posse do jogo; essa política deve ser tratada pelo módulo de identidade/distribuição antes do lançamento.
 
-## Contrato de integração futura
+## Integração atual
 
-O frontend/Tauri deverá chamar `LauncherEngine::prepare_launch`, mostrar o comando de forma redigida e chamar `spawn` somente após confirmação do usuário. O resolvedor de versões fornecerá `VersionLaunchSpec`; o módulo B fornecerá `LaunchIdentity`.
+O comando Tauri `launch_instance` já chama `LauncherEngine::prepare_launch` e depois `spawn`. O resolvedor fornece `VersionLaunchSpec` e a fronteira de sessão fornece `LaunchIdentity`. O contrato ainda não está pronto para distribuição pública: o token de jogo continua sendo scaffolding, e confirmação de entitlement Microsoft/Minecraft deve ocorrer antes do launch.
 
+O próximo hardening deste módulo é limitar HTTP/IPC e tornar a substituição de arquivos realmente transacional. Hoje os downloads validam hashes e usam staging, mas a remoção do destino anterior antes do rename cria uma janela de perda se o commit falhar.
