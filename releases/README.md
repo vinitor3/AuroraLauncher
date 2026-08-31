@@ -20,8 +20,11 @@ deve ser sobrescrito nem removido.
 Não use `npm --prefix apps/desktop run tauri build` para um release oficial,
 pois esse comando ignora o preflight da raiz.
 
-## Release integrado atual
+## Instaladores preservados
 
-- `Aurora Smart Launcher_0.1.1-alpha.3_x64-setup.exe`
-- SHA-256: `E535918AD05E26F057BA5415E93BCFB30C778D30B705A6B123F22F739364CEFB`
-- Contém o redesign do desktop, Aurora Core 1.0.0 e Companion 0.2.0.
+- `0.1.0`: `95C2708E5898A0E194263D5E9865F0CC6E56D8880E757C209BD4A50A69D9AAF8`
+- `0.1.1-alpha.2`: `64CED79E0E0A335F5EC595ED0B9A22B34AD01BF9D1692E32A99ACCF07D21A160`
+- `0.1.1-alpha.3`: `E535918AD05E26F057BA5415E93BCFB30C778D30B705A6B123F22F739364CEFB`
+
+A `alpha.3` é o release integrado atual e contém o redesign do desktop,
+Aurora Core 1.0.0 e Companion 0.2.0.
