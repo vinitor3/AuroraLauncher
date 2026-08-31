@@ -1,6 +1,6 @@
 import { initializeApp, type FirebaseApp } from "firebase/app";
 import { createUserWithEmailAndPassword, deleteUser, getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, type Auth, type User } from "firebase/auth";
-import { deleteField, doc, getDoc, getFirestore, runTransaction, serverTimestamp, updateDoc, type Firestore } from "firebase/firestore";
+import { deleteField, doc, getDoc, getFirestore, runTransaction, serverTimestamp, setDoc, updateDoc, type Firestore } from "firebase/firestore";
 import { getDownloadURL, getStorage, ref, uploadBytes, type FirebaseStorage } from "firebase/storage";
 
 export type FirebasePublicConfig = {
@@ -87,6 +87,13 @@ export async function registerAuroraUser(services: FirebaseServices, nickname: s
       });
     });
   } catch (error) { await deleteUser(credential.user); throw error; }
+  await syncAuroraPublicProfile(services, {
+    uid: credential.user.uid,
+    username,
+    avatarUrl: null,
+    skinUrl: null,
+    skinModel: "classic",
+  }).catch(() => undefined);
   return credential;
 }
 
@@ -124,6 +131,7 @@ export async function uploadFirebaseAppearanceImage(
 }
 
 export type AuroraAppearance = Pick<AuroraUserProfile, "avatarUrl" | "skinUrl" | "capeUrl" | "skinModel">;
+export type AuroraPublicProfile = Pick<AuroraUserProfile, "uid" | "username" | "avatarUrl" | "skinUrl" | "skinModel">;
 
 function publicHttpsUrl(value: string) {
   const trimmed = value.trim();
@@ -150,7 +158,21 @@ export async function saveAuroraAppearance(
     updatedAt: serverTimestamp(),
   };
   await updateDoc(doc(services.db, "users", profile.uid), next);
+  await syncAuroraPublicProfile(services, {
+    uid: profile.uid,
+    username: profile.username,
+    avatarUrl: next.avatarUrl,
+    skinUrl: next.skinUrl,
+    skinModel: next.skinModel,
+  }).catch(() => undefined);
   return { ...profile, ...next, updatedAt: undefined } as AuroraUserProfile;
+}
+
+export async function syncAuroraPublicProfile(services: FirebaseServices, profile: AuroraPublicProfile) {
+  await setDoc(doc(services.db, "publicProfiles", profile.uid), {
+    ...profile,
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
 }
 
 export async function clearRemoteSkinLibrary(services: FirebaseServices, profile: AuroraUserProfile) {

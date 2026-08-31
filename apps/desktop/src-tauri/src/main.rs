@@ -4,10 +4,13 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(commands::IpcSessions::default())
+        .manage(commands::RunningInstances::default())
         .invoke_handler(tauri::generate_handler![
             commands::engine_status,
             commands::list_instances,
             commands::create_instance,
+            commands::rename_instance,
+            commands::set_instance_presentation,
             commands::delete_instance,
             commands::install_vanilla,
             commands::install_fabric,
@@ -27,6 +30,7 @@ fn main() {
             commands::read_instance_log,
             commands::read_instance_launch_profile,
             commands::launch_instance,
+            commands::list_running_instances,
             commands::poll_ipc_events,
             commands::toggle_ipc_assistant,
             commands::send_ipc_assistant_response,
@@ -34,6 +38,8 @@ fn main() {
             commands::send_ipc_transcript,
             commands::synthesize_speech,
             commands::validate_appearance_url,
+            commands::load_appearance_url,
+            commands::load_local_appearance,
             commands::save_local_appearance,
             commands::verify_java,
             commands::discover_java,

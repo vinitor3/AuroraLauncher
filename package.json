@@ -1,7 +1,7 @@
 {
   "name": "aurora-smart-launcher",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1-alpha.2",
   "scripts": {
     "desktop:dev": "npm --prefix apps/desktop run tauri dev",
     "desktop:build": "npm --prefix apps/desktop run tauri build",

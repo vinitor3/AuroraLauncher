@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::Read;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -46,6 +46,9 @@ pub struct InstanceSummary {
     path: String,
     has_mods_directory: bool,
     has_installed_version: bool,
+    display_name: Option<String>,
+    icon_url: Option<String>,
+    project_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -95,10 +98,24 @@ pub struct JavaRuntimeSummary {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AppearanceImageSummary {
+    url: String,
+    data_base64: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LaunchSummary {
     process_id: u32,
     version_id: String,
     companion_installed: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunningInstanceSummary {
+    instance_id: String,
+    process_id: u32,
 }
 
 #[derive(Serialize)]
@@ -192,6 +209,14 @@ fn emit_download_event(app: &AppHandle, progress: DownloadProgressEvent) {
 #[derive(Default)]
 pub struct IpcSessions(Mutex<BTreeMap<u32, IpcServer>>);
 
+struct RunningInstance {
+    instance_id: String,
+    child: Child,
+}
+
+#[derive(Default)]
+pub struct RunningInstances(Mutex<BTreeMap<u32, RunningInstance>>);
+
 /// Configuração pública do Firebase, guardada fora do código empacotado.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -213,6 +238,70 @@ fn data_directory(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn layout(app: &AppHandle) -> Result<InstanceLayout, String> {
     Ok(InstanceLayout::new(data_directory(app)?))
+}
+
+fn instance_presentation(path: &Path) -> (Option<String>, Option<String>, Option<String>) {
+    let Ok(contents) = fs::read(path.join("aurora-modpack.json")) else {
+        return (None, None, None);
+    };
+    let Ok(document) = serde_json::from_slice::<serde_json::Value>(&contents) else {
+        return (None, None, None);
+    };
+    let display_name = document["name"].as_str().map(str::to_owned);
+    let icon_url = document["iconUrl"]
+        .as_str()
+        .filter(|url| url.starts_with("https://") && url.len() <= 2_048)
+        .map(str::to_owned);
+    let project_id = document["projectId"].as_str().map(str::to_owned);
+    (display_name, icon_url, project_id)
+}
+
+fn summarize_instance(id: String, path: PathBuf) -> InstanceSummary {
+    let has_installed_version = path
+        .join("versions")
+        .read_dir()
+        .ok()
+        .is_some_and(|entries| {
+            entries.filter_map(Result::ok).any(|version| {
+                let version_id = version.file_name().to_string_lossy().into_owned();
+                version.path().join(format!("{version_id}.json")).is_file()
+            })
+        });
+    let (display_name, icon_url, project_id) = instance_presentation(&path);
+    InstanceSummary {
+        id,
+        has_mods_directory: path.join("mods").is_dir(),
+        has_installed_version,
+        display_name,
+        icon_url,
+        project_id,
+        path: path.display().to_string(),
+    }
+}
+
+fn prune_finished_processes(processes: &mut BTreeMap<u32, RunningInstance>) -> Vec<u32> {
+    let finished = processes
+        .iter_mut()
+        .filter_map(|(process_id, process)| match process.child.try_wait() {
+            Ok(Some(_)) | Err(_) => Some(*process_id),
+            Ok(None) => None,
+        })
+        .collect::<Vec<_>>();
+    for process_id in &finished {
+        processes.remove(process_id);
+    }
+    finished
+}
+
+fn instance_is_running(running: &RunningInstances, instance_id: &str) -> Result<bool, String> {
+    let mut processes = running
+        .0
+        .lock()
+        .map_err(|_| "não foi possível consultar os jogos em execução".to_owned())?;
+    prune_finished_processes(&mut processes);
+    Ok(processes
+        .values()
+        .any(|process| process.instance_id == instance_id))
 }
 
 fn firebase_config_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -277,23 +366,7 @@ pub fn list_instances(app: AppHandle) -> Result<Vec<InstanceSummary>, String> {
         if InstanceId::parse(id.clone()).is_err() {
             continue;
         }
-        let path = entry.path();
-        let has_installed_version = path
-            .join("versions")
-            .read_dir()
-            .ok()
-            .is_some_and(|entries| {
-                entries.filter_map(Result::ok).any(|version| {
-                    let version_id = version.file_name().to_string_lossy().into_owned();
-                    version.path().join(format!("{version_id}.json")).is_file()
-                })
-            });
-        instances.push(InstanceSummary {
-            id,
-            has_mods_directory: path.join("mods").is_dir(),
-            has_installed_version,
-            path: path.display().to_string(),
-        });
+        instances.push(summarize_instance(id, entry.path()));
     }
     instances.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(instances)
@@ -307,17 +380,110 @@ pub fn create_instance(app: AppHandle, id: String) -> Result<InstanceSummary, St
         .ensure_layout()
         .map_err(|error| error.to_string())?;
 
-    Ok(InstanceSummary {
-        id: instance.id().as_str().to_owned(),
-        path: instance.root().display().to_string(),
-        has_mods_directory: true,
-        has_installed_version: false,
-    })
+    Ok(summarize_instance(
+        instance.id().as_str().to_owned(),
+        instance.root().to_path_buf(),
+    ))
 }
 
 #[tauri::command]
-pub fn delete_instance(app: AppHandle, id: String) -> Result<(), String> {
+pub fn rename_instance(
+    app: AppHandle,
+    running: tauri::State<RunningInstances>,
+    id: String,
+    new_id: String,
+) -> Result<InstanceSummary, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    let new_id = InstanceId::parse(new_id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de renomear esta instância".to_owned());
+    }
+    let layout = layout(&app)?;
+    let source = layout.path_for(&id);
+    if !source.is_dir() {
+        return Err("a instância não existe mais".to_owned());
+    }
+    if id == new_id {
+        return Ok(summarize_instance(id.as_str().to_owned(), source));
+    }
+    let destination = layout.path_for(&new_id);
+    if destination.exists() {
+        return Err("já existe uma instância com esse nome".to_owned());
+    }
+    fs::rename(&source, &destination)
+        .map_err(|error| format!("não foi possível renomear a instância: {error}"))?;
+    Ok(summarize_instance(new_id.as_str().to_owned(), destination))
+}
+
+#[tauri::command]
+pub fn set_instance_presentation(
+    app: AppHandle,
+    id: String,
+    display_name: String,
+    icon_url: Option<String>,
+) -> Result<InstanceSummary, String> {
+    let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    let display_name = display_name.trim();
+    if display_name.is_empty()
+        || display_name.len() > 160
+        || display_name.chars().any(char::is_control)
+    {
+        return Err("o nome público do modpack é inválido".to_owned());
+    }
+    let icon_url = icon_url
+        .map(|url| url.trim().to_owned())
+        .filter(|url| !url.is_empty());
+    if icon_url
+        .as_deref()
+        .is_some_and(|url| !url.starts_with("https://") || url.len() > 2_048)
+    {
+        return Err("a imagem do modpack precisa usar uma URL HTTPS".to_owned());
+    }
+    let instance = layout(&app)?.open(id);
+    if !instance.root().is_dir() {
+        return Err("a instância não existe mais".to_owned());
+    }
+    let marker_path = instance.root().join("aurora-modpack.json");
+    let mut document = fs::read(&marker_path)
+        .ok()
+        .and_then(|contents| serde_json::from_slice::<serde_json::Value>(&contents).ok())
+        .unwrap_or_else(|| serde_json::json!({ "source": "modrinth" }));
+    let object = document
+        .as_object_mut()
+        .ok_or_else(|| "os metadados do modpack estão corrompidos".to_owned())?;
+    object.insert("name".to_owned(), serde_json::json!(display_name));
+    if let Some(icon_url) = icon_url {
+        object.insert("iconUrl".to_owned(), serde_json::json!(icon_url));
+    }
+    let temporary = marker_path.with_extension("json.aurora-writing");
+    fs::write(
+        &temporary,
+        serde_json::to_vec_pretty(&document)
+            .map_err(|error| format!("não foi possível preparar os metadados: {error}"))?,
+    )
+    .map_err(|error| format!("não foi possível preparar os metadados: {error}"))?;
+    if marker_path.exists() {
+        fs::remove_file(&marker_path)
+            .map_err(|error| format!("não foi possível atualizar os metadados: {error}"))?;
+    }
+    fs::rename(&temporary, &marker_path)
+        .map_err(|error| format!("não foi possível concluir os metadados: {error}"))?;
+    Ok(summarize_instance(
+        instance.id().as_str().to_owned(),
+        instance.root().to_path_buf(),
+    ))
+}
+
+#[tauri::command]
+pub fn delete_instance(
+    app: AppHandle,
+    running: tauri::State<RunningInstances>,
+    id: String,
+) -> Result<(), String> {
+    let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de excluir esta instância".to_owned());
+    }
     let instance = layout(&app)?.open(id);
     if !instance.root().exists() {
         return Ok(());
@@ -1075,6 +1241,7 @@ pub fn read_instance_launch_profile(
 pub fn launch_instance(
     app: AppHandle,
     sessions: tauri::State<IpcSessions>,
+    running: tauri::State<RunningInstances>,
     id: String,
     version_id: String,
     minecraft_version: String,
@@ -1088,6 +1255,10 @@ pub fn launch_instance(
     let nickname = nickname.trim().to_owned();
     validate_nickname(&nickname).map_err(|error| error.to_string())?;
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("esta instância já está rodando".to_owned());
+    }
+    let instance_id = id.as_str().to_owned();
     let instance = layout(&app)?.open(id);
     let java = JavaRuntime::from_executable(java_executable).map_err(|error| error.to_string())?;
     let uuid = offline_uuid_for_nickname(&nickname).map_err(|error| error.to_string())?;
@@ -1134,20 +1305,67 @@ pub fn launch_instance(
     let prepared = LauncherEngine
         .prepare_launch(&instance, &java, &identity, &spec, 4_096)
         .map_err(|error| error.to_string())?;
-    let child = prepared.spawn().map_err(|error| error.to_string())?;
+    let mut child = prepared.spawn().map_err(|error| error.to_string())?;
     let process_id = child.id();
     if let Some(server) = ipc_server {
-        sessions
-            .0
-            .lock()
-            .map_err(|_| "não foi possível preservar a sessão IPC".to_owned())?
-            .insert(process_id, server);
+        let Ok(mut ipc_sessions) = sessions.0.lock() else {
+            let _ = child.kill();
+            return Err("não foi possível preservar a sessão IPC".to_owned());
+        };
+        ipc_sessions.insert(process_id, server);
     }
+    let Ok(mut processes) = running.0.lock() else {
+        let _ = child.kill();
+        if let Ok(mut ipc_sessions) = sessions.0.lock() {
+            ipc_sessions.remove(&process_id);
+        }
+        return Err("não foi possível acompanhar o jogo iniciado".to_owned());
+    };
+    prune_finished_processes(&mut processes);
+    if processes
+        .values()
+        .any(|process| process.instance_id == instance_id)
+    {
+        let _ = child.kill();
+        if let Ok(mut ipc_sessions) = sessions.0.lock() {
+            ipc_sessions.remove(&process_id);
+        }
+        return Err("esta instância já está rodando".to_owned());
+    }
+    processes.insert(process_id, RunningInstance { instance_id, child });
     Ok(LaunchSummary {
         process_id,
         version_id,
         companion_installed,
     })
+}
+
+#[tauri::command]
+pub fn list_running_instances(
+    running: tauri::State<RunningInstances>,
+    sessions: tauri::State<IpcSessions>,
+) -> Result<Vec<RunningInstanceSummary>, String> {
+    let mut processes = running
+        .0
+        .lock()
+        .map_err(|_| "não foi possível consultar os jogos em execução".to_owned())?;
+    let finished = prune_finished_processes(&mut processes);
+    if !finished.is_empty() {
+        let mut ipc_sessions = sessions
+            .0
+            .lock()
+            .map_err(|_| "não foi possível atualizar as sessões encerradas".to_owned())?;
+        for process_id in finished {
+            ipc_sessions.remove(&process_id);
+        }
+    }
+    Ok(processes
+        .iter()
+        .map(|(process_id, process)| RunningInstanceSummary {
+            instance_id: process.instance_id.clone(),
+            process_id: *process_id,
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -1272,9 +1490,52 @@ pub async fn synthesize_speech(text: String) -> Result<SpeechResult, String> {
 
 #[tauri::command]
 pub async fn validate_appearance_url(url: String, kind: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || validate_appearance_url_blocking(&url, &kind))
-        .await
-        .map_err(|error| format!("não foi possível validar a imagem: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        download_appearance_url_blocking(&url, &kind).map(|(url, _)| url)
+    })
+    .await
+    .map_err(|error| format!("não foi possível validar a imagem: {error}"))?
+}
+
+#[tauri::command]
+pub async fn load_appearance_url(
+    url: String,
+    kind: String,
+) -> Result<AppearanceImageSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (url, bytes) = download_appearance_url_blocking(&url, &kind)?;
+        Ok(AppearanceImageSummary {
+            url,
+            data_base64: format!("data:image/png;base64,{}", STANDARD.encode(bytes)),
+        })
+    })
+    .await
+    .map_err(|error| format!("não foi possível carregar a imagem: {error}"))?
+}
+
+#[tauri::command]
+pub fn load_local_appearance(
+    app: AppHandle,
+    user_id: String,
+    kind: String,
+) -> Result<AppearanceImageSummary, String> {
+    if !valid_profile_id(&user_id) || !matches!(kind.as_str(), "skin" | "cape") {
+        return Err("aparência local inválida".to_owned());
+    }
+    let path = data_directory(&app)?
+        .join("appearance")
+        .join(user_id)
+        .join(format!("{kind}.png"));
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("não foi possível abrir a aparência local: {error}"))?;
+    if bytes.is_empty() || bytes.len() > 5 * 1024 * 1024 {
+        return Err("a aparência local tem um tamanho inválido".to_owned());
+    }
+    png_dimensions(&bytes)?;
+    Ok(AppearanceImageSummary {
+        url: String::new(),
+        data_base64: format!("data:image/png;base64,{}", STANDARD.encode(bytes)),
+    })
 }
 
 #[tauri::command]
@@ -1288,12 +1549,7 @@ pub fn save_local_appearance(
     if !matches!(kind.as_str(), "skin" | "cape") {
         return Err("tipo de aparência inválido".to_owned());
     }
-    if user_id.is_empty()
-        || user_id.len() > 128
-        || !user_id
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-    {
+    if !valid_profile_id(&user_id) {
         return Err("identificador de perfil inválido".to_owned());
     }
     let encoded = data_base64
@@ -1327,6 +1583,14 @@ pub fn save_local_appearance(
     Ok(destination.display().to_string())
 }
 
+fn valid_profile_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
 fn local_appearance_path(app: &AppHandle, value: Option<&str>, kind: &str) -> Option<PathBuf> {
     let candidate = PathBuf::from(value?.trim());
     let root = data_directory(app)
@@ -1341,7 +1605,7 @@ fn local_appearance_path(app: &AppHandle, value: Option<&str>, kind: &str) -> Op
     .then_some(candidate)
 }
 
-fn validate_appearance_url_blocking(url: &str, kind: &str) -> Result<String, String> {
+fn download_appearance_url_blocking(url: &str, kind: &str) -> Result<(String, Vec<u8>), String> {
     const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
 
     let url = url.trim();
@@ -1397,7 +1661,7 @@ fn validate_appearance_url_blocking(url: &str, kind: &str) -> Result<String, Str
         return Err(format!("dimensões de capa inválidas: {width}x{height}"));
     }
 
-    Ok(final_url)
+    Ok((final_url, bytes))
 }
 
 fn png_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {

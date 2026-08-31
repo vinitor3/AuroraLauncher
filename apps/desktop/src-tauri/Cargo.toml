@@ -1,6 +1,6 @@
 [package]
 name = "aurora-launcher-core"
-version = "0.1.0"
+version = "0.1.1-alpha.2"
 edition = "2021"
 description = "Aurora Smart Launcher - Module A engine"
 license = "GPL-3.0-only"

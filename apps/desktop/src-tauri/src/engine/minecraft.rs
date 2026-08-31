@@ -444,22 +444,15 @@ impl MinecraftInstaller {
 
         progress(stage_progress("Executando instalador do Forge", 95.0));
         let mut command = Command::new(java);
-        command.arg("-jar").arg(&installer).arg("--installClient");
-        if minecraft_version == "1.12.2" {
-            command.arg(instance.root());
-        } else {
-            command.arg("--installPath").arg(instance.root());
-        }
+        configure_forge_installer_command(&mut command, &installer, instance.root());
+        command.current_dir(instance.root());
         let output = command.output()?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let details = stderr
-                .lines()
-                .chain(stdout.lines())
-                .rfind(|line| !line.trim().is_empty())
-                .unwrap_or("sem detalhes");
-            return Err(InstallError::ForgeInstaller(details.to_owned()));
+            return Err(InstallError::ForgeInstaller(forge_installer_failure(
+                &stderr, &stdout,
+            )));
         }
         summary.version_id = format!("{minecraft_version}-forge-{forge_version}");
         progress(stage_progress("Forge preparado", 100.0));
@@ -469,6 +462,37 @@ impl MinecraftInstaller {
     fn get_json(&self, url: &str) -> Result<Value, InstallError> {
         Ok(self.client.get(url).send()?.error_for_status()?.json()?)
     }
+}
+
+fn configure_forge_installer_command(command: &mut Command, installer: &Path, target: &Path) {
+    // O caminho é o valor opcional de --installClient em instaladores antigos e
+    // modernos. --installPath não faz parte da CLI oficial do Forge.
+    command
+        .arg("-jar")
+        .arg(installer)
+        .arg("--installClient")
+        .arg(target);
+}
+
+fn forge_installer_failure(stderr: &str, stdout: &str) -> String {
+    let lines = stderr
+        .lines()
+        .chain(stdout.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let meaningful = lines.iter().rev().find(|line| {
+        let lower = line.to_ascii_lowercase();
+        lower.starts_with("caused by:")
+            || lower.contains("exception:")
+            || lower.contains("error:")
+            || lower.starts_with("error ")
+    });
+    let details = meaningful
+        .copied()
+        .or_else(|| lines.last().copied())
+        .unwrap_or("sem detalhes");
+    details.chars().take(800).collect()
 }
 
 fn descriptor_request(
@@ -635,7 +659,13 @@ fn extract_native(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_java_major, required_java_major};
+    use std::path::Path;
+    use std::process::Command;
+
+    use super::{
+        configure_forge_installer_command, forge_installer_failure, parse_java_major,
+        required_java_major,
+    };
 
     #[test]
     fn recognizes_legacy_and_modern_java_versions() {
@@ -648,5 +678,43 @@ mod tests {
         assert_eq!(required_java_major("1.12.2"), 8);
         assert_eq!(required_java_major("1.20.1"), 17);
         assert_eq!(required_java_major("1.21.1"), 21);
+    }
+
+    #[test]
+    fn passes_the_instance_path_as_the_install_client_value() {
+        let mut command = Command::new("java");
+        configure_forge_installer_command(
+            &mut command,
+            Path::new("forge-installer.jar"),
+            Path::new("instance with spaces"),
+        );
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            arguments,
+            [
+                "-jar",
+                "forge-installer.jar",
+                "--installClient",
+                "instance with spaces"
+            ]
+        );
+        assert!(!arguments.iter().any(|argument| argument == "--installPath"));
+    }
+
+    #[test]
+    fn reports_the_forge_exception_instead_of_the_last_stack_frame() {
+        let failure = forge_installer_failure(
+            "Exception in thread \"main\"\n\
+             joptsimple.UnrecognizedOptionException: installPath is not a recognized option\n\
+             \tat net.minecraftforge.installer.SimpleInstaller.main(SimpleInstaller.java:76)",
+            "",
+        );
+        assert_eq!(
+            failure,
+            "joptsimple.UnrecognizedOptionException: installPath is not a recognized option"
+        );
     }
 }
