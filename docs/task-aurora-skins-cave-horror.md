@@ -2,9 +2,10 @@
 
 ## Estado
 
-**PARCIAL** em 1º de setembro de 2026: código, matrizes de mods, catálogo de
-produção e teste visual do menu estão concluídos. O instalador oficial
-`0.1.1-alpha.5` ainda será gerado depois do commit e do preflight limpo.
+**CONCLUÍDO** no código, nas matrizes de mods, no catálogo de produção e no
+instalador em 1º de setembro de 2026. A homologação runtime completa das nove
+combinações continua separada; o roteiro real desta entrega cobriu o menu do
+Cave Horror 1.20.1 Forge e, portanto, permanece **PARCIAL** nessa matriz.
 
 ## Entrega
 
@@ -39,3 +40,12 @@ Minecraft/loader, valida o Core assinado e instala ou substitui atomicamente
 Core, Skins e Companion na pasta `mods`. A imagem de uma skin do catálogo só é
 baixada quando a pessoa a seleciona/aplica e depois fica no cache local; o
 catálogo possui skins originais embutidas para funcionar sem rede.
+
+## Instalador
+
+- Arquivo: `releases/Aurora Smart Launcher_0.1.1-alpha.5_x64-setup.exe`
+- Tamanho: 6.475.907 bytes
+- SHA-256: `F10E8128D4984BAF6E2014E9F4F460FE901DB0B2AD796CE4B74B15150885BEED`
+- Authenticode: ausente (`NotSigned`).
+- Build: `npm run desktop:build`, com matriz 27/27 e preflight dos seis
+  worktrees aprovados antes do bundle NSIS.
