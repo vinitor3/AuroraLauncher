@@ -10,11 +10,11 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Adaptador dual: nome intermediary no Fabric e nome oficial no Forge 1.21.1. */
+/** Adaptador do ciclo do cliente no namespace oficial usado pelo Forge. */
 @Pseudo
-@Mixin(targets = { "net.minecraft.class_310", "net.minecraft.client.Minecraft" })
-public abstract class AuroraMinecraftMixin {
-    @Inject(method = { "method_1574", "tick" }, at = @At("TAIL"), require = 0)
+@Mixin(targets = "net.minecraft.client.Minecraft")
+public abstract class ForgeMinecraftMixin {
+    @Inject(method = "tick", at = @At("TAIL"), require = 0)
     private void aurora$clientTick(CallbackInfo callback) {
         long handle = findWindowHandle(this);
         if (handle != 0L) AuroraCompanion.tickOverlayShortcut(handle);

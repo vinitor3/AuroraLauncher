@@ -1,7 +1,5 @@
 package com.aurora.mod;
 
-import com.aurora.mod.profile.AuroraProfileAppearance;
-
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.concurrent.Executors;
@@ -22,7 +20,6 @@ public final class AuroraCompanion {
         if (ipcClient != null) return;
         System.out.println("[Aurora] Companion 1.12.2 carregado.");
         System.setProperty("java.awt.headless", "false");
-        AuroraProfileAppearance.initialize();
         ipcClient = AuroraIpcClient.fromSystemProperties();
         if (ipcClient != null) {
             ipcClient.connect();

@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 public final class AuroraCompanion {
     public static final String MOD_ID = "aurora_companion";
     private static AuroraIpcClient ipcClient;
+    private static ScheduledExecutorService bootstrapExecutor;
     private static ScheduledExecutorService telemetryExecutor;
     private static boolean overlayShortcutWasDown;
     private static boolean overlayTickAnnounced;
@@ -20,15 +21,27 @@ public final class AuroraCompanion {
         if (ipcClient != null) {
             return;
         }
-        System.out.println("[Aurora] Companion carregado.");
         System.setProperty("java.awt.headless", "false");
-        initializeAppearance();
         ipcClient = AuroraIpcClient.fromSystemProperties();
-        if (ipcClient != null) {
-            ipcClient.connect();
-            registerAuroraModule();
-            startTelemetrySampler();
-        }
+        if (ipcClient == null) { scheduleBootstrapRetry(); return; }
+        System.out.println("[Aurora] Companion carregado.");
+        if (bootstrapExecutor != null) { bootstrapExecutor.shutdown(); bootstrapExecutor = null; }
+        ipcClient.connect();
+        registerAuroraModule();
+        startTelemetrySampler();
+    }
+
+    private static synchronized void scheduleBootstrapRetry() {
+        if (bootstrapExecutor != null) return;
+        bootstrapExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "Aurora-Companion-Bootstrap");
+            thread.setDaemon(true);
+            return thread;
+        });
+        bootstrapExecutor.scheduleAtFixedRate(() -> {
+            try { if (com.aurora.core.api.Aurora.isAvailable()) initialize(); }
+            catch (Throwable ignored) { }
+        }, 250L, 250L, TimeUnit.MILLISECONDS);
     }
 
     private static void registerAuroraModule() {
@@ -42,19 +55,6 @@ public final class AuroraCompanion {
     /** Porta de loopback fornecida somente pelo Launcher Core. */
     public static int ipcPort() {
         return Integer.getInteger("aurora.ipc.port", 45882);
-    }
-
-    private static void initializeAppearance() {
-        String[] managers = {
-            "com.aurora.mod.appearance.AuroraSkinManager",
-            "com.aurora.mod.profile.AuroraProfileAppearance"
-        };
-        for (String manager : managers) {
-            try {
-                Class.forName(manager).getMethod("initialize").invoke(null);
-                return;
-            } catch (ReflectiveOperationException ignored) { }
-        }
     }
 
     /**

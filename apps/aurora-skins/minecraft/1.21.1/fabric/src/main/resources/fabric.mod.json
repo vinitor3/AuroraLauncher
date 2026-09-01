@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "aurora_skins",
+  "version": "${version}",
+  "name": "Aurora Skins",
+  "description": "Biblioteca e renderização de skins integradas ao Aurora Core.",
+  "environment": "client",
+  "entrypoints": { "client": ["com.aurora.skins.minecraft.fabric.AuroraSkinsFabric"] },
+  "mixins": ["aurora_skins.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.16.10",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "aurora_core": ">=1.1.0"
+  }
+}

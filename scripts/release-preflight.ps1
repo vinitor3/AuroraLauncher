@@ -59,8 +59,10 @@ try {
     }
 
     $requiredFiles = @(
-        "apps/aurora-core/compatibility-manifest.json",
+        "apps/aurora-core/compatibility-manifest-1.1.0.json",
+        "apps/aurora-core/trusted-public-key-1.1.0.txt",
         "apps/desktop/src-tauri/src/engine/core.rs",
+        "apps/desktop/src-tauri/src/engine/skins.rs",
         "apps/desktop/src/App.tsx",
         "apps/desktop/src/styles.css"
     )
@@ -92,6 +94,7 @@ try {
     $sourcePaths = @(
         "apps/desktop",
         "apps/aurora-core",
+        "apps/aurora-skins",
         "apps/companion-mod",
         "apps/edge-proxy",
         "firebase",

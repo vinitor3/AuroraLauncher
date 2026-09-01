@@ -2,6 +2,8 @@ package com.aurora.core.minecraft.legacy;
 
 import com.aurora.core.api.Aurora;
 import com.aurora.core.api.ui.AuroraPlayerPreview;
+import com.aurora.core.api.ui.AuroraButtonLayout;
+import com.aurora.core.api.ui.AuroraSettingsLayout;
 import com.aurora.core.api.ui.AuroraSettingsPage;
 import com.aurora.core.api.ui.AuroraUiContext;
 import com.aurora.core.runtime.AuroraCoreRuntime;
@@ -27,9 +29,26 @@ final class LegacyAuroraUi {
         if (screen == null || !screen.getClass().getName().equals("net.minecraft.client.gui.GuiOptions")) return;
         List<Object> buttons = list(invoke(event, "getButtonList"));
         if (!states.containsKey(screen)) {
-            Object button = button(OPEN_BUTTON, width(screen) / 2 - 100, height(screen) - 52, 200, 20, "Opções Aurora");
+            List<AuroraButtonLayout.Rect> occupied = new ArrayList<AuroraButtonLayout.Rect>();
+            for (Object existing : buttons) {
+                occupied.add(new AuroraButtonLayout.Rect(
+                    integer(field(existing, "x", "xPosition", "field_146128_h"), 0),
+                    integer(field(existing, "y", "yPosition", "field_146129_i"), 0),
+                    integer(field(existing, "width", "field_146120_f"), 200),
+                    integer(field(existing, "height", "field_146121_g"), 20)));
+            }
+            AuroraButtonLayout.Slot slot = AuroraButtonLayout.findSlot(width(screen), height(screen), occupied);
+            Object button = button(OPEN_BUTTON, slot.x(), slot.y(), slot.width(), slot.height(), "Opções Aurora");
             if (button != null) buttons.add(button);
         }
+    }
+
+    @SubscribeEvent public void onDrawBackground(GuiScreenEvent.BackgroundDrawnEvent event) {
+        Object screen = invoke(event, "getGui");
+        if (!states.containsKey(screen)) return;
+        AuroraSettingsLayout layout = AuroraSettingsLayout.calculate(width(screen), height(screen));
+        drawRect(layout.panelLeft(), 40, layout.panelRight(), height(screen) - 40, 0xD91A112B);
+        drawRect(layout.panelLeft(), 40, layout.panelLeft() + 3, height(screen) - 40, 0xFFB78CFF);
     }
 
     @SubscribeEvent public void onAction(GuiScreenEvent.ActionPerformedEvent.Post event) {
@@ -57,10 +76,15 @@ final class LegacyAuroraUi {
         if (state == null) return;
         int mouseX = integer(invoke(event, "getMouseX"), width(screen) / 2);
         int mouseY = integer(invoke(event, "getMouseY"), height(screen) / 2);
+        AuroraSettingsLayout layout = AuroraSettingsLayout.calculate(width(screen), height(screen));
         drawText(screen, "AURORA", width(screen) / 2 - 18, 18, 0xF2EAFF);
-        drawText(screen, "Módulos", Math.max(18, width(screen) / 2 - 220), 48, 0xB9AACB);
-        drawText(screen, Aurora.services().ipc().isConnected() ? "Launcher conectado" : "Launcher desconectado",
-            width(screen) / 2 + 62, 52, 0xB9AACB);
+        drawText(screen, "Módulos", layout.navigationX(), 48, 0xB9AACB);
+        drawText(screen, fitText(screen, Aurora.services().ipc().isConnected()
+            ? "Launcher conectado" : "Launcher desconectado", layout.contentWidth()),
+            layout.contentX(), 58, 0xB9AACB);
+        drawText(screen, fitText(screen, "Módulos instalados: "
+            + Aurora.services().modules().modules().size(), layout.contentWidth()),
+            layout.contentX(), 76, 0xB9AACB);
         renderAvatar(state, screen, mouseX, mouseY);
     }
 
@@ -73,12 +97,13 @@ final class LegacyAuroraUi {
         List<Object> buttons = list(LegacyMinecraftPlatform.field(screen, "buttonList", "field_146292_n"));
         buttons.clear();
         State state = new State();
+        AuroraSettingsLayout layout = AuroraSettingsLayout.calculate(width(screen), height(screen));
         List<AuroraSettingsPage> pages = Aurora.services().settings().pages();
-        int x = Math.max(18, width(screen) / 2 - 220);
+        int x = layout.navigationX();
         for (int index = 0; index < pages.size() && index < 8; index++) {
             AuroraSettingsPage page = pages.get(index);
             int id = PAGE_BUTTON_START + index;
-            Object pageButton = button(id, x, 64 + index * 24, 150, 20, page.title());
+            Object pageButton = button(id, x, 64 + index * 24, layout.navigationWidth(), 20, page.title());
             if (pageButton != null) {
                 buttons.add(pageButton);
                 state.pages.put(id, page);
@@ -87,7 +112,7 @@ final class LegacyAuroraUi {
         AuroraSettingsPage skins = findSkinsPage();
         if (skins != null) {
             int id = PAGE_BUTTON_START + 90;
-            Object skinButton = button(id, width(screen) / 2 + 52, height(screen) - 76, 94, 20, "Skins");
+            Object skinButton = button(id, layout.avatarX() - 47, height(screen) - 76, 94, 20, "Skins");
             if (skinButton != null) {
                 buttons.add(skinButton);
                 state.pages.put(id, skins);
@@ -120,19 +145,24 @@ final class LegacyAuroraUi {
 
     private void renderAvatar(State state, Object screen, int mouseX, int mouseY) {
         try {
-            int x = width(screen) / 2 + 100, y = height(screen) - 88;
+            AuroraSettingsLayout layout = AuroraSettingsLayout.calculate(width(screen), height(screen));
+            int x = layout.avatarX(), y = layout.avatarY();
             state.preview.aim(mouseX, mouseY, x, y - 70, Math.max(160, width(screen) / 2), Math.max(120, height(screen)));
             long now = System.nanoTime();
             state.preview.update((now - state.lastFrame) / 1_000_000_000.0F);
             state.lastFrame = now;
             Object minecraft = LegacyMinecraftPlatform.minecraft();
             Object player = LegacyMinecraftPlatform.field(minecraft, "player", "field_71439_g");
-            if (player == null) return;
+            int scale = Math.min(55, Math.max(34, height(screen) / 5));
+            if (player == null) {
+                Aurora.services().previews().render(screen, x, y, scale, state.preview);
+                return;
+            }
             Class<?> inventory = Class.forName("net.minecraft.client.gui.inventory.GuiInventory");
             for (Method method : inventory.getMethods()) {
                 if (!(method.getName().equals("drawEntityOnScreen") || method.getName().equals("func_147046_a"))
                     || method.getParameterTypes().length != 6) continue;
-                method.invoke(null, x, y, Math.min(55, Math.max(34, height(screen) / 5)),
+                method.invoke(null, x, y, scale,
                     -state.preview.headYaw() * 0.65F, state.preview.headPitch() * 0.7F, player);
                 return;
             }
@@ -162,6 +192,41 @@ final class LegacyAuroraUi {
                 return;
             } catch (ReflectiveOperationException ignored) { }
         }
+    }
+
+    private static String fitText(Object screen, String value, int maxWidth) {
+        Object font = LegacyMinecraftPlatform.field(screen, "fontRenderer", "field_146289_q");
+        if (font == null) return value;
+        String shortened = value;
+        while (!shortened.isEmpty() && stringWidth(font, shortened + "…") > maxWidth) {
+            shortened = shortened.substring(0, shortened.length() - 1);
+        }
+        return shortened.equals(value) ? value : shortened + "…";
+    }
+
+    private static int stringWidth(Object font, String value) {
+        for (String name : new String[] { "getStringWidth", "func_78256_a" }) {
+            try {
+                Method method = font.getClass().getMethod(name, String.class);
+                Object result = method.invoke(font, value);
+                if (result instanceof Number) return ((Number) result).intValue();
+            } catch (ReflectiveOperationException ignored) { }
+        }
+        return value.length() * 6;
+    }
+
+    private static void drawRect(int left, int top, int right, int bottom, int color) {
+        try {
+            Class<?> gui = Class.forName("net.minecraft.client.gui.Gui");
+            for (String name : new String[] { "drawRect", "func_73734_a" }) {
+                try {
+                    Method method = gui.getDeclaredMethod(name, int.class, int.class, int.class, int.class, int.class);
+                    method.setAccessible(true);
+                    method.invoke(null, left, top, right, bottom, color);
+                    return;
+                } catch (ReflectiveOperationException ignored) { }
+            }
+        } catch (ClassNotFoundException ignored) { }
     }
 
     private static int width(Object screen) { return integer(LegacyMinecraftPlatform.field(screen, "width", "field_146294_l"), 854); }

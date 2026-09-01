@@ -13,17 +13,18 @@ Launcher Rust
             ├─ API de módulos e eventos
             ├─ sessão pública sem tokens
             ├─ configuração versionada em .aurora/config
-            ├─ menu Aurora + avatar 3D reutilizável
+            ├─ menu Aurora + layout/preview 3D reutilizáveis
+            ├─ módulo Aurora Skins
             ├─ módulo Aurora Companion
-            └─ futuros módulos, incluindo Aurora Skins
+            └─ futuros módulos oficiais/terceiros
 ```
 
 - `api`: contratos Java 8 sem classes de Minecraft ou loader;
 - `runtime`: registro de módulos, event bus, sessão, IPC e configuração;
 - `minecraft/<versão>`: adaptadores Fabric/Forge e UI nativa;
 - `minecraft/legacy/forge-1.12.2`: adaptador legado isolado;
-- `compatibility-manifest.json`: matriz central e metadados assinados;
-- `releases/core/1.0.0`: artefatos imutáveis embarcados pelo Launcher.
+- `compatibility-manifest-1.1.0.json`: matriz central e metadados assinados;
+- `releases/core/1.1.0`: artefatos imutáveis embarcados pelo Launcher.
 
 ## Contrato de módulo
 

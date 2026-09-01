@@ -1,40 +1,50 @@
 # Compatibility Matrix
 
-Atualizado em 2026-08-31. `BUILD` significa JAR válido/compilável; `RUNTIME` exige o roteiro completo. Aurora Core 1.0.0 compila nos nove alvos, mas ainda não possui homologação runtime.
+Atualizado em 2026-08-31. `BUILD` significa JAR compilado e inspecionado; `RUNTIME` exige o roteiro completo em uma instância real. Core 1.1.0, Skins 0.1.0 e Companion 0.2.1 formam a matriz embarcada no Launcher 0.1.1-alpha.4.
 
-| Minecraft | Loader | Java | Core build | Core runtime | Companion build | Companion runtime | Estado do Core |
+| Minecraft | Loader | Java | Core build | Skins build | Companion build | Runtime do conjunto | Estado |
 | --- | --- | ---: | :---: | :---: | :---: | :---: | --- |
-| 1.12.2 | Forge | 8 | sim | não | sim | sim | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.16.5 | Fabric | 8 | sim | não | sim | não | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.16.5 | Forge | 8 | sim | não | sim | não | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.19.2 | Fabric | 17 | sim | não | sim | não | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.19.2 | Forge | 17 | sim | não | sim | não | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.20.1 | Fabric | 17 | sim | não | sim | sim | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.20.1 | Forge | 17 | sim | não | sim | não | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.21.1 | Fabric | 21 | sim | não | sim | não | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.21.1 | Forge | 21 | sim | não | sim | não | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| 1.12.2 | Forge 14.23.5.2860 | 8 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| 1.16.5 | Fabric 0.16.14 | 8 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| 1.16.5 | Forge 36.2.42 | 8 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| 1.19.2 | Fabric 0.16.14 | 17 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| 1.19.2 | Forge 43.4.16 | 17 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| 1.20.1 | Fabric 0.16.14 | 17 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| 1.20.1 | Forge 47.4.23 | 17 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| 1.21.1 | Fabric 0.16.14 | 21 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| 1.21.1 | Forge 52.1.12 | 21 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 
-As duas marcações runtime do Companion são evidências anteriores e não homologam automaticamente o novo Core. O menu Aurora, o avatar 3D e a conexão única precisam ser reexecutados em cada linha.
+Evidências runtime anteriores do Companion 1.12.2 Forge e 1.20.1 Fabric não homologam automaticamente os novos Core/Skins. O conjunto precisa ser reexecutado porque a aparência deixou de pertencer ao Companion e passou para o módulo Aurora Skins.
+
+## Instalação pelo Launcher
+
+Para cada instância Fabric/Forge suportada, o Launcher instala por troca atômica:
+
+1. Aurora Core 1.1.0, após validar tamanho, SHA-256 e assinatura Ed25519;
+2. Aurora Skins 0.1.0;
+3. Aurora Companion 0.2.1.
+
+O release preflight recompila as 27 combinações e compara os JARs de staging com os artefatos embarcados. Uma divergência bloqueia a criação do instalador.
 
 ## Roteiro runtime obrigatório
 
 1. Instância limpa e hashes de instalador/JAR.
 2. Java/loader corretos e launch sem argumento sensível.
 3. Handshake IPC e rejeição de nonce inválido.
-4. Core instalado antes do Companion; somente uma conexão WebSocket.
-5. Options → Aurora Options; abrir/fechar repetido; ESC.
-6. Avatar 3D com classic/slim, camadas externas, mouse e fallback de render.
-7. Mundo não pausa; teclado/mouse voltam ao jogo sem travar.
-8. Texto, voz, resposta, legenda e mute/TTS.
-9. Screenshot somente após confirmação e sem telemetria.
-10. Skin 64x64 classic, slim, 64x32 convertida e capa, com inspeção visual.
-11. Falha de módulo/IPC/Worker e encerramento do Minecraft/launcher.
-12. Migração/backup de configuração e evidência redigida anexada à execução.
+4. Core → Skins → Companion; somente uma conexão WebSocket.
+5. Options → Aurora Options; botão sem sobreposição em diferentes GUI scales.
+6. Painel roxo, textos truncados sem colisão e abrir/fechar repetido por botão/ESC.
+7. Avatar 3D na tela principal e na Central Aurora, classic/slim, duas camadas e fallback.
+8. Mouse para cima/baixo e esquerda/direita com cabeça/corpo na direção correta e suavização.
+9. Importar/aplicar PNG 64x64 classic, slim e 64x32 convertida; reiniciar e confirmar persistência.
+10. Mundo não pausa; teclado/mouse voltam ao jogo sem travar.
+11. Em 1.16.5, Multiplayer não deve ser bloqueado pela conta Microsoft fictícia; servidor `online-mode` continua exigindo autenticação oficial.
+12. Falha de módulo, skin HTTPS, IPC e encerramento sem impedir o Minecraft de iniciar.
 
-## Estratégia de portes
+## Estratégia
 
-- Referência: Core/Companion Fabric 1.20.1.
-- Segundo alvo: Forge 1.20.1.
-- Depois: 1.19.2, 1.16.5, 1.21.1 conforme adaptadores reais.
-- Último: Forge 1.12.2, preservando Java 8/LWJGL2 e sem bloquear o moderno.
+- Referência moderna: Fabric/Forge 1.20.1.
+- 1.21.1 usa Java 21 e adaptadores próprios de `PlayerSkin`.
+- 1.16.5 preserva bytecode Java 8 e identidade de launch `legacy`/offline.
+- 1.12.2 permanece em trilho Forge legado Java 8/LWJGL2.
 - NeoForge: fora do escopo por decisão atual.

@@ -31,4 +31,8 @@ allprojects {
         options.encoding = "UTF-8"
         options.release = requestedJavaVersion
     }
+    tasks.withType(AbstractArchiveTask).configureEach {
+        preserveFileTimestamps = false
+        reproducibleFileOrder = true
+    }
 }

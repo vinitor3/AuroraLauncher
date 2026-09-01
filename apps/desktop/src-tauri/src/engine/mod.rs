@@ -9,6 +9,7 @@ mod jre;
 mod launch;
 mod minecraft;
 mod modpacks;
+mod skins;
 mod tts;
 mod version;
 
@@ -35,5 +36,6 @@ pub use modpacks::{
     search_modrinth_content, search_modrinth_modpacks, ModpackError, ModpackInstallSummary,
     ModpackProgress, ModrinthContent, ModrinthPack, ModrinthSearchPage, ResolvedContentArtwork,
 };
+pub use skins::{install_embedded_skins, SkinsError};
 pub use tts::{synthesize_speech, SpeechBoundary, SpeechResult, TtsError};
 pub use version::{resolve_launch_spec, VersionResolveError};

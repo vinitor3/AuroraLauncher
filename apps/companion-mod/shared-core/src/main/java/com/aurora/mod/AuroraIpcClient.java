@@ -17,7 +17,6 @@ final class AuroraIpcClient {
 
     static AuroraIpcClient fromSystemProperties() {
         if (!Aurora.isAvailable()) {
-            System.err.println("[Aurora Companion] Aurora Core 1.0.0 or newer is required.");
             return null;
         }
         return new AuroraIpcClient();

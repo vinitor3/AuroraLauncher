@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "com.aurora"
-version = "0.2.0"
+version = "0.2.1"
 
 repositories {
     mavenCentral()
@@ -14,16 +14,17 @@ repositories {
 
 sourceSets {
     main {
-        java.srcDirs "../../common/src/main/java", "../../shared-ui/src/main/java", "../../shared-core/src/main/java", "../../profile-appearance/src/main/java", "src/main/java", "src/forge-stubs/java"
+        java.srcDirs "../../common/src/main/java", "../../shared-ui/src/main/java", "../../shared-core/src/main/java", "src/main/java", "src/forge-stubs/java"
         java.exclude "com/aurora/mod/appearance/**", "com/aurora/mod/mixin/**"
     }
 }
 
 java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
 tasks.withType(JavaCompile).configureEach { options.encoding = "UTF-8"; options.release = 17 }
+tasks.withType(AbstractArchiveTask).configureEach { preserveFileTimestamps = false; reproducibleFileOrder = true }
 
 dependencies {
-    compileOnly files("../../../aurora-core/api/build/libs/aurora-core-api-1.0.0.jar")
+    compileOnly files("../../../aurora-core/api/build/libs/aurora-core-api-1.1.0.jar")
     compileOnly "net.fabricmc:fabric-loader:0.16.10"
     compileOnly "net.fabricmc:sponge-mixin:0.12.5+mixin.0.8.5"
 }
