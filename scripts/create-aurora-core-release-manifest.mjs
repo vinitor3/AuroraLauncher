@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const version = "1.1.1";
+const version = "1.1.2";
 const manifestPath = join(repository, "apps", "aurora-core", `compatibility-manifest-${version}.json`);
 const publicKeyPath = join(repository, "apps", "aurora-core", `trusted-public-key-${version}.txt`);
 

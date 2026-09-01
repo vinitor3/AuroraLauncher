@@ -17,7 +17,7 @@ Este roadmap separa claramente o que já está implementado, o que ainda precisa
 - [ ] Homologar todas as combinações Minecraft/loader em execução real.
 - [ ] Concluir a inspeção visual de skin e capa nas versões suportadas.
 - [ ] Cobrir fluxos críticos com testes de interface reproduzíveis.
-- [ ] Conectar um catálogo de skins com API/termos autorizados e resultados visuais paginados.
+- [x] Conectar um catálogo próprio de skins com resultados visuais paginados e fallback offline.
 - [ ] Sincronizar skin ativa, biblioteca e favoritos entre Launcher, jogo e API Aurora.
 - [ ] Propagar skins Aurora entre jogadores sem exigir mod no servidor.
 

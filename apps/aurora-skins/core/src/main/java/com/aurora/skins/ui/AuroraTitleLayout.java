@@ -42,9 +42,10 @@ public final class AuroraTitleLayout {
         int panelWidth = Math.max(BUTTON_WIDTH, scale + 34);
         int fullHeight = scale * 2 + BUTTON_HEIGHT + 26;
         int preferredCenter = safeWidth / 2 + Math.min(178, safeWidth / 3);
-        int preferredLeft = clamp(preferredCenter - panelWidth / 2, 6, safeWidth - panelWidth - 6);
+        int centeredRight = clamp(preferredCenter - panelWidth / 2, 6, safeWidth - panelWidth - 6);
+        int preferredLeft = safeWidth - panelWidth - 8;
         int preferredTop = clamp((safeHeight - fullHeight) / 2, 24, safeHeight - fullHeight - 6);
-        int[] lefts = unique(preferredLeft, safeWidth - panelWidth - 8, 8,
+        int[] lefts = unique(preferredLeft, centeredRight, 8,
             clamp(safeWidth / 2 + 104, 6, safeWidth - panelWidth - 6),
             clamp(safeWidth / 2 - 104 - panelWidth, 6, safeWidth - panelWidth - 6));
         int[] tops = unique(preferredTop, 28, safeHeight - fullHeight - 8, 8);
@@ -72,7 +73,7 @@ public final class AuroraTitleLayout {
         int buttonX = bestLeft + (panelWidth - BUTTON_WIDTH) / 2;
         int buttonY = previewY + 6;
         return new AuroraTitleLayout(previewX, previewY, scale, bestLeft, bestTop,
-            bestLeft + panelWidth, previewY + 4, buttonX, buttonY);
+            bestLeft + panelWidth, buttonY + BUTTON_HEIGHT + 4, buttonX, buttonY);
     }
 
     public int previewX() { return previewX; }
@@ -86,6 +87,10 @@ public final class AuroraTitleLayout {
     public int buttonY() { return buttonY; }
     public int buttonWidth() { return BUTTON_WIDTH; }
     public int buttonHeight() { return BUTTON_HEIGHT; }
+    public boolean containsButton(double x, double y) {
+        return x >= buttonX && x < buttonX + BUTTON_WIDTH
+            && y >= buttonY && y < buttonY + BUTTON_HEIGHT;
+    }
 
     private static long overlapArea(Rect first, Rect second) {
         int width = Math.max(0, Math.min(first.right(), second.right()) - Math.max(first.x, second.x));

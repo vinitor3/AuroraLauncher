@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class AuroraVersionTest {
     @Test void ordersStableAndPrereleaseVersions() {
-        assertTrue(AuroraVersion.parse("1.1.1").isAtLeast("1.0.9"));
+        assertTrue(AuroraVersion.parse("1.1.2").isAtLeast("1.0.9"));
         assertTrue(AuroraVersion.parse("1.0.0").compareTo(AuroraVersion.parse("1.0.0-rc.1")) > 0);
         assertFalse(AuroraVersion.parse("0.9.9").isAtLeast("1.0.0"));
     }

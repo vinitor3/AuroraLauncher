@@ -63,8 +63,8 @@ try {
     }
 
     $requiredFiles = @(
-        "apps/aurora-core/compatibility-manifest-1.1.1.json",
-        "apps/aurora-core/trusted-public-key-1.1.1.txt",
+        "apps/aurora-core/compatibility-manifest-1.1.2.json",
+        "apps/aurora-core/trusted-public-key-1.1.2.txt",
         "apps/desktop/src-tauri/src/engine/core.rs",
         "apps/desktop/src-tauri/src/engine/skins.rs",
         "apps/desktop/src/App.tsx",

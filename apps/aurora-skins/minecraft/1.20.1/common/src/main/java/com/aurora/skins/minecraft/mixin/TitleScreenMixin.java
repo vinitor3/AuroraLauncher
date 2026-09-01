@@ -16,6 +16,7 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -44,6 +45,16 @@ public abstract class TitleScreenMixin extends Screen {
             button -> AuroraSkinsClient.open((Screen) (Object) this))
             .bounds(auroraSkins$titleLayout.buttonX(), auroraSkins$titleLayout.buttonY(),
                 auroraSkins$titleLayout.buttonWidth(), auroraSkins$titleLayout.buttonHeight()).build());
+    }
+
+    @Inject(method = "mouseClicked", at = @At("HEAD"), cancellable = true, require = 0)
+    private void auroraSkins$openButtonFromCustomizedMenus(double mouseX, double mouseY, int button,
+                                                            CallbackInfoReturnable<Boolean> callback) {
+        AuroraTitleLayout layout = auroraSkins$titleLayout;
+        if (button != 0 || layout == null || !layout.containsButton(mouseX, mouseY)) return;
+        if (!Aurora.isAvailable() || !Aurora.services().modules().isInstalled("aurora_skins")) return;
+        AuroraSkinsClient.open((Screen) (Object) this);
+        callback.setReturnValue(true);
     }
 
     @Inject(method = "render", at = @At("TAIL"), require = 0)

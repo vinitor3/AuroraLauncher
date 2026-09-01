@@ -11,6 +11,6 @@
     "fabricloader": ">=0.13.3",
     "minecraft": "~1.16.5",
     "java": ">=8",
-    "aurora_core": ">=1.1.1"
+    "aurora_core": ">=1.1.2"
   }
 }

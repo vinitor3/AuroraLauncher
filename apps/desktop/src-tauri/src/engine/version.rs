@@ -49,7 +49,16 @@ pub fn resolve_launch_spec(
         ));
     }
 
-    let jvm_args = clean_jvm_arguments(&profile.jvm_args, instance);
+    // Perfis Forge herdados usam `${version_name}.jar` no `ignoreList`. O valor
+    // precisa corresponder ao JAR cliente físico (por exemplo `1.20.1.jar`), e
+    // não ao id do perfil filho (`1.20.1-forge-...`). Caso contrário, o Java
+    // tenta resolver o Minecraft bruto e o Minecraft transformado como módulos
+    // distintos e falha por pacotes duplicados em `net.minecraft.*`.
+    let client_jar_version = client_jar
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or(version_id);
+    let jvm_args = clean_jvm_arguments(&profile.jvm_args, instance, client_jar_version);
     let game_args = clean_game_arguments(&profile.game_args);
     Ok(VersionLaunchSpec {
         version_name: version_id.to_owned(),
@@ -243,7 +252,11 @@ fn library_path(library: &Value) -> Result<Option<PathBuf>, VersionResolveError>
     ))
 }
 
-fn clean_jvm_arguments(args: &[String], instance: &Instance) -> Vec<String> {
+fn clean_jvm_arguments(
+    args: &[String],
+    instance: &Instance,
+    client_jar_version: &str,
+) -> Vec<String> {
     let mut cleaned = Vec::new();
     let mut index = 0usize;
     while index < args.len() {
@@ -264,6 +277,7 @@ fn clean_jvm_arguments(args: &[String], instance: &Instance) -> Vec<String> {
                 )
                 .replace("${launcher_name}", "Aurora")
                 .replace("${launcher_version}", "0.1.0")
+                .replace("${version_name}", client_jar_version)
                 .replace(
                     "${library_directory}",
                     &instance.root().join("libraries").display().to_string(),
@@ -301,7 +315,8 @@ fn clean_game_arguments(args: &[String]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{clean_game_arguments, library_path};
+    use super::{clean_game_arguments, clean_jvm_arguments, library_path};
+    use crate::engine::{InstanceId, InstanceLayout};
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -349,5 +364,18 @@ mod tests {
                 .unwrap(),
             PathBuf::from("net/fabricmc/fabric-loader/0.16.10/fabric-loader-0.16.10.jar")
         );
+    }
+
+    #[test]
+    fn forge_ignore_list_uses_the_inherited_client_jar_name() {
+        let instance = InstanceLayout::new("aurora-version-test")
+            .open(InstanceId::parse("forge-placeholder").unwrap());
+        let arguments = clean_jvm_arguments(
+            &["-DignoreList=bootstraplauncher,${version_name}.jar".into()],
+            &instance,
+            "1.20.1",
+        );
+
+        assert_eq!(arguments, ["-DignoreList=bootstraplauncher,1.20.1.jar"]);
     }
 }

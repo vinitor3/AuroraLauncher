@@ -5,7 +5,12 @@ architectury {
 sourceSets.main.java.srcDir "../shared-ui/src/main/java"
 sourceSets.main.java.srcDir "../shared-core/src/main/java"
 
+processResources {
+    inputs.property "pack_format", rootProject.pack_format
+    filesMatching("pack.mcmeta") { expand "pack_format": rootProject.pack_format }
+}
+
 dependencies {
-    compileOnly files(rootProject.file("../aurora-core/api/build/libs/aurora-core-api-1.1.1.jar"))
+    compileOnly files(rootProject.file("../aurora-core/api/build/libs/aurora-core-api-1.1.2.jar"))
     compileOnly "net.fabricmc:sponge-mixin:0.12.5+mixin.0.8.5"
 }

@@ -5,8 +5,8 @@ dependencies {
     modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
     common(project(path: ":common", configuration: "namedElements")) { transitive false }
     shadowCommon(project(path: ":common", configuration: "transformProductionFabric")) { transitive false }
-    shadowCommon files(rootProject.file("../../api/build/libs/aurora-core-api-1.1.1.jar"))
-    shadowCommon files(rootProject.file("../../runtime/build/libs/aurora-core-runtime-1.1.1.jar"))
+    shadowCommon files(rootProject.file("../../api/build/libs/aurora-core-api-1.1.2.jar"))
+    shadowCommon files(rootProject.file("../../runtime/build/libs/aurora-core-runtime-1.1.2.jar"))
     shadowCommon "com.google.code.gson:gson:2.10.1"
     shadowCommon "org.java-websocket:Java-WebSocket:1.5.6"
 }

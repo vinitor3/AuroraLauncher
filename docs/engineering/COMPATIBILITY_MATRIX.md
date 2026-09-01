@@ -1,6 +1,6 @@
 # Compatibility Matrix
 
-Atualizado em 2026-09-01. `BUILD` significa JAR compilado e inspecionado; `RUNTIME` exige o roteiro completo em uma instância real. Core 1.1.1, Skins 0.2.0 e Companion 0.2.2 formam a matriz embarcada no Launcher 0.1.1-alpha.5.
+Atualizado em 2026-09-01. `BUILD` significa JAR compilado e inspecionado; `RUNTIME` exige o roteiro completo em uma instância real. Core 1.1.2, Skins 0.2.1 e Companion 0.2.3 formam a matriz embarcada no Launcher 0.1.1-alpha.5.
 
 | Minecraft | Loader | Java | Core build | Skins build | Companion build | Runtime do conjunto | Estado |
 | --- | --- | ---: | :---: | :---: | :---: | :---: | --- |
@@ -10,21 +10,28 @@ Atualizado em 2026-09-01. `BUILD` significa JAR compilado e inspecionado; `RUNTI
 | 1.19.2 | Fabric 0.16.14 | 17 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 | 1.19.2 | Forge 43.4.16 | 17 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 | 1.20.1 | Fabric 0.16.14 | 17 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.20.1 | Forge 47.4.23 | 17 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| 1.20.1 | Forge 47.4.23 | 17 | sim | sim | sim | Cave Horror: launch/menu/IPC/skin/catálogo PASS; mundo PRECISA DE TESTE | PARCIAL |
 | 1.21.1 | Fabric 0.16.14 | 21 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 | 1.21.1 | Forge 52.1.12 | 21 | sim | sim | sim | PRECISA DE TESTE | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 
 Evidências runtime anteriores do Companion 1.12.2 Forge e 1.20.1 Fabric não homologam automaticamente os novos Core/Skins. O conjunto precisa ser reexecutado porque a aparência deixou de pertencer ao Companion e passou para o módulo Aurora Skins.
 
+Em 1º de setembro de 2026, o Cave Horror Project 1.20.1 Forge 47.4.21 iniciou
+com Java 17 usando exatamente os JARs embarcados Core 1.1.2, Skins 0.2.1 e
+Companion 0.2.3. Não houve conflito JPMS de SLF4J/Minecraft nem rejeição de
+resource pack; os três módulos registraram, o IPC conectou, a skin apareceu em
+pé, o botão permaneceu sob o avatar no FancyMenu e abriu o catálogo online. Um
+mundo/servidor não foi aberto nessa execução, portanto a linha continua parcial.
+
 ## Instalação pelo Launcher
 
 Para cada instância Fabric/Forge suportada, o Launcher instala por troca atômica:
 
-1. Aurora Core 1.1.1, após validar tamanho, SHA-256 e assinatura Ed25519;
-2. Aurora Skins 0.2.0;
-3. Aurora Companion 0.2.2.
+1. Aurora Core 1.1.2, após validar tamanho, SHA-256 e assinatura Ed25519;
+2. Aurora Skins 0.2.1;
+3. Aurora Companion 0.2.3.
 
-O release preflight recompila as 27 combinações e compara o conteúdo normalizado dos JARs de staging com os artefatos embarcados. A normalização ignora apenas o namespace aleatório de injeção gerado pelo Architectury e metadados ZIP; qualquer outra divergência bloqueia a criação do instalador. O mesmo gate abre cada Core e rejeita `org/slf4j/**` sem relocação ou qualquer `net/minecraft/**`, evitando conflitos de módulos como o observado no Cave Horror.
+O release preflight recompila as 27 combinações e compara o conteúdo normalizado dos JARs de staging com os artefatos embarcados. A normalização ignora apenas o namespace aleatório de injeção gerado pelo Architectury e metadados ZIP; qualquer outra divergência bloqueia a criação do instalador. O mesmo gate exige `pack.mcmeta` em todos os módulos e abre cada Core para rejeitar `org/slf4j/**` sem relocação ou qualquer `net/minecraft/**`, evitando os conflitos e avisos observados no Cave Horror.
 
 ## Compatibilidade do launcher
 

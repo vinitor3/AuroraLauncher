@@ -19,6 +19,11 @@ final class AuroraTitleLayoutTest {
             assertTrue(layout.buttonY() + layout.buttonHeight() <= size[1]);
             assertTrue(layout.buttonX() >= 0);
             assertTrue(layout.buttonX() + layout.buttonWidth() <= size[0]);
+            assertTrue(layout.panelBottom() > layout.buttonY() + layout.buttonHeight());
+            assertTrue(layout.containsButton(
+                layout.buttonX() + layout.buttonWidth() / 2.0,
+                layout.buttonY() + layout.buttonHeight() / 2.0));
+            assertTrue(!layout.containsButton(layout.buttonX() - 1, layout.buttonY()));
         }
     }
 

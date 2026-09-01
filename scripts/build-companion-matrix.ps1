@@ -1,13 +1,13 @@
 [CmdletBinding()]
 param(
-    [string]$StageDirectory = ".aurora\build-matrix\companion\0.2.2"
+    [string]$StageDirectory = ".aurora\build-matrix\companion\0.2.3"
 )
 
 $ErrorActionPreference = "Stop"
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 $CompanionRoot = Join-Path $RepositoryRoot "apps\companion-mod"
 $Gradle = Join-Path $CompanionRoot "gradlew.bat"
-$Version = "0.2.2"
+$Version = "0.2.3"
 $StageRoot = if ([IO.Path]::IsPathRooted($StageDirectory)) {
     [IO.Path]::GetFullPath($StageDirectory)
 } else {
@@ -46,15 +46,15 @@ function Copy-StagedArtifact {
 
 $modernMatrix = @(
     @{
-        Minecraft = "1.16.5"; Java = "8"; Forge = "1.16.5-36.2.42";
+        Minecraft = "1.16.5"; Java = "8"; PackFormat = "6"; Forge = "1.16.5-36.2.42";
         FabricRange = "~1.16.5"; ForgeRange = "[1.16.5,1.17)"; ForgeLoaderRange = "[36,)"
     },
     @{
-        Minecraft = "1.19.2"; Java = "17"; Forge = "1.19.2-43.4.16";
+        Minecraft = "1.19.2"; Java = "17"; PackFormat = "9"; Forge = "1.19.2-43.4.16";
         FabricRange = "~1.19.2"; ForgeRange = "[1.19.2,1.20)"; ForgeLoaderRange = "[43,)"
     },
     @{
-        Minecraft = "1.20.1"; Java = "17"; Forge = "1.20.1-47.4.23";
+        Minecraft = "1.20.1"; Java = "17"; PackFormat = "15"; Forge = "1.20.1-47.4.23";
         FabricRange = "~1.20.1"; ForgeRange = "[1.20.1,1.21)"; ForgeLoaderRange = "[47,)"
     }
 )
@@ -67,6 +67,7 @@ foreach ($entry in $modernMatrix) {
         "-Pforge_loader_range=$($entry.ForgeLoaderRange)",
         "-Pjava_version=$($entry.Java)",
         "-Pcompile_java_version=$($entry.Java)",
+        "-Ppack_format=$($entry.PackFormat)",
         "-Pfabric_loader_version=0.16.14",
         "-Pforge_version=$($entry.Forge)"
     )

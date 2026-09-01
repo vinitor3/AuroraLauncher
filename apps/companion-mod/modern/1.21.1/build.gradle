@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "com.aurora"
-version = "0.2.2"
+version = "0.2.3"
 
 repositories {
     mavenCentral()
@@ -24,7 +24,7 @@ tasks.withType(JavaCompile).configureEach { options.encoding = "UTF-8"; options.
 tasks.withType(AbstractArchiveTask).configureEach { preserveFileTimestamps = false; reproducibleFileOrder = true }
 
 dependencies {
-    compileOnly files("../../../aurora-core/api/build/libs/aurora-core-api-1.1.1.jar")
+    compileOnly files("../../../aurora-core/api/build/libs/aurora-core-api-1.1.2.jar")
     compileOnly "net.fabricmc:fabric-loader:0.16.10"
     compileOnly "net.fabricmc:sponge-mixin:0.12.5+mixin.0.8.5"
 }

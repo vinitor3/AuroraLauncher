@@ -55,6 +55,32 @@ function jsonResponse(body: unknown, status = 200, headers?: HeadersInit) {
   });
 }
 
+test("publica catálogo de skins pesquisável com PNG íntegro", async () => {
+  const catalog = await worker.fetch(new Request(
+    "https://aurora.test/v1/skins/catalog?query=naruto&page=0&pageSize=12",
+  ), env);
+  assert.equal(catalog.status, 200);
+  assert.match(catalog.headers.get("Content-Type") ?? "", /text\/tab-separated-values/);
+
+  const lines = (await catalog.text()).trimEnd().split("\n");
+  assert.equal(lines[0], "AURORA_SKINS_CATALOG_V1");
+  assert.equal(lines[1], "page\t0\tmore\t0");
+  assert.equal(lines.length, 3);
+  const fields = lines[2].split("\t");
+  assert.equal(fields.length, 7);
+  assert.equal(fields[0], "solar-ninja");
+  assert.equal(Buffer.from(fields[1], "base64url").toString("utf8"), "Ninja Solar");
+
+  const assetPath = Buffer.from(fields[5], "base64url").toString("utf8");
+  const asset = await worker.fetch(new Request(`https://aurora.test${assetPath}`), env);
+  assert.equal(asset.status, 200);
+  assert.equal(asset.headers.get("Content-Type"), "image/png");
+  const png = new Uint8Array(await asset.arrayBuffer());
+  assert.deepEqual(Array.from(png.slice(0, 8)), [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const digest = Buffer.from(await crypto.subtle.digest("SHA-256", png)).toString("hex");
+  assert.equal(digest, fields[4]);
+});
+
 async function firebaseIdentity(userId: string) {
   const keyPair = await crypto.subtle.generateKey(
     {

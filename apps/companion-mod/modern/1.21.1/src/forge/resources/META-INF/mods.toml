@@ -3,7 +3,7 @@ loaderVersion="[52,)"
 license="GPL-3.0-only"
 [[mods]]
 modId="aurora_companion"
-version="0.2.2"
+version="0.2.3"
 displayName="Aurora Companion"
 description='''Ponte local entre Minecraft e Aurora Smart Launcher.'''
 [[dependencies.aurora_companion]]

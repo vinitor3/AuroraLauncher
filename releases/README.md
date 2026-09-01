@@ -36,14 +36,24 @@ Aurora Skins 0.1.0 e Aurora Companion 0.2.2.
 
 ## Matrizes de módulos preservadas
 
+- Aurora Core 1.1.2: nove JARs assinados em `releases/core/1.1.2`; dependências
+  internas relocacionadas e gate contra pacotes SLF4J/Minecraft duplicados.
+- Aurora Skins 0.2.1: nove JARs em `releases/skins/0.2.1`, com catálogo online,
+  fallback offline, preview corrigido e botão responsivo na tela principal.
+- Aurora Companion 0.2.3: nove JARs versionados; os hashes estão em
+  [`companion/0.2.3-SHA256SUMS.txt`](companion/0.2.3-SHA256SUMS.txt).
+
+Matrizes anteriores permanecem disponíveis como histórico:
+
+- Aurora Core 1.1.1: nove JARs assinados em `releases/core/1.1.1`.
+- Aurora Skins 0.2.0: nove JARs versionados em `releases/skins/0.2.0`.
+- Aurora Companion 0.2.2: nove JARs versionados e checksum preservado.
 - Aurora Core 1.1.0: nove JARs Fabric/Forge versionados em `releases/core/1.1.0`.
 - Aurora Skins 0.1.0: nove JARs versionados em `releases/skins/0.1.0`.
-- Aurora Companion 0.2.2: nove JARs versionados; os hashes estão em
-  [`companion/0.2.2-SHA256SUMS.txt`](companion/0.2.2-SHA256SUMS.txt).
 
-O Companion 0.2.2 preserva os artefatos 0.2.0/0.2.1 e incorpora as correções
-de inicialização, desligamento, feedback do Assistente e limite de captura
-integradas depois da matriz 0.2.1.
+O Companion 0.2.3 preserva os artefatos 0.2.0/0.2.1/0.2.2, incorpora as
+correções de inicialização, desligamento, feedback do Assistente e limite de
+captura, e adiciona metadados de resource pack válidos para cada Minecraft.
 
 ## Histórico do Companion 0.2.0
 

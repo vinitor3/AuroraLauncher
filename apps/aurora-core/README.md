@@ -23,8 +23,8 @@ Launcher Rust
 - `runtime`: registro de módulos, event bus, sessão, IPC e configuração;
 - `minecraft/<versão>`: adaptadores Fabric/Forge e UI nativa;
 - `minecraft/legacy/forge-1.12.2`: adaptador legado isolado;
-- `compatibility-manifest-1.1.1.json`: matriz central e metadados assinados;
-- `releases/core/1.1.1`: artefatos imutáveis embarcados pelo Launcher.
+- `compatibility-manifest-1.1.2.json`: matriz central e metadados assinados;
+- `releases/core/1.1.2`: artefatos imutáveis embarcados pelo Launcher.
 
 ## Contrato de módulo
 
