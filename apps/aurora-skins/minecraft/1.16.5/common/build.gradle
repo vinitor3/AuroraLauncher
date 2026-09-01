@@ -1,0 +1,20 @@
+architectury { common(rootProject.enabled_platforms.split(",")) }
+dependencies {
+    implementation files(rootProject.file("../../core/build/libs/aurora-skins-core-0.1.0.jar"))
+    compileOnly files(rootProject.file("../../../aurora-core/api/build/libs/aurora-core-api-1.1.0.jar"))
+    compileOnly "net.fabricmc:sponge-mixin:0.12.5+mixin.0.8.5"
+}
+tasks.named("compileJava") {
+    source(rootProject.fileTree("../1.20.1/common/src/main/java") {
+        include "com/aurora/skins/minecraft/AuroraSkinsBootstrap.java"
+        include "com/aurora/skins/minecraft/AuroraSkinsClient.java"
+        include "com/aurora/skins/minecraft/AuroraSkinsModule.java"
+        include "com/aurora/skins/minecraft/appearance/AuroraSkinManager.java"
+    })
+}
+tasks.named("processResources") {
+    from(rootProject.file("../1.20.1/common/src/main/resources")) {
+        include "META-INF/services/**"
+        include "assets/**"
+    }
+}

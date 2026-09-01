@@ -1,6 +1,6 @@
 # Status da Fundação e da Fase 1
 
-Atualizado em 30 de agosto de 2026.
+Atualizado em 31 de agosto de 2026.
 
 ## Fase 0 — Fundação & Identidade
 
@@ -38,8 +38,11 @@ visual dentro do Minecraft para ser considerada encerrada:
 - fallback interno para arquivos CurseForge sem URL direta: o Aurora abre a
   página oficial em uma janela WebView2, aguarda o disparo da própria página,
   captura em arquivo temporário, valida o SHA-1 e instala na pasta correta;
-- skin local para o Companion 1.20.1 e conversão correta do layout legado
-  64x32 para 64x64;
+- Aurora Core 1.1.0, Aurora Skins 0.1.0 e Companion 0.2.1 auto-instalados
+  na combinação exata de Minecraft/loader, com 27 JARs conferidos contra o
+  código-fonte antes do instalador;
+- skin local/HTTPS aplicada pelo Aurora Skins nas nove combinações, com
+  conversão correta do layout legado 64x32 para 64x64;
 - foto pública do perfil renderizada a partir da face e da segunda camada da
   única skin equipada online, com biblioteca não equipada mantida apenas localmente;
   somente o documento mínimo `publicProfiles/{uid}` é compartilhado entre contas;
@@ -69,8 +72,9 @@ Implementado como infraestrutura/protótipo:
   de confirmação explícita a cada captura; nunca é feita silenciosamente;
 - upload de skin/capa preparado no Supabase Storage, sempre depois de validar o
   token Firebase no Worker; a Secret key nunca entra no launcher;
-- skin/capa por URL HTTPS nas nove combinações e skin por arquivo local no
-  Companion 1.20.1;
+- módulo Aurora Skins independente para Forge 1.12.2 e Fabric/Forge 1.16.5,
+  1.19.2, 1.20.1 e 1.21.1, com biblioteca, favoritos, histórico, importação,
+  preview e aplicação local; o Companion 0.2.1 não modifica mais aparência;
 - o launcher valida o conteúdo remoto antes de salvar: skin precisa ser um PNG
   64x64 ou 64x32 de até 5 MB. Links de páginas, inclusive páginas do NovaSkin
   que não entregam o PNG, são recusados com mensagem curta.
@@ -93,9 +97,9 @@ Ainda não implementada:
 
 ## Evidências e pendências de validação
 
-Os nove JARs disponíveis foram inspecionados e são arquivos válidos. Os dois
-JARs 1.20.1 foram recompilados com o fallback local e a conversão de skin
-legada; as outras sete combinações ainda carregam a implementação anterior.
+As matrizes Core 1.1.0, Skins 0.1.0 e Companion 0.2.1 foram recompiladas nos
+nove alvos. O preflight compara SHA-256 dos 27 JARs gerados com os artefatos
+embarcados e bloqueia qualquer divergência.
 Os testes Rust do IPC validam handshake,
 pedido e resposta em ambas as direções. O teste online do Edge TTS produziu MP3
 e eventos de sentença. Uma conversa autenticada completa confirmou o Worker e
@@ -107,16 +111,17 @@ uma skin PNG 64x64 dentro do gerenciador de texturas do jogo. Minecraft 1.12.2
 Forge também foi homologado em execução real com Java 8, nick correto, skin do
 perfil, handshake IPC autenticado e abertura/fechamento do painel. O JAR legado
 isola WebSocket/SLF4J no namespace do Aurora e remove classes Java 9, evitando
-conflitos com o `LaunchClassLoader` e o ASM 5 do Forge antigo. A validação
-runtime das outras sete combinações, da capa e a inspeção visual da correção de
-skin num mundo ainda são testes pendentes; compilação não deve ser confundida
-com validação dentro do jogo.
+conflitos com o `LaunchClassLoader` e o ASM 5 do Forge antigo. Essa evidência é
+anterior à separação do Aurora Skins. Portanto, o conjunto Core 1.1.0 + Skins
+0.1.0 + Companion 0.2.1 ainda precisa de nova homologação visual em todas as
+combinações; compilação não deve ser confundida com validação dentro do jogo.
 
-O armazenamento online de aparências está **ativo**. Em 28 de agosto de 2026,
+O armazenamento online de aparências do Launcher está **ativo**. Em 28 de agosto de 2026,
 o Worker publicado confirmou `SUPABASE_API_KEY_SERVICE_ROLE`, o bucket público
 `aurora-appearance` e o acesso administrativo. O launcher sincroniza a skin no
-Supabase e mantém a cópia local do Companion 1.20.1 como proteção contra falhas
-temporárias de rede.
+Supabase e mantém uma cópia local usada pelo Aurora Skins como proteção contra
+falhas temporárias de rede. Alterações feitas dentro do Minecraft ainda não
+retornam à API/Launcher; essa sincronização é **NÃO IMPLEMENTADA** nesta entrega.
 
 O perfil usado durante o teste continha uma URL NovaSkin que retornava HTTP
 403/HTML, e não um PNG. Por isso essa skin específica não pôde ser usada como

@@ -11,10 +11,15 @@ Este roadmap separa claramente o que já está implementado, o que ainda precisa
 - [x] Downloads concorrentes, retomada, hash e gravação atômica.
 - [x] Gerenciamento de mods, shaders e resource packs.
 - [x] Biblioteca local de skins e prévia 3D.
+- [x] Aurora Skins independente, auto-instalado nas nove combinações Fabric/Forge suportadas.
+- [x] Aplicação local, favoritos, histórico, importação 64x64/64x32 e personagem 3D na tela principal.
 - [x] IPC local autenticado entre launcher e Companion.
 - [ ] Homologar todas as combinações Minecraft/loader em execução real.
 - [ ] Concluir a inspeção visual de skin e capa nas versões suportadas.
 - [ ] Cobrir fluxos críticos com testes de interface reproduzíveis.
+- [ ] Conectar um catálogo de skins com API/termos autorizados e resultados visuais paginados.
+- [ ] Sincronizar skin ativa, biblioteca e favoritos entre Launcher, jogo e API Aurora.
+- [ ] Propagar skins Aurora entre jogadores sem exigir mod no servidor.
 
 ## Próximo — Companion nativo
 
@@ -39,4 +44,3 @@ Este roadmap separa claramente o que já está implementado, o que ainda precisa
 - NeoForge.
 - Distribuição de conteúdo que viole termos ou licenças de terceiros.
 - Captura silenciosa de tela ou envio de dados sem ação explícita do usuário.
-

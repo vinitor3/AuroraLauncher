@@ -1,13 +1,15 @@
 {
   "name": "aurora-smart-launcher",
   "private": true,
-  "version": "0.1.1-alpha.3",
+  "version": "0.1.1-alpha.4",
   "scripts": {
     "desktop:dev": "npm --prefix apps/desktop run tauri dev",
     "release:preflight": "powershell -ExecutionPolicy Bypass -File scripts/release-preflight.ps1",
-    "desktop:build": "npm run release:preflight && npm --prefix apps/desktop run tauri build",
+    "release:verify-mods": "powershell -ExecutionPolicy Bypass -File scripts/verify-mod-release-matrix.ps1",
+    "desktop:build": "npm run release:verify-mods && npm run release:preflight && npm --prefix apps/desktop run tauri build",
     "desktop:test": "npm --prefix apps/desktop run build",
     "core:build": "powershell -ExecutionPolicy Bypass -File scripts/build-aurora-core.ps1",
-    "companion:build": "cd apps/companion-mod && gradlew.bat build"
+    "skins:build": "powershell -ExecutionPolicy Bypass -File scripts/build-aurora-skins.ps1",
+    "companion:build": "powershell -ExecutionPolicy Bypass -File scripts/build-companion-matrix.ps1"
   }
 }

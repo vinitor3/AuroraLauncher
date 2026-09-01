@@ -9,7 +9,7 @@ O alvo de referência é Minecraft 1.20.1 com Forge 47.4.23, a versão 1.20.1 ma
 
 ## Compatibilidade planejada
 
-O Companion 0.2.0 é entregue apenas para Fabric e Forge e requer Aurora Core 1.0.0 ou superior. Todos os artefatos da tabela abaixo foram gerados. O módulo usa a API IPC do Core e não abre uma segunda conexão.
+O Companion 0.2.1 é entregue apenas para Fabric e Forge e requer Aurora Core 1.1.0 ou superior. A aparência agora pertence exclusivamente ao Aurora Skins; o Companion permanece responsável pelo Assistente e pela telemetria local. O módulo usa a API IPC do Core e não abre uma segunda conexão.
 
 | Minecraft | Fabric | Forge | Java |
 | --- | --- | --- | --- |
@@ -37,17 +37,11 @@ O Launcher instala primeiro o Core e depois o JAR correspondente do Companion na
 
 O mod nunca recebe JWT Firebase, senha ou chave de serviço pela linha de comando.
 
-## Assistente e aparência
+## Assistente
 
 O Companion registra o módulo `aurora_companion` no Core e conversa com o launcher pelo IPC autenticado compartilhado. O protótipo atual do
 Assistente é uma janela Swing externa sobre o jogo; a substituição por uma tela
 e um HUD nativos do Minecraft ainda está pendente. `AltGr + /`, pedidos de voz,
 respostas e legendas do Edge TTS já usam o mesmo canal IPC.
 
-Skin/capa chegam como URLs HTTPS públicas. O build 1.20.1 também aceita a skin
-local passada pelo launcher e converte skins legadas 64x32. Minecraft 1.16.5, 1.19.2 e 1.20.1
-usam um Mixin de textura para o jogador local; 1.12.2 e 1.21.1 usam um adaptador
-de `GameProfile`. Todos os nove JARs compilam e contêm esses componentes. A
-homologação runtime confirmada até aqui cobre 1.20.1 Fabric e 1.12.2 Forge;
-consulte o status geral antes de considerar as outras sete combinações validadas
-dentro do jogo.
+O Companion não intercepta mais perfil, skin ou capa. Toda aparência pertence ao módulo independente Aurora Skins, evitando dois mixins concorrentes sobre o jogador. Evidências runtime anteriores em 1.20.1 Fabric e 1.12.2 Forge continuam históricas; os JARs 0.2.1 precisam ser homologados novamente junto do Core 1.1.0 e Skins 0.1.0.

@@ -8,7 +8,7 @@
   "entrypoints": { "client": ["com.aurora.core.minecraft.fabric.AuroraCoreFabric"] },
   "mixins": ["aurora_core.mixins.json"],
   "depends": {
-    "fabricloader": ">=0.14.0",
+    "fabricloader": ">=0.13.3",
     "minecraft": "${minecraft_range}",
     "java": ">=${java_version}"
   }

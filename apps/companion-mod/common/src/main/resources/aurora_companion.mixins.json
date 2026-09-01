@@ -3,6 +3,6 @@
   "minVersion": "0.8",
   "package": "com.aurora.mod.mixin",
   "compatibilityLevel": "JAVA_8",
-  "client": ["AbstractClientPlayerMixin", "MinecraftMixin"],
+  "client": ["MinecraftMixin"],
   "injectors": { "defaultRequire": 0 }
 }

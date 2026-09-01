@@ -11,6 +11,7 @@ import com.aurora.core.api.module.AuroraModuleRegistry;
 import com.aurora.core.api.module.AuroraModuleRegistrationException;
 import com.aurora.core.api.session.AuroraSessionService;
 import com.aurora.core.api.ui.AuroraPageOpener;
+import com.aurora.core.api.ui.AuroraPreviewRegistry;
 import com.aurora.core.api.ui.AuroraSettingsPage;
 import com.aurora.core.api.ui.AuroraSettingsRegistry;
 import com.aurora.core.api.ui.AuroraUiContext;
@@ -20,19 +21,21 @@ import com.aurora.core.runtime.ipc.LauncherIpcClient;
 import com.aurora.core.runtime.module.DefaultModuleRegistry;
 import com.aurora.core.runtime.session.DefaultSessionService;
 import com.aurora.core.runtime.ui.DefaultSettingsRegistry;
+import com.aurora.core.runtime.ui.DefaultPreviewRegistry;
 
 import java.nio.file.Path;
 import java.util.ServiceLoader;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class AuroraCoreRuntime implements AuroraServices, AutoCloseable {
-    public static final String VERSION = "1.0.0";
+    public static final String VERSION = "1.1.0";
     private static volatile AuroraCoreRuntime instance;
 
     private final AuroraCorePlatform platform;
     private final AuroraLog log;
     private final DefaultEventBus events;
     private final DefaultSettingsRegistry settings;
+    private final DefaultPreviewRegistry previews;
     private final DefaultSessionService sessions;
     private final JsonConfigManager configs;
     private final DefaultModuleRegistry modules;
@@ -44,6 +47,7 @@ public final class AuroraCoreRuntime implements AuroraServices, AutoCloseable {
         this.log = new AuroraLog(platform);
         this.events = new DefaultEventBus(log);
         this.settings = new DefaultSettingsRegistry(events);
+        this.previews = new DefaultPreviewRegistry(log);
         this.sessions = new DefaultSessionService(events);
         Path configRoot = platform.gameDirectory().resolve(".aurora").resolve("config");
         this.configs = new JsonConfigManager(configRoot, events, log);
@@ -114,6 +118,7 @@ public final class AuroraCoreRuntime implements AuroraServices, AutoCloseable {
     @Override public String coreVersion() { return VERSION; }
     @Override public AuroraModuleRegistry modules() { return modules; }
     @Override public AuroraSettingsRegistry settings() { return settings; }
+    @Override public AuroraPreviewRegistry previews() { return previews; }
     @Override public AuroraEventBus events() { return events; }
     @Override public AuroraSessionService sessions() { return sessions; }
     @Override public AuroraIpc ipc() { return ipc; }

@@ -16,7 +16,7 @@ public final class AuroraPlayerPreview {
         float vertical = clamp((mouseY - centerY) / (safeHeight * 0.5F), -1.0F, 1.0F);
         targetHeadYaw = horizontal * 38.0F;
         targetBodyYaw = horizontal * 12.0F;
-        targetHeadPitch = vertical * 25.0F;
+        targetHeadPitch = -vertical * 25.0F;
     }
 
     public void update(float deltaSeconds) {

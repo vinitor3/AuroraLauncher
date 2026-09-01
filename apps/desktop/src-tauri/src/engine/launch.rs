@@ -32,6 +32,20 @@ pub struct LaunchIdentity {
     pub user_type: String,
 }
 
+impl LaunchIdentity {
+    /// Offline identity understood by legacy and modern clients. A fabricated
+    /// bearer token can be interpreted as a valid Microsoft session with no
+    /// multiplayer privileges, which disables the button on Minecraft 1.16.x.
+    pub fn offline(username: impl Into<String>, uuid: Uuid) -> Self {
+        Self {
+            username: username.into(),
+            uuid,
+            access_token: "0".to_owned(),
+            user_type: "legacy".to_owned(),
+        }
+    }
+}
+
 /// Resultado do resolvedor de versão (vanilla ou mod loader).
 #[derive(Clone, Debug)]
 pub struct VersionLaunchSpec {
@@ -201,6 +215,13 @@ mod tests {
             environment: BTreeMap::new(),
         };
         assert_eq!(command.redacted_args(), vec!["--accessToken", "[redacted]"]);
+    }
+
+    #[test]
+    fn offline_identity_does_not_impersonate_a_microsoft_session() {
+        let identity = LaunchIdentity::offline("AuroraPlayer", Uuid::nil());
+        assert_eq!(identity.access_token, "0");
+        assert_eq!(identity.user_type, "legacy");
     }
 
     #[test]

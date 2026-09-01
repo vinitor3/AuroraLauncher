@@ -132,6 +132,7 @@ type LaunchSummary = {
   processId: number;
   versionId: string;
   coreInstalled: boolean;
+  skinsInstalled: boolean;
   companionInstalled: boolean;
 };
 type DownloadProgress = {
@@ -374,8 +375,11 @@ function fileAsDataUrl(file: File) {
   });
 }
 
-function requiredJavaMajor(minecraftVersion: string) {
-  if (minecraftVersion === "1.12.2" || minecraftVersion === "1.16.5") return 8;
+function requiredJavaMajor(minecraftVersion: string, versionId = "") {
+  if (minecraftVersion === "1.12.2") return 8;
+  if (minecraftVersion === "1.16.5") {
+    return versionId.startsWith("fabric-loader-") ? 17 : 8;
+  }
   if (minecraftVersion === "1.21.1") return 21;
   return 17;
 }
@@ -1704,7 +1708,7 @@ function LauncherApp() {
       setInstalledMinecraftVersion(gameVersion);
       setMinecraftVersion(gameVersion);
       let executable = javaPath.trim();
-      const requiredJava = requiredJavaMajor(gameVersion);
+      const requiredJava = requiredJavaMajor(gameVersion, versionId);
       if (executable) {
         try {
           const detectedVersion = await invoke<string>("verify_java", { executable });
@@ -1716,7 +1720,10 @@ function LauncherApp() {
       if (!executable) {
         const runtimes = await invoke<JavaRuntime[]>("discover_java");
         const selected = runtimes.find((runtime) => javaMajor(runtime.version) === requiredJava)
-          ?? await invoke<JavaRuntime>("ensure_java", { minecraftVersion: gameVersion });
+          ?? await invoke<JavaRuntime>("ensure_java", {
+            minecraftVersion: gameVersion,
+            requiredMajor: requiredJava,
+          });
         executable = selected.executable;
         setJavaRuntimes(runtimes.some((runtime) => runtime.executable === selected.executable) ? runtimes : [...runtimes, selected]);
         setJavaPath(executable);
@@ -1738,7 +1745,7 @@ function LauncherApp() {
         { instanceId, processId: result.processId },
       ]);
       setNotice(
-        `“${instanceId}” está rodando (processo ${result.processId}) com o perfil ${result.versionId}${result.coreInstalled ? " e Aurora Core" : ""}${result.companionInstalled ? " + Companion" : ""}.`,
+        `“${instanceId}” está rodando (processo ${result.processId}) com o perfil ${result.versionId}${result.coreInstalled ? " e Aurora Core" : ""}${result.skinsInstalled ? " + Skins" : ""}${result.companionInstalled ? " + Companion" : ""}.`,
       );
     } catch (error) {
       setNotice(`Não foi possível iniciar Minecraft: ${String(error)}`);

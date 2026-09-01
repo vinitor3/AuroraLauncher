@@ -13,7 +13,8 @@ use aurora_launcher_core::{
     auth::{offline_uuid_for_nickname, validate_nickname},
     engine::{
         discover_java_executables, ensure_managed_java_with_progress, install_embedded_companion,
-        install_embedded_core, install_modrinth_content_with_progress as install_modrinth_project,
+        install_embedded_core, install_embedded_skins,
+        install_modrinth_content_with_progress as install_modrinth_project,
         install_modrinth_modpack_with_progress as install_modrinth_archive,
         install_remote_content_with_progress as install_remote_project, required_java_major,
         resolve_launch_spec, resolve_modrinth_content_artwork,
@@ -110,6 +111,7 @@ pub struct LaunchSummary {
     process_id: u32,
     version_id: String,
     core_installed: bool,
+    skins_installed: bool,
     companion_installed: bool,
 }
 
@@ -1269,11 +1271,15 @@ pub fn launch_instance(
     let loader = loader_for_profile(&version_id);
     let mut ipc_server = None;
     let mut core_installed = false;
+    let mut skins_installed = false;
     let mut companion_installed = false;
     if let Some(loader) = loader {
         install_embedded_core(&instance, &minecraft_version, loader)
             .map_err(|error| error.to_string())?;
         core_installed = true;
+        install_embedded_skins(&instance, &minecraft_version, loader)
+            .map_err(|error| error.to_string())?;
+        skins_installed = true;
         install_embedded_companion(&instance, &minecraft_version, loader)
             .map_err(|error| error.to_string())?;
         let server =
@@ -1282,13 +1288,18 @@ pub fn launch_instance(
         spec.aurora_ipc_port = Some(server.endpoint().port);
         spec.aurora_session_nonce = Some(server.endpoint().nonce.clone());
         spec.jvm_args.push(format!("-Daurora.loader={loader}"));
+        let skins_root = data_directory(&app)?.join("skins").join(uuid.to_string());
+        spec.jvm_args
+            .push(format!("-Daurora.skins.root={}", skins_root.display()));
         if let Some(url) = public_profile_url(skin_url.as_deref()) {
             spec.jvm_args
                 .push(format!("-Daurora.profile.skinUrl={url}"));
         }
         if let Some(path) = local_appearance_path(&app, skin_file.as_deref(), "skin") {
-            spec.jvm_args
-                .push(format!("-Daurora.profile.skinFile={}", path.display()));
+            spec.jvm_args.push(format!(
+                "-Daurora.profile.skinFile={}",
+                java_property_path(&path)
+            ));
         }
         if let Some(url) = public_profile_url(cape_url.as_deref()) {
             spec.jvm_args
@@ -1304,12 +1315,7 @@ pub fn launch_instance(
         ipc_server = Some(server);
         companion_installed = true;
     }
-    let identity = LaunchIdentity {
-        username: nickname,
-        uuid,
-        access_token: "aurora_session_authenticated".to_owned(),
-        user_type: "mojang".to_owned(),
-    };
+    let identity = LaunchIdentity::offline(nickname, uuid);
     let prepared = LauncherEngine
         .prepare_launch(&instance, &java, &identity, &spec, 4_096)
         .map_err(|error| error.to_string())?;
@@ -1345,6 +1351,7 @@ pub fn launch_instance(
         process_id,
         version_id,
         core_installed,
+        skins_installed,
         companion_installed,
     })
 }
@@ -1614,6 +1621,20 @@ fn local_appearance_path(app: &AppHandle, value: Option<&str>, kind: &str) -> Op
     .then_some(candidate)
 }
 
+fn java_property_path(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{unc}");
+        }
+        if let Some(local) = value.strip_prefix(r"\\?\") {
+            return local.to_owned();
+        }
+    }
+    value.into_owned()
+}
+
 fn download_appearance_url_blocking(url: &str, kind: &str) -> Result<(String, Vec<u8>), String> {
     const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
 
@@ -1725,8 +1746,12 @@ pub fn discover_java() -> Vec<JavaRuntimeSummary> {
 pub async fn ensure_java(
     app: AppHandle,
     minecraft_version: String,
+    required_major: Option<u32>,
 ) -> Result<JavaRuntimeSummary, String> {
-    let major = required_java_major(&minecraft_version);
+    let major = required_major.unwrap_or_else(|| required_java_major(&minecraft_version));
+    if !matches!(major, 8 | 17 | 21) {
+        return Err(format!("Java {major} não é suportado pelo Aurora"));
+    }
     emit_download_progress(&app, format!("Preparando Java {major}"), 5.0);
     let data_directory = data_directory(&app)?;
     let progress_app = app.clone();
@@ -1795,9 +1820,22 @@ mod tests {
     use std::fs;
 
     use super::{
-        finalize_manual_download, is_curseforge_host, png_dimensions, unique_content_filenames,
-        validate_content_filename,
+        finalize_manual_download, is_curseforge_host, java_property_path, png_dimensions,
+        unique_content_filenames, validate_content_filename,
     };
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn removes_windows_verbatim_prefix_before_passing_paths_to_java() {
+        assert_eq!(
+            java_property_path(std::path::Path::new(r"\\?\C:\Aurora\skin.png")),
+            r"C:\Aurora\skin.png"
+        );
+        assert_eq!(
+            java_property_path(std::path::Path::new(r"\\?\UNC\server\share\skin.png")),
+            r"\\server\share\skin.png"
+        );
+    }
 
     #[test]
     fn reads_png_dimensions_from_ihdr() {

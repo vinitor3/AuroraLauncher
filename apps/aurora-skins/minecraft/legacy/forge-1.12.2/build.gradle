@@ -1,0 +1,24 @@
+plugins {
+    id "java"
+    id "com.gradleup.shadow" version "8.3.6"
+}
+group = "com.aurora.skins"
+version = "0.1.0"
+repositories { mavenCentral(); maven { url "https://maven.minecraftforge.net/" } }
+java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
+tasks.withType(JavaCompile).configureEach { options.encoding = "UTF-8"; options.release = 8 }
+tasks.withType(AbstractArchiveTask).configureEach { preserveFileTimestamps = false; reproducibleFileOrder = true }
+sourceSets.main.java.srcDir "../../../core/src/main/java"
+dependencies {
+    compileOnly "net.minecraftforge:forge:1.12.2-14.23.5.2860:universal"
+    compileOnly files("../../../../aurora-core/api/build/libs/aurora-core-api-1.1.0.jar")
+}
+jar { archiveClassifier = "thin" }
+shadowJar {
+    archiveBaseName = "aurora-skins-forge-1.12.2"
+    archiveClassifier = ""
+    archiveVersion = project.version
+    configurations = [project.configurations.runtimeClasspath]
+    exclude "META-INF/versions/**", "module-info.class"
+}
+tasks.build.dependsOn tasks.shadowJar

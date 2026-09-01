@@ -1,0 +1,30 @@
+plugins { id "dev.architectury.loom" }
+loom { silentMojangMappingsLicense() }
+sourceSets.main.java.srcDir rootProject.file("common/src/main/java")
+sourceSets.main.resources.srcDir rootProject.file("common/src/main/resources")
+dependencies {
+    minecraft "com.mojang:minecraft:${rootProject.minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
+    implementation project(":skins-core")
+    include project(":skins-core")
+    compileOnly files(rootProject.file("../../../aurora-core/api/build/libs/aurora-core-api-1.1.0.jar"))
+}
+processResources {
+    inputs.property "version", project.version
+    filesMatching("fabric.mod.json") { expand "version": project.version }
+    from(rootProject.file("../1.20.1/common/src/main/resources")) {
+        include "META-INF/services/**"
+        include "assets/**"
+    }
+}
+jar { manifest { attributes "MixinConfigs": "aurora_skins.mixins.json" } }
+tasks.named("compileJava") {
+    source(rootProject.fileTree("../1.20.1/common/src/main/java") {
+        include "com/aurora/skins/minecraft/AuroraSkinsBootstrap.java"
+        include "com/aurora/skins/minecraft/AuroraSkinsClient.java"
+        include "com/aurora/skins/minecraft/AuroraSkinsModule.java"
+        include "com/aurora/skins/minecraft/mixin/TitleScreenMixin.java"
+        include "com/aurora/skins/minecraft/ui/AuroraSkinsScreen.java"
+    })
+}

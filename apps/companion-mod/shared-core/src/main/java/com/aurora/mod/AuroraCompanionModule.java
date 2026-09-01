@@ -11,7 +11,7 @@ final class AuroraCompanionModule implements AuroraModule {
     AuroraCompanionModule(AuroraIpcClient ipc) { this.ipc = ipc; }
 
     @Override public AuroraModuleMetadata metadata() {
-        return new AuroraModuleMetadata("aurora_companion", "Assistente", "0.2.0", "assistant", "1.0.0");
+        return new AuroraModuleMetadata("aurora_companion", "Assistente", "0.2.1", "assistant", "1.1.0");
     }
 
     @Override public void registerSettings(AuroraSettingsRegistry settings) {
