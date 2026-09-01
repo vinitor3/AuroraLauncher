@@ -5,9 +5,10 @@
 ```mermaid
 flowchart LR
   UI[React / WebView2] -->|commands tipados| TAURI[Tauri boundary]
-  TAURI --> CORE[Engine Rust]
-  CORE --> GAME[Minecraft + Fabric/Forge]
-  CORE <-->|WebSocket loopback + nonce| COMP[Companion]
+  TAURI --> ENGINE[Engine Rust]
+  ENGINE --> GAME[Minecraft + Fabric/Forge]
+  ENGINE <-->|WebSocket loopback + nonce| CORE[Aurora Core in-game]
+  COMP[Companion module] -->|API/event bus| CORE
   UI --> FIREBASE[Firebase Auth + Firestore]
   UI --> EDGE[Cloudflare Worker]
   EDGE --> GEMINI[Gemini]
@@ -16,7 +17,13 @@ flowchart LR
   CORE --> MODRINTH[Modrinth API/CDN]
 ```
 
-O desenho é adequado para o alpha: secrets permanecem fora do cliente, o jogo não recebe JWT e a engine local controla caminhos/processos. As fragilidades não exigem reescrita: exigem limites mais nítidos, módulos menores e transações antes de automação.
+O desenho é adequado para o alpha: secrets permanecem fora do cliente, o jogo
+não recebe JWT e a engine local controla caminhos/processos. Desde o Companion
+0.2.0, o Core deve ser o único dono do WebSocket; o Companion é módulo. Os JARs
+Fabric publicados, porém, mostraram uma corrida de ordem de inicialização que
+impediu o registro do módulo. A fonte agora faz anexação tardia, ainda sem
+homologação runtime. As demais fragilidades não exigem reescrita: exigem limites
+mais nítidos, módulos menores e transações antes de automação.
 
 ## Fronteiras a corrigir
 
@@ -91,4 +98,3 @@ Master só começa depois de manifesto v3, roles e auditoria. Multiplayer separa
 - Toda escrita relevante tem staging, validação, commit e rollback.
 - Compatibilidade é dado observado, não promessa de build.
 - Custo zero significa limite rígido + modo degradado, nunca serviço ilimitado implícito.
-

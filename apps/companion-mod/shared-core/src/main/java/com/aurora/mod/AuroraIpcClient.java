@@ -61,18 +61,18 @@ final class AuroraIpcClient {
         Aurora.services().ipc().send("overlay", java.util.Collections.<String, Object>emptyMap());
     }
 
-    void publishAssistantRequest(String requestId, String message, String screenshotBase64) {
+    boolean publishAssistantRequest(String requestId, String message, String screenshotBase64) {
         Map<String, Object> payload = new LinkedHashMap<String, Object>();
         payload.put("requestId", requestId);
         payload.put("message", message);
         payload.put("screenshotBase64", screenshotBase64);
-        Aurora.services().ipc().send("assistantRequest", payload);
+        return Aurora.services().ipc().send("assistantRequest", payload);
     }
 
-    void publishAssistantListen(String requestId) {
+    boolean publishAssistantListen(String requestId) {
         Map<String, Object> payload = new LinkedHashMap<String, Object>();
         payload.put("requestId", requestId);
-        Aurora.services().ipc().send("assistantListen", payload);
+        return Aurora.services().ipc().send("assistantListen", payload);
     }
 
     private static String encode(AuroraIpcMessageEvent event) {

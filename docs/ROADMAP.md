@@ -13,7 +13,7 @@ Este roadmap separa claramente o que já está implementado, o que ainda precisa
 - [x] Biblioteca local de skins e prévia 3D.
 - [x] Aurora Skins independente, auto-instalado nas nove combinações Fabric/Forge suportadas.
 - [x] Aplicação local, favoritos, histórico, importação 64x64/64x32 e personagem 3D na tela principal.
-- [x] IPC local autenticado entre launcher e Companion.
+- [x] IPC local autenticado entre launcher e Aurora Core, compartilhado pelo Companion.
 - [ ] Homologar todas as combinações Minecraft/loader em execução real.
 - [ ] Concluir a inspeção visual de skin e capa nas versões suportadas.
 - [ ] Cobrir fluxos críticos com testes de interface reproduzíveis.

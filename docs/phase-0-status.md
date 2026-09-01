@@ -60,8 +60,8 @@ Implementado como infraestrutura/protótipo:
 
 - Companion empacotado para Forge 1.12.2 e Fabric/Forge 1.16.5, 1.19.2,
   1.20.1 e 1.21.1; NeoForge não faz parte do escopo;
-- IPC WebSocket bidirecional limitado a `127.0.0.1`, com porta efêmera e nonce
-  novo por execução;
+- IPC WebSocket bidirecional do Aurora Core limitado a `127.0.0.1`, com porta
+  efêmera e nonce novo por execução; o Companion usa a API compartilhada;
 - painel do Assistente dentro do launcher;
 - `AltGr + /`, pedidos por texto/voz, respostas, legendas e Edge TTS pelo IPC;
 - conversa Gemini autenticada no Worker, usando Flash-Lite no jogo e fallback
@@ -99,13 +99,15 @@ Ainda não implementada:
 
 As matrizes Core 1.1.0, Skins 0.1.0 e Companion 0.2.1 foram recompiladas nos
 nove alvos. O preflight compara SHA-256 dos 27 JARs gerados com os artefatos
-embarcados e bloqueia qualquer divergência.
+embarcados e bloqueia qualquer divergência. O Companion 0.2.1 corrige os
+metadados Forge e a nova tentativa de anexação ao Core sem sobrescrever os
+JARs históricos 0.2.0; a correção ainda **PRECISA DE TESTE** dentro do jogo.
 Os testes Rust do IPC validam handshake,
 pedido e resposta em ambas as direções. O teste online do Edge TTS produziu MP3
 e eventos de sentença. Uma conversa autenticada completa confirmou o Worker e
 o modelo `gemini-3.5-flash-lite` no modo in-game.
 
-Em uma homologação anterior, Minecraft 1.20.1 Fabric confirmou carregamento do Companion,
+Em uma homologação anterior do Companion 0.1.0, Minecraft 1.20.1 Fabric confirmou carregamento do Companion,
 autenticação IPC, tick de cliente, abertura/fechamento do painel e registro de
 uma skin PNG 64x64 dentro do gerenciador de texturas do jogo. Minecraft 1.12.2
 Forge também foi homologado em execução real com Java 8, nick correto, skin do
@@ -114,7 +116,9 @@ isola WebSocket/SLF4J no namespace do Aurora e remove classes Java 9, evitando
 conflitos com o `LaunchClassLoader` e o ASM 5 do Forge antigo. Essa evidência é
 anterior à separação do Aurora Skins. Portanto, o conjunto Core 1.1.0 + Skins
 0.1.0 + Companion 0.2.1 ainda precisa de nova homologação visual em todas as
-combinações; compilação não deve ser confundida com validação dentro do jogo.
+combinações. O Companion 0.2.1 também encerra agendadores, limita screenshots e
+recupera a UI em falha/timeout, mas compilação não deve ser confundida com
+validação dentro do jogo.
 
 O armazenamento online de aparências do Launcher está **ativo**. Em 28 de agosto de 2026,
 o Worker publicado confirmou `SUPABASE_API_KEY_SERVICE_ROLE`, o bucket público

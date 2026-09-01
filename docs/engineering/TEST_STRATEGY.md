@@ -18,7 +18,10 @@
 - Rust: 26 aprovados; um TTS online ignorado;
 - Worker dry-run e Functions lint: verdes, sem Miniflare/auth matrix;
 - Companion 1.20.1 build: verde, sem testes Java e com warning de tooling;
-- runtime confirmado documentalmente: Forge 1.12.2 e Fabric 1.20.1.
+- runtime histórico documentado do Companion 0.1.0: Forge 1.12.2 e Fabric
+  1.20.1. Para Core + Companion 0.2.0, 0/9 concluem o roteiro; há execução
+  parcial 1.12.2, corrida de inicialização nas linhas Fabric observadas e
+  metadados Forge inválidos em 1.16.5/1.19.2.
 
 ## Suítes prioritárias
 
@@ -69,4 +72,3 @@ Fixtures maliciosas em log, nome de mod, manifesto e HTML. Verificar que frases 
 ## Fixtures
 
 Dados reais devem ser redigidos e versionados por causa/padrão, sem username, token, path pessoal, IP público ou mundo. Snapshot dourado só é atualizado com revisão do comportamento esperado.
-

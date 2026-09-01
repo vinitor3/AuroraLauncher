@@ -26,6 +26,15 @@ Para cada instância Fabric/Forge suportada, o Launcher instala por troca atômi
 
 O release preflight recompila as 27 combinações e compara os JARs de staging com os artefatos embarcados. Uma divergência bloqueia a criação do instalador.
 
+## Compatibilidade do launcher
+
+- Minecraft 1.16.5 em sessão offline: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. O
+  launcher isola somente o endpoint de privilégios do `authlib 2.1.28`, fazendo
+  o cliente usar o fallback `OfflineSocialInteractions` e preservar Multiplayer
+  LAN/offline. Há teste unitário do escopo por versão e prova direta com o
+  `authlib` da instância; a confirmação visual do botão ainda **PRECISA DE
+  TESTE** em uma nova build desktop.
+
 ## Roteiro runtime obrigatório
 
 1. Instância limpa e hashes de instalador/JAR.

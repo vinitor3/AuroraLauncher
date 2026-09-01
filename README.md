@@ -49,7 +49,9 @@ O projeto combina uma interface em **React**, um aplicativo **Tauri v2**, um nú
 - **Gerenciador de downloads:** até oito transferências concorrentes, retomada, tentativas e hashes; a troca de destino ainda precisa do gate transacional descrito no roadmap.
 - **Conteúdo por instância:** mods, shaders e resource packs com seleção múltipla, ativação, desativação e remoção.
 - **Guarda-roupa:** skins locais, favoritos, busca por nick, modelo Classic/Slim, capa e visualização 3D.
-- **Aurora Companion:** builds para Forge 1.12.2 e Fabric/Forge 1.16.5, 1.19.2, 1.20.1 e 1.21.1.
+- **Aurora Companion:** JARs 0.2.0 para Forge 1.12.2 e Fabric/Forge 1.16.5,
+  1.19.2, 1.20.1 e 1.21.1; a matriz atual tem 0/9 runtimes completos e
+  correções posteriores ainda não publicadas.
 - **Aurora Core:** menu modular no jogo, avatar 3D, sessão pública, eventos, configuração versionada e instalação assinada nos mesmos nove alvos.
 - **Assistente integrado:** conversa autenticada com Gemini, entrada por texto/voz, Edge TTS e legendas.
 - **IPC seguro:** comunicação local via WebSocket em `127.0.0.1`, porta efêmera e nonce renovado a cada execução.
@@ -139,17 +141,22 @@ Para testar e gerar toda a matriz do Aurora Core:
 npm run core:build
 ```
 
-Para gerar os Companions:
+Para gerar somente o alvo de referência 1.20.1 Fabric/Forge:
 
 ```powershell
 npm run companion:build
 ```
 
+Os demais alvos usam projetos/propriedades próprios e ainda não possuem um
+comando único de matriz. Não copie o resultado sobre um JAR versionado em
+`releases`; consulte o [dossiê técnico do Companion](docs/engineering/COMPANION_AUDIT.md).
+
 ## Segurança e privacidade
 
 - Tokens Firebase e nonces de sessão nunca são registrados pelo núcleo.
 - Segredos de serviços permanecem no Worker/Functions, nunca no bundle desktop.
-- O Companion aceita conexões somente no loopback local.
+- O Aurora Core mantém o único socket, somente no loopback local; o Companion
+  usa a API do Core.
 - A análise de tela é opcional e exige confirmação explícita a cada captura.
 - Vulnerabilidades devem seguir o processo descrito em [`SECURITY.md`](SECURITY.md).
 
@@ -160,6 +167,7 @@ npm run companion:build
 - [Roadmap do produto](docs/ROADMAP.md)
 - [Launcher Core](docs/module-a.md)
 - [IPC do Companion](docs/companion-ipc.md)
+- [Dossiê e auditoria do Companion](docs/engineering/COMPANION_AUDIT.md)
 - [Aurora Core](docs/aurora-core.md)
 - [Backend CurseForge](docs/curseforge-backend.md)
 - [Configuração do Firebase](docs/firebase-setup.md)

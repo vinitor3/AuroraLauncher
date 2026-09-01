@@ -28,3 +28,12 @@ pois esse comando ignora o preflight da raiz.
 
 A `alpha.3` é o release integrado atual e contém o redesign do desktop,
 Aurora Core 1.0.0 e Companion 0.2.0.
+
+## Limitação conhecida do Companion 0.2.0
+
+Os artefatos continuam preservados byte a byte, mas a auditoria posterior
+encontrou faixas Forge incorretas nos JARs 1.16.5/1.19.2 e uma corrida de
+inicialização nas linhas Fabric observadas. A correção existe somente na fonte
+e deve sair sob nova versão; a `alpha.3` não deve ser descrita como matriz
+runtime homologada. Consulte
+[`docs/engineering/COMPANION_AUDIT.md`](../docs/engineering/COMPANION_AUDIT.md).

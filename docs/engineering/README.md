@@ -1,6 +1,6 @@
 # Engenharia Aurora
 
-Baseline auditado em 2026-08-30, commit `5aa5fe8` (`v0.1.0-alpha`).
+Baseline geral auditado em 2026-08-30; Companion reauditado em 2026-08-31.
 
 ## Mudança de segurança preparada nesta branch
 
@@ -17,11 +17,12 @@ As regras Firestore locais agora bloqueiam autoatribuição de `ADMIN` e payload
 7. [Estratégia de testes](TEST_STRATEGY.md)
 8. [Estratégia de releases](RELEASE_STRATEGY.md)
 9. [Matriz de compatibilidade](COMPATIBILITY_MATRIX.md)
-10. [Plano paralelo Codex](CODEX_PARALLEL_PLAN.md)
-11. [Plano de integração](CODEX_INTEGRATION_PLAN.md)
-12. [Decisões do responsável](DECISIONS_REQUIRED.md)
-13. [ADRs](ADR/README.md)
-14. [Tarefas Codex](CODEX_TASKS/README.md)
-15. [Prompts Codex](CODEX_PROMPTS/README.md)
+10. [Dossiê do Aurora Companion](COMPANION_AUDIT.md)
+11. [Plano paralelo Codex](CODEX_PARALLEL_PLAN.md)
+12. [Plano de integração](CODEX_INTEGRATION_PLAN.md)
+13. [Decisões do responsável](DECISIONS_REQUIRED.md)
+14. [ADRs](ADR/README.md)
+15. [Tarefas Codex](CODEX_TASKS/README.md)
+16. [Prompts Codex](CODEX_PROMPTS/README.md)
 
 O contexto permanente de agentes está em [`../../AGENTS.md`](../../AGENTS.md). O threat model normativo permanece no [`../../SECURITY.md`](../../SECURITY.md).
