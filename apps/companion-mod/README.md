@@ -9,7 +9,7 @@ O alvo de referência é Minecraft 1.20.1 com Forge 47.4.23, a versão 1.20.1 ma
 
 ## Compatibilidade e estado real
 
-O Companion 0.2.1 é entregue apenas para Fabric e Forge e requer Aurora Core 1.1.0 ou superior. A aparência agora pertence exclusivamente ao Aurora Skins; o Companion permanece responsável pelo Assistente e pela telemetria local. O módulo usa a API IPC do Core e não abre uma segunda conexão.
+O Companion 0.2.2 é entregue apenas para Fabric e Forge e requer Aurora Core 1.1.0 ou superior. A aparência agora pertence exclusivamente ao Aurora Skins; o Companion permanece responsável pelo Assistente e pela telemetria local. O módulo usa a API IPC do Core e não abre uma segunda conexão.
 
 | Minecraft | Fabric | Forge | Java |
 | --- | --- | --- | --- |
@@ -21,7 +21,7 @@ O Companion 0.2.1 é entregue apenas para Fabric e Forge e requer Aurora Core 1.
 
 NeoForge não está no escopo atual. O módulo 1.12.2 fica isolado dos módulos modernos para preservar a compatibilidade com Java 8.
 
-Os JARs 0.2.0 são históricos e imutáveis. A auditoria de 31 de agosto de 2026
+Os JARs 0.2.0 e 0.2.1 são históricos e imutáveis. A auditoria de 31 de agosto de 2026
 encontrou dois bloqueios nessa versão publicada:
 
 - os JARs Forge 1.16.5 e 1.19.2 declaram incorretamente Forge `[47,)` no
@@ -30,7 +30,7 @@ encontrou dois bloqueios nessa versão publicada:
   antes de o Core terminar de inicializar, deixando Assistente, módulo e
   telemetria sem IPC.
 
-O Companion 0.2.1 corrige os metadados Forge, tenta novamente a anexação ao
+O Companion 0.2.2 corrige os metadados Forge, tenta novamente a anexação ao
 Core e mantém os JARs 0.2.0 intactos como histórico. A nova matriz está
 **IMPLEMENTADA MAS NÃO HOMOLOGADA**: compilação e inspeção de artefato não
 substituem o roteiro runtime completo. Veja o
@@ -64,9 +64,9 @@ Assistente é uma janela Swing externa sobre o jogo; a substituição por uma te
 e um HUD nativos do Minecraft ainda está pendente. `AltGr + /`, pedidos de voz,
 respostas e legendas do Edge TTS já usam o mesmo canal IPC.
 
-O Companion não intercepta mais perfil, skin ou capa. Toda aparência pertence ao módulo independente Aurora Skins, evitando dois mixins concorrentes sobre o jogador. Evidências runtime anteriores em 1.20.1 Fabric e 1.12.2 Forge continuam históricas; os JARs 0.2.1 precisam ser homologados novamente junto do Core 1.1.0 e Skins 0.1.0.
+O Companion não intercepta mais perfil, skin ou capa. Toda aparência pertence ao módulo independente Aurora Skins, evitando dois mixins concorrentes sobre o jogador. Evidências runtime anteriores em 1.20.1 Fabric e 1.12.2 Forge continuam históricas; os JARs 0.2.2 precisam ser homologados novamente junto do Core 1.1.0 e Skins 0.1.0.
 
-O Companion 0.2.1 tenta novamente a anexação quando o Core termina de
+O Companion 0.2.2 tenta novamente a anexação quando o Core termina de
 inicializar, encerra seus agendadores junto com o módulo e apresenta falha ou
 timeout quando um pedido do Assistente não atravessa o IPC. A captura confirmada
 é recomprimida para caber no limite de mensagem do Core.

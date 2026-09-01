@@ -23,15 +23,15 @@ pub fn install_embedded_companion(
     loader: &str,
 ) -> Result<PathBuf, CompanionError> {
     let contents = match (minecraft_version, loader) {
-        ("1.12.2", "forge") => include_bytes!("../../../../../releases/companion/1.12.2/forge/aurora-companion-forge-1.12.2-0.2.1.jar").as_slice(),
-        ("1.16.5", "fabric") => include_bytes!("../../../../../releases/companion/1.16.5/fabric/aurora-companion-fabric-1.16.5-0.2.1.jar").as_slice(),
-        ("1.16.5", "forge") => include_bytes!("../../../../../releases/companion/1.16.5/forge/aurora-companion-forge-1.16.5-0.2.1.jar").as_slice(),
-        ("1.19.2", "fabric") => include_bytes!("../../../../../releases/companion/1.19.2/fabric/aurora-companion-fabric-1.19.2-0.2.1.jar").as_slice(),
-        ("1.19.2", "forge") => include_bytes!("../../../../../releases/companion/1.19.2/forge/aurora-companion-forge-1.19.2-0.2.1.jar").as_slice(),
-        ("1.20.1", "fabric") => include_bytes!("../../../../../releases/companion/1.20.1/fabric/aurora-companion-fabric-1.20.1-0.2.1.jar").as_slice(),
-        ("1.20.1", "forge") => include_bytes!("../../../../../releases/companion/1.20.1/forge/aurora-companion-forge-1.20.1-0.2.1.jar").as_slice(),
-        ("1.21.1", "fabric") => include_bytes!("../../../../../releases/companion/1.21.1/fabric/aurora-companion-fabric-1.21.1-0.2.1.jar").as_slice(),
-        ("1.21.1", "forge") => include_bytes!("../../../../../releases/companion/1.21.1/forge/aurora-companion-forge-1.21.1-0.2.1.jar").as_slice(),
+        ("1.12.2", "forge") => include_bytes!("../../../../../releases/companion/1.12.2/forge/aurora-companion-forge-1.12.2-0.2.2.jar").as_slice(),
+        ("1.16.5", "fabric") => include_bytes!("../../../../../releases/companion/1.16.5/fabric/aurora-companion-fabric-1.16.5-0.2.2.jar").as_slice(),
+        ("1.16.5", "forge") => include_bytes!("../../../../../releases/companion/1.16.5/forge/aurora-companion-forge-1.16.5-0.2.2.jar").as_slice(),
+        ("1.19.2", "fabric") => include_bytes!("../../../../../releases/companion/1.19.2/fabric/aurora-companion-fabric-1.19.2-0.2.2.jar").as_slice(),
+        ("1.19.2", "forge") => include_bytes!("../../../../../releases/companion/1.19.2/forge/aurora-companion-forge-1.19.2-0.2.2.jar").as_slice(),
+        ("1.20.1", "fabric") => include_bytes!("../../../../../releases/companion/1.20.1/fabric/aurora-companion-fabric-1.20.1-0.2.2.jar").as_slice(),
+        ("1.20.1", "forge") => include_bytes!("../../../../../releases/companion/1.20.1/forge/aurora-companion-forge-1.20.1-0.2.2.jar").as_slice(),
+        ("1.21.1", "fabric") => include_bytes!("../../../../../releases/companion/1.21.1/fabric/aurora-companion-fabric-1.21.1-0.2.2.jar").as_slice(),
+        ("1.21.1", "forge") => include_bytes!("../../../../../releases/companion/1.21.1/forge/aurora-companion-forge-1.21.1-0.2.2.jar").as_slice(),
         _ => {
             return Err(CompanionError::Unsupported {
                 minecraft_version: minecraft_version.to_owned(),
@@ -111,7 +111,7 @@ mod tests {
                 .read_to_string(&mut metadata)
                 .expect("metadado textual");
             assert!(metadata.contains("aurora_core"));
-            assert!(metadata.contains("0.2.1"));
+            assert!(metadata.contains("0.2.2"));
             if loader == "fabric" {
                 assert!(metadata.contains("\"client\""));
                 assert!(!metadata.contains("\"main\""));

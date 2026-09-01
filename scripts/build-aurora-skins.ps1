@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$StageDirectory = ".aurora\build-matrix\skins"
+    [string]$StageDirectory = ".aurora\build-matrix\skins\0.1.0"
 )
 
 $ErrorActionPreference = "Stop"

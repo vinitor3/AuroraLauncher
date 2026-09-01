@@ -26,8 +26,19 @@ pois esse comando ignora o preflight da raiz.
 - `0.1.1-alpha.2`: `64CED79E0E0A335F5EC595ED0B9A22B34AD01BF9D1692E32A99ACCF07D21A160`
 - `0.1.1-alpha.3`: `E535918AD05E26F057BA5415E93BCFB30C778D30B705A6B123F22F739364CEFB`
 
-A `alpha.3` é o release integrado atual e contém o redesign do desktop,
+A `alpha.3` é o release integrado anterior e contém o redesign do desktop,
 Aurora Core 1.0.0 e Companion 0.2.0.
+
+## Matrizes de módulos preservadas
+
+- Aurora Core 1.1.0: nove JARs Fabric/Forge versionados em `releases/core/1.1.0`.
+- Aurora Skins 0.1.0: nove JARs versionados em `releases/skins/0.1.0`.
+- Aurora Companion 0.2.2: nove JARs versionados; os hashes estão em
+  [`companion/0.2.2-SHA256SUMS.txt`](companion/0.2.2-SHA256SUMS.txt).
+
+O Companion 0.2.2 preserva os artefatos 0.2.0/0.2.1 e incorpora as correções
+de inicialização, desligamento, feedback do Assistente e limite de captura
+integradas depois da matriz 0.2.1.
 
 ## Limitação conhecida do Companion 0.2.0
 

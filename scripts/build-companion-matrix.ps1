@@ -1,13 +1,13 @@
 [CmdletBinding()]
 param(
-    [string]$StageDirectory = ".aurora\build-matrix\companion"
+    [string]$StageDirectory = ".aurora\build-matrix\companion\0.2.2"
 )
 
 $ErrorActionPreference = "Stop"
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 $CompanionRoot = Join-Path $RepositoryRoot "apps\companion-mod"
 $Gradle = Join-Path $CompanionRoot "gradlew.bat"
-$Version = "0.2.1"
+$Version = "0.2.2"
 $StageRoot = if ([IO.Path]::IsPathRooted($StageDirectory)) {
     [IO.Path]::GetFullPath($StageDirectory)
 } else {

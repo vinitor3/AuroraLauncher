@@ -1,6 +1,6 @@
 # Compatibility Matrix
 
-Atualizado em 2026-08-31. `BUILD` significa JAR compilado e inspecionado; `RUNTIME` exige o roteiro completo em uma instância real. Core 1.1.0, Skins 0.1.0 e Companion 0.2.1 formam a matriz embarcada no Launcher 0.1.1-alpha.4.
+Atualizado em 2026-08-31. `BUILD` significa JAR compilado e inspecionado; `RUNTIME` exige o roteiro completo em uma instância real. Core 1.1.0, Skins 0.1.0 e Companion 0.2.2 formam a matriz embarcada no Launcher 0.1.1-alpha.4.
 
 | Minecraft | Loader | Java | Core build | Skins build | Companion build | Runtime do conjunto | Estado |
 | --- | --- | ---: | :---: | :---: | :---: | :---: | --- |
@@ -22,9 +22,9 @@ Para cada instância Fabric/Forge suportada, o Launcher instala por troca atômi
 
 1. Aurora Core 1.1.0, após validar tamanho, SHA-256 e assinatura Ed25519;
 2. Aurora Skins 0.1.0;
-3. Aurora Companion 0.2.1.
+3. Aurora Companion 0.2.2.
 
-O release preflight recompila as 27 combinações e compara os JARs de staging com os artefatos embarcados. Uma divergência bloqueia a criação do instalador.
+O release preflight recompila as 27 combinações e compara o conteúdo normalizado dos JARs de staging com os artefatos embarcados. A normalização ignora apenas o namespace aleatório de injeção gerado pelo Architectury e metadados ZIP; qualquer outra divergência bloqueia a criação do instalador.
 
 ## Compatibilidade do launcher
 
