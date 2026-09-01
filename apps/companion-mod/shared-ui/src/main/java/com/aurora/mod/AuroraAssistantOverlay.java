@@ -18,9 +18,14 @@ import java.awt.event.KeyEvent;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.util.Base64;
+import java.util.Iterator;
 import java.util.UUID;
 
+import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.stream.MemoryCacheImageOutputStream;
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -39,6 +44,9 @@ import javax.swing.Timer;
 
 /** HUD leve do Assistente, executado no processo cliente do Minecraft. */
 final class AuroraAssistantOverlay {
+    private static final int MAX_SCREENSHOT_BYTES = 700_000;
+    private static final int RESPONSE_TIMEOUT_MS = 60_000;
+    private static final int LISTEN_TIMEOUT_MS = 30_000;
     private static final Color SURFACE = new Color(17, 11, 31, 246);
     private static final Color BORDER = new Color(196, 163, 255, 170);
     private static final Color TEXT = new Color(241, 235, 255);
@@ -55,6 +63,8 @@ final class AuroraAssistantOverlay {
     private JButton listenButton;
     private String pendingRequestId;
     private String voiceRequestId;
+    private Timer responseTimeout;
+    private Timer listenTimeout;
 
     private AuroraAssistantOverlay() { }
 
@@ -214,42 +224,104 @@ final class AuroraAssistantOverlay {
                 return;
             }
         }
-        pendingRequestId = UUID.randomUUID().toString();
+        String requestId = UUID.randomUUID().toString();
+        if (!ipcClient.publishAssistantRequest(requestId, text, screenshot)) {
+            status.setText("Não foi possível enviar o pedido ao launcher.");
+            return;
+        }
+        pendingRequestId = requestId;
         conversation.append("\nVocê: " + text + "\n");
         question.setText("");
         question.setEnabled(false);
         sendButton.setEnabled(false);
         status.setText("Aurora está pensando…");
-        ipcClient.publishAssistantRequest(pendingRequestId, text, screenshot);
+        startResponseTimeout(requestId);
     }
 
     private void listen() {
         if (voiceRequestId != null || pendingRequestId != null || ipcClient == null || !ipcClient.isOpen()) return;
-        voiceRequestId = UUID.randomUUID().toString();
+        String requestId = UUID.randomUUID().toString();
+        if (!ipcClient.publishAssistantListen(requestId)) {
+            status.setText("Não foi possível pedir o microfone ao launcher.");
+            return;
+        }
+        voiceRequestId = requestId;
         listenButton.setEnabled(false);
         status.setText("Ouvindo você…");
-        ipcClient.publishAssistantListen(voiceRequestId);
+        startListenTimeout(requestId);
     }
 
     private String captureScreen() throws Exception {
         Rectangle bounds = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
         BufferedImage source = new Robot().createScreenCapture(bounds);
-        int width = Math.min(1280, source.getWidth());
-        int height = Math.max(1, source.getHeight() * width / source.getWidth());
-        Image scaled = source.getScaledInstance(width, height, Image.SCALE_SMOOTH);
-        BufferedImage output = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
-        Graphics2D graphics = output.createGraphics();
-        graphics.drawImage(scaled, 0, 0, null);
-        graphics.dispose();
+        int[] maximumWidths = { 1280, 1024, 800 };
+        float[] qualities = { 0.78F, 0.66F, 0.54F };
+        for (int index = 0; index < maximumWidths.length; index++) {
+            int width = Math.min(maximumWidths[index], source.getWidth());
+            int height = Math.max(1, source.getHeight() * width / source.getWidth());
+            Image scaled = source.getScaledInstance(width, height, Image.SCALE_SMOOTH);
+            BufferedImage output = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+            Graphics2D graphics = output.createGraphics();
+            graphics.drawImage(scaled, 0, 0, null);
+            graphics.dispose();
+            byte[] encoded = encodeJpeg(output, qualities[index]);
+            if (encoded.length <= MAX_SCREENSHOT_BYTES) {
+                return "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(encoded);
+            }
+        }
+        throw new IllegalStateException("captura excede o limite seguro do IPC");
+    }
+
+    private static byte[] encodeJpeg(BufferedImage image, float quality) throws Exception {
+        Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpg");
+        if (!writers.hasNext()) throw new IllegalStateException("encoder JPEG indisponível");
+        ImageWriter writer = writers.next();
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        ImageIO.write(output, "jpg", bytes);
-        return "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(bytes.toByteArray());
+        try (MemoryCacheImageOutputStream output = new MemoryCacheImageOutputStream(bytes)) {
+            ImageWriteParam parameters = writer.getDefaultWriteParam();
+            if (parameters.canWriteCompressed()) {
+                parameters.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+                parameters.setCompressionQuality(quality);
+            }
+            writer.setOutput(output);
+            writer.write(null, new IIOImage(image, null, null), parameters);
+        } finally {
+            writer.dispose();
+        }
+        return bytes.toByteArray();
+    }
+
+    private void startResponseTimeout(String requestId) {
+        if (responseTimeout != null) responseTimeout.stop();
+        responseTimeout = new Timer(RESPONSE_TIMEOUT_MS, event -> {
+            if (!requestId.equals(pendingRequestId)) return;
+            pendingRequestId = null;
+            question.setEnabled(true);
+            sendButton.setEnabled(true);
+            caption.setText(" ");
+            status.setText("O pedido expirou. Tente novamente.");
+        });
+        responseTimeout.setRepeats(false);
+        responseTimeout.start();
+    }
+
+    private void startListenTimeout(String requestId) {
+        if (listenTimeout != null) listenTimeout.stop();
+        listenTimeout = new Timer(LISTEN_TIMEOUT_MS, event -> {
+            if (!requestId.equals(voiceRequestId)) return;
+            voiceRequestId = null;
+            listenButton.setEnabled(true);
+            status.setText("O microfone não respondeu. Tente novamente.");
+        });
+        listenTimeout.setRepeats(false);
+        listenTimeout.start();
     }
 
     private void receiveOnUi(String message) {
         String kind = jsonString(message, "kind");
         String requestId = jsonString(message, "requestId");
         if ("assistantTranscript".equals(kind) && requestId.equals(voiceRequestId)) {
+            if (listenTimeout != null) listenTimeout.stop();
             String text = jsonString(message, "text");
             String error = jsonString(message, "error");
             voiceRequestId = null;
@@ -268,6 +340,7 @@ final class AuroraAssistantOverlay {
             return;
         }
         if (!"assistantResponse".equals(kind) || !requestId.equals(pendingRequestId)) return;
+        if (responseTimeout != null) responseTimeout.stop();
         String text = jsonString(message, "text");
         String error = jsonString(message, "error");
         conversation.append("\nAurora: " + (error.isEmpty() ? text : error) + "\n");
@@ -275,6 +348,7 @@ final class AuroraAssistantOverlay {
         status.setText(error.isEmpty() ? "Resposta pronta" : "Não foi possível responder");
         question.setEnabled(true);
         sendButton.setEnabled(true);
+        caption.setText(" ");
         question.requestFocusInWindow();
         pendingRequestId = null;
     }

@@ -45,6 +45,13 @@ aparência de credencial e não aceita conexões fora do loopback. O protocolo n
 transmite senha, token Firebase, IP de servidor, chat do Minecraft ou arquivos
 pessoais.
 
+O Core limita cada mensagem a 1 MiB. Na fonte preparada para a próxima versão,
+o Companion recomprime a captura confirmada até no máximo 700.000 bytes antes
+do Base64, deixando margem para o envelope JSON. Se o canal recusar o envio, a
+interface volta ao estado utilizável e mostra uma falha curta; pedidos de texto
+expiram em 60 segundos e pedidos de microfone em 30 segundos. Os JARs 0.2.0
+imutáveis ainda não contêm essas proteções.
+
 ## Atalho e captura
 
 No Windows, `AltGr + /` é registrado pelo launcher como `Ctrl + Alt + /`. Com um
@@ -52,6 +59,13 @@ jogo suportado conectado, o comando é enviado ao Companion; sem jogo conectado,
 o mesmo atalho abre o painel interno do launcher. O Companion ainda usa uma
 janela Swing externa. A tela/HUD nativa dentro do Minecraft, com controle de
 mouse correto, é trabalho pendente da Fase 1.2.
+
+Na versão 0.2.0 o Companion já não cria um WebSocket próprio: o Aurora Core é o
+único cliente do socket e repassa eventos aos módulos. Logs Fabric de 31 de
+agosto de 2026 mostraram uma corrida de inicialização em que o entrypoint do
+Companion executava antes do Core; a fonte agora tenta a anexação novamente no
+agendador do módulo. Essa correção ainda exige novo artefato e homologação
+runtime.
 
 A imagem da tela não faz parte da telemetria. O botão **Analisar tela** mostra
 uma confirmação antes de cada captura, reduz a imagem e envia JPEG somente

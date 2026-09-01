@@ -1,20 +1,37 @@
 # Compatibility Matrix
 
-Atualizado em 2026-08-31. `BUILD` significa JAR válido/compilável; `RUNTIME` exige o roteiro completo. Aurora Core 1.0.0 compila nos nove alvos, mas ainda não possui homologação runtime.
+Atualizado em 2026-08-31 após inspeção dos JARs 0.2.0 e dos logs locais mais
+recentes. `BUILD` significa somente que a fonte/artefato é legível e compila;
+`RUNTIME COMPLETO` exige todo o roteiro abaixo. Aurora Core 1.0.0 compila nos
+nove alvos, mas nenhuma combinação Core + Companion 0.2.0 concluiu o roteiro.
 
-| Minecraft | Loader | Java | Core build | Core runtime | Companion build | Companion runtime | Estado do Core |
-| --- | --- | ---: | :---: | :---: | :---: | :---: | --- |
-| 1.12.2 | Forge | 8 | sim | não | sim | sim | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.16.5 | Fabric | 8 | sim | não | sim | não | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.16.5 | Forge | 8 | sim | não | sim | não | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.19.2 | Fabric | 17 | sim | não | sim | não | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.19.2 | Forge | 17 | sim | não | sim | não | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.20.1 | Fabric | 17 | sim | não | sim | sim | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.20.1 | Forge | 17 | sim | não | sim | não | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.21.1 | Fabric | 21 | sim | não | sim | não | IMPLEMENTADO MAS NÃO HOMOLOGADO |
-| 1.21.1 | Forge | 21 | sim | não | sim | não | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| Minecraft | Loader | Java | Core build | Companion 0.2 build | Evidência 0.2 observada | Runtime completo 0.2 |
+| --- | --- | ---: | :---: | :---: | --- | :---: |
+| 1.12.2 | Forge | 8 | sim | sim | PARCIAL: Core e módulo carregaram, aparência/atalho apareceram e o mundo encerrou; handshake e fluxo do Assistente não foram provados | não |
+| 1.16.5 | Fabric | 8 | sim | sim | RISCO: um pack recusou Fabric Loader 0.13.3; outro iniciou, mas o Companion executou antes do Core e não anexou o módulo | não |
+| 1.16.5 | Forge | 8 | sim | sim | RISCO: JAR imutável declara Forge `[47,)` em vez de `[36,)` | não |
+| 1.19.2 | Fabric | 17 | sim | sim | RISCO: Core conectou, mas o Companion executou antes do Core e não anexou o módulo | não |
+| 1.19.2 | Forge | 17 | sim | sim | RISCO: JAR imutável declara Forge `[47,)` em vez de `[43,)` | não |
+| 1.20.1 | Fabric | 17 | sim | sim | RISCO: Core conectou, mas o Companion executou antes do Core e não anexou o módulo | não |
+| 1.20.1 | Forge | 17 | sim | sim | NÃO VERIFICADO | não |
+| 1.21.1 | Fabric | 21 | sim | sim | RISCO: mesma corrida de inicialização; adaptador também não localizou o perfil para aplicar aparência | não |
+| 1.21.1 | Forge | 21 | sim | sim | NÃO VERIFICADO | não |
 
-As duas marcações runtime do Companion são evidências anteriores e não homologam automaticamente o novo Core. O menu Aurora, o avatar 3D e a conexão única precisam ser reexecutados em cada linha.
+As homologações anteriormente citadas para Forge 1.12.2 e Fabric 1.20.1 são do
+Companion 0.1.0, quando cada JAR possuía cliente WebSocket próprio. Elas são
+evidência histórica, mas não homologam o protocolo único do Core nem o
+Companion 0.2.0. A fonte posterior aos JARs 0.2.0 corrige a faixa Forge e tenta
+anexar novamente ao Core; permanece **PRECISA DE TESTE** até ser publicada com
+versão nova e executada.
+
+## Compatibilidade do launcher
+
+- Minecraft 1.16.5 em sessão offline: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. O
+  launcher isola somente o endpoint de privilégios do `authlib 2.1.28`, fazendo
+  o cliente usar o fallback `OfflineSocialInteractions` e preservar Multiplayer
+  LAN/offline. Há teste unitário do escopo por versão e prova direta com o
+  `authlib` da instância; a confirmação visual do botão ainda **PRECISA DE
+  TESTE** em uma nova build desktop.
 
 ## Roteiro runtime obrigatório
 

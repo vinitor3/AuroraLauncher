@@ -21,5 +21,5 @@ final class AuroraCompanionModule implements AuroraModule {
             "assistant", 200, context -> AuroraAssistantOverlay.toggle(ipc)));
     }
 
-    @Override public void shutdown() { ipc.close(); }
+    @Override public void shutdown() { AuroraCompanion.shutdown(); }
 }

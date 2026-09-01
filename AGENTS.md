@@ -9,7 +9,10 @@ Aurora é um launcher independente para Minecraft Java Edition, gratuito e open 
 Estado em 2026-08-30:
 
 - launcher desktop e núcleo Rust: implementados, build/testes locais verdes;
-- Companion: nove JARs presentes, mas somente Forge 1.12.2 e Fabric 1.20.1 têm evidência runtime registrada;
+- Companion: nove JARs 0.2.0 presentes; as evidências Forge 1.12.2 e Fabric
+  1.20.1 pertencem ao 0.1.0. A matriz 0.2.0 tem 0/9 runtimes completos, dois
+  metadados Forge incorretos e uma corrida de inicialização Fabric corrigida
+  apenas na fonte posterior aos artefatos;
 - HUD nativa, updater de conteúdo, CAS, diagnóstico e Tools: não concluídos; Master e Social: IMPLEMENTAR FUTURAMENTE;
 - release `v0.1.0-alpha`: histórico; não reutilizar nem sobrescrever.
 

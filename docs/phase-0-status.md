@@ -1,6 +1,6 @@
 # Status da Fundação e da Fase 1
 
-Atualizado em 30 de agosto de 2026.
+Atualizado em 31 de agosto de 2026.
 
 ## Fase 0 — Fundação & Identidade
 
@@ -57,8 +57,8 @@ Implementado como infraestrutura/protótipo:
 
 - Companion empacotado para Forge 1.12.2 e Fabric/Forge 1.16.5, 1.19.2,
   1.20.1 e 1.21.1; NeoForge não faz parte do escopo;
-- IPC WebSocket bidirecional limitado a `127.0.0.1`, com porta efêmera e nonce
-  novo por execução;
+- IPC WebSocket bidirecional do Aurora Core limitado a `127.0.0.1`, com porta
+  efêmera e nonce novo por execução; o Companion usa a API compartilhada;
 - painel do Assistente dentro do launcher;
 - `AltGr + /`, pedidos por texto/voz, respostas, legendas e Edge TTS pelo IPC;
 - conversa Gemini autenticada no Worker, usando Flash-Lite no jogo e fallback
@@ -93,24 +93,35 @@ Ainda não implementada:
 
 ## Evidências e pendências de validação
 
-Os nove JARs disponíveis foram inspecionados e são arquivos válidos. Os dois
-JARs 1.20.1 foram recompilados com o fallback local e a conversão de skin
-legada; as outras sete combinações ainda carregam a implementação anterior.
+Os nove JARs 0.2.0 disponíveis foram inspecionados e são ZIPs/JARs legíveis,
+mas os metadados Forge 1.16.5 e 1.19.2 exigem incorretamente Forge `[47,)`.
+Esses artefatos são históricos e não serão sobrescritos. A fonte corrige a
+faixa para usar a propriedade de cada loader; uma nova versão ainda precisa ser
+gerada e testada.
 Os testes Rust do IPC validam handshake,
 pedido e resposta em ambas as direções. O teste online do Edge TTS produziu MP3
 e eventos de sentença. Uma conversa autenticada completa confirmou o Worker e
 o modelo `gemini-3.5-flash-lite` no modo in-game.
 
-Em uma homologação anterior, Minecraft 1.20.1 Fabric confirmou carregamento do Companion,
+Em uma homologação anterior do Companion 0.1.0, Minecraft 1.20.1 Fabric confirmou carregamento do Companion,
 autenticação IPC, tick de cliente, abertura/fechamento do painel e registro de
 uma skin PNG 64x64 dentro do gerenciador de texturas do jogo. Minecraft 1.12.2
 Forge também foi homologado em execução real com Java 8, nick correto, skin do
 perfil, handshake IPC autenticado e abertura/fechamento do painel. O JAR legado
 isola WebSocket/SLF4J no namespace do Aurora e remove classes Java 9, evitando
 conflitos com o `LaunchClassLoader` e o ASM 5 do Forge antigo. A validação
-runtime das outras sete combinações, da capa e a inspeção visual da correção de
-skin num mundo ainda são testes pendentes; compilação não deve ser confundida
-com validação dentro do jogo.
+não migra automaticamente para o Companion 0.2.0 com Aurora Core.
+
+Nos logs locais mais recentes do 0.2.0, Forge 1.12.2 carregou Core, Companion e
+o módulo Assistente, aplicou aparência, conectou o atalho e encerrou um mundo,
+mas não há prova completa de handshake, texto, voz, legenda e captura. Fabric
+1.16.5, 1.19.2, 1.20.1 e 1.21.1 expôs uma corrida: o Companion inicializou antes
+do Core e não registrou o módulo. Em 1.21.1 o adaptador também não localizou o
+perfil para aplicar a aparência. A fonte agora tenta novamente a anexação,
+encerra os agendadores, limita screenshots e recupera a UI em falha/timeout;
+essas mudanças ainda não estão em release. Portanto o 0.2.0 permanece com 0/9
+runtimes completos, e compilação não deve ser confundida com validação dentro
+do jogo.
 
 O armazenamento online de aparências está **ativo**. Em 28 de agosto de 2026,
 o Worker publicado confirmou `SUPABASE_API_KEY_SERVICE_ROLE`, o bucket público

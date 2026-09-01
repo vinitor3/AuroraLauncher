@@ -9,10 +9,11 @@ import java.util.concurrent.TimeUnit;
 /** Código compartilhado entre os loaders suportados. */
 public final class AuroraCompanion {
     public static final String MOD_ID = "aurora_companion";
-    private static AuroraIpcClient ipcClient;
+    private static volatile AuroraIpcClient ipcClient;
     private static ScheduledExecutorService telemetryExecutor;
     private static boolean overlayShortcutWasDown;
     private static boolean overlayTickAnnounced;
+    private static boolean waitingForCoreAnnounced;
 
     private AuroraCompanion() { }
 
@@ -23,12 +24,34 @@ public final class AuroraCompanion {
         System.out.println("[Aurora] Companion carregado.");
         System.setProperty("java.awt.headless", "false");
         initializeAppearance();
-        ipcClient = AuroraIpcClient.fromSystemProperties();
-        if (ipcClient != null) {
-            ipcClient.connect();
-            registerAuroraModule();
-            startTelemetrySampler();
+        attachToCoreIfReady();
+        startTelemetrySampler();
+    }
+
+    private static synchronized void attachToCoreIfReady() {
+        if (ipcClient != null) return;
+        AuroraIpcClient candidate = AuroraIpcClient.fromSystemProperties();
+        if (candidate == null) {
+            if (!waitingForCoreAnnounced) {
+                waitingForCoreAnnounced = true;
+                System.out.println("[Aurora Companion] Aguardando o Aurora Core concluir a inicialização.");
+            }
+            return;
         }
+        ipcClient = candidate;
+        ipcClient.connect();
+        registerAuroraModule();
+        System.out.println("[Aurora Companion] Integração com o Aurora Core concluída.");
+    }
+
+    static synchronized void shutdown() {
+        if (ipcClient != null) ipcClient.close();
+        ipcClient = null;
+        if (telemetryExecutor != null) telemetryExecutor.shutdownNow();
+        telemetryExecutor = null;
+        overlayShortcutWasDown = false;
+        overlayTickAnnounced = false;
+        waitingForCoreAnnounced = false;
     }
 
     private static void registerAuroraModule() {
@@ -83,6 +106,7 @@ public final class AuroraCompanion {
         });
         telemetryExecutor.scheduleAtFixedRate(() -> {
             try {
+                attachToCoreIfReady();
                 publishTelemetry(readFps(), 0.0F, "");
             } catch (Throwable ignored) {
                 // Telemetria é opcional e não pode afetar a execução do jogo.

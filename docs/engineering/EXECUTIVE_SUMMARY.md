@@ -12,7 +12,10 @@ O Aurora é um **alpha funcional avançado do launcher**, não um produto multip
 - Rust: `fmt` e `clippy -D warnings` verdes; 26 testes aprovados e um teste online de TTS ignorado.
 - Worker e Functions: validação TypeScript/dry-run verdes.
 - Companion 1.20.1: build Gradle verde, mas Loom 1.3 está obsoleto e há APIs incompatíveis com Gradle 9.
-- Nove JARs versionados presentes; sete combinações permanecem sem evidência runtime registrada.
+- Nove JARs 0.2.0 versionados presentes, mas 0/9 concluem o roteiro runtime da
+  arquitetura com Core. As duas evidências antes citadas são históricas do
+  Companion 0.1.0; a inspeção atual encontrou corrida Fabric e metadados Forge
+  incorretos em 1.16.5/1.19.2.
 
 ## Correções ao relatório de 29/08
 
@@ -33,7 +36,7 @@ A regra original de criação de `/users/{uid}` aceitava um `role` escolhido pel
 | --- | --- | --- |
 | Desktop e engine | PARCIAL | build/testes verdes; E2E e modularização ausentes |
 | Downloads | IMPLEMENTADO MAS NÃO HOMOLOGADO | concorrência/hash/rename testados; falhas extensas e CAS futuros |
-| Companion | IMPLEMENTADO MAS NÃO HOMOLOGADO | 9 JARs, somente 2 runtimes comprovados |
+| Companion | IMPLEMENTADO MAS NÃO HOMOLOGADO | 9 JARs 0.2.0; 0/9 runtimes completos, com correções apenas na fonte seguinte |
 | HUD nativa | NÃO IMPLEMENTADO | Swing externa permanece |
 | Updater de conteúdo | NÃO IMPLEMENTADO | inventário/resolve/rollback ausentes |
 | Crash/Doctor/CAS | NÃO IMPLEMENTADO | contratos ainda precisam preceder Tools |

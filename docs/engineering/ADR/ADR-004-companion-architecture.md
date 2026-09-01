@@ -18,7 +18,7 @@ Independentes maximizam compatibilidade e duplicação. JAR universal simplifica
 
 Abstração “comum” vazar tipos Minecraft; toolchain único quebrar Java 8.
 
-## Decisão recomendada
+## Decisão
 
 **MELHORAR** para core Java mínimo sem classes Minecraft: DTO IPC, estado do Assistente, filas e sanitização. Keybind, screen/HUD, render, textura e lifecycle ficam em adaptadores. 1.12.2 continua projeto isolado.
 
@@ -30,3 +30,9 @@ Testes do core sem jogo; cada adaptador ainda exige runtime. Protocolo IPC ganha
 
 Média; o protocolo compartilhado reduz custo de trocar API de render.
 
+## Estado
+
+Aceita e parcialmente implementada pelo Companion 0.2.0 + Aurora Core 1.0.0.
+Os JARs publicados ainda têm defeitos de metadata/ordem de inicialização e a UI
+nativa continua pendente; consulte o dossiê e a matriz antes de promover o
+estado para homologado.

@@ -1266,6 +1266,7 @@ pub fn launch_instance(
     let uuid = offline_uuid_for_nickname(&nickname).map_err(|error| error.to_string())?;
     let mut spec =
         resolve_launch_spec(&instance, &version_id).map_err(|error| error.to_string())?;
+    spec.apply_offline_compatibility(&minecraft_version);
     let loader = loader_for_profile(&version_id);
     let mut ipc_server = None;
     let mut core_installed = false;

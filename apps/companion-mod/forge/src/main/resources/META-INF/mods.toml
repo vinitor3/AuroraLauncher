@@ -15,7 +15,7 @@ side="CLIENT"
 [[dependencies.aurora_companion]]
 modId="forge"
 mandatory=true
-versionRange="[47,)"
+versionRange="${forge_loader_range}"
 ordering="NONE"
 side="CLIENT"
 [[dependencies.aurora_companion]]

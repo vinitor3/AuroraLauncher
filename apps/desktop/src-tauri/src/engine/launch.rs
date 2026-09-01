@@ -49,6 +49,25 @@ pub struct VersionLaunchSpec {
     pub aurora_session_nonce: Option<String>,
 }
 
+impl VersionLaunchSpec {
+    /// O authlib 2.1.28 do Minecraft 1.16.5 interpreta a resposta anônima atual
+    /// de `/privileges` como todos os privilégios desativados. Ao tornar apenas
+    /// o endpoint de serviços indisponível para a sessão offline, o próprio jogo
+    /// usa `OfflineSocialInteractions`, que mantém multiplayer LAN/offline ativo.
+    pub fn apply_offline_compatibility(&mut self, minecraft_version: &str) {
+        if minecraft_version != "1.16.5" {
+            return;
+        }
+
+        self.jvm_args.extend([
+            "-Dminecraft.api.auth.host=https://authserver.mojang.com".into(),
+            "-Dminecraft.api.account.host=https://api.mojang.com".into(),
+            "-Dminecraft.api.session.host=https://sessionserver.mojang.com".into(),
+            "-Dminecraft.api.services.host=http://127.0.0.1:0".into(),
+        ]);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct LaunchCommand {
     pub executable: PathBuf,
@@ -192,6 +211,21 @@ fn build_classpath(libraries: &[PathBuf], client_jar: &Path) -> Result<String, L
 mod tests {
     use super::*;
 
+    fn launch_spec() -> VersionLaunchSpec {
+        VersionLaunchSpec {
+            version_name: "test".into(),
+            main_class: "example.Main".into(),
+            client_jar: "client.jar".into(),
+            libraries: vec!["library.jar".into()],
+            assets_dir: "assets".into(),
+            asset_index: "index".into(),
+            jvm_args: Vec::new(),
+            game_args: Vec::new(),
+            aurora_ipc_port: None,
+            aurora_session_nonce: None,
+        }
+    }
+
     #[test]
     fn redacts_access_token() {
         let command = LaunchCommand {
@@ -209,5 +243,31 @@ mod tests {
             build_classpath(&[], Path::new("client.jar")),
             Err(LaunchError::EmptyClasspath)
         ));
+    }
+
+    #[test]
+    fn applies_1_16_5_offline_privileges_fallback() {
+        let mut spec = launch_spec();
+
+        spec.apply_offline_compatibility("1.16.5");
+
+        assert_eq!(
+            spec.jvm_args,
+            vec![
+                "-Dminecraft.api.auth.host=https://authserver.mojang.com",
+                "-Dminecraft.api.account.host=https://api.mojang.com",
+                "-Dminecraft.api.session.host=https://sessionserver.mojang.com",
+                "-Dminecraft.api.services.host=http://127.0.0.1:0",
+            ]
+        );
+    }
+
+    #[test]
+    fn leaves_other_versions_unchanged() {
+        let mut spec = launch_spec();
+
+        spec.apply_offline_compatibility("1.20.1");
+
+        assert!(spec.jvm_args.is_empty());
     }
 }

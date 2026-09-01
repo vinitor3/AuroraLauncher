@@ -2,7 +2,9 @@
 
 - **Fase/prioridade:** R1 / P0.
 - **Objetivo:** substituir “JAR existe” por evidência reproduzível da matriz 9/9.
-- **Contexto/problema:** somente Forge 1.12.2 e Fabric 1.20.1 têm evidência runtime; sete combinações estão apenas compiladas.
+- **Contexto/problema:** Forge 1.12.2 e Fabric 1.20.1 têm evidência histórica do
+  Companion 0.1.0. A arquitetura Core + Companion 0.2.0 tem 0/9 roteiros
+  completos e já apresentou falhas de metadata/ordem de inicialização.
 - **Resultado esperado:** schema/runner/checklist de evidência, fixtures redigidas e estados `UNBUILT`, `BUILT`, `LAUNCHED`, `IPC`, `UI`, `VERIFIED_RUNTIME`.
 - **Dependências:** R0 verde; matriz atual é autoridade inicial.
 
@@ -38,4 +40,3 @@ Automação visual pode ser frágil. Separar prova automática e atestado manual
 - Commit: `test(companion): add runtime evidence harness [AUR-R1-002]`.
 - PR depende de R0; precede HUD.
 - Execução paralela: **sim**.
-
