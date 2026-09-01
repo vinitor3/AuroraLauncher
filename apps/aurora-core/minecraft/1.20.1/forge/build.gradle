@@ -8,8 +8,8 @@ dependencies {
     forge "net.minecraftforge:forge:${rootProject.forge_version}"
     common(project(path: ":common", configuration: "namedElements")) { transitive false }
     shadowCommon(project(path: ":common", configuration: "transformProductionForge")) { transitive false }
-    shadowCommon files(rootProject.file("../../api/build/libs/aurora-core-api-1.1.0.jar"))
-    shadowCommon files(rootProject.file("../../runtime/build/libs/aurora-core-runtime-1.1.0.jar"))
+    shadowCommon files(rootProject.file("../../api/build/libs/aurora-core-api-1.1.1.jar"))
+    shadowCommon files(rootProject.file("../../runtime/build/libs/aurora-core-runtime-1.1.1.jar"))
     shadowCommon "com.google.code.gson:gson:2.10.1"
     shadowCommon "org.java-websocket:Java-WebSocket:1.5.6"
 }
@@ -24,6 +24,7 @@ shadowJar {
     archiveClassifier = "dev-shadow"
     relocate "com.google.gson", "com.aurora.core.shadow.gson"
     relocate "org.java_websocket", "com.aurora.core.shadow.websocket"
+    relocate "org.slf4j", "com.aurora.core.shadow.slf4j"
     exclude "fabric.mod.json", "META-INF/versions/**", "module-info.class"
     manifest { attributes "MixinConfigs": "aurora_core.mixins.json" }
 }

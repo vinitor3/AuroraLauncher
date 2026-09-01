@@ -33,8 +33,8 @@ public final class MinecraftSkinPreviewRenderer implements AuroraPreviewRenderer
             PlayerModel<AbstractClientPlayer> model = "slim".equals(AuroraSkinManager.model()) ? slim : wide;
             ResourceLocation texture = AuroraSkinManager.skin();
             if (texture == null) texture = DefaultPlayerSkin.get(new UUID(0L, 0L)).texture();
-            graphics.flush(); PoseStack matrices = graphics.pose(); matrices.pushPose(); matrices.translate(x, y, 120.0D);
-            matrices.scale(scale, scale, -scale); matrices.mulPose(Axis.ZP.rotationDegrees(180.0F)); matrices.mulPose(Axis.YP.rotationDegrees(pose.bodyYaw()));
+            graphics.flush(); PoseStack matrices = graphics.pose(); matrices.pushPose(); matrices.translate(x, y - scale * 1.5D, 120.0D);
+            matrices.scale(scale, scale, -scale); matrices.mulPose(Axis.YP.rotationDegrees(pose.bodyYaw()));
             reset(model); model.head.yRot = radians(pose.headYaw() - pose.bodyYaw()); model.head.xRot = radians(pose.headPitch()); model.hat.copyFrom(model.head);
             RenderSystem.enableDepthTest(); MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
             VertexConsumer vertices = buffers.getBuffer(RenderType.entityTranslucent(texture));

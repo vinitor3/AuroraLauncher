@@ -57,6 +57,28 @@ public final class AuroraSkinStore {
         return entry;
     }
 
+    public synchronized SkinEntry importCatalogSkin(Path source, SkinEntry catalogEntry)
+            throws IOException, SkinValidationException {
+        if (catalogEntry == null) throw new SkinValidationException("Item de catálogo inválido.");
+        validate(source);
+        String hash = sha256(source);
+        if (!hash.equals(catalogEntry.contentHash())) {
+            throw new SkinValidationException("A skin baixada não corresponde ao catálogo Aurora.");
+        }
+        Path target = cache.resolve(hash + ".png");
+        if (!Files.isRegularFile(target)) {
+            Path temporary = cache.resolve(hash + ".png.tmp");
+            Files.copy(source, temporary, StandardCopyOption.REPLACE_EXISTING);
+            move(temporary, target);
+        }
+        SkinEntry entry = new SkinEntry(catalogEntry.id(), catalogEntry.name(), catalogEntry.author(),
+            catalogEntry.model(), catalogEntry.providerId(), catalogEntry.source(), hash, target,
+            catalogEntry.tags());
+        writeMetadata(entry);
+        appendUnique(root.resolve("library.index"), hash, Integer.MAX_VALUE);
+        return entry;
+    }
+
     public synchronized List<SkinEntry> list() throws IOException {
         List<SkinEntry> result = new ArrayList<SkinEntry>();
         for (String hash : readLines(root.resolve("library.index"))) {
@@ -147,6 +169,7 @@ public final class AuroraSkinStore {
         properties.setProperty("provider", entry.providerId());
         properties.setProperty("source", entry.source());
         properties.setProperty("hash", entry.contentHash());
+        properties.setProperty("tags", String.join(",", entry.tags()));
         writeProperties(metadata.resolve(entry.contentHash() + ".properties"), properties);
     }
 
@@ -157,7 +180,14 @@ public final class AuroraSkinStore {
         return new SkinEntry(properties.getProperty("id", hash), properties.getProperty("name", "Skin"),
             properties.getProperty("author", ""), SkinModel.fromId(properties.getProperty("model")),
             properties.getProperty("provider", "local"), properties.getProperty("source", ""), hash,
-            cache.resolve(hash + ".png"), Collections.<String>emptyList());
+            cache.resolve(hash + ".png"), tags(properties.getProperty("tags", "")));
+    }
+
+    private static List<String> tags(String value) {
+        if (value == null || value.trim().isEmpty()) return Collections.emptyList();
+        List<String> tags = new ArrayList<String>();
+        for (String tag : value.split(",")) if (!tag.trim().isEmpty()) tags.add(tag.trim());
+        return tags;
     }
 
     private static String safeName(String value) {

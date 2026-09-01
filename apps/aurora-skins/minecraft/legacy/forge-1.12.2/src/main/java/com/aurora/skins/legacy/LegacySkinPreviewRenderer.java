@@ -31,9 +31,9 @@ final class LegacySkinPreviewRenderer implements AuroraPreviewRenderer {
             staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"enableDepth", "func_179126_j"});
             staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"enableBlend", "func_179147_l"});
             staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"color", "func_179131_c"}, 1F, 1F, 1F, 1F);
-            staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"translate", "func_179109_b"}, (float)x, (float)y, 100F);
+            staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"translate", "func_179109_b"},
+                (float)x, (float)(y - scale * 1.5F), 100F);
             staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"scale", "func_179152_a"}, (float)scale, (float)scale, (float)-scale);
-            staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"rotate", "func_179114_b"}, 180F, 0F, 0F, 1F);
             staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"rotate", "func_179114_b"}, pose.bodyYaw(), 0F, 1F, 0F);
             staticInvoke("net.minecraft.client.renderer.RenderHelper", new String[] {"enableGUIStandardItemLighting", "func_74519_b"});
 

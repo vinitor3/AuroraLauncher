@@ -2,6 +2,7 @@ package com.aurora.skins;
 
 import com.aurora.skins.api.SkinEntry;
 import com.aurora.skins.api.SkinModel;
+import com.aurora.skins.catalog.AuroraCatalogProvider;
 import com.aurora.skins.storage.AuroraSkinStore;
 import com.aurora.skins.storage.LocalSkinProvider;
 import com.aurora.skins.storage.SkinValidationException;
@@ -9,6 +10,8 @@ import com.aurora.skins.storage.SkinValidationException;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public final class AuroraSkinsRuntime {
@@ -16,12 +19,14 @@ public final class AuroraSkinsRuntime {
     private static volatile AuroraSkinsRuntime instance;
     private final AuroraSkinStore store;
     private final LocalSkinProvider localProvider;
+    private final AuroraCatalogProvider catalogProvider;
     private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<Listener>();
     private volatile SkinEntry active;
 
     private AuroraSkinsRuntime(AuroraSkinStore store) throws IOException {
         this.store = store;
         this.localProvider = new LocalSkinProvider(store);
+        this.catalogProvider = new AuroraCatalogProvider(store);
         this.active = store.active();
     }
 
@@ -61,7 +66,24 @@ public final class AuroraSkinsRuntime {
 
     public AuroraSkinStore store() { return store; }
     public LocalSkinProvider localProvider() { return localProvider; }
+    public AuroraCatalogProvider catalogProvider() { return catalogProvider; }
     public SkinEntry active() { return active; }
+    public CompletableFuture<SkinEntry> materialize(SkinEntry entry) {
+        if (entry != null && "local".equals(entry.providerId()) && entry.file() != null) {
+            return CompletableFuture.completedFuture(entry);
+        }
+        return catalogProvider.materialize(entry);
+    }
+    public CompletableFuture<SkinEntry> applyAsync(SkinEntry entry) {
+        return materialize(entry).thenApply(installed -> {
+            try {
+                apply(installed);
+                return installed;
+            } catch (IOException error) {
+                throw new CompletionException(error);
+            }
+        });
+    }
     public void addListener(Listener listener) { if (listener != null) listeners.addIfAbsent(listener); }
     public void removeListener(Listener listener) { listeners.remove(listener); }
 }

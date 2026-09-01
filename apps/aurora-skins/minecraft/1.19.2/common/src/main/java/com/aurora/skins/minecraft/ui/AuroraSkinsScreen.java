@@ -35,6 +35,8 @@ public final class AuroraSkinsScreen extends Screen {
     private EditBox search;
     private Button favoriteButton, modelButton, previousButton, nextButton, applyButton;
     private AuroraSkinsLayout layout;
+    private int catalogPage, catalogRequest;
+    private boolean catalogHasMore, busy;
 
     public AuroraSkinsScreen(Screen parent) { super(Component.translatable("aurora_skins.title")); this.parent = parent; }
 
@@ -53,7 +55,7 @@ public final class AuroraSkinsScreen extends Screen {
         slot = layout.search();
         search = addRenderableWidget(new EditBox(font, slot.x(), slot.y(), slot.width(), slot.height(),
             Component.translatable("aurora_skins.search")));
-        search.setResponder(value -> refresh());
+        search.setResponder(value -> { if (view == View.EXPLORE) catalogPage = 0; refresh(); });
         slot = layout.previous();
         previousButton = addRenderableWidget(new Button(slot.x(), slot.y(), slot.width(), slot.height(), Component.literal("‹"), b -> move(-1)));
         slot = layout.next();
@@ -69,14 +71,16 @@ public final class AuroraSkinsScreen extends Screen {
         refresh();
     }
 
-    private void select(View next) { view = next; selectedIndex = 0; refresh(); }
+    private void select(View next) { catalogRequest++; view = next; selectedIndex = 0; if (view == View.EXPLORE) catalogPage = 0; refresh(); }
 
     private void refresh() {
+        if (view == View.EXPLORE) { refreshCatalog(); return; }
+        busy = false;
         try {
             AuroraSkinsRuntime runtime = AuroraSkinsClient.runtime();
             List<SkinEntry> source = view == View.FAVORITES ? runtime.store().favorites()
                 : view == View.HISTORY ? runtime.store().history()
-                : view == View.EXPLORE ? Collections.<SkinEntry>emptyList() : runtime.store().list();
+                : runtime.store().list();
             String query = search == null ? "" : search.getValue().trim().toLowerCase(Locale.ROOT);
             if (query.isEmpty()) entries = source;
             else {
@@ -85,38 +89,90 @@ public final class AuroraSkinsScreen extends Screen {
                 entries = filtered;
             }
             if (selectedIndex >= entries.size()) selectedIndex = Math.max(0, entries.size() - 1);
-            status = view == View.EXPLORE ? Component.translatable("aurora_skins.provider_unavailable").getString()
-                : entries.isEmpty() ? Component.translatable("aurora_skins.empty").getString() : "";
+            status = entries.isEmpty() ? Component.translatable("aurora_skins.empty").getString() : "";
         } catch (Exception error) { entries = Collections.emptyList(); status = Component.translatable("aurora_skins.read_error").getString(); }
         updateControls();
     }
 
+    private void refreshCatalog() {
+        final int request = ++catalogRequest;
+        final String query = search == null ? "" : search.getValue().trim();
+        busy = true; status = Component.translatable("aurora_skins.catalog_loading").getString(); updateControls();
+        AuroraSkinsRuntime runtime = AuroraSkinsClient.runtime();
+        runtime.catalogProvider().search(query, catalogPage, 12).whenComplete((page, error) -> minecraft.execute(() -> {
+            if (request != catalogRequest || view != View.EXPLORE) return;
+            busy = false;
+            if (error != null || page == null) {
+                entries = Collections.emptyList(); catalogHasMore = false;
+                status = Component.translatable("aurora_skins.catalog_error").getString();
+            } else {
+                entries = page.entries(); catalogPage = page.page(); catalogHasMore = page.hasMore();
+                selectedIndex = Math.min(selectedIndex, Math.max(0, entries.size() - 1));
+                status = entries.isEmpty() ? Component.translatable("aurora_skins.catalog_empty").getString()
+                    : Component.translatable(runtime.catalogProvider().online()
+                        ? "aurora_skins.catalog_online" : "aurora_skins.catalog_offline").getString();
+            }
+            updateControls();
+        }));
+    }
+
     private SkinEntry selected() { return entries.isEmpty() ? null : entries.get(selectedIndex); }
-    private void move(int amount) { if (!entries.isEmpty()) selectedIndex = (selectedIndex + amount + entries.size()) % entries.size(); updateControls(); }
+    private void move(int amount) {
+        if (entries.isEmpty()) return;
+        if (view == View.EXPLORE && amount > 0 && selectedIndex == entries.size() - 1 && catalogHasMore) {
+            catalogPage++; selectedIndex = 0; refreshCatalog(); return;
+        }
+        if (view == View.EXPLORE && amount < 0 && selectedIndex == 0 && catalogPage > 0) {
+            catalogPage--; selectedIndex = 0; refreshCatalog(); return;
+        }
+        selectedIndex = (selectedIndex + amount + entries.size()) % entries.size(); updateControls();
+    }
 
     private void apply() {
         SkinEntry entry = selected(); if (entry == null) return;
-        try { AuroraSkinsClient.runtime().apply(entry); status = Component.translatable("aurora_skins.applied", entry.name()).getString(); }
-        catch (Exception error) { status = Component.translatable("aurora_skins.apply_error").getString(); }
+        withInstalled(entry, "aurora_skins.apply_error", installed -> {
+            AuroraSkinsClient.runtime().apply(installed); replaceSelected(installed);
+            status = Component.translatable("aurora_skins.applied", installed.name()).getString();
+        });
     }
 
     private void favorite() {
         SkinEntry entry = selected(); if (entry == null) return;
-        try {
+        withInstalled(entry, "aurora_skins.favorite_error", installed -> {
             AuroraSkinsRuntime runtime = AuroraSkinsClient.runtime();
-            runtime.store().setFavorite(entry, !runtime.store().isFavorite(entry));
-            if (view == View.FAVORITES) refresh(); else updateControls();
-        } catch (Exception error) { status = Component.translatable("aurora_skins.favorite_error").getString(); }
+            runtime.store().setFavorite(installed, !runtime.store().isFavorite(installed)); replaceSelected(installed);
+            status = ""; if (view == View.FAVORITES) refresh();
+        });
     }
 
     private void toggleModel() {
         SkinEntry entry = selected(); SkinModel model = entry == null ? importModel : entry.model();
         importModel = model == SkinModel.SLIM ? SkinModel.WIDE : SkinModel.SLIM;
-        if (entry != null) try {
-            SkinEntry updated = AuroraSkinsClient.runtime().store().importSkin(entry.file(), entry.name(), importModel);
-            AuroraSkinsClient.runtime().apply(updated); refresh();
-        } catch (Exception error) { status = Component.translatable("aurora_skins.model_error").getString(); }
+        if (entry != null) {
+            final SkinModel selectedModel = importModel;
+            withInstalled(entry, "aurora_skins.model_error", installed -> {
+                SkinEntry updated = AuroraSkinsClient.runtime().store().importSkin(installed.file(), installed.name(), selectedModel);
+                AuroraSkinsClient.runtime().apply(updated); replaceSelected(updated); status = "";
+            });
+        }
         updateControls();
+    }
+
+    private void withInstalled(SkinEntry entry, String errorKey, InstalledAction action) {
+        busy = true; status = Component.translatable("aurora_skins.downloading").getString(); updateControls();
+        AuroraSkinsClient.runtime().materialize(entry).whenComplete((installed, error) -> minecraft.execute(() -> {
+            try {
+                if (error != null || installed == null) throw new IllegalStateException();
+                action.run(installed);
+            } catch (Exception failure) { status = Component.translatable(errorKey).getString(); }
+            finally { busy = false; updateControls(); }
+        }));
+    }
+
+    private void replaceSelected(SkinEntry installed) {
+        if (entries.isEmpty()) return;
+        List<SkinEntry> updated = new ArrayList<SkinEntry>(entries);
+        updated.set(Math.max(0, Math.min(selectedIndex, updated.size() - 1)), installed); entries = updated;
     }
 
     private void chooseFile() {
@@ -144,15 +200,16 @@ public final class AuroraSkinsScreen extends Screen {
 
     private void updateControls() {
         SkinEntry entry = selected(); boolean active = entry != null;
-        if (previousButton != null) previousButton.active = active && entries.size() > 1;
-        if (nextButton != null) nextButton.active = active && entries.size() > 1;
-        if (applyButton != null) applyButton.active = active;
+        if (previousButton != null) previousButton.active = !busy && active && (entries.size() > 1 || view == View.EXPLORE && catalogPage > 0);
+        if (nextButton != null) nextButton.active = !busy && active && (entries.size() > 1 || view == View.EXPLORE && catalogHasMore);
+        if (applyButton != null) applyButton.active = !busy && active;
         if (favoriteButton != null) {
-            favoriteButton.active = active; boolean favorite = false;
+            favoriteButton.active = !busy && active; boolean favorite = false;
             if (active) try { favorite = AuroraSkinsClient.runtime().store().isFavorite(entry); } catch (Exception ignored) { }
             favoriteButton.setMessage(Component.translatable(favorite ? "aurora_skins.unfavorite" : "aurora_skins.favorite"));
         }
         if (modelButton != null) {
+            modelButton.active = !busy;
             String label = (active ? entry.model() : importModel) == SkinModel.SLIM ? "Slim" : "Clássico";
             modelButton.setMessage(Component.literal(layout != null && layout.compact() ? label : "Modelo: " + label));
         }
@@ -170,7 +227,9 @@ public final class AuroraSkinsScreen extends Screen {
         SkinEntry entry = selected(); int textX = current.textX(), textY = current.textY();
         if (entry != null) {
             drawString(pose, font, fit(entry.name(), current.textWidth()), textX, textY, TEXT);
-            drawString(pose, font, (selectedIndex + 1) + " / " + entries.size(), textX, textY + 16, MUTED);
+            String position = view == View.EXPLORE ? "Página " + (catalogPage + 1) + " · "
+                + (selectedIndex + 1) + " / " + entries.size() : (selectedIndex + 1) + " / " + entries.size();
+            drawString(pose, font, position, textX, textY + 16, MUTED);
         }
         if (!status.isEmpty()) drawString(pose, font, fit(status, current.textWidth()), textX, textY + 40, MUTED);
         super.render(pose, mouseX, mouseY, partialTick);
@@ -183,4 +242,5 @@ public final class AuroraSkinsScreen extends Screen {
     }
     @Override public void onClose() { minecraft.setScreen(parent); }
     @Override public boolean isPauseScreen() { return false; }
+    private interface InstalledAction { void run(SkinEntry entry) throws Exception; }
 }

@@ -1115,6 +1115,198 @@ async function curseForgeCatalog(request: Request, env: Env): Promise<Response> 
   return json(payload);
 }
 
+type CatalogSkin = {
+  id: string;
+  name: string;
+  model: "classic" | "slim";
+  skin: number;
+  hair: number;
+  primary: number;
+  accent: number;
+  dark: number;
+  tags: string[];
+};
+
+const catalogSkins: CatalogSkin[] = [
+  { id: "aurora-voyager", name: "Viajante Aurora", model: "slim", skin: 0xdcc1a0, hair: 0x241739, primary: 0x7652b8, accent: 0xb78cff, dark: 0x181125, tags: ["aurora", "cosmos", "espaço", "neon", "roxo"] },
+  { id: "solar-ninja", name: "Ninja Solar", model: "slim", skin: 0xe7b78e, hair: 0x19151b, primary: 0xe86f22, accent: 0xffc34a, dark: 0x202027, tags: ["anime", "ninja", "naruto", "shinobi", "laranja"] },
+  { id: "ki-guardian", name: "Guardião do Ki", model: "classic", skin: 0xe5b186, hair: 0x171b36, primary: 0x3159ae, accent: 0xf18b2a, dark: 0x18213b, tags: ["anime", "dragon ball", "ki", "guerreiro", "azul"] },
+  { id: "forest-ranger", name: "Guardiã da Floresta", model: "slim", skin: 0xd6a47f, hair: 0x3b2a20, primary: 0x355e3b, accent: 0x79a85b, dark: 0x25362a, tags: ["floresta", "ranger", "natureza", "verde", "aventura"] },
+  { id: "cyber-violet", name: "Cyber Violeta", model: "slim", skin: 0xc99d83, hair: 0x16131f, primary: 0x4d2c78, accent: 0x33d6c6, dark: 0x191426, tags: ["cyber", "futurista", "neon", "violeta", "tecnologia"] },
+  { id: "crimson-mage", name: "Maga Carmesim", model: "classic", skin: 0xdba37f, hair: 0x2a1721, primary: 0x741f35, accent: 0xe05268, dark: 0x25151b, tags: ["maga", "fantasia", "carmesim", "vermelho", "aventura"] },
+];
+
+const generatedSkinPngs = new Map<string, Uint8Array>();
+const crcTable = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index++) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit++) value = (value & 1) !== 0 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
+function normalizeCatalogText(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR").trim();
+}
+
+function fillSkinRect(pixels: Uint8Array, x: number, y: number, width: number, height: number, color: number): void {
+  const red = color >>> 16 & 0xff;
+  const green = color >>> 8 & 0xff;
+  const blue = color & 0xff;
+  for (let row = y; row < y + height; row++) for (let column = x; column < x + width; column++) {
+    const offset = (row * 64 + column) * 4;
+    pixels[offset] = red;
+    pixels[offset + 1] = green;
+    pixels[offset + 2] = blue;
+    pixels[offset + 3] = 0xff;
+  }
+}
+
+function setSkinPixel(pixels: Uint8Array, x: number, y: number, color: number): void {
+  fillSkinRect(pixels, x, y, 1, 1, color);
+}
+
+function skinPixels(value: CatalogSkin): Uint8Array {
+  const pixels = new Uint8Array(64 * 64 * 4);
+  fillSkinRect(pixels, 0, 0, 32, 16, value.skin);
+  fillSkinRect(pixels, 0, 8, 8, 8, value.hair);
+  fillSkinRect(pixels, 8, 0, 8, 8, value.hair);
+  fillSkinRect(pixels, 16, 8, 16, 8, value.hair);
+  fillSkinRect(pixels, 8, 8, 8, 2, value.hair);
+  setSkinPixel(pixels, 10, 11, value.accent);
+  setSkinPixel(pixels, 13, 11, value.accent);
+  setSkinPixel(pixels, 11, 14, 0x7b4a42);
+  setSkinPixel(pixels, 12, 14, 0x7b4a42);
+  fillSkinRect(pixels, 16, 16, 24, 16, value.primary);
+  fillSkinRect(pixels, 20, 20, 8, 12, value.primary);
+  fillSkinRect(pixels, 23, 20, 2, 12, value.accent);
+  fillSkinRect(pixels, 20, 29, 8, 3, value.dark);
+  fillSkinRect(pixels, 40, 16, 16, 16, value.primary);
+  fillSkinRect(pixels, 44, 24, 4, 8, value.skin);
+  fillSkinRect(pixels, 44, 24, 4, 2, value.accent);
+  fillSkinRect(pixels, 32, 48, 16, 16, value.primary);
+  fillSkinRect(pixels, 36, 56, 4, 8, value.skin);
+  fillSkinRect(pixels, 36, 56, 4, 2, value.accent);
+  fillSkinRect(pixels, 0, 16, 16, 16, value.dark);
+  fillSkinRect(pixels, 4, 29, 4, 3, value.accent);
+  fillSkinRect(pixels, 16, 48, 16, 16, value.dark);
+  fillSkinRect(pixels, 20, 61, 4, 3, value.accent);
+  return pixels;
+}
+
+function uint32(value: number): Uint8Array {
+  return new Uint8Array([value >>> 24 & 0xff, value >>> 16 & 0xff, value >>> 8 & 0xff, value & 0xff]);
+}
+
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const result = new Uint8Array(parts.reduce((size, part) => size + part.length, 0));
+  let offset = 0;
+  for (const part of parts) { result.set(part, offset); offset += part.length; }
+  return result;
+}
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const value of bytes) crc = crcTable[(crc ^ value) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function adler32(bytes: Uint8Array): number {
+  let first = 1;
+  let second = 0;
+  for (const value of bytes) { first = (first + value) % 65521; second = (second + first) % 65521; }
+  return ((second << 16) | first) >>> 0;
+}
+
+function pngChunk(name: string, data: Uint8Array): Uint8Array {
+  const type = textEncoder.encode(name);
+  return concatBytes(uint32(data.length), type, data, uint32(crc32(concatBytes(type, data))));
+}
+
+function catalogSkinPng(value: CatalogSkin): Uint8Array {
+  const cached = generatedSkinPngs.get(value.id);
+  if (cached) return cached;
+  const pixels = skinPixels(value);
+  const scanlines = new Uint8Array((64 * 4 + 1) * 64);
+  for (let row = 0; row < 64; row++) scanlines.set(pixels.subarray(row * 64 * 4, (row + 1) * 64 * 4), row * (64 * 4 + 1) + 1);
+  const length = scanlines.length;
+  const deflate = concatBytes(
+    new Uint8Array([0x78, 0x01, 0x01, length & 0xff, length >>> 8 & 0xff, ~length & 0xff, ~length >>> 8 & 0xff]),
+    scanlines,
+    uint32(adler32(scanlines)),
+  );
+  const header = concatBytes(uint32(64), uint32(64), new Uint8Array([8, 6, 0, 0, 0]));
+  const png = concatBytes(
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", header),
+    pngChunk("IDAT", deflate),
+    pngChunk("IEND", new Uint8Array()),
+  );
+  generatedSkinPngs.set(value.id, png);
+  return png;
+}
+
+function catalogBase64(value: string): string {
+  const bytes = textEncoder.encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function skinCatalogResponse(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  const page = Number.parseInt(url.searchParams.get("page") ?? "0", 10);
+  const pageSize = Number.parseInt(url.searchParams.get("pageSize") ?? "12", 10);
+  if (!Number.isInteger(page) || page < 0 || page > 100000 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 24) {
+    return error("Paginação inválida.");
+  }
+  const query = normalizeCatalogText((url.searchParams.get("query") ?? "").slice(0, 80));
+  const matches = catalogSkins.filter((skin) => !query || normalizeCatalogText(`${skin.name} ${skin.tags.join(" ")}`).includes(query));
+  const start = Math.min(matches.length, page * pageSize);
+  const selected = matches.slice(start, start + pageSize);
+  const lines = ["AURORA_SKINS_CATALOG_V1", `page\t${page}\tmore\t${start + selected.length < matches.length ? 1 : 0}`];
+  for (const skin of selected) {
+    const bytes = catalogSkinPng(skin);
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    const hash = Array.from(digest, (item) => item.toString(16).padStart(2, "0")).join("");
+    lines.push([
+      skin.id,
+      catalogBase64(skin.name),
+      catalogBase64("Aurora Studio"),
+      skin.model,
+      hash,
+      catalogBase64(`/v1/skins/catalog/${skin.id}.png`),
+      catalogBase64(skin.tags.join(",")),
+    ].join("\t"));
+  }
+  return new Response(lines.join("\n") + "\n", {
+    status: 200,
+    headers: {
+      "Content-Type": "text/tab-separated-values; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "public, max-age=300",
+    },
+  });
+}
+
+function skinCatalogAsset(pathname: string): Response {
+  const match = pathname.match(/^\/v1\/skins\/catalog\/([a-z0-9_-]{1,64})\.png$/);
+  const skin = match ? catalogSkins.find((item) => item.id === match[1]) : undefined;
+  if (!skin) return error("Skin não encontrada.", 404);
+  return new Response(catalogSkinPng(skin), {
+    status: 200,
+    headers: {
+      "Content-Type": "image/png",
+      "Content-Length": String(catalogSkinPng(skin).length),
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "public, max-age=86400, immutable",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method === "OPTIONS") {
@@ -1145,6 +1337,8 @@ export default {
       }
     }
     if (request.method === "GET" && url.pathname === "/v1/curseforge/download") return await curseForgeDownload(request, env);
+    if (request.method === "GET" && url.pathname === "/v1/skins/catalog") return await skinCatalogResponse(request);
+    if (request.method === "GET" && url.pathname.startsWith("/v1/skins/catalog/")) return skinCatalogAsset(url.pathname);
     if (request.method !== "POST") return error("Rota não encontrada.", 404);
     try {
       const claims = await verifyFirebaseToken(request, env);

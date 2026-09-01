@@ -12,10 +12,10 @@ use thiserror::Error;
 use super::{Instance, InstanceError};
 
 const MANIFEST_JSON: &str =
-    include_str!("../../../../../apps/aurora-core/compatibility-manifest-1.1.0.json");
-const TRUSTED_KEY_ID: &str = "aurora-core-1.1.0-release";
+    include_str!("../../../../../apps/aurora-core/compatibility-manifest-1.1.1.json");
+const TRUSTED_KEY_ID: &str = "aurora-core-1.1.1-release";
 const TRUSTED_PUBLIC_KEY: &str =
-    include_str!("../../../../../apps/aurora-core/trusted-public-key-1.1.0.txt");
+    include_str!("../../../../../apps/aurora-core/trusted-public-key-1.1.1.txt");
 
 #[derive(Debug, Error)]
 pub enum AuroraCoreError {
@@ -155,31 +155,31 @@ fn verify_artifact(
 fn embedded_artifact(minecraft: &str, loader: &str) -> Option<&'static [u8]> {
     Some(match (minecraft, loader) {
         ("1.12.2", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.0/1.12.2/forge/aurora-core-forge-1.12.2-1.1.0.jar"
+            "../../../../../releases/core/1.1.1/1.12.2/forge/aurora-core-forge-1.12.2-1.1.1.jar"
         ),
         ("1.16.5", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.0/1.16.5/fabric/aurora-core-fabric-1.16.5-1.1.0.jar"
+            "../../../../../releases/core/1.1.1/1.16.5/fabric/aurora-core-fabric-1.16.5-1.1.1.jar"
         ),
         ("1.16.5", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.0/1.16.5/forge/aurora-core-forge-1.16.5-1.1.0.jar"
+            "../../../../../releases/core/1.1.1/1.16.5/forge/aurora-core-forge-1.16.5-1.1.1.jar"
         ),
         ("1.19.2", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.0/1.19.2/fabric/aurora-core-fabric-1.19.2-1.1.0.jar"
+            "../../../../../releases/core/1.1.1/1.19.2/fabric/aurora-core-fabric-1.19.2-1.1.1.jar"
         ),
         ("1.19.2", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.0/1.19.2/forge/aurora-core-forge-1.19.2-1.1.0.jar"
+            "../../../../../releases/core/1.1.1/1.19.2/forge/aurora-core-forge-1.19.2-1.1.1.jar"
         ),
         ("1.20.1", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.0/1.20.1/fabric/aurora-core-fabric-1.20.1-1.1.0.jar"
+            "../../../../../releases/core/1.1.1/1.20.1/fabric/aurora-core-fabric-1.20.1-1.1.1.jar"
         ),
         ("1.20.1", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.0/1.20.1/forge/aurora-core-forge-1.20.1-1.1.0.jar"
+            "../../../../../releases/core/1.1.1/1.20.1/forge/aurora-core-forge-1.20.1-1.1.1.jar"
         ),
         ("1.21.1", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.0/1.21.1/fabric/aurora-core-fabric-1.21.1-1.1.0.jar"
+            "../../../../../releases/core/1.1.1/1.21.1/fabric/aurora-core-fabric-1.21.1-1.1.1.jar"
         ),
         ("1.21.1", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.0/1.21.1/forge/aurora-core-forge-1.21.1-1.1.0.jar"
+            "../../../../../releases/core/1.1.1/1.21.1/forge/aurora-core-forge-1.21.1-1.1.1.jar"
         ),
         _ => return None,
     })
@@ -233,7 +233,18 @@ mod tests {
             };
             for index in 0..archive.len() {
                 let mut entry = archive.by_index(index).expect("entrada do JAR");
-                if !entry.name().ends_with(".class") {
+                let entry_name = entry.name().replace('\\', "/");
+                assert!(
+                    !entry_name.starts_with("org/slf4j/"),
+                    "{} contém SLF4J sem relocação: {entry_name}",
+                    build.aurora_core_build
+                );
+                assert!(
+                    !entry_name.starts_with("net/minecraft/"),
+                    "{} empacota classes do Minecraft: {entry_name}",
+                    build.aurora_core_build
+                );
+                if !entry_name.ends_with(".class") {
                     continue;
                 }
                 let mut header = [0_u8; 8];

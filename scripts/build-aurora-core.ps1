@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$StageDirectory = ".aurora\build-matrix\core\1.1.0"
+    [string]$StageDirectory = ".aurora\build-matrix\core\1.1.1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -8,7 +8,7 @@ $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 $CoreRoot = Join-Path $RepositoryRoot "apps\aurora-core"
 $SharedGradle = Join-Path $RepositoryRoot "apps\companion-mod\gradlew.bat"
 $ModernGradle = Join-Path $CoreRoot "minecraft\1.21.1\gradlew.bat"
-$Version = "1.1.0"
+$Version = "1.1.1"
 $StageRoot = if ([IO.Path]::IsPathRooted($StageDirectory)) {
     [IO.Path]::GetFullPath($StageDirectory)
 } else {

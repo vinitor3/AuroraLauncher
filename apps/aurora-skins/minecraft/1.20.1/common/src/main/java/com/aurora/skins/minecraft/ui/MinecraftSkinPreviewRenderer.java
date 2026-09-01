@@ -43,9 +43,8 @@ public final class MinecraftSkinPreviewRenderer implements AuroraPreviewRenderer
             graphics.flush();
             PoseStack matrices = graphics.pose();
             matrices.pushPose();
-            matrices.translate(x, y, 120.0D);
+            matrices.translate(x, y - scale * 1.5D, 120.0D);
             matrices.scale(scale, scale, -scale);
-            matrices.mulPose(Axis.ZP.rotationDegrees(180.0F));
             matrices.mulPose(Axis.YP.rotationDegrees(pose.bodyYaw()));
 
             reset(model);

@@ -38,7 +38,7 @@ visual dentro do Minecraft para ser considerada encerrada:
 - fallback interno para arquivos CurseForge sem URL direta: o Aurora abre a
   página oficial em uma janela WebView2, aguarda o disparo da própria página,
   captura em arquivo temporário, valida o SHA-1 e instala na pasta correta;
-- Aurora Core 1.1.0, Aurora Skins 0.1.0 e Companion 0.2.2 auto-instalados
+- Aurora Core 1.1.1, Aurora Skins 0.2.0 e Companion 0.2.2 auto-instalados
   na combinação exata de Minecraft/loader, com 27 JARs conferidos contra o
   código-fonte antes do instalador;
 - skin local/HTTPS aplicada pelo Aurora Skins nas nove combinações, com
@@ -108,7 +108,7 @@ Ainda não implementada:
 
 ## Evidências e pendências de validação
 
-As matrizes Core 1.1.0, Skins 0.1.0 e Companion 0.2.2 foram recompiladas nos
+As matrizes Core 1.1.1, Skins 0.2.0 e Companion 0.2.2 foram recompiladas nos
 nove alvos. O preflight compara o conteúdo normalizado dos 27 JARs gerados com
 os artefatos embarcados e bloqueia qualquer divergência. O Companion 0.2.2 corrige os
 metadados Forge e a nova tentativa de anexação ao Core sem sobrescrever os
@@ -125,8 +125,8 @@ Forge também foi homologado em execução real com Java 8, nick correto, skin d
 perfil, handshake IPC autenticado e abertura/fechamento do painel. O JAR legado
 isola WebSocket/SLF4J no namespace do Aurora e remove classes Java 9, evitando
 conflitos com o `LaunchClassLoader` e o ASM 5 do Forge antigo. Essa evidência é
-anterior à separação do Aurora Skins. Portanto, o conjunto Core 1.1.0 + Skins
-0.1.0 + Companion 0.2.2 ainda precisa de nova homologação visual em todas as
+anterior à separação do Aurora Skins. Portanto, o conjunto Core 1.1.1 + Skins
+0.2.0 + Companion 0.2.2 ainda precisa de nova homologação visual em todas as
 combinações. O Companion 0.2.2 também encerra agendadores, limita screenshots e
 recupera a UI em falha/timeout, mas compilação não deve ser confundida com
 validação dentro do jogo.

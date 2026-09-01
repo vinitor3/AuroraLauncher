@@ -34,9 +34,8 @@ public final class MinecraftSkinPreviewRenderer implements AuroraPreviewRenderer
             if (texture == null) texture = DefaultPlayerSkin.getDefaultSkin(new UUID(0L, 0L));
             PoseStack matrices = (PoseStack) nativeContext;
             matrices.pushPose();
-            matrices.translate(x, y, 120.0D);
+            matrices.translate(x, y - scale * 1.5D, 120.0D);
             matrices.scale(scale, scale, -scale);
-            matrices.mulPose(Vector3f.ZP.rotationDegrees(180.0F));
             matrices.mulPose(Vector3f.YP.rotationDegrees(pose.bodyYaw()));
             reset(model);
             model.head.yRot = radians(pose.headYaw() - pose.bodyYaw());

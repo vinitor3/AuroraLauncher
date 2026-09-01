@@ -46,8 +46,12 @@ try {
         Stop-Preflight "não foi possível procurar marcadores de conflito"
     }
 
+    $savedErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $diffCheck = & git diff --check 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $diffExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $savedErrorActionPreference
+    if ($diffExitCode -ne 0) {
         Stop-Preflight "git diff --check falhou:$([Environment]::NewLine)$($diffCheck -join [Environment]::NewLine)"
     }
 
@@ -59,8 +63,8 @@ try {
     }
 
     $requiredFiles = @(
-        "apps/aurora-core/compatibility-manifest-1.1.0.json",
-        "apps/aurora-core/trusted-public-key-1.1.0.txt",
+        "apps/aurora-core/compatibility-manifest-1.1.1.json",
+        "apps/aurora-core/trusted-public-key-1.1.1.txt",
         "apps/desktop/src-tauri/src/engine/core.rs",
         "apps/desktop/src-tauri/src/engine/skins.rs",
         "apps/desktop/src/App.tsx",

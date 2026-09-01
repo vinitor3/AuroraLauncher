@@ -1,7 +1,6 @@
 package com.aurora.skins.legacy;
 
 import com.aurora.core.api.Aurora;
-import com.aurora.core.api.ui.AuroraButtonLayout;
 import com.aurora.core.api.ui.AuroraPlayerPreview;
 import com.aurora.core.api.ui.AuroraUiContext;
 import com.aurora.skins.AuroraSkinsRuntime;
@@ -31,6 +30,7 @@ final class LegacySkinsUi {
     private final AuroraSkinsRuntime runtime;
     private final Map<Object, State> states = new IdentityHashMap<Object, State>();
     private final Map<Object, PreviewState> titlePreviews = new IdentityHashMap<Object, PreviewState>();
+    private final Map<Object, AuroraTitleLayout> titleLayouts = new IdentityHashMap<Object, AuroraTitleLayout>();
 
     LegacySkinsUi(AuroraSkinsRuntime runtime) { this.runtime = runtime; }
 
@@ -42,14 +42,15 @@ final class LegacySkinsUi {
         Object screen = invoke(event, "getGui");
         if (screen == null || !isMainMenu(screen) || states.containsKey(screen)) return;
         List<Object> buttons = list(invoke(event, "getButtonList"));
-        List<AuroraButtonLayout.Rect> occupied = new ArrayList<AuroraButtonLayout.Rect>();
-        for (Object existing : buttons) occupied.add(new AuroraButtonLayout.Rect(
+        List<AuroraTitleLayout.Rect> occupied = new ArrayList<AuroraTitleLayout.Rect>();
+        for (Object existing : buttons) occupied.add(new AuroraTitleLayout.Rect(
             integer(LegacyMinecraft.field(existing, "x", "xPosition", "field_146128_h"), 0),
             integer(LegacyMinecraft.field(existing, "y", "yPosition", "field_146129_i"), 0),
             integer(LegacyMinecraft.field(existing, "width", "field_146120_f"), 200),
             integer(LegacyMinecraft.field(existing, "height", "field_146121_g"), 20)));
-        AuroraButtonLayout.Slot slot = AuroraButtonLayout.findSlot(width(screen), height(screen), occupied);
-        Object open = button(OPEN, slot.x(), slot.y(), slot.width(), slot.height(), "Skins");
+        AuroraTitleLayout layout = AuroraTitleLayout.calculate(width(screen), height(screen), occupied);
+        titleLayouts.put(screen, layout);
+        Object open = button(OPEN, layout.buttonX(), layout.buttonY(), layout.buttonWidth(), layout.buttonHeight(), "Skins");
         if (open != null) buttons.add(open);
     }
 
@@ -61,10 +62,19 @@ final class LegacySkinsUi {
         State state = states.get(screen); if (state == null) return;
         if (id == CLOSE) { states.remove(screen); state.close.run(); return; }
         if (id == LIBRARY || id == FAVORITES || id == HISTORY || id == EXPLORE) {
-            state.view = id == FAVORITES ? 1 : id == HISTORY ? 2 : id == EXPLORE ? 3 : 0; state.selected = 0; refresh(state); rebuild(screen, state); return;
+            state.request++; state.view = id == FAVORITES ? 1 : id == HISTORY ? 2 : id == EXPLORE ? 3 : 0;
+            state.selected = 0; if (state.view == 3) state.catalogPage = 0; refresh(state); rebuild(screen, state); return;
         }
         if (id == PREVIOUS || id == NEXT) {
-            if (!state.entries.isEmpty()) state.selected = (state.selected + (id == NEXT ? 1 : -1) + state.entries.size()) % state.entries.size(); rebuild(screen, state); return;
+            if (!state.entries.isEmpty()) {
+                int amount = id == NEXT ? 1 : -1;
+                if (state.view == 3 && amount > 0 && state.selected == state.entries.size() - 1 && state.catalogHasMore) {
+                    state.catalogPage++; state.selected = 0; refresh(state);
+                } else if (state.view == 3 && amount < 0 && state.selected == 0 && state.catalogPage > 0) {
+                    state.catalogPage--; state.selected = 0; refresh(state);
+                } else state.selected = (state.selected + amount + state.entries.size()) % state.entries.size();
+            }
+            rebuild(screen, state); return;
         }
         if (id == APPLY) apply(state);
         else if (id == FAVORITE) favorite(state);
@@ -96,7 +106,7 @@ final class LegacySkinsUi {
 
     private void open(Object screen, Runnable close) {
         if (screen == null) return;
-        State state = new State(close); states.put(screen, state); refresh(state); rebuild(screen, state);
+        State state = new State(screen, close); states.put(screen, state); refresh(state); rebuild(screen, state);
     }
 
     private void rebuild(Object screen, State state) {
@@ -130,23 +140,83 @@ final class LegacySkinsUi {
     }
 
     private void refresh(State state) {
+        if (state.view == 3) { refreshCatalog(state); return; }
+        state.busy = false;
         try {
             state.entries = state.view == 1 ? runtime.store().favorites() : state.view == 2 ? runtime.store().history()
-                : state.view == 3 ? Collections.<SkinEntry>emptyList() : runtime.store().list();
+                : runtime.store().list();
             if (state.selected >= state.entries.size()) state.selected = Math.max(0, state.entries.size() - 1);
-            state.status = state.view == 3 ? "Catálogo online indisponível; a biblioteca local continua funcionando."
-                : state.entries.isEmpty() ? "Nenhuma skin aqui. Importe um PNG 64x64 ou 64x32." : "";
+            state.status = state.entries.isEmpty() ? "Nenhuma skin aqui. Importe um PNG 64x64 ou 64x32." : "";
         } catch (Exception error) { state.entries = Collections.emptyList(); state.status = "Não foi possível ler a biblioteca local."; }
     }
 
+    private void refreshCatalog(final State state) {
+        final int request = ++state.request;
+        state.busy = true; state.status = "Buscando no catálogo Aurora...";
+        runtime.catalogProvider().search("", state.catalogPage, 12).whenComplete((page, error) ->
+            LegacyMinecraft.execute(new Runnable() { @Override public void run() {
+                if (request != state.request || state.view != 3) return;
+                state.busy = false;
+                if (error != null || page == null) {
+                    state.entries = Collections.emptyList(); state.catalogHasMore = false;
+                    state.status = "Não foi possível abrir o catálogo Aurora.";
+                } else {
+                    state.entries = page.entries(); state.catalogPage = page.page(); state.catalogHasMore = page.hasMore();
+                    state.selected = Math.min(state.selected, Math.max(0, state.entries.size() - 1));
+                    state.status = state.entries.isEmpty() ? "Nenhuma skin encontrada."
+                        : runtime.catalogProvider().online() ? "Catálogo Aurora online e sincronizado."
+                        : "Catálogo Aurora pronto no modo offline.";
+                }
+                rebuild(state.screen, state);
+            }}));
+    }
+
     private SkinEntry selected(State state) { return state.entries.isEmpty() ? null : state.entries.get(state.selected); }
-    private void apply(State state) { SkinEntry entry = selected(state); if (entry == null) return; try { runtime.apply(entry); state.status = "Skin aplicada: " + entry.name(); }
-        catch (Exception error) { state.status = "Não foi possível aplicar esta skin."; } }
-    private void favorite(State state) { SkinEntry entry = selected(state); if (entry == null) return; try { runtime.store().setFavorite(entry, !runtime.store().isFavorite(entry)); if (state.view == 1) refresh(state); }
-        catch (Exception error) { state.status = "Não foi possível atualizar os favoritos."; } }
+    private void apply(final State state) { SkinEntry entry = selected(state); if (entry == null) return;
+        withInstalled(state, entry, "Não foi possível aplicar esta skin.", new InstalledAction() {
+            @Override public void run(SkinEntry installed) throws Exception {
+                runtime.apply(installed); replaceSelected(state, installed); state.status = "Skin aplicada: " + installed.name();
+            }
+        });
+    }
+    private void favorite(final State state) { SkinEntry entry = selected(state); if (entry == null) return;
+        withInstalled(state, entry, "Não foi possível atualizar os favoritos.", new InstalledAction() {
+            @Override public void run(SkinEntry installed) throws Exception {
+                runtime.store().setFavorite(installed, !runtime.store().isFavorite(installed)); replaceSelected(state, installed);
+                state.status = ""; if (state.view == 1) refresh(state);
+            }
+        });
+    }
     private void toggleModel(State state) { SkinEntry entry = selected(state); SkinModel current = entry == null ? state.importModel : entry.model(); state.importModel = current == SkinModel.SLIM ? SkinModel.WIDE : SkinModel.SLIM;
-        if (entry != null) try { SkinEntry updated = runtime.store().importSkin(entry.file(), entry.name(), state.importModel); runtime.apply(updated); refresh(state); }
-        catch (Exception error) { state.status = "Não foi possível alterar o modelo."; } }
+        if (entry != null) {
+            final SkinModel model = state.importModel; final State target = state;
+            withInstalled(state, entry, "Não foi possível alterar o modelo.", new InstalledAction() {
+                @Override public void run(SkinEntry installed) throws Exception {
+                    SkinEntry updated = runtime.store().importSkin(installed.file(), installed.name(), model);
+                    runtime.apply(updated); replaceSelected(target, updated); target.status = "";
+                }
+            });
+        }
+    }
+
+    private void withInstalled(final State state, SkinEntry entry, final String errorMessage, final InstalledAction action) {
+        state.busy = true; state.status = "Preparando e verificando esta skin...";
+        runtime.materialize(entry).whenComplete((installed, error) -> LegacyMinecraft.execute(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (error != null || installed == null) throw new IllegalStateException();
+                    action.run(installed);
+                } catch (Exception failure) { state.status = errorMessage; }
+                finally { state.busy = false; rebuild(state.screen, state); }
+            }
+        }));
+    }
+
+    private static void replaceSelected(State state, SkinEntry installed) {
+        if (state.entries.isEmpty()) return;
+        List<SkinEntry> updated = new ArrayList<SkinEntry>(state.entries);
+        updated.set(Math.max(0, Math.min(state.selected, updated.size() - 1)), installed); state.entries = updated;
+    }
 
     private void chooseFile(final Object screen, final State state) {
         state.status = "Abrindo o seletor de arquivo...";
@@ -168,16 +238,23 @@ final class LegacySkinsUi {
         AuroraSkinsLayout layout = AuroraSkinsLayout.calculate(width(screen), height(screen));
         drawText(screen, "AURORA SKINS", width(screen) / 2 - 36, 15, 0xF2EAFF);
         SkinEntry entry = selected(state); int textX = layout.textX(), textY = layout.textY();
-        if (entry != null) { drawText(screen, fit(screen, entry.name(), layout.textWidth()), textX, textY, 0xF2EAFF); drawText(screen, (state.selected + 1) + " / " + state.entries.size(), textX, textY + 16, 0xB9AACB); }
+        if (entry != null) {
+            drawText(screen, fit(screen, entry.name(), layout.textWidth()), textX, textY, 0xF2EAFF);
+            String position = state.view == 3 ? "Página " + (state.catalogPage + 1) + " · "
+                + (state.selected + 1) + " / " + state.entries.size() : (state.selected + 1) + " / " + state.entries.size();
+            drawText(screen, position, textX, textY + 16, 0xB9AACB);
+        }
         if (!state.status.isEmpty()) drawText(screen, fit(screen, state.status, layout.textWidth()), textX, textY + 40, 0xB9AACB);
         renderPreview(screen, state.preview, mouseX, mouseY, layout.previewX(), layout.previewY(), layout.previewScale(), state);
     }
 
     private void drawTitlePreview(Object screen, int mouseX, int mouseY) {
         PreviewState state = titlePreviews.get(screen); if (state == null) { state = new PreviewState(); titlePreviews.put(screen, state); }
-        AuroraTitleLayout layout = AuroraTitleLayout.calculate(width(screen), height(screen));
+        AuroraTitleLayout layout = titleLayouts.get(screen);
+        if (layout == null) layout = AuroraTitleLayout.calculate(width(screen), height(screen));
         int x = layout.previewX(), y = layout.previewY(), scale = layout.previewScale();
-        drawRect(x - 42, y - scale * 2 - 12, x + 42, y + 5, 0x661A112B); drawRect(x - 42, y - scale * 2 - 12, x - 39, y + 5, 0xFFB78CFF);
+        drawRect(layout.panelLeft(), layout.panelTop(), layout.panelRight(), layout.panelBottom(), 0x661A112B);
+        drawRect(layout.panelLeft(), layout.panelTop(), layout.panelLeft() + 3, layout.panelBottom(), 0xFFB78CFF);
         renderPreview(screen, state.preview, mouseX, mouseY, x, y, scale, state);
     }
 
@@ -210,7 +287,10 @@ final class LegacySkinsUi {
 
     private static class PreviewState { final AuroraPlayerPreview preview = new AuroraPlayerPreview(); long lastFrame = System.nanoTime(); }
     private static final class State extends PreviewState {
-        final Runnable close; List<SkinEntry> entries = Collections.emptyList(); int selected, view; String status = ""; SkinModel importModel = SkinModel.WIDE;
-        State(Runnable close) { this.close = close; }
+        final Object screen; final Runnable close; List<SkinEntry> entries = Collections.emptyList();
+        int selected, view, catalogPage, request; boolean catalogHasMore, busy;
+        String status = ""; SkinModel importModel = SkinModel.WIDE;
+        State(Object screen, Runnable close) { this.screen = screen; this.close = close; }
     }
+    private interface InstalledAction { void run(SkinEntry entry) throws Exception; }
 }

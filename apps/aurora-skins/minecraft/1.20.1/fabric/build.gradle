@@ -7,7 +7,7 @@ dependencies {
     modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
     common(project(path: ":common", configuration: "namedElements")) { transitive false }
     shadowCommon(project(path: ":common", configuration: "transformProductionFabric")) { transitive false }
-    shadowCommon files(rootProject.file("../../core/build/libs/aurora-skins-core-0.1.0.jar"))
+    shadowCommon files(rootProject.file("../../core/build/libs/aurora-skins-core-0.2.0.jar"))
 }
 
 processResources {

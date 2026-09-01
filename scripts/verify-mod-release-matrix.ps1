@@ -6,7 +6,6 @@ param(
 $ErrorActionPreference = "Stop"
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-
 function Get-AuroraSha256Bytes {
     param([Parameter(Mandatory = $true)][byte[]]$Bytes)
 
@@ -87,7 +86,8 @@ function Compare-AuroraMatrix {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][string]$StageDirectory,
-        [Parameter(Mandatory = $true)][string]$ReleaseDirectory
+        [Parameter(Mandatory = $true)][string]$ReleaseDirectory,
+        [string[]]$ForbiddenEntryPrefixes = @()
     )
 
     $stageRoot = [IO.Path]::GetFullPath((Join-Path $RepositoryRoot $StageDirectory)).TrimEnd('\')
@@ -110,10 +110,27 @@ function Compare-AuroraMatrix {
         if ($stagedHash -ne $releaseHash) {
             throw "$Name divergente em $relative. A release não contém o código-fonte compilado atual."
         }
+
+        if ($ForbiddenEntryPrefixes.Count -gt 0) {
+            $archive = [IO.Compression.ZipFile]::OpenRead($artifact.FullName)
+            try {
+                foreach ($entry in $archive.Entries) {
+                    $entryName = $entry.FullName.Replace('\', '/')
+                    foreach ($prefix in $ForbiddenEntryPrefixes) {
+                        if ($entryName.StartsWith($prefix, [StringComparison]::Ordinal)) {
+                            throw "$Name contém pacote proibido em ${relative}: $entryName"
+                        }
+                    }
+                }
+            }
+            finally {
+                $archive.Dispose()
+            }
+        }
     }
     Write-Host "[Aurora release matrix] ${Name}: 9/9 artefatos correspondem ao código atual."
 }
 
-Compare-AuroraMatrix "Aurora Core" ".aurora\build-matrix\core\1.1.0" "releases\core\1.1.0"
-Compare-AuroraMatrix "Aurora Skins" ".aurora\build-matrix\skins\0.1.0" "releases\skins\0.1.0"
+Compare-AuroraMatrix "Aurora Core" ".aurora\build-matrix\core\1.1.1" "releases\core\1.1.1" @("org/slf4j/", "net/minecraft/")
+Compare-AuroraMatrix "Aurora Skins" ".aurora\build-matrix\skins\0.2.0" "releases\skins\0.2.0"
 Compare-AuroraMatrix "Aurora Companion" ".aurora\build-matrix\companion\0.2.2" "releases\companion"

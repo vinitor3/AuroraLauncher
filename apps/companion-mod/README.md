@@ -64,7 +64,7 @@ Assistente é uma janela Swing externa sobre o jogo; a substituição por uma te
 e um HUD nativos do Minecraft ainda está pendente. `AltGr + /`, pedidos de voz,
 respostas e legendas do Edge TTS já usam o mesmo canal IPC.
 
-O Companion não intercepta mais perfil, skin ou capa. Toda aparência pertence ao módulo independente Aurora Skins, evitando dois mixins concorrentes sobre o jogador. Evidências runtime anteriores em 1.20.1 Fabric e 1.12.2 Forge continuam históricas; os JARs 0.2.2 precisam ser homologados novamente junto do Core 1.1.0 e Skins 0.1.0.
+O Companion não intercepta mais perfil, skin ou capa. Toda aparência pertence ao módulo independente Aurora Skins, evitando dois mixins concorrentes sobre o jogador. Evidências runtime anteriores em 1.20.1 Fabric e 1.12.2 Forge continuam históricas; os JARs 0.2.2 precisam ser homologados novamente junto do Core 1.1.1 e Skins 0.2.0.
 
 O Companion 0.2.2 tenta novamente a anexação quando o Core termina de
 inicializar, encerra seus agendadores junto com o módulo e apresenta falha ou

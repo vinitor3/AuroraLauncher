@@ -2,6 +2,8 @@ package com.aurora.skins.ui;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
+
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class AuroraTitleLayoutTest {
@@ -13,6 +15,21 @@ final class AuroraTitleLayoutTest {
             assertTrue(layout.previewX() + layout.previewScale() <= size[0]);
             assertTrue(layout.previewY() < size[1]);
             assertTrue(layout.previewScale() >= 34 && layout.previewScale() <= 52);
+            assertTrue(layout.buttonY() > layout.previewY());
+            assertTrue(layout.buttonY() + layout.buttonHeight() <= size[1]);
+            assertTrue(layout.buttonX() >= 0);
+            assertTrue(layout.buttonX() + layout.buttonWidth() <= size[0]);
         }
+    }
+
+    @Test void movesTheWholePlayerPanelAwayFromAddedButtons() {
+        AuroraTitleLayout baseline = AuroraTitleLayout.calculate(854, 480);
+        AuroraTitleLayout shifted = AuroraTitleLayout.calculate(854, 480, Arrays.asList(
+            new AuroraTitleLayout.Rect(baseline.panelLeft(), baseline.panelTop(),
+                baseline.panelRight() - baseline.panelLeft(),
+                baseline.buttonY() + baseline.buttonHeight() - baseline.panelTop())
+        ));
+        assertTrue(shifted.previewX() != baseline.previewX() || shifted.previewY() != baseline.previewY());
+        assertTrue(shifted.buttonX() + shifted.buttonWidth() / 2 == shifted.previewX());
     }
 }
