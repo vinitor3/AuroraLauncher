@@ -15,6 +15,7 @@ fn main() {
             commands::install_vanilla,
             commands::install_fabric,
             commands::install_forge,
+            commands::list_modrinth_categories,
             commands::search_modrinth_modpacks,
             commands::install_modrinth_modpack,
             commands::prepare_curseforge_modpack,

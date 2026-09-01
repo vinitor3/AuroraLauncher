@@ -4,10 +4,11 @@ use std::collections::{HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use reqwest::blocking::Client;
 use reqwest::Url;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha1::{Digest as Sha1Digest, Sha1};
 use thiserror::Error;
@@ -90,6 +91,62 @@ pub struct ModrinthContent {
     pub date_modified: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModrinthCategory {
+    pub name: String,
+    #[serde(alias = "project_type")]
+    pub project_type: String,
+    pub header: String,
+}
+
+fn validated_modrinth_category(category: Option<&str>) -> Result<Option<&str>, ModpackError> {
+    let Some(category) = category.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if category.len() > 64
+        || !category
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '+'))
+    {
+        return Err(ModpackError::InvalidResponse);
+    }
+    Ok(Some(category))
+}
+
+fn push_modrinth_category_facet(
+    facets: &mut Vec<Vec<String>>,
+    category: Option<&str>,
+) -> Result<(), ModpackError> {
+    if let Some(category) = validated_modrinth_category(category)? {
+        facets.push(vec![format!("categories:{category}")]);
+    }
+    Ok(())
+}
+
+pub fn list_modrinth_categories(content_type: &str) -> Result<Vec<ModrinthCategory>, ModpackError> {
+    if !matches!(content_type, "mod" | "modpack" | "resourcepack" | "shader") {
+        return Err(ModpackError::InvalidResponse);
+    }
+    let mut categories = Client::builder()
+        .user_agent("Aurora-Smart-Launcher/0.1")
+        .timeout(Duration::from_secs(20))
+        .build()
+        .expect("cliente HTTP deve inicializar")
+        .get(format!("{MODRINTH_API}/tag/category"))
+        .send()?
+        .error_for_status()?
+        .json::<Vec<ModrinthCategory>>()?;
+    categories.retain(|category| category.project_type == content_type);
+    categories.sort_by(|left, right| {
+        left.header
+            .cmp(&right.header)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    categories.dedup_by(|left, right| left.name == right.name);
+    Ok(categories)
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedContentArtwork {
@@ -103,6 +160,7 @@ pub fn search_modrinth_modpacks(
     query: &str,
     minecraft_version: Option<&str>,
     loader: Option<&str>,
+    category: Option<&str>,
     sort: &str,
     offset: u32,
     limit: u32,
@@ -113,6 +171,7 @@ pub fn search_modrinth_modpacks(
     if let Some(version) = minecraft_version.filter(|value| !value.trim().is_empty()) {
         facets.push(vec![format!("versions:{}", version.trim())]);
     }
+    push_modrinth_category_facet(&mut facets, category)?;
     if let Some(loader) = loader.filter(|value| matches!(*value, "fabric" | "forge")) {
         facets.push(vec![format!("categories:{loader}")]);
     } else {
@@ -140,6 +199,7 @@ pub fn search_modrinth_modpacks(
     }
     let document: Value = Client::builder()
         .user_agent("Aurora-Smart-Launcher/0.1")
+        .timeout(Duration::from_secs(20))
         .build()
         .expect("cliente HTTP deve inicializar")
         .get(url)
@@ -199,6 +259,7 @@ pub fn search_modrinth_content(
     content_type: &str,
     minecraft_version: Option<&str>,
     loader: Option<&str>,
+    category: Option<&str>,
     sort: &str,
 ) -> Result<Vec<ModrinthContent>, ModpackError> {
     let project_type = match content_type {
@@ -210,6 +271,7 @@ pub fn search_modrinth_content(
     if let Some(version) = minecraft_version.filter(|value| !value.trim().is_empty()) {
         facets.push(vec![format!("versions:{}", version.trim())]);
     }
+    push_modrinth_category_facet(&mut facets, category)?;
     if content_type == "mod" {
         if let Some(loader) = loader.filter(|value| matches!(*value, "fabric" | "forge")) {
             facets.push(vec![format!("categories:{loader}")]);
@@ -238,6 +300,7 @@ pub fn search_modrinth_content(
     }
     let document: Value = Client::builder()
         .user_agent("Aurora-Smart-Launcher/0.1")
+        .timeout(Duration::from_secs(20))
         .build()
         .expect("cliente HTTP deve inicializar")
         .get(url)
@@ -1051,12 +1114,50 @@ fn extract_overrides(
 
 #[cfg(test)]
 mod tests {
-    use super::safe_relative_path;
+    use super::{
+        list_modrinth_categories, push_modrinth_category_facet, safe_relative_path,
+        validated_modrinth_category, ModrinthCategory,
+    };
 
     #[test]
     fn rejects_modpack_path_traversal() {
         assert!(safe_relative_path("../outside.jar").is_err());
         assert!(safe_relative_path("C:\\outside.jar").is_err());
         assert!(safe_relative_path("mods/example.jar").is_ok());
+    }
+
+    #[test]
+    fn validates_modrinth_category_facets() {
+        assert_eq!(
+            validated_modrinth_category(Some("adventure")).unwrap(),
+            Some("adventure")
+        );
+        assert_eq!(
+            validated_modrinth_category(Some("512x+")).unwrap(),
+            Some("512x+")
+        );
+        assert!(validated_modrinth_category(Some("adventure\"],[\"versions:1.0")).is_err());
+        let mut facets = vec![vec!["project_type:modpack".to_owned()]];
+        push_modrinth_category_facet(&mut facets, Some("adventure")).unwrap();
+        assert_eq!(facets[1], vec!["categories:adventure"]);
+    }
+
+    #[test]
+    fn reads_modrinth_category_taxonomy_shape() {
+        let category: ModrinthCategory = serde_json::from_str(
+            r#"{"name":"adventure","project_type":"modpack","header":"categories"}"#,
+        )
+        .unwrap();
+        assert_eq!(category.name, "adventure");
+        assert_eq!(category.project_type, "modpack");
+    }
+
+    #[test]
+    #[ignore = "faz uma chamada real ao catálogo Modrinth"]
+    fn reads_live_modrinth_categories() {
+        let categories = list_modrinth_categories("modpack").unwrap();
+        assert!(categories
+            .iter()
+            .any(|category| category.name == "adventure"));
     }
 }

@@ -40,9 +40,10 @@ pub use minecraft::{required_java_major, InstallError, InstallSummary, Minecraft
 pub use modpacks::{
     install_modrinth_content, install_modrinth_content_with_progress, install_modrinth_modpack,
     install_modrinth_modpack_with_progress, install_remote_content,
-    install_remote_content_with_progress, resolve_modrinth_content_artwork,
-    search_modrinth_content, search_modrinth_modpacks, ModpackError, ModpackInstallSummary,
-    ModpackProgress, ModrinthContent, ModrinthPack, ModrinthSearchPage, ResolvedContentArtwork,
+    install_remote_content_with_progress, list_modrinth_categories,
+    resolve_modrinth_content_artwork, search_modrinth_content, search_modrinth_modpacks,
+    ModpackError, ModpackInstallSummary, ModpackProgress, ModrinthCategory, ModrinthContent,
+    ModrinthPack, ModrinthSearchPage, ResolvedContentArtwork,
 };
 pub use runtime_requirements::required_java_major_for_instance;
 pub use skins::{install_embedded_skins, SkinsError};

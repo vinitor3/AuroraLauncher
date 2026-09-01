@@ -45,6 +45,7 @@ jobs:
         run: |
           npm ci --prefix apps/edge-proxy
           npm --prefix apps/edge-proxy run check
+          npm --prefix apps/edge-proxy test
       - name: Node.js para Firebase Functions
         uses: actions/setup-node@v4
         with:

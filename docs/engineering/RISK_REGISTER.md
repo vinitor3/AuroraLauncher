@@ -13,7 +13,7 @@
 | R-005 | P0 | licença do monorepo ambígua/incompleta | `LICENSE.md` fala apenas no manifesto Rust e aponta para texto externo | escolher licença de todo código, incluir texto integral e notices/SBOM |
 | R-006 | P1 | branch `main` sem proteção | CONFIRMADO via configuração pública do GitHub | required checks, PR, bloquear force-push/delete |
 | R-007 | P1 | `App.tsx`/`commands.rs`/Worker monolíticos | 2.293/1.582/456 linhas | ownership exclusivo e decomposição por domínio |
-| R-008 | P1 | frontend pode esperar rede indefinidamente | `edge.ts` e fetches Modrinth sem timeout | wrapper cancelável, timeout por operação e testes |
+| R-008 | P1 | frontend pode esperar rede indefinidamente | MITIGADO no catálogo: Worker/desktop e chamadas Modrinth agora têm timeout; outros fetches ainda precisam de inventário | manter wrapper cancelável e cobrir demais operações |
 | R-009 | P1 | rate limit Worker não distribuído | `Map` por isolate | quotas por UID/IP e binding distribuído apenas se couber no free tier |
 | R-010 | P1 | supply chain/update malicioso | sem updater assinado/SBOM/pinning completo | updater fail-closed, hashes, assinatura, dependency review |
 | R-011 | P1 | prompt injection/excessive agency | chat recebe logs/web; Tools planejadas | broker tipado, least privilege, confirmação, auditoria e red-team |
@@ -23,7 +23,8 @@
 | R-015 | P2 | nonce IPC observável no argv | propriedade JVM é visível a processo local | single-client, TTL, vínculo ao processo e canal herdado futuro |
 | R-016 | P2 | Edge TTS não oficial/instável | teste depende de serviço externo e está ignored | fallback sem voz, aviso de privacidade e adaptador substituível |
 | R-017 | P2 | CAS GC apaga blob vivo | subsistema ainda ausente | raízes explícitas, GC dry-run, transação SQLite e fixtures de crash |
-| R-018 | P2 | conteúdo CurseForge sem autorização | alguns arquivos não têm URL direta | manter página oficial/manual; nunca contornar escolha do autor |
+| R-018 | P2 | conteúdo CurseForge sem autorização | alguns arquivos não têm URL direta e o CDN passou a exigir `x-api-key` | página oficial/manual quando bloqueado; tickets HMAC e gateway restrito a `forgecdn.net` quando autorizado |
+| R-023 | P0 | chave CurseForge de produção inválida | `/health/curseforge` recebe HTTP 403 `API Key missing or invalid` na busca oficial em 01/09/2026 | proprietário renovar chave aprovada, atualizar secret do Worker e exigir health HTTP 200 antes de release |
 
 ## Política
 

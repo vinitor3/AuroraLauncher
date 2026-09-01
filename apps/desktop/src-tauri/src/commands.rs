@@ -18,6 +18,7 @@ use aurora_launcher_core::{
         install_modrinth_content_with_progress as install_modrinth_project,
         install_modrinth_modpack_with_progress as install_modrinth_archive,
         install_remote_content_with_progress as install_remote_project,
+        list_modrinth_categories as list_modrinth_catalog_categories,
         prepare_curseforge_modpack_with_progress, read_cached_curseforge_manifest,
         required_java_major, required_java_major_for_instance, resolve_launch_spec,
         resolve_modrinth_content_artwork,
@@ -26,8 +27,8 @@ use aurora_launcher_core::{
         CurseForgeManifestSummary, CurseForgeResolvedFile, InstallSummary, InstanceId,
         InstanceLayout, IpcEvent, IpcServer, IpcSessionProfile, JavaReleaseCatalog, JavaRuntime,
         LaunchIdentity, LauncherEngine, MinecraftInstaller, ModpackInstallSummary, ModpackProgress,
-        ModrinthContent, ModrinthSearchPage, ResolvedContentArtwork, SpeechResult,
-        TransferProgress,
+        ModrinthCategory, ModrinthContent, ModrinthSearchPage, ResolvedContentArtwork,
+        SpeechResult, TransferProgress,
     },
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -638,6 +639,7 @@ pub async fn search_modrinth_modpacks(
     query: String,
     minecraft_version: Option<String>,
     loader: Option<String>,
+    category: Option<String>,
     sort: String,
     offset: u32,
     limit: u32,
@@ -647,6 +649,7 @@ pub async fn search_modrinth_modpacks(
             &query,
             minecraft_version.as_deref(),
             loader.as_deref(),
+            category.as_deref(),
             &sort,
             offset,
             limit,
@@ -658,11 +661,23 @@ pub async fn search_modrinth_modpacks(
 }
 
 #[tauri::command]
+pub async fn list_modrinth_categories(
+    content_type: String,
+) -> Result<Vec<ModrinthCategory>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        list_modrinth_catalog_categories(&content_type).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("a consulta de categorias do Modrinth falhou: {error}"))?
+}
+
+#[tauri::command]
 pub async fn search_modrinth_content(
     query: String,
     content_type: String,
     minecraft_version: Option<String>,
     loader: Option<String>,
+    category: Option<String>,
     sort: String,
 ) -> Result<Vec<ModrinthContent>, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -671,6 +686,7 @@ pub async fn search_modrinth_content(
             &content_type,
             minecraft_version.as_deref(),
             loader.as_deref(),
+            category.as_deref(),
             &sort,
         )
         .map_err(|error| error.to_string())

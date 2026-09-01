@@ -37,7 +37,9 @@ de Minecraft, loader e Java continua sendo uma etapa manual separada.
 - Testes Rust: 45 aprovados e 1 teste online opcional ignorado.
 - Matriz de release: 9/9 JARs Core, 9/9 Skins e 9/9 Companion correspondem ao
   código integrado.
-- Worker validado com `wrangler deploy --dry-run`; nenhum deploy foi realizado.
+- O Worker desse fluxo recebeu uma publicação posterior em 1º de setembro de
+  2026, com categorias e gateway autenticado de downloads CurseForge. A
+  credencial CurseForge de produção ainda precisa ser renovada.
 - Lint das Firebase Functions concluído.
 - Preflight oficial de release aprovado no branch
   `codex/aurora-all-chats-integration`.
@@ -54,8 +56,8 @@ de Minecraft, loader e Java continua sendo uma etapa manual separada.
 
 - O build confirma compilação e consistência dos artefatos, mas não substitui
   testes manuais de inicialização e multiplayer para cada versão do Minecraft.
-- O Worker foi validado apenas em dry-run e precisa ser implantado separadamente
-  para disponibilizar as novas ações da CurseForge em produção.
+- O Worker está implantado, mas a busca CurseForge permanece indisponível até o
+  proprietário substituir a chave recusada pela API oficial.
 - O bundle web mantém o aviso conhecido de chunk acima de 500 kB.
 - Os builds de mods mantêm avisos conhecidos do Architectury Loom/Gradle legado.
 - A instalação das Functions em Node 24 avisou que o projeto declara Node 20 e

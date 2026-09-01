@@ -20,17 +20,28 @@ versionados. Uma chave já exposta deve ser revogada e substituída.
 - são permitidas apenas operações específicas de catálogo, arquivos,
   dependências e download;
 - não existe proxy de URL livre;
+- categorias são consultadas dinamicamente por classe (modpack, mod, shader ou
+  resource pack) e a busca aceita somente o identificador numérico retornado
+  pelo CurseForge;
 - referências de um modpack são resolvidas em lotes pelo Worker, sem expor a
   chave ao cliente e sem enviar arquivos do jogador ao serviço;
+- URLs de CDN nunca são entregues diretamente ao desktop. O Worker assina em um
+  ticket HMAC de oito horas os IDs e a URL retornada pela API, revalida a
+  assinatura/expiração/host e transmite somente URLs HTTPS em `forgecdn.net`,
+  enviando `x-api-key` sem expô-la. Há limites por ticket e IP, e as tabelas
+  locais têm poda para não crescerem indefinidamente. Isso atende à
+  [autenticação exigida para downloads do CDN](https://blog.curseforge.com/introducing-api-key-authentication-for-curseforge-file-downloads/);
 - arquivos que o CurseForge não autoriza baixar diretamente nunca são obtidos
   por uma URL construída ou contorno do bloqueio. O launcher abre a página
   oficial, captura o download iniciado por ela, valida o SHA-1 publicado e
   continua automaticamente com o próximo item da fila.
+- falhas de filtro, limite, indisponibilidade e autorização recebem mensagens
+  distintas; consultas têm timeout e repetem uma vez somente em `429`/`5xx`.
 
 ## Fluxos disponíveis no launcher
 
 - busca de modpacks, mods, shaders e pacotes de recursos, com versão do
-  Minecraft, Forge/Fabric, ordenação e paginação quando aplicável;
+  Minecraft, Forge/Fabric, categoria, ordenação e paginação quando aplicável;
 - listagem inicial pelos mais baixados mesmo com a busca vazia;
 - instalação de modpacks pelo `manifest.json` oficial, incluindo loader,
   arquivos obrigatórios e a pasta `overrides`;
@@ -42,6 +53,18 @@ versionados. Uma chave já exposta deve ser revogada e substituída.
 
 O código do Worker precisa ser publicado antes de distribuir uma versão do
 launcher que use as ações em lote `resolveFiles` e `resolveProjects`.
+
+## Verificação operacional
+
+- `GET /health` confirma a revisão publicada do Worker sem consultar terceiros;
+- `GET /health/curseforge` faz uma busca mínima e lê categorias reais, portanto
+  também valida a credencial e o acesso ao catálogo;
+- em 1º de setembro de 2026, o Worker atualizado foi publicado, mas a chave
+  presente em `CURSEFORGE_API_KEY` recebeu `403 API Key missing or invalid` na
+  busca oficial. O proprietário precisa renovar a chave aprovada pelo
+  [processo oficial do CurseForge](https://support.curseforge.com/support/solutions/articles/9000208346-about-the-curseforge-api-and-how-to-apply-for-a-key)
+  e atualizar o secret com `wrangler secret put CURSEFORGE_API_KEY`. O endpoint
+  de saúde deve retornar HTTP 200 antes de anunciar o catálogo como disponível.
 
 Firebase Functions e Secret Manager do Google não são necessários para esta
 integração; Firebase continua responsável apenas pela identidade e pelos dados

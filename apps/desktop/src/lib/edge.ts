@@ -8,17 +8,31 @@ function endpoint(services: FirebaseServices, path: string) {
   return base + path;
 }
 
-async function request<T>(services: FirebaseServices, path: string, body: Record<string, unknown>): Promise<T> {
+async function request<T>(
+  services: FirebaseServices,
+  path: string,
+  body: Record<string, unknown>,
+  timeoutMs = 25_000,
+): Promise<T> {
   const user = services.auth.currentUser;
   if (!user) throw new Error("Entre na sua conta Aurora para continuar.");
-  const response = await fetch(endpoint(services, path), {
-    method: "POST",
-    headers: {
-      Authorization: "Bearer " + await user.getIdToken(),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  let response: Response;
+  try {
+    response = await fetch(endpoint(services, path), {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + await user.getIdToken(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "TimeoutError") {
+      throw new Error("O serviço Aurora demorou para responder. Tente novamente.");
+    }
+    throw new Error("Não foi possível conectar ao serviço Aurora.");
+  }
   const payload = await response.json().catch(() => null) as { error?: string } & T | null;
   if (!response.ok) throw new Error(payload?.error ?? "O serviço Aurora não está disponível agora.");
   return payload as T;
@@ -31,11 +45,16 @@ export async function askAuroraAssistant(
 ) {
   const trimmed = message.trim();
   if (!trimmed || trimmed.length > 2_000) throw new Error("A mensagem deve ter entre 1 e 2.000 caracteres.");
-  return (await request<{ text: string; model?: string }>(services, "/v1/assistant", {
-    message: trimmed,
-    mode: options?.mode ?? "launcher",
-    ...(options?.screenshotBase64 ? { screenshotBase64: options.screenshotBase64 } : {}),
-  })).text;
+  return (await request<{ text: string; model?: string }>(
+    services,
+    "/v1/assistant",
+    {
+      message: trimmed,
+      mode: options?.mode ?? "launcher",
+      ...(options?.screenshotBase64 ? { screenshotBase64: options.screenshotBase64 } : {}),
+    },
+    70_000,
+  )).text;
 }
 
 export async function uploadAuroraAppearanceImage(
@@ -62,7 +81,8 @@ export async function uploadAuroraAppearanceImage(
 }
 
 export type CurseForgeCatalogRequest =
-  | { action: "search"; query?: string; contentType: "mod" | "shader" | "resourcepack" | "modpack"; gameVersion?: string; loader?: "forge" | "fabric"; sort?: "relevance" | "popular" | "updated"; pageSize?: number; index?: number }
+  | { action: "search"; query?: string; contentType: "mod" | "shader" | "resourcepack" | "modpack"; gameVersion?: string; loader?: "forge" | "fabric"; categoryId?: number; sort?: "relevance" | "popular" | "updated"; pageSize?: number; index?: number }
+  | { action: "categories"; contentType: "mod" | "shader" | "resourcepack" | "modpack" }
   | { action: "mod"; modId: number }
   | { action: "description"; modId: number }
   | { action: "files"; modId: number; gameVersion?: string; loader?: "forge" | "fabric" }
@@ -72,5 +92,8 @@ export type CurseForgeCatalogRequest =
   | { action: "resolveFiles"; files: Array<{ projectId: number; fileId: number }> };
 
 export function requestCurseForgeCatalog<T>(services: FirebaseServices, body: CurseForgeCatalogRequest) {
-  return request<T>(services, "/v1/curseforge", body);
+  const timeoutMs = body.action === "resolveFiles" || body.action === "resolveProjects"
+    ? 300_000
+    : 45_000;
+  return request<T>(services, "/v1/curseforge", body, timeoutMs);
 }

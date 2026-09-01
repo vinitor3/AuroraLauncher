@@ -23,6 +23,11 @@ import {
   type FirebaseServices,
 } from "./lib/firebase";
 import { askAuroraAssistant, requestCurseForgeCatalog, uploadAuroraAppearanceImage } from "./lib/edge";
+import {
+  catalogCategoryLabel,
+  groupedCatalogCategories,
+  type CatalogCategoryOption,
+} from "./lib/catalogCategories";
 import { deleteLocalSkin, listLocalSkins, saveLocalSkin, type LocalSkin } from "./lib/localSkins";
 
 type EngineStatus = { dataDirectory: string; ready: boolean };
@@ -57,6 +62,7 @@ type ModrinthSearchPage = { items: ModrinthPack[]; totalHits: number; offset: nu
 type CatalogPack = ModrinthPack & {
   source: CatalogSource;
   curseForgeId?: number;
+  curseForgeHasOnlyUnsupportedLoaders?: boolean;
   websiteUrl?: string;
   gallery?: string[];
 };
@@ -123,6 +129,8 @@ type CurseForgeFile = {
   project?: CurseForgeProject;
 };
 type CurseForgeSearchResponse = { data?: CurseForgeProject[]; pagination?: { totalCount?: number } };
+type CurseForgeCategory = { id: number; name: string; slug?: string; group?: string };
+type ModrinthCategory = { name: string; projectType: string; header: string };
 type CurseForgeManifestSummary = {
   name: string;
   versionName: string;
@@ -462,7 +470,17 @@ function preferredPackVersion(pack: CatalogPack | ModrinthPack, fallback: string
   return pack.versions.includes(fallback) ? fallback : pack.versions[0] ?? fallback;
 }
 
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function catalogCategoryKey(source: CatalogSource, contentType: ContentType | "modpack") {
+  return `${source}:${contentType}`;
+}
+
 function curseForgeProjectToPack(project: CurseForgeProject): CatalogPack {
+  const loaderIndexes = project.latestFilesIndexes ?? [];
+  const supportedIndexes = loaderIndexes.filter((entry) => entry.modLoader === 1 || entry.modLoader === 4);
   return {
     source: "curseforge",
     curseForgeId: project.id,
@@ -470,8 +488,9 @@ function curseForgeProjectToPack(project: CurseForgeProject): CatalogPack {
     slug: project.slug,
     title: project.name,
     description: project.summary ?? "",
-    versions: [...new Set((project.latestFilesIndexes ?? []).map((entry) => entry.gameVersion).filter((value): value is string => Boolean(value)))],
-    loaders: [...new Set((project.latestFilesIndexes ?? []).map((entry) => entry.modLoader === 1 ? "forge" : entry.modLoader === 4 ? "fabric" : "").filter(Boolean))],
+    versions: [...new Set(supportedIndexes.map((entry) => entry.gameVersion).filter((value): value is string => Boolean(value)))],
+    loaders: [...new Set(supportedIndexes.map((entry) => entry.modLoader === 1 ? "forge" : "fabric"))],
+    curseForgeHasOnlyUnsupportedLoaders: loaderIndexes.length > 0 && supportedIndexes.length === 0,
     iconUrl: project.logo?.thumbnailUrl ?? project.logo?.url,
     downloads: project.downloadCount ?? 0,
     follows: 0,
@@ -875,6 +894,7 @@ function LauncherApp() {
   const [selectedModrinthPack, setSelectedModrinthPack] = useState<CatalogPack>();
   const [modpackVersionFilter, setModpackVersionFilter] = useState(minecraftVersion);
   const [modpackLoaderFilter, setModpackLoaderFilter] = useState<"" | LoaderChoice>("");
+  const [modpackCategoryFilter, setModpackCategoryFilter] = useState("");
   const [modpackSort, setModpackSort] = useState<ContentSort>("popular");
   const [packVersions, setPackVersions] = useState<Record<string, string>>({});
   const [editingInstance, setEditingInstance] = useState("");
@@ -888,6 +908,11 @@ function LauncherApp() {
   const [contentSort, setContentSort] = useState<ContentSort>("popular");
   const [contentVersionFilter, setContentVersionFilter] = useState("");
   const [contentLoaderFilter, setContentLoaderFilter] = useState<"" | LoaderChoice>("");
+  const [contentCategoryFilter, setContentCategoryFilter] = useState("");
+  const [catalogCategories, setCatalogCategories] = useState<Record<string, CatalogCategoryOption[]>>({});
+  const [catalogCategoryErrors, setCatalogCategoryErrors] = useState<Record<string, string>>({});
+  const catalogCategoryCache = useRef<Record<string, CatalogCategoryOption[]>>({});
+  const catalogCategoryRequests = useRef(new Set<string>());
   const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
   const [detailLoading, setDetailLoading] = useState(false);
   const [instanceContent, setInstanceContent] = useState<InstanceContent>({ mods: [], shaderpacks: [], resourcepacks: [] });
@@ -1385,6 +1410,44 @@ function LauncherApp() {
       setBusy(false);
     }
   }
+  async function loadCatalogCategories(source: CatalogSource, type: ContentType | "modpack") {
+    const key = catalogCategoryKey(source, type);
+    if (catalogCategoryCache.current[key] || catalogCategoryRequests.current.has(key)) return;
+    catalogCategoryRequests.current.add(key);
+    setCatalogCategoryErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    try {
+      let categories: CatalogCategoryOption[];
+      if (source === "modrinth") {
+        categories = (await invoke<ModrinthCategory[]>("list_modrinth_categories", { contentType: type })).map((category) => ({
+          value: category.name,
+          name: category.name,
+          group: category.header,
+        }));
+      } else {
+        if (!services) throw new Error("Entre na conta Aurora para consultar as categorias do CurseForge.");
+        const response = await requestCurseForgeCatalog<{ data?: CurseForgeCategory[] }>(services, {
+          action: "categories",
+          contentType: type,
+        });
+        categories = (response.data ?? []).map((category) => ({
+          value: String(category.id),
+          name: catalogCategoryLabel(category.name, category.slug),
+          group: category.group || "Categorias",
+        }));
+      }
+      catalogCategoryCache.current[key] = categories;
+      setCatalogCategories((current) => ({ ...current, [key]: categories }));
+    } catch (error) {
+      setCatalogCategoryErrors((current) => ({ ...current, [key]: errorMessage(error) }));
+    } finally {
+      catalogCategoryRequests.current.delete(key);
+    }
+  }
+
   async function searchModrinth(event: FormEvent) {
     event.preventDefault();
     await loadModrinthPage(0);
@@ -1393,7 +1456,9 @@ function LauncherApp() {
     page: number,
     requestedPageSize = modrinthPageSize,
     requestedSource: CatalogSource = catalogSource,
+    requestedCategory = modpackCategoryFilter,
   ) {
+    void loadCatalogCategories(requestedSource, "modpack");
     setBusy(true);
     try {
       let items: CatalogPack[];
@@ -1403,6 +1468,7 @@ function LauncherApp() {
           query: modpackQuery.trim(),
           minecraftVersion: modpackVersionFilter || null,
           loader: modpackLoaderFilter || null,
+          category: requestedCategory || null,
           sort: modpackSort,
           offset: page * requestedPageSize,
           limit: requestedPageSize,
@@ -1417,13 +1483,14 @@ function LauncherApp() {
           query: modpackQuery.trim() || undefined,
           gameVersion: modpackVersionFilter || undefined,
           loader: modpackLoaderFilter || undefined,
+          categoryId: requestedCategory ? Number(requestedCategory) : undefined,
           sort: modpackSort,
           pageSize: requestedPageSize,
           index: page * requestedPageSize,
         });
         items = (result.data ?? [])
           .map(curseForgeProjectToPack)
-          .filter((pack) => pack.loaders.length === 0 || pack.loaders.some((loader) => loader === "fabric" || loader === "forge"));
+          .filter((pack) => !pack.curseForgeHasOnlyUnsupportedLoaders);
         totalHits = result.pagination?.totalCount ?? items.length;
       }
       setModrinthPacks(items);
@@ -1441,7 +1508,7 @@ function LauncherApp() {
     } catch (error) {
       setModrinthPacks([]);
       setSelectedModrinthPack(undefined);
-      setNotice(`Não foi possível consultar ${requestedSource === "modrinth" ? "Modrinth" : "CurseForge"}: ${String(error)}`);
+      setNotice(`Não foi possível consultar ${requestedSource === "modrinth" ? "Modrinth" : "CurseForge"}: ${errorMessage(error)}`);
     } finally { setBusy(false); }
   }
 
@@ -1750,8 +1817,9 @@ function LauncherApp() {
     setSelectedContentNames([]);
     setInstalledContentFilter("");
     setContentQuery("");
+    setContentCategoryFilter("");
     setContentResults([]);
-    if (editorView === "discover") void loadContentCatalog({ type: nextType, query: "", sort: "popular" });
+    if (editorView === "discover") void loadContentCatalog({ type: nextType, query: "", category: "", sort: "popular" });
   }
   async function selectInstance(id: string) {
     setTargetInstance(id);
@@ -1779,13 +1847,16 @@ function LauncherApp() {
     sort?: ContentSort;
     version?: string;
     loader?: "" | LoaderChoice;
+    category?: string;
   } = {}) {
     const source = options.source ?? contentSource;
     const type = options.type ?? contentType;
     const query = options.query ?? contentQuery;
     const sort = options.sort ?? contentSort;
-    const version = options.version ?? (contentVersionFilter || installedMinecraftVersion || minecraftVersion);
-    const loader = options.loader ?? (contentLoaderFilter || instanceLoader() || "");
+    const version = options.version ?? contentVersionFilter;
+    const loader = options.loader ?? contentLoaderFilter;
+    const category = options.category ?? contentCategoryFilter;
+    void loadCatalogCategories(source, type);
     setBusy(true);
     try {
       let results: CatalogContent[];
@@ -1795,6 +1866,7 @@ function LauncherApp() {
           contentType: type,
           minecraftVersion: version || null,
           loader: type === "mod" ? loader || null : null,
+          category: category || null,
           sort,
         });
         results = found.map((item) => ({ ...item, source: "modrinth" as const }));
@@ -1806,6 +1878,7 @@ function LauncherApp() {
           query: query.trim() || undefined,
           gameVersion: version || undefined,
           loader: type === "mod" && loader ? loader : undefined,
+          categoryId: category ? Number(category) : undefined,
           sort,
           pageSize: 24,
           index: 0,
@@ -1831,7 +1904,7 @@ function LauncherApp() {
       setNotice(`${results.length} resultado(s) carregados do ${source === "modrinth" ? "Modrinth" : "CurseForge"}.`);
     } catch (error) {
       setContentResults([]);
-      setNotice(`Não foi possível carregar o catálogo: ${String(error)}`);
+      setNotice(`Não foi possível carregar o catálogo: ${errorMessage(error)}`);
     } finally {
       setBusy(false);
     }
@@ -1848,7 +1921,8 @@ function LauncherApp() {
     setContentSort("popular");
     setContentVersionFilter(version);
     setContentLoaderFilter(loader);
-    void loadContentCatalog({ query: "", sort: "popular", version, loader });
+    setContentCategoryFilter("");
+    void loadContentCatalog({ query: "", sort: "popular", version, loader, category: "" });
   }
   async function openContentDetail(item: CatalogContent) {
     setDetailLoading(true);
@@ -2456,6 +2530,10 @@ function LauncherApp() {
   const selectedInstalledCount = selectedContentFiles.filter((file) => selectedContentNames.includes(file.name)).length;
   const selectedVisibleCount = visibleInstalledContent.filter((file) => selectedContentNames.includes(file.name)).length;
   const editingInstanceSummary = instances.find((instance) => instance.id === editingInstance);
+  const modpackCategoryKey = catalogCategoryKey(catalogSource, "modpack");
+  const contentCategoryKey = catalogCategoryKey(contentSource, contentType);
+  const modpackCategoryGroups = groupedCatalogCategories(catalogCategories[modpackCategoryKey] ?? []);
+  const contentCategoryGroups = groupedCatalogCategories(catalogCategories[contentCategoryKey] ?? []);
   return (
     <>
     <main className="shell app-shell">
@@ -2636,8 +2714,8 @@ function LauncherApp() {
             </div>
           </div>
           <div aria-label="Fonte do catálogo" className="catalog-tabs" role="tablist">
-            <button aria-selected={catalogSource === "modrinth"} className={catalogSource === "modrinth" ? "selected compact" : "secondary compact"} onClick={() => { setCatalogSource("modrinth"); void loadModrinthPage(0, modrinthPageSize, "modrinth"); }} role="tab" type="button">Modrinth</button>
-            <button aria-selected={catalogSource === "curseforge"} className={catalogSource === "curseforge" ? "selected compact" : "secondary compact"} onClick={() => { setCatalogSource("curseforge"); void loadModrinthPage(0, modrinthPageSize, "curseforge"); }} role="tab" type="button">CurseForge</button>
+            <button aria-selected={catalogSource === "modrinth"} className={catalogSource === "modrinth" ? "selected compact" : "secondary compact"} onClick={() => { setCatalogSource("modrinth"); setModpackCategoryFilter(""); void loadModrinthPage(0, modrinthPageSize, "modrinth", ""); }} role="tab" type="button">Modrinth</button>
+            <button aria-selected={catalogSource === "curseforge"} className={catalogSource === "curseforge" ? "selected compact" : "secondary compact"} onClick={() => { setCatalogSource("curseforge"); setModpackCategoryFilter(""); void loadModrinthPage(0, modrinthPageSize, "curseforge", ""); }} role="tab" type="button">CurseForge</button>
           </div>
           <form onSubmit={searchModrinth} className="catalog-search-bar">
             <input value={modpackQuery} onChange={(event) => setModpackQuery(event.target.value)} placeholder={`Buscar modpack no ${catalogSource === "modrinth" ? "Modrinth" : "CurseForge"}`} />
@@ -2647,6 +2725,7 @@ function LauncherApp() {
           <div className="content-filter-bar modpack-filter-bar">
             <label>Versão<select value={modpackVersionFilter} onChange={(event) => { setModpackVersionFilter(event.target.value); if (!event.target.value) setModpackLoaderFilter(""); }}><option value="">Todas</option>{[...new Set([minecraftVersion, "1.21.1", "1.20.1", "1.19.2", "1.16.5", "1.12.2"].filter(Boolean))].map((version) => <option key={version} value={version}>{version}</option>)}</select></label>
             <label>Loader<select disabled={!modpackVersionFilter} value={modpackLoaderFilter} onChange={(event) => setModpackLoaderFilter(event.target.value as "" | LoaderChoice)}><option value="">Forge e Fabric</option><option value="fabric">Fabric</option><option value="forge">Forge</option></select></label>
+            <label title={catalogCategoryErrors[modpackCategoryKey]}>Categoria<select value={modpackCategoryFilter} onChange={(event) => setModpackCategoryFilter(event.target.value)}><option value="">Todas</option>{!Object.hasOwn(catalogCategories, modpackCategoryKey) && !catalogCategoryErrors[modpackCategoryKey] && <option disabled value="__loading">Carregando categorias…</option>}{catalogCategoryErrors[modpackCategoryKey] && <option disabled value="__error">Categorias indisponíveis</option>}{modpackCategoryGroups.map(({ group, options }) => <optgroup key={group} label={group}>{options.map((category) => <option key={category.value} value={category.value}>{catalogCategoryLabel(category.name)}</option>)}</optgroup>)}</select></label>
             <label>Ordenar<select value={modpackSort} onChange={(event) => setModpackSort(event.target.value as ContentSort)}><option value="popular">Mais baixados</option><option value="relevance">Relevância</option><option value="updated">Atualizados</option></select></label>
             <button className="secondary compact" disabled={busy} onClick={() => void loadModrinthPage(0)} type="button">Aplicar filtros</button>
           </div>
@@ -2741,8 +2820,8 @@ function LauncherApp() {
                 ) : (
                   <div className="editor-discover">
                     <div className="content-source-tabs" role="tablist" aria-label="Fonte dos downloads">
-                      <button aria-selected={contentSource === "modrinth"} className={contentSource === "modrinth" ? "active" : ""} onClick={() => { setContentSource("modrinth"); void loadContentCatalog({ source: "modrinth", query: "" }); }} role="tab" type="button">Modrinth</button>
-                      <button aria-selected={contentSource === "curseforge"} className={contentSource === "curseforge" ? "active" : ""} onClick={() => { setContentSource("curseforge"); void loadContentCatalog({ source: "curseforge", query: "" }); }} role="tab" type="button">CurseForge</button>
+                      <button aria-selected={contentSource === "modrinth"} className={contentSource === "modrinth" ? "active" : ""} onClick={() => { setContentSource("modrinth"); setContentCategoryFilter(""); void loadContentCatalog({ source: "modrinth", query: "", category: "" }); }} role="tab" type="button">Modrinth</button>
+                      <button aria-selected={contentSource === "curseforge"} className={contentSource === "curseforge" ? "active" : ""} onClick={() => { setContentSource("curseforge"); setContentCategoryFilter(""); void loadContentCatalog({ source: "curseforge", query: "", category: "" }); }} role="tab" type="button">CurseForge</button>
                     </div>
                     <form onSubmit={searchContent} className="editor-search-form">
                       <span aria-hidden="true">⌕</span>
@@ -2750,8 +2829,9 @@ function LauncherApp() {
                       <button disabled={busy} type="submit">Pesquisar</button>
                     </form>
                     <div className="content-filter-bar">
-                      <label>Versão<select value={contentVersionFilter} onChange={(event) => setContentVersionFilter(event.target.value)}><option value="">Todas</option>{[...new Set([installedMinecraftVersion, minecraftVersion, "1.21.1", "1.20.1", "1.19.2", "1.16.5", "1.12.2"].filter(Boolean))].map((version) => <option key={version} value={version}>{version}</option>)}</select></label>
-                      {contentType === "mod" && <label>Loader<select value={contentLoaderFilter} onChange={(event) => setContentLoaderFilter(event.target.value as "" | LoaderChoice)}><option value="">Todos</option><option value="fabric">Fabric</option><option value="forge">Forge</option></select></label>}
+                      <label>Versão<select value={contentVersionFilter} onChange={(event) => { setContentVersionFilter(event.target.value); if (!event.target.value) setContentLoaderFilter(""); }}><option value="">Todas</option>{[...new Set([installedMinecraftVersion, minecraftVersion, "1.21.1", "1.20.1", "1.19.2", "1.16.5", "1.12.2"].filter(Boolean))].map((version) => <option key={version} value={version}>{version}</option>)}</select></label>
+                      {contentType === "mod" && <label>Loader<select disabled={!contentVersionFilter} value={contentLoaderFilter} onChange={(event) => setContentLoaderFilter(event.target.value as "" | LoaderChoice)}><option value="">Todos</option><option value="fabric">Fabric</option><option value="forge">Forge</option></select></label>}
+                      <label title={catalogCategoryErrors[contentCategoryKey]}>Categoria<select value={contentCategoryFilter} onChange={(event) => setContentCategoryFilter(event.target.value)}><option value="">Todas</option>{!Object.hasOwn(catalogCategories, contentCategoryKey) && !catalogCategoryErrors[contentCategoryKey] && <option disabled value="__loading">Carregando categorias…</option>}{catalogCategoryErrors[contentCategoryKey] && <option disabled value="__error">Categorias indisponíveis</option>}{contentCategoryGroups.map(({ group, options }) => <optgroup key={group} label={group}>{options.map((category) => <option key={category.value} value={category.value}>{catalogCategoryLabel(category.name)}</option>)}</optgroup>)}</select></label>
                       <label>Ordenar<select value={contentSort} onChange={(event) => setContentSort(event.target.value as ContentSort)}><option value="popular">Mais baixados</option><option value="relevance">Relevância</option><option value="updated">Atualizados</option></select></label>
                       <button className="secondary compact" disabled={busy} onClick={() => void loadContentCatalog()} type="button">Aplicar filtros</button>
                     </div>
