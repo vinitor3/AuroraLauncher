@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -12,16 +12,20 @@ use std::time::Duration;
 use aurora_launcher_core::{
     auth::{offline_uuid_for_nickname, validate_nickname},
     engine::{
-        discover_java_executables, ensure_managed_java_with_progress, install_embedded_companion,
-        install_embedded_core, install_embedded_skins,
+        available_java_releases, discover_java_executables, discover_managed_java_executables,
+        ensure_managed_java_with_progress, install_curseforge_modpack_with_progress,
+        install_embedded_companion, install_embedded_core, install_embedded_skins,
         install_modrinth_content_with_progress as install_modrinth_project,
         install_modrinth_modpack_with_progress as install_modrinth_archive,
-        install_remote_content_with_progress as install_remote_project, required_java_major,
-        resolve_launch_spec, resolve_modrinth_content_artwork,
+        install_remote_content_with_progress as install_remote_project,
+        prepare_curseforge_modpack_with_progress, read_cached_curseforge_manifest,
+        required_java_major, required_java_major_for_instance, resolve_launch_spec,
+        resolve_modrinth_content_artwork,
         search_modrinth_content as search_modrinth_catalog_content,
-        search_modrinth_modpacks as search_modrinth_catalog, InstallSummary, InstanceId,
-        InstanceLayout, IpcEvent, IpcServer, IpcSessionProfile, JavaRuntime, LaunchIdentity,
-        LauncherEngine, MinecraftInstaller, ModpackInstallSummary, ModpackProgress,
+        search_modrinth_modpacks as search_modrinth_catalog, supported_managed_java_major,
+        CurseForgeManifestSummary, CurseForgeResolvedFile, InstallSummary, InstanceId,
+        InstanceLayout, IpcEvent, IpcServer, IpcSessionProfile, JavaReleaseCatalog, JavaRuntime,
+        LaunchIdentity, LauncherEngine, MinecraftInstaller, ModpackInstallSummary, ModpackProgress,
         ModrinthContent, ModrinthSearchPage, ResolvedContentArtwork, SpeechResult,
         TransferProgress,
     },
@@ -73,6 +77,7 @@ pub struct InstanceContentFile {
 struct ManualDownloadEvent {
     instance_id: String,
     filename: String,
+    content_type: String,
     status: String,
     error: Option<String>,
 }
@@ -333,6 +338,37 @@ fn write_instance_profile(
     .map_err(|error| format!("não foi possível salvar o perfil da instância: {error}"))
 }
 
+fn update_modpack_launch_profile(
+    instance: &aurora_launcher_core::engine::Instance,
+    result: &InstallSummary,
+    loader: &str,
+) -> Result<(), String> {
+    let marker_path = instance.root().join("aurora-modpack.json");
+    if !marker_path.is_file() {
+        return Ok(());
+    }
+    let mut document = serde_json::from_slice::<serde_json::Value>(
+        &fs::read(&marker_path)
+            .map_err(|error| format!("não foi possível ler os metadados do modpack: {error}"))?,
+    )
+    .map_err(|error| format!("os metadados do modpack estão corrompidos: {error}"))?;
+    let object = document
+        .as_object_mut()
+        .ok_or_else(|| "os metadados do modpack estão corrompidos".to_owned())?;
+    object.insert("loader".to_owned(), serde_json::json!(loader));
+    object.insert(
+        "minecraft".to_owned(),
+        serde_json::json!(result.minecraft_version),
+    );
+    object.insert("versionId".to_owned(), serde_json::json!(result.version_id));
+    fs::write(
+        marker_path,
+        serde_json::to_vec_pretty(&document)
+            .map_err(|error| format!("não foi possível preparar os metadados: {error}"))?,
+    )
+    .map_err(|error| format!("não foi possível atualizar os metadados: {error}"))
+}
+
 #[tauri::command]
 pub fn engine_status(app: AppHandle) -> Result<EngineStatus, String> {
     let data_directory = data_directory(&app)?;
@@ -546,6 +582,7 @@ pub async fn install_fabric(
             })
             .map_err(|error| error.to_string())?;
         write_instance_profile(&instance, &result, "fabric")?;
+        update_modpack_launch_profile(&instance, &result, "fabric")?;
         emit_download_progress(&progress_app, "Fabric instalado", 100.0);
         Ok(result)
     })
@@ -599,11 +636,22 @@ pub async fn install_forge(
 #[tauri::command]
 pub async fn search_modrinth_modpacks(
     query: String,
+    minecraft_version: Option<String>,
+    loader: Option<String>,
+    sort: String,
     offset: u32,
     limit: u32,
 ) -> Result<ModrinthSearchPage, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        search_modrinth_catalog(&query, offset, limit).map_err(|error| error.to_string())
+        search_modrinth_catalog(
+            &query,
+            minecraft_version.as_deref(),
+            loader.as_deref(),
+            &sort,
+            offset,
+            limit,
+        )
+        .map_err(|error| error.to_string())
     })
     .await
     .map_err(|error| format!("a busca de modpacks falhou: {error}"))?
@@ -665,6 +713,7 @@ pub async fn install_remote_content(
 /// própria página cumpre a contagem regressiva; o WebView apenas captura o
 /// download, valida o SHA-1 publicado e o instala na instância.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn open_manual_content_download(
     app: AppHandle,
     id: String,
@@ -672,6 +721,8 @@ pub async fn open_manual_content_download(
     filename: String,
     content_type: String,
     sha1: String,
+    project_id: Option<u64>,
+    file_id: Option<u64>,
 ) -> Result<(), String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
     let instance_id = id.as_str().to_owned();
@@ -679,7 +730,6 @@ pub async fn open_manual_content_download(
     instance
         .ensure_layout()
         .map_err(|error| error.to_string())?;
-    let folder = content_folder(&content_type)?;
     validate_content_filename(&filename, &content_type)?;
     if sha1.len() != 40 || !sha1.chars().all(|character| character.is_ascii_hexdigit()) {
         return Err("o CurseForge não forneceu um SHA-1 seguro para este arquivo".to_owned());
@@ -690,7 +740,20 @@ pub async fn open_manual_content_download(
         return Err("somente páginas HTTPS oficiais do CurseForge podem ser abertas".to_owned());
     }
 
-    let destination = instance.root().join(folder).join(&filename);
+    let destination = if content_type == "modpack" {
+        let project_id = project_id.ok_or_else(|| "projeto CurseForge inválido".to_owned())?;
+        let file_id = file_id.ok_or_else(|| "arquivo CurseForge inválido".to_owned())?;
+        aurora_launcher_core::engine::curseforge_archive_path(&instance, project_id, file_id)
+    } else {
+        instance
+            .root()
+            .join(content_folder(&content_type)?)
+            .join(&filename)
+    };
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("não foi possível preparar o download: {error}"))?;
+    }
     let temporary = destination.with_file_name(format!(
         ".{}.{}.aurora-manual-download",
         Uuid::new_v4().simple(),
@@ -703,6 +766,7 @@ pub async fn open_manual_content_download(
     let handler_label = label.clone();
     let handler_instance_id = instance_id.clone();
     let handler_filename = filename.clone();
+    let handler_content_type = content_type.clone();
     let handler_destination = destination.clone();
     let handler_temporary = temporary.clone();
     let handler_sha1 = sha1.clone();
@@ -724,6 +788,7 @@ pub async fn open_manual_content_download(
                     ManualDownloadEvent {
                         instance_id: handler_instance_id.clone(),
                         filename: handler_filename.clone(),
+                        content_type: handler_content_type.clone(),
                         status: "downloading".to_owned(),
                         error: None,
                     },
@@ -749,6 +814,7 @@ pub async fn open_manual_content_download(
                     ManualDownloadEvent {
                         instance_id: handler_instance_id.clone(),
                         filename: handler_filename.clone(),
+                        content_type: handler_content_type.clone(),
                         status: if result.is_ok() {
                             "completed"
                         } else {
@@ -800,6 +866,83 @@ fn validate_content_filename(filename: &str, content_type: &str) -> Result<(), S
         ));
     }
     Ok(())
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_curseforge_modpack(
+    app: AppHandle,
+    id: String,
+    project_id: u64,
+    file_id: u64,
+    download_url: Option<String>,
+    filename: String,
+    sha1: String,
+) -> Result<CurseForgeManifestSummary, String> {
+    let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    let instance = layout(&app)?.open(id);
+    emit_download_progress(&app, format!("Preparando {filename}"), 1.0);
+    let progress_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let manifest = prepare_curseforge_modpack_with_progress(
+            &instance,
+            project_id,
+            file_id,
+            download_url.as_deref(),
+            &filename,
+            &sha1,
+            |progress| emit_transfer_progress(&progress_app, progress),
+        )
+        .map_err(|error| error.to_string())?;
+        emit_download_progress(&progress_app, "Manifesto CurseForge validado", 100.0);
+        Ok(manifest)
+    })
+    .await
+    .map_err(|error| format!("a preparação do modpack falhou: {error}"))?
+}
+
+#[tauri::command]
+pub async fn install_curseforge_modpack(
+    app: AppHandle,
+    id: String,
+    project_id: u64,
+    file_id: u64,
+    files: Vec<CurseForgeResolvedFile>,
+    icon_url: Option<String>,
+) -> Result<ModpackInstallSummary, String> {
+    let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    let instance = layout(&app)?.open(id);
+    let manifest = read_cached_curseforge_manifest(&instance, project_id, file_id)
+        .map_err(|error| error.to_string())?;
+    let runtime_data_directory = data_directory(&app)?;
+    emit_download_progress(&app, format!("Instalando {}", manifest.name), 1.0);
+    let progress_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let java = ensure_managed_java_with_progress(
+            &runtime_data_directory,
+            required_java_major(&manifest.minecraft_version),
+            |mut progress| {
+                progress.total_percent *= 0.08;
+                emit_transfer_progress(&progress_app, progress);
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        install_curseforge_modpack_with_progress(
+            &instance,
+            project_id,
+            file_id,
+            &files,
+            Some(java.executable()),
+            icon_url.as_deref(),
+            |mut progress| {
+                progress.percent = 8.0 + progress.percent * 0.92;
+                emit_modpack_progress(&progress_app, progress);
+            },
+        )
+        .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("a instalação do modpack falhou: {error}"))?
 }
 
 fn is_curseforge_host(host: Option<&str>) -> bool {
@@ -1283,6 +1426,19 @@ pub fn launch_instance(
         skins_installed = true;
         install_embedded_companion(&instance, &minecraft_version, loader)
             .map_err(|error| error.to_string())?;
+        let required_java = required_java_major_for_instance(&instance, &minecraft_version);
+        let selected_java = java.major_version().map_err(|error| error.to_string())?;
+        let baseline_java = required_java_major(&minecraft_version);
+        let compatible = if required_java > baseline_java {
+            selected_java >= required_java
+        } else {
+            selected_java == required_java
+        };
+        if !compatible {
+            return Err(format!(
+                "esta instância precisa do Java {required_java}, mas o Java {selected_java} foi selecionado"
+            ));
+        }
         let server =
             IpcServer::start_with_session(Some(IpcSessionProfile::offline(uuid, nickname.clone())))
                 .map_err(|error| error.to_string())?;
@@ -1728,8 +1884,14 @@ pub fn verify_java(executable: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn discover_java() -> Vec<JavaRuntimeSummary> {
-    discover_java_executables()
+pub fn discover_java(app: AppHandle) -> Vec<JavaRuntimeSummary> {
+    let mut executables = discover_java_executables()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if let Ok(directory) = data_directory(&app) {
+        executables.extend(discover_managed_java_executables(&directory));
+    }
+    executables
         .into_iter()
         .filter_map(|executable| {
             let runtime = JavaRuntime::from_executable(&executable).ok()?;
@@ -1741,6 +1903,52 @@ pub fn discover_java() -> Vec<JavaRuntimeSummary> {
             })
         })
         .collect()
+}
+
+#[tauri::command]
+pub fn required_java_for_instance(
+    app: AppHandle,
+    id: String,
+    minecraft_version: String,
+) -> Result<u32, String> {
+    let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    let instance = layout(&app)?.open(id);
+    Ok(required_java_major_for_instance(
+        &instance,
+        &minecraft_version,
+    ))
+}
+
+#[tauri::command]
+pub async fn available_java_versions() -> Result<JavaReleaseCatalog, String> {
+    tauri::async_runtime::spawn_blocking(available_java_releases)
+        .await
+        .map_err(|error| format!("a consulta de versões Java falhou: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn install_java_major(app: AppHandle, major: u32) -> Result<JavaRuntimeSummary, String> {
+    if !supported_managed_java_major(major) {
+        return Err("escolha uma versão do Java entre 8 e 30".to_owned());
+    }
+    emit_download_progress(&app, format!("Preparando Java {major}"), 5.0);
+    let data_directory = data_directory(&app)?;
+    let progress_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = ensure_managed_java_with_progress(&data_directory, major, |progress| {
+            emit_transfer_progress(&progress_app, progress);
+        })
+        .map_err(|error| error.to_string())?;
+        let summary = JavaRuntimeSummary {
+            executable: runtime.executable().display().to_string(),
+            version: runtime.version().map_err(|error| error.to_string())?,
+        };
+        emit_download_progress(&progress_app, format!("Java {major} pronto"), 100.0);
+        Ok(summary)
+    })
+    .await
+    .map_err(|error| format!("a instalação do Java falhou: {error}"))?
 }
 
 #[tauri::command]
@@ -1867,6 +2075,7 @@ mod tests {
         assert!(is_curseforge_host(Some("beta.curseforge.com")));
         assert!(!is_curseforge_host(Some("curseforge.com.example.org")));
         assert!(validate_content_filename("example.jar", "mod").is_ok());
+        assert!(validate_content_filename("modpack.zip", "modpack").is_ok());
         assert!(validate_content_filename("../example.jar", "mod").is_err());
         assert!(validate_content_filename("example.exe", "mod").is_err());
     }

@@ -1,5 +1,6 @@
 //! Catálogo e instalação segura de modpacks públicos do Modrinth.
 
+use std::collections::{HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
@@ -28,7 +29,7 @@ pub enum ModpackError {
     Network(#[from] reqwest::Error),
     #[error("falha ao baixar arquivo: {0}")]
     Download(#[from] DownloadError),
-    #[error("resposta Modrinth inválida")]
+    #[error("resposta de catálogo ou manifesto inválida")]
     InvalidResponse,
     #[error("o modpack não possui uma versão compatível com Minecraft {0}")]
     NoCompatibleVersion(String),
@@ -100,16 +101,43 @@ pub struct ResolvedContentArtwork {
 
 pub fn search_modrinth_modpacks(
     query: &str,
+    minecraft_version: Option<&str>,
+    loader: Option<&str>,
+    sort: &str,
     offset: u32,
     limit: u32,
 ) -> Result<ModrinthSearchPage, ModpackError> {
     let limit = limit.clamp(1, 50);
     let mut url = Url::parse(&format!("{MODRINTH_API}/search")).expect("URL Modrinth válida");
-    url.query_pairs_mut()
-        .append_pair("query", query.trim())
-        .append_pair("limit", &limit.to_string())
-        .append_pair("offset", &offset.to_string())
-        .append_pair("facets", r#"[["project_type:modpack"]]"#);
+    let mut facets = vec![vec!["project_type:modpack".to_owned()]];
+    if let Some(version) = minecraft_version.filter(|value| !value.trim().is_empty()) {
+        facets.push(vec![format!("versions:{}", version.trim())]);
+    }
+    if let Some(loader) = loader.filter(|value| matches!(*value, "fabric" | "forge")) {
+        facets.push(vec![format!("categories:{loader}")]);
+    } else {
+        facets.push(vec![
+            "categories:fabric".to_owned(),
+            "categories:forge".to_owned(),
+        ]);
+    }
+    let facets = serde_json::to_string(&facets).map_err(|_| ModpackError::InvalidResponse)?;
+    let index = match sort {
+        "relevance" if !query.trim().is_empty() => "relevance",
+        "updated" => "updated",
+        _ => "downloads",
+    };
+    {
+        let mut query_pairs = url.query_pairs_mut();
+        if !query.trim().is_empty() {
+            query_pairs.append_pair("query", query.trim());
+        }
+        query_pairs
+            .append_pair("limit", &limit.to_string())
+            .append_pair("offset", &offset.to_string())
+            .append_pair("index", index)
+            .append_pair("facets", &facets);
+    }
     let document: Value = Client::builder()
         .user_agent("Aurora-Smart-Launcher/0.1")
         .build()
@@ -185,6 +213,11 @@ pub fn search_modrinth_content(
     if content_type == "mod" {
         if let Some(loader) = loader.filter(|value| matches!(*value, "fabric" | "forge")) {
             facets.push(vec![format!("categories:{loader}")]);
+        } else {
+            facets.push(vec![
+                "categories:fabric".to_owned(),
+                "categories:forge".to_owned(),
+            ]);
         }
     }
     let facets = serde_json::to_string(&facets).map_err(|_| ModpackError::InvalidResponse)?;
@@ -439,7 +472,7 @@ pub fn install_modrinth_content_with_progress<F>(
     minecraft_version: &str,
     content_type: &str,
     loader: Option<&str>,
-    progress: F,
+    mut progress: F,
 ) -> Result<String, ModpackError>
 where
     F: FnMut(TransferProgress),
@@ -480,7 +513,106 @@ where
             })
         })
         .ok_or_else(|| ModpackError::NoCompatibleVersion(minecraft_version.to_owned()))?;
-    let file = selected["files"]
+    instance
+        .ensure_layout()
+        .map_err(|error| ModpackError::Io(io::Error::other(error)))?;
+    let mut queue = VecDeque::from([(selected.clone(), true)]);
+    let mut seen_versions = HashSet::new();
+    let mut requests = Vec::new();
+    let mut root_filename = None;
+    while let Some((version, root)) = queue.pop_front() {
+        let version_key = version["id"]
+            .as_str()
+            .or_else(|| version["version_number"].as_str())
+            .unwrap_or_default()
+            .to_owned();
+        if !version_key.is_empty() && !seen_versions.insert(version_key) {
+            continue;
+        }
+        if seen_versions.len() > 128 {
+            return Err(ModpackError::InvalidResponse);
+        }
+        let file = primary_version_file(&version)?;
+        let filename = file["filename"]
+            .as_str()
+            .ok_or(ModpackError::MissingDownload)?;
+        if filename.is_empty() || filename.contains(['/', '\\']) {
+            return Err(ModpackError::UnsafePath(filename.to_owned()));
+        }
+        let expected_extension = if root && content_type != "mod" {
+            ".zip"
+        } else {
+            ".jar"
+        };
+        if !filename.to_ascii_lowercase().ends_with(expected_extension) {
+            return Err(ModpackError::MissingDownload);
+        }
+        let url = file["url"]
+            .as_str()
+            .filter(|url| url.starts_with("https://"))
+            .ok_or(ModpackError::MissingDownload)?;
+        let target_folder = if root { folder } else { "mods" };
+        requests.push(content_download_request(
+            url,
+            &instance.root().join(target_folder).join(filename),
+            filename,
+            file.pointer("/hashes/sha1").and_then(Value::as_str),
+            file.pointer("/hashes/sha512").and_then(Value::as_str),
+            file["size"].as_u64(),
+        )?);
+        if root {
+            root_filename = Some(filename.to_owned());
+        }
+        for dependency in version["dependencies"].as_array().into_iter().flatten() {
+            if dependency["dependency_type"].as_str() != Some("required") {
+                continue;
+            }
+            let dependency_version = if let Some(version_id) = dependency["version_id"].as_str() {
+                get_json(&client, &format!("{MODRINTH_API}/version/{version_id}"))?
+            } else if let Some(project_id) = dependency["project_id"].as_str() {
+                let candidates = get_json(
+                    &client,
+                    &format!("{MODRINTH_API}/project/{project_id}/version"),
+                )?;
+                candidates
+                    .as_array()
+                    .and_then(|items| {
+                        items.iter().find(|candidate| {
+                            candidate["game_versions"]
+                                .as_array()
+                                .is_some_and(|versions| {
+                                    versions
+                                        .iter()
+                                        .any(|value| value.as_str() == Some(minecraft_version))
+                                })
+                                && loader.is_none_or(|expected| {
+                                    candidate["loaders"].as_array().is_some_and(|loaders| {
+                                        loaders.iter().any(|value| value.as_str() == Some(expected))
+                                    })
+                                })
+                        })
+                    })
+                    .cloned()
+                    .ok_or_else(|| {
+                        ModpackError::NoCompatibleVersion(minecraft_version.to_owned())
+                    })?
+            } else {
+                return Err(ModpackError::InvalidResponse);
+            };
+            queue.push_back((dependency_version, false));
+        }
+    }
+    download_many(
+        &client,
+        requests,
+        DEFAULT_DOWNLOAD_CONCURRENCY,
+        &mut progress,
+    )?;
+    root_filename.ok_or(ModpackError::MissingDownload)
+}
+
+fn primary_version_file(version: &Value) -> Result<&Value, ModpackError> {
+    version["files"]
         .as_array()
         .and_then(|files| {
             files
@@ -488,34 +620,7 @@ where
                 .find(|file| file["primary"].as_bool() == Some(true))
                 .or_else(|| files.first())
         })
-        .ok_or(ModpackError::MissingDownload)?;
-    let filename = file["filename"]
-        .as_str()
-        .ok_or(ModpackError::MissingDownload)?;
-    if filename.is_empty() || filename.contains(['/', '\\']) {
-        return Err(ModpackError::UnsafePath(filename.to_owned()));
-    }
-    if content_type == "mod" && !filename.ends_with(".jar") {
-        return Err(ModpackError::MissingDownload);
-    }
-    let url = file["url"]
-        .as_str()
-        .filter(|url| url.starts_with("https://"))
-        .ok_or(ModpackError::MissingDownload)?;
-    instance
-        .ensure_layout()
-        .map_err(|error| ModpackError::Io(io::Error::other(error)))?;
-    let destination = instance.root().join(folder).join(filename);
-    let request = content_download_request(
-        url,
-        &destination,
-        filename,
-        file.pointer("/hashes/sha1").and_then(Value::as_str),
-        file.pointer("/hashes/sha512").and_then(Value::as_str),
-        file["size"].as_u64(),
-    )?;
-    download_one_with_progress(&client, request, progress)?;
-    Ok(filename.to_owned())
+        .ok_or(ModpackError::MissingDownload)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -548,7 +653,7 @@ pub struct ModpackProgress {
 }
 
 impl ModpackProgress {
-    fn stage(label: impl Into<String>, percent: f64) -> Self {
+    pub(crate) fn stage(label: impl Into<String>, percent: f64) -> Self {
         Self {
             label: label.into(),
             percent,
@@ -564,7 +669,7 @@ impl ModpackProgress {
         }
     }
 
-    fn transfer(progress: TransferProgress) -> Self {
+    pub(crate) fn transfer(progress: TransferProgress) -> Self {
         Self {
             label: progress.label,
             percent: progress.total_percent,

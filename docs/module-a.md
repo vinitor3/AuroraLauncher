@@ -5,9 +5,10 @@
 O núcleo recebe uma especificação de versão já resolvida, uma identidade de sessão autorizada e uma instância local. Ele:
 
 1. cria e valida a árvore da instância;
-2. instala o Aurora Core e o Aurora Companion no diretório `mods` para
+2. instala o Aurora Core, o Aurora Skins e o Aurora Companion no diretório `mods` para
    instâncias Fabric/Forge suportadas;
-3. valida um Java isolado escolhido para a instância;
+3. detecta requisitos adicionais declarados por mods Fabric, inclusive em JARs
+   internos, e valida um Java isolado compatível escolhido para a instância;
 4. monta o classpath na ordem informada pelo resolvedor de versões;
 5. constrói, inicia e acompanha o processo Java enquanto o launcher estiver aberto;
 6. mantém metadados locais de apresentação e permite renomear uma instância
@@ -19,6 +20,8 @@ Baixar versões, resolver manifests Mojang/mod loaders, login, Firebase, telemet
 
 - IDs de instância são normalizados e não podem conter separadores de caminho.
 - Caminhos de JAR e Java precisam existir antes do lançamento.
+- Arquivos internos de mods têm limites de tamanho, quantidade e profundidade
+  durante a leitura dos metadados de runtime.
 - Instâncias em execução não podem ser iniciadas novamente, renomeadas ou
   excluídas até o processo terminar.
 - A credencial de sessão é um valor opaco e nunca é registrada pelo núcleo.

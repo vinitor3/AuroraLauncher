@@ -43,14 +43,25 @@ visual dentro do Minecraft para ser considerada encerrada:
   código-fonte antes do instalador;
 - skin local/HTTPS aplicada pelo Aurora Skins nas nove combinações, com
   conversão correta do layout legado 64x32 para 64x64;
+- catálogo de modpacks CurseForge com filtros equivalentes ao Modrinth e
+  instalação completa do `manifest.json`, incluindo arquivos obrigatórios e
+  `overrides`;
+- resolução em lote dos arquivos CurseForge e fila automática para itens sem
+  distribuição direta; dependências obrigatórias de conteúdo avulso também são
+  instaladas pelo editor;
 - foto pública do perfil renderizada a partir da face e da segunda camada da
   única skin equipada online, com biblioteca não equipada mantida apenas localmente;
   somente o documento mínimo `publicProfiles/{uid}` é compartilhado entre contas;
 - cards de instância com capa do modpack, início direto, seleção visual e
   estado de processo em execução;
 - renomeação segura de instância pelo editor;
-- gerenciador de Java com inventário dos runtimes encontrados e instalação
-  verificada das linhas 8, 17 e 21;
+- gerenciador de Java com inventário dos runtimes do sistema e do Aurora,
+  catálogo dinâmico das versões disponíveis no Eclipse Temurin e instalação
+  verificada de JRE ou JDK, inclusive versões intermediárias como Java 16;
+- leitura dos requisitos de Java nos metadados Fabric, inclusive em JARs
+  internos, com seleção/instalação automática do runtime exigido antes do jogo;
+- reparo automático de perfis Fabric cujo loader é antigo demais para o Aurora
+  Companion, preservando os mods e atualizando os metadados da instância;
 - normalização segura de Markdown/HTML legado do Modrinth, convertendo imagens,
   links e vídeos sem mostrar tags cruas nem executar iframes.
 
