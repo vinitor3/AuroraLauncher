@@ -73,4 +73,6 @@
   gerado com SHA-256
   `E535918AD05E26F057BA5415E93BCFB30C778D30B705A6B123F22F739364CEFB`.
 - As correções posteriores de Forge, Fabric Loader e seleção de Java foram
-  validadas no código, sem gerar um novo instalador, conforme solicitado.
+  integradas e compiladas no instalador imutável
+  `Aurora Smart Launcher_0.1.1-alpha.4_x64-setup.exe`, com SHA-256
+  `DC714FB83CF6D3388EFC5B420765A4A18620B219C8F5961412A5E8CF13046B15`.
