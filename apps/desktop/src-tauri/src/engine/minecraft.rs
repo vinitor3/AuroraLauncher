@@ -296,21 +296,44 @@ impl MinecraftInstaller {
     {
         let mut summary =
             self.install_vanilla_in_range(instance, minecraft_version, 0.0, 88.0, &mut progress)?;
+        let requested_loader_version = requested_loader_version
+            .map(str::trim)
+            .filter(|version| !version.is_empty());
+        if requested_loader_version.is_some_and(|version| !valid_loader_version(version)) {
+            return Err(InstallError::Metadata(
+                "versão do Fabric Loader inválida".into(),
+            ));
+        }
         let loader_version = match requested_loader_version {
-            Some(version) if !version.trim().is_empty() => version.to_owned(),
-            _ => {
+            Some(version) if fabric_loader_meets_minimum(minecraft_version, version) => {
+                version.to_owned()
+            }
+            requested => {
+                if let Some(version) = requested {
+                    progress(stage_progress(
+                        format!("Atualizando Fabric Loader incompatível {version}"),
+                        88.5,
+                    ));
+                }
                 let loaders: Value = self.get_json(&format!(
                     "https://meta.fabricmc.net/v2/versions/loader/{minecraft_version}/stable"
                 ))?;
-                loaders
+                let latest = loaders
                     .as_array()
                     .and_then(|entries| entries.first())
                     .and_then(|entry| entry.pointer("/loader/version"))
                     .and_then(Value::as_str)
                     .ok_or_else(|| {
                         InstallError::Metadata("Fabric Loader indisponível para esta versão".into())
-                    })?
-                    .to_owned()
+                    })?;
+                if !valid_loader_version(latest)
+                    || !fabric_loader_meets_minimum(minecraft_version, latest)
+                {
+                    return Err(InstallError::Metadata(
+                        "não há Fabric Loader compatível com o Aurora para esta versão".into(),
+                    ));
+                }
+                latest.to_owned()
             }
         };
         let profile: Value = self.get_json(&format!("https://meta.fabricmc.net/v2/versions/loader/{minecraft_version}/{loader_version}/profile/json"))?;
@@ -495,6 +518,37 @@ fn forge_installer_failure(stderr: &str, stdout: &str) -> String {
     details.chars().take(800).collect()
 }
 
+fn valid_loader_version(version: &str) -> bool {
+    !version.is_empty()
+        && version.len() <= 64
+        && version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+' | b'_'))
+}
+
+fn fabric_loader_meets_minimum(minecraft_version: &str, version: &str) -> bool {
+    let minimum = if minecraft_version.starts_with("1.21") {
+        [0, 16, 10]
+    } else {
+        [0, 14, 0]
+    };
+    loader_version_components(version).is_some_and(|components| components >= minimum)
+}
+
+fn loader_version_components(version: &str) -> Option<[u32; 3]> {
+    let mut components = version.split('.');
+    let mut next = || {
+        components
+            .next()?
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse::<u32>()
+            .ok()
+    };
+    Some([next()?, next()?, next()?])
+}
+
 fn descriptor_request(
     descriptor: &Value,
     destination: &Path,
@@ -663,8 +717,8 @@ mod tests {
     use std::process::Command;
 
     use super::{
-        configure_forge_installer_command, forge_installer_failure, parse_java_major,
-        required_java_major,
+        configure_forge_installer_command, fabric_loader_meets_minimum, forge_installer_failure,
+        parse_java_major, required_java_major, valid_loader_version,
     };
 
     #[test]
@@ -716,5 +770,15 @@ mod tests {
             failure,
             "joptsimple.UnrecognizedOptionException: installPath is not a recognized option"
         );
+    }
+
+    #[test]
+    fn upgrades_fabric_loaders_below_the_companion_minimum() {
+        assert!(!fabric_loader_meets_minimum("1.16.5", "0.13.3"));
+        assert!(fabric_loader_meets_minimum("1.16.5", "0.14.0"));
+        assert!(!fabric_loader_meets_minimum("1.21.1", "0.16.9"));
+        assert!(fabric_loader_meets_minimum("1.21.1", "0.16.10"));
+        assert!(valid_loader_version("0.16.10+build.1"));
+        assert!(!valid_loader_version("../../loader"));
     }
 }

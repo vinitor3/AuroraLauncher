@@ -19,8 +19,17 @@
 - Processos iniciados são acompanhados pelo backend. Cards mostram **Rodando** e
   bloqueiam novo início, renomeação ou exclusão até o encerramento.
 - O editor permite renomear a pasta/ID da instância sem sobrescrever outra.
-- Java & Engine lista os runtimes detectados, permite escolher o ativo e instalar
-  Java 8, 17 ou 21 pelo gerenciador verificado já existente.
+- Java & Engine lista tanto os runtimes do sistema quanto os gerenciados pelo
+  Aurora, permite escolher o ativo e consulta as versões atualmente disponíveis
+  no catálogo oficial do Eclipse Temurin. A instalação aceita JRE ou JDK, usa
+  SHA-256 e inclui versões intermediárias como Java 16.
+- Antes de iniciar uma instância Fabric, o launcher inspeciona também os
+  `fabric.mod.json` de dependências internas dos mods. Assim, requisitos como o
+  Java 16 do CaffeineConfig empacotado pelo Sodium Extra são detectados antes do
+  jogo abrir, e o runtime adequado é instalado/selecionado automaticamente.
+- Perfis Fabric antigos são reparados antes da execução: loaders inferiores ao
+  mínimo aceito pelo Aurora Companion são atualizados e a nova versão fica
+  gravada nos metadados locais da instância.
 - Descrições Modrinth com HTML legado são convertidas para Markdown seguro;
   `iframe` vira link HTTPS e tags executáveis são descartadas.
 - O instalador oficial do Forge recebe a pasta como valor de `--installClient`
@@ -35,12 +44,15 @@
 - O launcher não publica a biblioteca completa de skins.
 - A indicação de execução representa processos iniciados na sessão atual do
   launcher; ela não tenta adivinhar processos Minecraft iniciados por terceiros.
+- A inspeção de requisitos adicionais de Java usa metadados Fabric. Instâncias
+  Forge continuam usando a versão-base de Java definida para cada Minecraft.
 
 ## Evidência
 
-- Build React/Vite e empacotamento Tauri/NSIS concluídos.
+- Build React/Vite concluído para esta correção. O instalador existente não foi
+  substituído e nenhum novo instalador foi gerado, conforme solicitado.
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` e
-  `cargo test` concluídos: 28 testes aprovados e 1 teste online opcional ignorado.
+  `cargo test` concluídos: 34 testes aprovados e 1 teste online opcional ignorado.
 - `wrangler deploy --dry-run` e o lint TypeScript das Functions concluídos.
 - Regras de `publicProfiles` compiladas em dry-run e publicadas somente no
   Firestore do projeto `auroralauncher` em 30 de agosto de 2026.
@@ -49,5 +61,5 @@
 - A página do Cobblemon foi aberta no catálogo e não exibiu tags HTML cruas.
 - Instalador `Aurora Smart Launcher_0.1.1-alpha.2_x64-setup.exe` gerado com
   SHA-256 `64CED79E0E0A335F5EC595ED0B9A22B34AD01BF9D1692E32A99ACCF07D21A160`.
-- A correção posterior do comando Forge foi validada no código, sem gerar um
-  novo instalador, conforme solicitado.
+- As correções posteriores de Forge, Fabric Loader e seleção de Java foram
+  validadas no código, sem gerar um novo instalador, conforme solicitado.

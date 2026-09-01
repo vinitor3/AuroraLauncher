@@ -178,8 +178,6 @@ h2 { margin-bottom: .35rem; font-size: 1.18rem; letter-spacing: -.025em; }
 .catalog-note { margin: .1rem 0 0; font-size: .77rem; }
 .catalog-tabs { display: flex; gap: .4rem; padding-bottom: .15rem; border-bottom: 1px solid #ffffff12; }
 .catalog-tabs .selected { color: #180b25; background: linear-gradient(135deg, #eeb1fb, #ae91ff); }
-.catalog-unavailable { display: grid; min-height: 180px; place-content: center; gap: .4rem; padding: 1rem; border: 1px dashed #ffffff22; border-radius: 10px; color: #b5adc8; text-align: center; }
-.catalog-unavailable strong { color: #eeeaff; }
 
 .editor-panel { position: fixed; z-index: 24; top: 50%; left: 50%; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); width: min(980px, calc(100vw - 2.5rem)); height: min(720px, calc(100vh - 2.5rem)); overflow: hidden; border: 1px solid #cba9ff59; border-radius: 16px; background: #120c20; box-shadow: 0 28px 110px #000000c4, 0 0 45px #a986ff14; transform: translate(-50%, -50%); }
 .editor-panel::before { position: fixed; z-index: -1; inset: -100vmax; content: ""; background: #080511c7; backdrop-filter: blur(4px); }
@@ -337,12 +335,18 @@ h2 { margin-bottom: .35rem; font-size: 1.18rem; letter-spacing: -.025em; }
 .java-manager-heading > div:first-child { max-width: 670px; }
 .java-manager-heading .muted { margin: 0; font-size: .82rem; }
 .java-manager-actions { display: flex; flex: 0 0 auto; gap: .45rem; }
-.java-install-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem; padding: .8rem; border: 1px solid #cba9ff2e; border-radius: 11px; background: #09071480; }
-.java-install-option { display: grid; justify-items: start; gap: .28rem; padding: .75rem; border-color: #ffffff14; color: #e9e2f5; background: #ffffff08; text-align: left; }
-.java-install-option:hover:not(:disabled) { border-color: #c7a7ff66; background: #ffffff0f; }
-.java-install-option span { font-weight: 800; }
-.java-install-option small { min-height: 2rem; color: #9d93ac; font-size: .68rem; line-height: 1.4; }
-.java-install-option strong { color: #d8baff; font-size: .72rem; }
+.java-install-picker { display: grid; gap: .7rem; padding: .8rem; border: 1px solid #cba9ff2e; border-radius: 11px; background: #09071480; }
+.java-install-copy { display: grid; gap: .18rem; }
+.java-install-copy strong { color: #efe8fa; font-size: .84rem; }
+.java-install-copy small { color: #94899f; font-size: .7rem; }
+.java-recommended-options { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .45rem; }
+.java-version-choice { display: grid; justify-items: start; gap: .2rem; min-width: 0; padding: .58rem .65rem; border-color: #ffffff14; color: #e9e2f5; background: #ffffff08; text-align: left; }
+.java-version-choice.selected { border-color: #c8a7ff73; background: #ae8cff17; box-shadow: inset 0 0 0 1px #c8a7ff14; }
+.java-version-choice strong { font-size: .76rem; }
+.java-version-choice small { overflow: hidden; width: 100%; color: #968ba3; font-size: .61rem; text-overflow: ellipsis; white-space: nowrap; }
+.java-install-controls { display: grid; grid-template-columns: minmax(180px, 1fr) auto; align-items: end; gap: .55rem; }
+.java-install-controls label { display: grid; gap: .3rem; color: #b6a9c6; font-size: .68rem; }
+.java-install-controls select { min-width: 0; }
 .java-runtime-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: .55rem; }
 .java-runtime { display: grid; grid-template-columns: 2.65rem minmax(0, 1fr) auto; align-items: center; gap: .7rem; min-width: 0; padding: .7rem; border-color: #ffffff13; color: #eee8f7; background: #0d0918; text-align: left; }
 .java-runtime:hover:not(:disabled) { border-color: #ffffff2a; background: #ffffff09; }
@@ -460,6 +464,7 @@ code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .catalog-browser { grid-template-columns: 1fr; }
   .pack-compact-list { max-height: 310px; border-right: 0; border-bottom: 1px solid #ffffff14; }
   .java-manager-heading { display: grid; }
+  .java-recommended-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 640px) {
@@ -496,6 +501,8 @@ code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wardrobe-nav > strong, .wardrobe-nav small { grid-column: 1 / -1; }
   .catalog-search-bar, .pack-detail-actions { grid-template-columns: 1fr; }
   .java-manager-actions, .java-install-picker { display: grid; grid-template-columns: 1fr; }
+  .java-recommended-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .java-install-controls { grid-template-columns: 1fr; }
   .catalog-search-bar label { justify-content: space-between; }
   .create-modal { max-height: calc(100vh - 1rem); }
   .instance-actions, .catalog-actions { width: 100%; justify-content: flex-start; }

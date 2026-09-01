@@ -36,6 +36,7 @@ type Instance = {
   projectId?: string;
 };
 type JavaRuntime = { executable: string; version: string };
+type JavaReleaseCatalog = { available: number[]; lts: number[] };
 type RunningInstance = { instanceId: string; processId: number };
 type AppearanceImage = { url: string; dataBase64: string };
 type InstallSummary = { minecraftVersion: string; versionId: string; clientJar: string; libraryCount: number; assetCount: number };
@@ -53,6 +54,12 @@ type ModrinthPack = {
   dateModified: string;
 };
 type ModrinthSearchPage = { items: ModrinthPack[]; totalHits: number; offset: number; limit: number };
+type CatalogPack = ModrinthPack & {
+  source: CatalogSource;
+  curseForgeId?: number;
+  websiteUrl?: string;
+  gallery?: string[];
+};
 type ModpackInstallSummary = {
   name: string;
   versionName: string;
@@ -89,6 +96,7 @@ type CatalogContent = ModrinthContent & {
 };
 type CurseForgeProject = {
   id: number;
+  classId?: number;
   name: string;
   slug: string;
   summary?: string;
@@ -103,12 +111,34 @@ type CurseForgeProject = {
 };
 type CurseForgeFile = {
   id: number;
+  modId?: number;
   fileName: string;
   displayName?: string;
   downloadUrl?: string;
+  fileLength?: number;
+  isServerPack?: boolean;
+  gameVersions?: string[];
   hashes?: Array<{ algo: number; value: string }>;
+  dependencies?: Array<{ modId: number; relationType: number }>;
+  project?: CurseForgeProject;
 };
 type CurseForgeSearchResponse = { data?: CurseForgeProject[]; pagination?: { totalCount?: number } };
+type CurseForgeManifestSummary = {
+  name: string;
+  versionName: string;
+  minecraftVersion: string;
+  loader: LoaderChoice;
+  loaderVersion: string;
+  files: Array<{ projectId: number; fileId: number; required: boolean }>;
+};
+type CurseForgeResolvedFile = {
+  projectId: number;
+  fileId: number;
+  fileName: string;
+  downloadUrl?: string;
+  sha1: string;
+  fileSize?: number;
+};
 type ProjectDetail = {
   source: CatalogSource;
   kind: "content" | "modpack";
@@ -121,7 +151,7 @@ type ProjectDetail = {
   gallery: string[];
   websiteUrl?: string;
   content?: CatalogContent;
-  pack?: ModrinthPack;
+  pack?: CatalogPack;
 };
 type ContentArtworkEntry = { iconUrl?: string; projectId: string; title: string };
 type ResolvedContentArtwork = ContentArtworkEntry & { filename: string };
@@ -146,6 +176,7 @@ type DownloadProgress = {
 type ManualDownloadResult = {
   instanceId: string;
   filename: string;
+  contentType: ContentType | "modpack";
   status: "downloading" | "completed" | "failed";
   error?: string;
 };
@@ -210,10 +241,10 @@ function contentArtworkKey(contentType: ContentType, filename: string) {
   return `${contentType}:${filename}`;
 }
 
-function curseForgeDownloadPage(item: CatalogContent, fileId: number, contentType: ContentType) {
-  if (item.websiteUrl) {
+function curseForgeDownloadPage(slug: string, fileId: number, contentType: ContentType | "modpack", websiteUrl?: string) {
+  if (websiteUrl) {
     try {
-      const url = new URL(item.websiteUrl);
+      const url = new URL(websiteUrl);
       if (url.protocol === "https:" && (url.hostname === "curseforge.com" || url.hostname.endsWith(".curseforge.com"))) {
         url.search = "";
         url.hash = "";
@@ -224,8 +255,8 @@ function curseForgeDownloadPage(item: CatalogContent, fileId: number, contentTyp
       // Usa abaixo a rota oficial construída a partir do slug conhecido.
     }
   }
-  const category = contentType === "mod" ? "mc-mods" : contentType === "shader" ? "shaders" : "texture-packs";
-  return `https://www.curseforge.com/minecraft/${category}/${encodeURIComponent(item.slug)}/download/${fileId}`;
+  const category = contentType === "modpack" ? "modpacks" : contentType === "mod" ? "mc-mods" : contentType === "shader" ? "shaders" : "texture-packs";
+  return `https://www.curseforge.com/minecraft/${category}/${encodeURIComponent(slug)}/download/${fileId}`;
 }
 
 function ContentArtwork({ compact = false, iconUrl, title, type }: { compact?: boolean; iconUrl?: string; title: string; type: ContentType }) {
@@ -375,6 +406,29 @@ function requiredJavaMajor(minecraftVersion: string) {
   return 17;
 }
 
+function fabricLoaderNeedsUpgrade(versionId: string, minecraftVersion: string) {
+  if (!versionId.startsWith("fabric-loader-")) return false;
+  const match = versionId.match(/^fabric-loader-(\d+)\.(\d+)\.(\d+)(?:[-+]|$)/);
+  if (!match) return true;
+  const current = match.slice(1, 4).map(Number);
+  const minimum = minecraftVersion.startsWith("1.21") ? [0, 16, 10] : [0, 14, 0];
+  return current.some((component, index) => component !== minimum[index]
+    ? component < minimum[index] && current.slice(0, index).every((value, prior) => value === minimum[prior])
+    : false);
+}
+
+const FALLBACK_JAVA_MAJORS = [8, 11, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26];
+const RECOMMENDED_JAVA_MAJORS = [8, 16, 17, 21, 25];
+
+function javaVersionDescription(major: number) {
+  if (major === 8) return "Minecraft e Forge legados";
+  if (major === 16) return "Mods Fabric 1.16.5 antigos";
+  if (major === 17) return "Minecraft 1.18–1.20.4";
+  if (major === 21) return "Minecraft 1.20.5 ou mais recente";
+  if (major === 25) return "Java LTS atual e ferramentas";
+  return "Runtime alternativo para mods específicos";
+}
+
 function javaMajor(version: string) {
   const match = version.match(/version\s+"?(\d+)(?:\.(\d+))?/i);
   if (!match) return 0;
@@ -395,8 +449,35 @@ function safeInstanceId(value: string) {
   return base || "modpack";
 }
 
-function preferredPackVersion(pack: ModrinthPack, fallback: string) {
+function preferredPackVersion(pack: CatalogPack | ModrinthPack, fallback: string) {
   return pack.versions.includes(fallback) ? fallback : pack.versions[0] ?? fallback;
+}
+
+function curseForgeProjectToPack(project: CurseForgeProject): CatalogPack {
+  return {
+    source: "curseforge",
+    curseForgeId: project.id,
+    projectId: String(project.id),
+    slug: project.slug,
+    title: project.name,
+    description: project.summary ?? "",
+    versions: [...new Set((project.latestFilesIndexes ?? []).map((entry) => entry.gameVersion).filter((value): value is string => Boolean(value)))],
+    loaders: [...new Set((project.latestFilesIndexes ?? []).map((entry) => entry.modLoader === 1 ? "forge" : entry.modLoader === 4 ? "fabric" : "").filter(Boolean))],
+    iconUrl: project.logo?.thumbnailUrl ?? project.logo?.url,
+    downloads: project.downloadCount ?? 0,
+    follows: 0,
+    author: project.authors?.[0]?.name ?? "",
+    dateModified: project.dateModified ?? "",
+    websiteUrl: project.links?.websiteUrl,
+    gallery: (project.screenshots ?? []).map((image) => image.url ?? image.thumbnailUrl ?? "").filter(Boolean),
+  };
+}
+
+function curseForgeProjectContentType(project: CurseForgeProject | undefined, fallback: ContentType): ContentType {
+  if (project?.classId === 6) return "mod";
+  if (project?.classId === 6552) return "shader";
+  if (project?.classId === 12) return "resourcepack";
+  return fallback;
 }
 
 async function playAuroraSpeech(
@@ -778,11 +859,14 @@ function LauncherApp() {
   const [installedVersionId, setInstalledVersionId] = useState("");
   const [installedMinecraftVersion, setInstalledMinecraftVersion] = useState("");
   const [modpackQuery, setModpackQuery] = useState("");
-  const [modrinthPacks, setModrinthPacks] = useState<ModrinthPack[]>([]);
+  const [modrinthPacks, setModrinthPacks] = useState<CatalogPack[]>([]);
   const [modrinthTotalHits, setModrinthTotalHits] = useState(0);
   const [modrinthPage, setModrinthPage] = useState(0);
   const [modrinthPageSize, setModrinthPageSize] = useState(10);
-  const [selectedModrinthPack, setSelectedModrinthPack] = useState<ModrinthPack>();
+  const [selectedModrinthPack, setSelectedModrinthPack] = useState<CatalogPack>();
+  const [modpackVersionFilter, setModpackVersionFilter] = useState(minecraftVersion);
+  const [modpackLoaderFilter, setModpackLoaderFilter] = useState<"" | LoaderChoice>("");
+  const [modpackSort, setModpackSort] = useState<ContentSort>("popular");
   const [packVersions, setPackVersions] = useState<Record<string, string>>({});
   const [editingInstance, setEditingInstance] = useState("");
   const [contentType, setContentType] = useState<ContentType>("mod");
@@ -803,6 +887,9 @@ function LauncherApp() {
   const [javaRuntimes, setJavaRuntimes] = useState<JavaRuntime[]>([]);
   const [javaInstallOpen, setJavaInstallOpen] = useState(false);
   const [installingJavaMajor, setInstallingJavaMajor] = useState<number>();
+  const [javaInstallMajor, setJavaInstallMajor] = useState(16);
+  const [availableJavaMajors, setAvailableJavaMajors] = useState(FALLBACK_JAVA_MAJORS);
+  const [javaLtsMajors, setJavaLtsMajors] = useState([8, 11, 17, 21, 25]);
   const [notice, setNotice] = useState("Preparando o núcleo Aurora…");
   const [noticeHovered, setNoticeHovered] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>();
@@ -830,6 +917,11 @@ function LauncherApp() {
   const avatarMigrationRef = useRef("");
   const localAvatarMigrationRef = useRef("");
   const activeInstanceRef = useRef({ editingInstance, targetInstance });
+  const manualDownloadWaiters = useRef(new Map<string, {
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timeout: number;
+  }>());
   useEffect(() => {
     activeInstanceRef.current = { editingInstance, targetInstance };
   }, [editingInstance, targetInstance]);
@@ -898,6 +990,16 @@ function LauncherApp() {
         }
       })
       .catch(() => undefined);
+    invoke<JavaReleaseCatalog>("available_java_versions")
+      .then((catalog) => {
+        if (catalog.available.length === 0) return;
+        setAvailableJavaMajors(catalog.available);
+        setJavaLtsMajors(catalog.lts);
+        setJavaInstallMajor((current) => catalog.available.includes(current)
+          ? current
+          : catalog.available.includes(16) ? 16 : catalog.available[0]);
+      })
+      .catch(() => undefined);
   }, []);
   useEffect(() => {
     let disposed = false;
@@ -920,18 +1022,30 @@ function LauncherApp() {
     void listen<ManualDownloadResult>("aurora-manual-download", (event) => {
       if (disposed) return;
       const result = event.payload;
+      const waiterKey = `${result.instanceId}\u0000${result.filename}`;
+      const waiter = manualDownloadWaiters.current.get(waiterKey);
       if (result.status === "downloading") {
         setNotice(`Recebendo “${result.filename}” dentro do Aurora…`);
         return;
       }
       setDownloadProgress(undefined);
       if (result.status === "failed") {
+        if (waiter) {
+          window.clearTimeout(waiter.timeout);
+          manualDownloadWaiters.current.delete(waiterKey);
+          waiter.reject(new Error(result.error ?? "arquivo não validado"));
+        }
         setNotice(`O download interno de “${result.filename}” falhou: ${result.error ?? "arquivo não validado"}`);
         return;
       }
+      if (waiter) {
+        window.clearTimeout(waiter.timeout);
+        manualDownloadWaiters.current.delete(waiterKey);
+        waiter.resolve();
+      }
       setNotice(`“${result.filename}” foi validado e instalado automaticamente.`);
       void refresh();
-      if (activeInstanceRef.current.editingInstance === result.instanceId) {
+      if (result.contentType !== "modpack" && activeInstanceRef.current.editingInstance === result.instanceId) {
         void invoke<InstanceContent>("list_instance_content", { id: result.instanceId })
           .then((content) => {
             if (activeInstanceRef.current.editingInstance === result.instanceId) {
@@ -945,7 +1059,15 @@ function LauncherApp() {
       if (disposed) unlisten();
       else stopListening = unlisten;
     });
-    return () => { disposed = true; stopListening?.(); };
+    return () => {
+      disposed = true;
+      stopListening?.();
+      for (const waiter of manualDownloadWaiters.current.values()) {
+        window.clearTimeout(waiter.timeout);
+        waiter.reject(new Error("o download foi interrompido"));
+      }
+      manualDownloadWaiters.current.clear();
+    };
   }, []);
   useEffect(() => {
     if (!notice || noticeHovered || busy) return;
@@ -1154,6 +1276,51 @@ function LauncherApp() {
     }, 1_000);
     return () => window.clearInterval(timer);
   }, [services]);
+  async function downloadFromOfficialCurseForgePage(options: {
+    id: string;
+    pageUrl: string;
+    filename: string;
+    contentType: ContentType | "modpack";
+    sha1: string;
+    projectId?: number;
+    fileId?: number;
+  }) {
+    const key = `${options.id}\u0000${options.filename}`;
+    if (manualDownloadWaiters.current.has(key)) {
+      throw new Error(`“${options.filename}” já está na fila de downloads.`);
+    }
+    let resolveDownload!: () => void;
+    let rejectDownload!: (error: Error) => void;
+    const completion = new Promise<void>((resolve, reject) => {
+      resolveDownload = resolve;
+      rejectDownload = reject;
+    });
+    const timeout = window.setTimeout(() => {
+      manualDownloadWaiters.current.delete(key);
+      rejectDownload(new Error("o CurseForge não iniciou o download dentro de 10 minutos"));
+    }, 10 * 60 * 1000);
+    manualDownloadWaiters.current.set(key, { resolve: resolveDownload, reject: rejectDownload, timeout });
+    try {
+      await invoke("open_manual_content_download", {
+        id: options.id,
+        pageUrl: options.pageUrl,
+        filename: options.filename,
+        contentType: options.contentType,
+        sha1: options.sha1,
+        projectId: options.projectId ?? null,
+        fileId: options.fileId ?? null,
+      });
+      await completion;
+    } catch (error) {
+      const waiter = manualDownloadWaiters.current.get(key);
+      if (waiter) {
+        window.clearTimeout(waiter.timeout);
+        manualDownloadWaiters.current.delete(key);
+      }
+      throw error;
+    }
+  }
+
   async function createInstance(event: FormEvent) {
     event.preventDefault();
     if (!instanceName.trim()) return;
@@ -1213,31 +1380,184 @@ function LauncherApp() {
     event.preventDefault();
     await loadModrinthPage(0);
   }
-  async function loadModrinthPage(page: number, requestedPageSize = modrinthPageSize) {
+  async function loadModrinthPage(
+    page: number,
+    requestedPageSize = modrinthPageSize,
+    requestedSource: CatalogSource = catalogSource,
+  ) {
     setBusy(true);
     try {
-      const result = await invoke<ModrinthSearchPage>("search_modrinth_modpacks", {
-        query: modpackQuery.trim(),
-        offset: page * requestedPageSize,
-        limit: requestedPageSize,
-      });
-      setModrinthPacks(result.items);
-      setModrinthTotalHits(result.totalHits);
+      let items: CatalogPack[];
+      let totalHits: number;
+      if (requestedSource === "modrinth") {
+        const result = await invoke<ModrinthSearchPage>("search_modrinth_modpacks", {
+          query: modpackQuery.trim(),
+          minecraftVersion: modpackVersionFilter || null,
+          loader: modpackLoaderFilter || null,
+          sort: modpackSort,
+          offset: page * requestedPageSize,
+          limit: requestedPageSize,
+        });
+        items = result.items.map((pack) => ({ ...pack, source: "modrinth" as const }));
+        totalHits = result.totalHits;
+      } else {
+        if (!services) throw new Error("Entre na conta Aurora para consultar o CurseForge.");
+        const result = await requestCurseForgeCatalog<CurseForgeSearchResponse>(services, {
+          action: "search",
+          contentType: "modpack",
+          query: modpackQuery.trim() || undefined,
+          gameVersion: modpackVersionFilter || undefined,
+          loader: modpackLoaderFilter || undefined,
+          sort: modpackSort,
+          pageSize: requestedPageSize,
+          index: page * requestedPageSize,
+        });
+        items = (result.data ?? [])
+          .map(curseForgeProjectToPack)
+          .filter((pack) => pack.loaders.length === 0 || pack.loaders.some((loader) => loader === "fabric" || loader === "forge"));
+        totalHits = result.pagination?.totalCount ?? items.length;
+      }
+      setModrinthPacks(items);
+      setModrinthTotalHits(totalHits);
       setModrinthPage(page);
-      setSelectedModrinthPack(result.items[0]);
+      setSelectedModrinthPack(items[0]);
       setPackVersions((current) => {
         const next = { ...current };
-        for (const pack of result.items) {
+        for (const pack of items) {
           if (!next[pack.projectId]) next[pack.projectId] = preferredPackVersion(pack, minecraftVersion);
         }
         return next;
       });
-      setNotice(`${result.totalHits.toLocaleString("pt-BR")} modpack(s) encontrado(s) no Modrinth.`);
+      setNotice(`${totalHits.toLocaleString("pt-BR")} modpack(s) encontrado(s) no ${requestedSource === "modrinth" ? "Modrinth" : "CurseForge"}.`);
     } catch (error) {
-      setNotice(`Não foi possível consultar Modrinth: ${String(error)}`);
+      setModrinthPacks([]);
+      setSelectedModrinthPack(undefined);
+      setNotice(`Não foi possível consultar ${requestedSource === "modrinth" ? "Modrinth" : "CurseForge"}: ${String(error)}`);
     } finally { setBusy(false); }
   }
-  async function installModrinth(pack: ModrinthPack) {
+
+  async function installCurseForgePack(pack: CatalogPack, id: string) {
+    if (!services || !pack.curseForgeId) throw new Error("O modpack CurseForge é inválido.");
+    const selectedVersion = packVersions[pack.projectId] ?? preferredPackVersion(pack, minecraftVersion);
+    const selectedLoader = modpackLoaderFilter || (pack.loaders.length === 1 && (pack.loaders[0] === "fabric" || pack.loaders[0] === "forge") ? pack.loaders[0] : undefined);
+    const filesResponse = await requestCurseForgeCatalog<{ data?: CurseForgeFile[] }>(services, {
+      action: "files",
+      modId: pack.curseForgeId,
+      gameVersion: selectedVersion,
+      loader: selectedLoader,
+    });
+    const packFile = (filesResponse.data ?? []).find((file) => !file.isServerPack && file.fileName.toLowerCase().endsWith(".zip"));
+    if (!packFile) throw new Error(`Não há arquivo do modpack compatível com Minecraft ${selectedVersion}.`);
+    const archiveSha1 = packFile.hashes?.find((hash) => hash.algo === 1)?.value;
+    if (!archiveSha1) throw new Error("O arquivo do modpack não possui SHA-1 para validação.");
+    let archiveUrl = packFile.downloadUrl;
+    if (!archiveUrl) {
+      const resolved = await requestCurseForgeCatalog<{ data?: string }>(services, {
+        action: "download",
+        modId: pack.curseForgeId,
+        fileId: packFile.id,
+      }).catch(() => undefined);
+      archiveUrl = resolved?.data;
+    }
+    if (!archiveUrl) {
+      setNotice(`O autor exige a página oficial. O Aurora baixará “${packFile.fileName}” e continuará automaticamente.`);
+      await downloadFromOfficialCurseForgePage({
+        id,
+        pageUrl: curseForgeDownloadPage(pack.slug, packFile.id, "modpack", pack.websiteUrl),
+        filename: packFile.fileName,
+        contentType: "modpack",
+        sha1: archiveSha1,
+        projectId: pack.curseForgeId,
+        fileId: packFile.id,
+      });
+    }
+    const manifest = await invoke<CurseForgeManifestSummary>("prepare_curseforge_modpack", {
+      id,
+      projectId: pack.curseForgeId,
+      fileId: packFile.id,
+      downloadUrl: archiveUrl ?? null,
+      filename: packFile.fileName,
+      sha1: archiveSha1,
+    });
+    const required = manifest.files.filter((file) => file.required);
+    const resolvedFiles: CurseForgeResolvedFile[] = [];
+    const resolvedCatalogFiles: CurseForgeFile[] = [];
+    if (required.length > 0) {
+      setNotice(`Resolvendo ${required.length} arquivo(s) obrigatório(s) de “${manifest.name}”…`);
+      const files: CurseForgeFile[] = [];
+      for (let index = 0; index < required.length; index += 400) {
+        const response = await requestCurseForgeCatalog<{ data?: CurseForgeFile[] }>(services, {
+          action: "resolveFiles",
+          files: required.slice(index, index + 400).map((file) => ({ projectId: file.projectId, fileId: file.fileId })),
+        });
+        files.push(...(response.data ?? []));
+      }
+      if (files.length !== required.length) throw new Error("O CurseForge não retornou todos os arquivos obrigatórios do modpack.");
+      resolvedCatalogFiles.push(...files);
+      for (const file of files) {
+        const projectId = file.modId ?? file.project?.id;
+        const project = file.project;
+        const sha1 = file.hashes?.find((hash) => hash.algo === 1)?.value;
+        if (!projectId || !sha1 || !file.fileName.toLowerCase().endsWith(".jar")) {
+          throw new Error(`O arquivo “${file.fileName || file.id}” não pode ser validado com segurança.`);
+        }
+        if (!file.downloadUrl) {
+          if (!project?.slug) throw new Error(`O projeto ${projectId} não possui página oficial válida.`);
+          setNotice(`Baixando pela página oficial: ${project.name || file.fileName}…`);
+          await downloadFromOfficialCurseForgePage({
+            id,
+            pageUrl: curseForgeDownloadPage(project.slug, file.id, "mod", project.links?.websiteUrl),
+            filename: file.fileName,
+            contentType: "mod",
+            sha1,
+          });
+        }
+        resolvedFiles.push({
+          projectId,
+          fileId: file.id,
+          fileName: file.fileName,
+          downloadUrl: file.downloadUrl,
+          sha1,
+          fileSize: file.fileLength,
+        });
+      }
+    }
+    const result = await invoke<ModpackInstallSummary>("install_curseforge_modpack", {
+      id,
+      projectId: pack.curseForgeId,
+      fileId: packFile.id,
+      files: resolvedFiles,
+      iconUrl: safeHttpsUrl(pack.iconUrl) || null,
+    });
+    for (const file of resolvedCatalogFiles) {
+      const project = file.project;
+      if (!project) continue;
+      rememberContentArtworkData(id, file.fileName, "mod", {
+        iconUrl: project.logo?.thumbnailUrl ?? project.logo?.url,
+        projectId: String(project.id),
+        title: project.name,
+      });
+    }
+    return result;
+  }
+
+  async function installPackIntoInstance(pack: CatalogPack, id: string) {
+    const result = pack.source === "modrinth"
+      ? await invoke<ModpackInstallSummary>("install_modrinth_modpack", {
+        id,
+        projectId: pack.projectId,
+        minecraftVersion: packVersions[pack.projectId] ?? preferredPackVersion(pack, minecraftVersion),
+      })
+      : await installCurseForgePack(pack, id);
+    await invoke<Instance>("set_instance_presentation", {
+      id,
+      displayName: pack.title,
+      iconUrl: safeHttpsUrl(pack.iconUrl) || null,
+    }).catch(() => undefined);
+    return result;
+  }
+
+  async function installModrinth(pack: CatalogPack) {
     if (!targetInstance) {
       setNotice("Escolha uma instância antes de instalar o modpack.");
       return;
@@ -1245,16 +1565,7 @@ function LauncherApp() {
     setBusy(true);
     setNotice(`Preparando “${pack.title}”. O Aurora vai baixar e verificar todos os arquivos do modpack…`);
     try {
-      const result = await invoke<ModpackInstallSummary>("install_modrinth_modpack", {
-        id: targetInstance,
-        projectId: pack.projectId,
-        minecraftVersion: packVersions[pack.projectId] ?? preferredPackVersion(pack, minecraftVersion),
-      });
-      await invoke<Instance>("set_instance_presentation", {
-        id: targetInstance,
-        displayName: pack.title,
-        iconUrl: safeHttpsUrl(pack.iconUrl) || null,
-      }).catch(() => undefined);
+      const result = await installPackIntoInstance(pack, targetInstance);
       setInstalledVersionId(result.minecraft.versionId);
       setInstalledMinecraftVersion(result.minecraftVersion);
       setNotice(
@@ -1268,7 +1579,7 @@ function LauncherApp() {
       setBusy(false);
     }
   }
-  async function createAndInstallModrinth(pack: ModrinthPack) {
+  async function createAndInstallModrinth(pack: CatalogPack) {
     const selectedMinecraftVersion = packVersions[pack.projectId] ?? preferredPackVersion(pack, minecraftVersion);
     const preferred = safeInstanceId(`${pack.slug || pack.title}-${selectedMinecraftVersion}`);
     let id = preferred;
@@ -1280,16 +1591,7 @@ function LauncherApp() {
     setNotice(`Criando a instância de “${pack.title}” e baixando os arquivos verificados…`);
     try {
       const instance = await invoke<Instance>("create_instance", { id });
-      const result = await invoke<ModpackInstallSummary>("install_modrinth_modpack", {
-        id: instance.id,
-        projectId: pack.projectId,
-        minecraftVersion: selectedMinecraftVersion,
-      });
-      await invoke<Instance>("set_instance_presentation", {
-        id: instance.id,
-        displayName: pack.title,
-        iconUrl: safeHttpsUrl(pack.iconUrl) || null,
-      }).catch(() => undefined);
+      const result = await installPackIntoInstance(pack, instance.id);
       setTargetInstance(instance.id);
       setInstalledVersionId(result.minecraft.versionId);
       setInstalledMinecraftVersion(result.minecraftVersion);
@@ -1583,27 +1885,63 @@ function LauncherApp() {
       setDetailLoading(false);
     }
   }
-  async function openModpackDetail(pack: ModrinthPack) {
+  async function openModpackDetail(pack: CatalogPack) {
     setDetailLoading(true);
-    setProjectDetail({ source: "modrinth", kind: "modpack", title: pack.title, author: pack.author, iconUrl: pack.iconUrl, summary: pack.description, body: normalizeProjectMarkdown(pack.description), bodyFormat: "markdown", gallery: [], websiteUrl: `https://modrinth.com/modpack/${pack.slug || pack.projectId}`, pack });
+    setProjectDetail({
+      source: pack.source,
+      kind: "modpack",
+      title: pack.title,
+      author: pack.author,
+      iconUrl: pack.iconUrl,
+      summary: pack.description,
+      body: pack.source === "modrinth" ? normalizeProjectMarkdown(pack.description) : pack.description,
+      bodyFormat: pack.source === "modrinth" ? "markdown" : "html",
+      gallery: pack.gallery ?? [],
+      websiteUrl: pack.websiteUrl ?? `https://modrinth.com/modpack/${pack.slug || pack.projectId}`,
+      pack,
+    });
     try {
-      const response = await fetch(`https://api.modrinth.com/v2/project/${encodeURIComponent(pack.projectId)}`);
-      if (!response.ok) throw new Error("A página do modpack não está disponível.");
-      const project = await response.json() as { body?: string; icon_url?: string; gallery?: Array<{ url?: string; featured?: boolean }> };
-      setProjectDetail((current) => current?.pack?.projectId === pack.projectId ? { ...current, body: normalizeProjectMarkdown(project.body ?? pack.description), iconUrl: project.icon_url ?? pack.iconUrl, gallery: (project.gallery ?? []).sort((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))).map((image) => image.url ?? "").filter(Boolean) } : current);
+      if (pack.source === "modrinth") {
+        const response = await fetch(`https://api.modrinth.com/v2/project/${encodeURIComponent(pack.projectId)}`);
+        if (!response.ok) throw new Error("A página do modpack não está disponível.");
+        const project = await response.json() as { body?: string; icon_url?: string; gallery?: Array<{ url?: string; featured?: boolean }> };
+        setProjectDetail((current) => current?.pack?.projectId === pack.projectId ? { ...current, body: normalizeProjectMarkdown(project.body ?? pack.description), iconUrl: project.icon_url ?? pack.iconUrl, gallery: (project.gallery ?? []).sort((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))).map((image) => image.url ?? "").filter(Boolean) } : current);
+      } else if (services && pack.curseForgeId) {
+        const description = await requestCurseForgeCatalog<{ data?: string }>(services, { action: "description", modId: pack.curseForgeId });
+        setProjectDetail((current) => current?.pack?.projectId === pack.projectId ? { ...current, body: description.data ?? pack.description } : current);
+      }
     } catch (error) {
       setNotice(`A descrição completa não pôde ser carregada: ${String(error)}`);
     } finally {
       setDetailLoading(false);
     }
   }
+  function rememberContentArtworkData(
+    id: string,
+    filename: string,
+    type: ContentType,
+    artwork: ContentArtworkEntry,
+  ) {
+    setContentArtwork((current) => {
+      let stored = current;
+      if (activeInstanceRef.current.editingInstance !== id) {
+        try {
+          stored = JSON.parse(window.localStorage.getItem(`aurora.contentArtwork.${id}`) ?? "{}") as Record<string, ContentArtworkEntry>;
+        } catch {
+          stored = {};
+        }
+      }
+      const nextArtwork = { ...stored, [contentArtworkKey(type, filename)]: artwork };
+      window.localStorage.setItem(`aurora.contentArtwork.${id}`, JSON.stringify(nextArtwork));
+      return activeInstanceRef.current.editingInstance === id ? nextArtwork : current;
+    });
+  }
   function rememberContentArtwork(id: string, filename: string, item: CatalogContent) {
-    const nextArtwork = {
-      ...contentArtwork,
-      [contentArtworkKey(contentType, filename)]: { iconUrl: item.iconUrl, projectId: item.projectId, title: item.title },
-    };
-    setContentArtwork(nextArtwork);
-    window.localStorage.setItem(`aurora.contentArtwork.${id}`, JSON.stringify(nextArtwork));
+    rememberContentArtworkData(id, filename, contentType, {
+      iconUrl: item.iconUrl,
+      projectId: item.projectId,
+      title: item.title,
+    });
   }
   async function installContent(item: CatalogContent) {
     const id = editingInstance || targetInstance;
@@ -1634,35 +1972,92 @@ function LauncherApp() {
           gameVersion,
           loader: contentType === "mod" ? loader : undefined,
         });
-        const file = files.data?.[0];
+        const expectedRootExtension = contentType === "mod" ? ".jar" : ".zip";
+        const file = (files.data ?? []).find((entry) => entry.fileName.toLowerCase().endsWith(expectedRootExtension));
         if (!file) throw new Error(`Não há arquivo compatível com Minecraft ${gameVersion}${loader ? ` e ${loader}` : ""}.`);
-        let downloadUrl = file.downloadUrl;
-        if (!downloadUrl) {
-          const resolved = await requestCurseForgeCatalog<{ data?: string }>(services, { action: "download", modId: item.curseForgeId, fileId: file.id });
-          downloadUrl = resolved.data;
+        type InstallCandidate = { file: CurseForgeFile; project: CurseForgeProject; type: ContentType; root: boolean };
+        const queue: InstallCandidate[] = [{
+          file,
+          type: contentType,
+          root: true,
+          project: {
+            id: item.curseForgeId,
+            name: item.title,
+            slug: item.slug,
+            classId: contentType === "mod" ? 6 : contentType === "shader" ? 6552 : 12,
+            links: { websiteUrl: item.websiteUrl },
+            logo: { thumbnailUrl: item.iconUrl },
+          },
+        }];
+        const seenProjects = new Set<number>([item.curseForgeId]);
+        let processed = 0;
+        while (processed < queue.length) {
+          const level = queue.slice(processed);
+          processed = queue.length;
+          const dependencyIds = [...new Set(level.flatMap((candidate) => (candidate.file.dependencies ?? [])
+            .filter((dependency) => dependency.relationType === 3 && !seenProjects.has(dependency.modId))
+            .map((dependency) => dependency.modId)))];
+          if (queue.length + dependencyIds.length > 64) throw new Error("A árvore de dependências do projeto é grande demais para instalação automática.");
+          for (const dependencyId of dependencyIds) seenProjects.add(dependencyId);
+          for (let dependencyIndex = 0; dependencyIndex < dependencyIds.length; dependencyIndex += 32) {
+            const requestedIds = dependencyIds.slice(dependencyIndex, dependencyIndex + 32);
+            const response = await requestCurseForgeCatalog<{ data?: Array<{ project: CurseForgeProject; files: CurseForgeFile[] }> }>(services, {
+              action: "resolveProjects",
+              projectIds: requestedIds,
+              gameVersion,
+              loader,
+            });
+            const resolvedProjects = response.data ?? [];
+            for (const dependencyId of requestedIds) {
+              const resolved = resolvedProjects.find((entry) => entry.project.id === dependencyId);
+              if (!resolved) throw new Error(`A dependência ${dependencyId} não está disponível.`);
+              const dependencyType = curseForgeProjectContentType(resolved.project, "mod");
+              const expectedExtension = dependencyType === "mod" ? ".jar" : ".zip";
+              const dependencyFile = resolved.files.find((entry) => entry.fileName.toLowerCase().endsWith(expectedExtension));
+              if (!dependencyFile) throw new Error(`“${resolved.project.name}” não possui arquivo compatível com esta instância.`);
+              queue.push({ file: dependencyFile, project: resolved.project, type: dependencyType, root: false });
+            }
+          }
         }
-        const sha1 = file.hashes?.find((hash) => hash.algo === 1)?.value;
-        if (!downloadUrl) {
-          if (!sha1) throw new Error("O autor exige download pela página e o CurseForge não forneceu o SHA-1 necessário para uma instalação segura.");
-          await invoke("open_manual_content_download", {
-            id,
-            pageUrl: curseForgeDownloadPage(item, file.id, contentType),
-            filename: file.fileName,
-            contentType,
-            sha1,
+        setNotice(`Baixando “${item.title}” e ${Math.max(0, queue.length - 1)} dependência(s) obrigatória(s)…`);
+        let mainFilename = file.fileName;
+        for (const candidate of queue) {
+          const sha1 = candidate.file.hashes?.find((hash) => hash.algo === 1)?.value;
+          if (!sha1) throw new Error(`“${candidate.file.fileName}” não possui SHA-1 para validação.`);
+          let downloadUrl = candidate.file.downloadUrl;
+          if (!downloadUrl) {
+            const resolved = await requestCurseForgeCatalog<{ data?: string }>(services, {
+              action: "download",
+              modId: candidate.project.id,
+              fileId: candidate.file.id,
+            }).catch(() => undefined);
+            downloadUrl = resolved?.data;
+          }
+          if (downloadUrl) {
+            await invoke<string>("install_remote_content", {
+              id,
+              url: downloadUrl,
+              filename: candidate.file.fileName,
+              contentType: candidate.type,
+              sha1,
+            });
+          } else {
+            await downloadFromOfficialCurseForgePage({
+              id,
+              pageUrl: curseForgeDownloadPage(candidate.project.slug, candidate.file.id, candidate.type, candidate.project.links?.websiteUrl),
+              filename: candidate.file.fileName,
+              contentType: candidate.type,
+              sha1,
+            });
+          }
+          rememberContentArtworkData(id, candidate.file.fileName, candidate.type, {
+            iconUrl: candidate.project.logo?.thumbnailUrl ?? candidate.project.logo?.url,
+            projectId: String(candidate.project.id),
+            title: candidate.project.name,
           });
-          rememberContentArtwork(id, file.fileName, item);
-          setProjectDetail(undefined);
-          setNotice(`A página oficial foi aberta dentro do Aurora. Aguarde os 5 segundos; “${file.fileName}” será validado e colocado na instância automaticamente.`);
-          return;
+          if (candidate.root) mainFilename = candidate.file.fileName;
         }
-        filename = await invoke<string>("install_remote_content", {
-          id,
-          url: downloadUrl,
-          filename: file.fileName,
-          contentType,
-          sha1: sha1 ?? null,
-        });
+        filename = mainFilename;
       }
       setInstanceContent(await invoke<InstanceContent>("list_instance_content", { id }));
       rememberContentArtwork(id, filename, item);
@@ -1692,14 +2087,26 @@ function LauncherApp() {
       if (!launchProfile.versionId || !launchProfile.minecraftVersion) {
         throw new Error("instale Fabric ou Forge nesta instância antes de iniciar");
       }
-      const versionId = launchProfile.versionId;
+      let versionId = launchProfile.versionId;
       const gameVersion = launchProfile.minecraftVersion;
+      if (fabricLoaderNeedsUpgrade(versionId, gameVersion)) {
+        setNotice(`Atualizando o Fabric Loader de “${instanceId}” para uma versão compatível…`);
+        const repaired = await invoke<InstallSummary>("install_fabric", {
+          id: instanceId,
+          minecraftVersion: gameVersion,
+        });
+        versionId = repaired.versionId;
+        await refresh();
+      }
       setTargetInstance(instanceId);
       setInstalledVersionId(versionId);
       setInstalledMinecraftVersion(gameVersion);
       setMinecraftVersion(gameVersion);
       let executable = javaPath.trim();
-      const requiredJava = requiredJavaMajor(gameVersion);
+      const requiredJava = await invoke<number>("required_java_for_instance", {
+        id: instanceId,
+        minecraftVersion: gameVersion,
+      });
       if (executable) {
         try {
           const detectedVersion = await invoke<string>("verify_java", { executable });
@@ -1711,7 +2118,7 @@ function LauncherApp() {
       if (!executable) {
         const runtimes = await invoke<JavaRuntime[]>("discover_java");
         const selected = runtimes.find((runtime) => javaMajor(runtime.version) === requiredJava)
-          ?? await invoke<JavaRuntime>("ensure_java", { minecraftVersion: gameVersion });
+          ?? await invoke<JavaRuntime>("install_java_major", { major: requiredJava });
         executable = selected.executable;
         setJavaRuntimes(runtimes.some((runtime) => runtime.executable === selected.executable) ? runtimes : [...runtimes, selected]);
         setJavaPath(executable);
@@ -1999,13 +2406,12 @@ function LauncherApp() {
     window.localStorage.setItem("aurora.javaExecutable", runtime.executable);
     setNotice(`${runtime.version} selecionado para o Aurora.`);
   }
-  async function installJava(major: 8 | 17 | 21) {
-    const representativeVersion: Record<number, string> = { 8: "1.16.5", 17: "1.20.1", 21: "1.21.1" };
+  async function installJava(major: number) {
     setBusy(true);
     setInstallingJavaMajor(major);
     setNotice(`Baixando e verificando Java ${major}…`);
     try {
-      const runtime = await invoke<JavaRuntime>("ensure_java", { minecraftVersion: representativeVersion[major] });
+      const runtime = await invoke<JavaRuntime>("install_java_major", { major });
       const runtimes = await invoke<JavaRuntime[]>("discover_java");
       setJavaRuntimes(runtimes.some((item) => item.executable === runtime.executable) ? runtimes : [...runtimes, runtime]);
       selectJava(runtime);
@@ -2221,15 +2627,20 @@ function LauncherApp() {
             </div>
           </div>
           <div aria-label="Fonte do catálogo" className="catalog-tabs" role="tablist">
-            <button aria-selected={catalogSource === "modrinth"} className={catalogSource === "modrinth" ? "selected compact" : "secondary compact"} onClick={() => setCatalogSource("modrinth")} role="tab" type="button">Modrinth</button>
-            <button aria-selected={catalogSource === "curseforge"} className={catalogSource === "curseforge" ? "selected compact" : "secondary compact"} onClick={() => setCatalogSource("curseforge")} role="tab" type="button">CurseForge</button>
+            <button aria-selected={catalogSource === "modrinth"} className={catalogSource === "modrinth" ? "selected compact" : "secondary compact"} onClick={() => { setCatalogSource("modrinth"); void loadModrinthPage(0, modrinthPageSize, "modrinth"); }} role="tab" type="button">Modrinth</button>
+            <button aria-selected={catalogSource === "curseforge"} className={catalogSource === "curseforge" ? "selected compact" : "secondary compact"} onClick={() => { setCatalogSource("curseforge"); void loadModrinthPage(0, modrinthPageSize, "curseforge"); }} role="tab" type="button">CurseForge</button>
           </div>
-          {catalogSource === "modrinth" ? <>
           <form onSubmit={searchModrinth} className="catalog-search-bar">
-            <input value={modpackQuery} onChange={(event) => setModpackQuery(event.target.value)} placeholder="Buscar modpack no Modrinth" />
+            <input value={modpackQuery} onChange={(event) => setModpackQuery(event.target.value)} placeholder={`Buscar modpack no ${catalogSource === "modrinth" ? "Modrinth" : "CurseForge"}`} />
             <label>Mostrar<select value={modrinthPageSize} onChange={(event) => { const size = Number(event.target.value); setModrinthPageSize(size); void loadModrinthPage(0, size); }}><option value={10}>10</option><option value={20}>20</option><option value={30}>30</option><option value={50}>50</option></select></label>
             <button disabled={busy} type="submit">Buscar</button>
           </form>
+          <div className="content-filter-bar modpack-filter-bar">
+            <label>Versão<select value={modpackVersionFilter} onChange={(event) => { setModpackVersionFilter(event.target.value); if (!event.target.value) setModpackLoaderFilter(""); }}><option value="">Todas</option>{[...new Set([minecraftVersion, "1.21.1", "1.20.1", "1.19.2", "1.16.5", "1.12.2"].filter(Boolean))].map((version) => <option key={version} value={version}>{version}</option>)}</select></label>
+            <label>Loader<select disabled={!modpackVersionFilter} value={modpackLoaderFilter} onChange={(event) => setModpackLoaderFilter(event.target.value as "" | LoaderChoice)}><option value="">Forge e Fabric</option><option value="fabric">Fabric</option><option value="forge">Forge</option></select></label>
+            <label>Ordenar<select value={modpackSort} onChange={(event) => setModpackSort(event.target.value as ContentSort)}><option value="popular">Mais baixados</option><option value="relevance">Relevância</option><option value="updated">Atualizados</option></select></label>
+            <button className="secondary compact" disabled={busy} onClick={() => void loadModrinthPage(0)} type="button">Aplicar filtros</button>
+          </div>
           {modrinthPacks.length > 0 && (
             <div className="catalog-browser">
               <div className="pack-compact-list">
@@ -2242,21 +2653,16 @@ function LauncherApp() {
               </div>
               {selectedModrinthPack && <aside className="pack-detail">
                 {selectedModrinthPack.iconUrl ? <img className="pack-detail-icon" src={selectedModrinthPack.iconUrl} alt="" /> : <div className="orb large">◈</div>}
-                <div><p className="eyebrow">MODRINTH · {selectedModrinthPack.author}</p><h2>{selectedModrinthPack.title}</h2></div>
+                <div><p className="eyebrow">{selectedModrinthPack.source === "modrinth" ? "MODRINTH" : "CURSEFORGE"} · {selectedModrinthPack.author}</p><h2>{selectedModrinthPack.title}</h2></div>
                 <p>{selectedModrinthPack.description || "Sem descrição publicada."}</p>
                 <div className="pack-badges">{selectedModrinthPack.loaders.map((loader) => <span key={loader}>{loader}</span>)}<span>{selectedModrinthPack.downloads.toLocaleString("pt-BR")} downloads</span></div>
                 <label>Versão do Minecraft<select value={packVersions[selectedModrinthPack.projectId] ?? preferredPackVersion(selectedModrinthPack, minecraftVersion)} onChange={(event) => setPackVersions((current) => ({ ...current, [selectedModrinthPack.projectId]: event.target.value }))}>{(selectedModrinthPack.versions.length ? selectedModrinthPack.versions : [minecraftVersion]).map((version) => <option key={version} value={version}>{version}</option>)}</select></label>
-                <div className="pack-detail-actions"><button className="secondary" disabled={busy || !targetInstance} onClick={() => void installModrinth(selectedModrinthPack)} type="button">Instalar na selecionada</button><button disabled={busy} onClick={() => void createAndInstallModrinth(selectedModrinthPack)} type="button">Criar e instalar</button></div>
+                <div className="pack-detail-actions"><button className="secondary" disabled={busy || !targetInstance} onClick={() => void installModrinth(selectedModrinthPack)} type="button">{selectedModrinthPack.source === "curseforge" ? "Baixar tudo na selecionada" : "Instalar na selecionada"}</button><button disabled={busy} onClick={() => void createAndInstallModrinth(selectedModrinthPack)} type="button">{selectedModrinthPack.source === "curseforge" ? "Criar e baixar tudo" : "Criar e instalar"}</button></div>
               </aside>}
             </div>
           )}
+          {modrinthPacks.length === 0 && <div className="editor-empty discover-empty"><span>{busy ? "…" : "⌕"}</span><strong>{busy ? "Carregando catálogo" : "Nenhum modpack compatível"}</strong><p>Os mais baixados aparecem automaticamente; altere os filtros para refinar.</p></div>}
           <div className="catalog-pagination"><button className="secondary compact" disabled={busy || modrinthPage === 0} onClick={() => void loadModrinthPage(modrinthPage - 1)} type="button">← Anterior</button><span>Página {modrinthPage + 1} de {Math.max(1, Math.ceil(modrinthTotalHits / modrinthPageSize))}</span><button className="secondary compact" disabled={busy || (modrinthPage + 1) * modrinthPageSize >= modrinthTotalHits} onClick={() => void loadModrinthPage(modrinthPage + 1)} type="button">Próxima →</button></div>
-          </> : (
-            <div className="catalog-unavailable">
-              <strong>CurseForge ainda não está conectado.</strong>
-              <span>O serviço protegido do Aurora será publicado antes de habilitar buscas e instalações, sem exigir chave API dos jogadores.</span>
-            </div>
-          )}
         </article>
         {editingInstance && (
             <section className="editor-panel">
@@ -2385,8 +2791,8 @@ function LauncherApp() {
                 {projectDetail.kind === "content" && <small>Instalação compatível com Minecraft {installedMinecraftVersion || minecraftVersion}{contentType === "mod" && instanceLoader() ? ` · ${instanceLoader()}` : ""}</small>}
                 {projectDetail.kind === "modpack" && projectDetail.pack && <label className="detail-version-select">Versão<select value={packVersions[projectDetail.pack.projectId] ?? preferredPackVersion(projectDetail.pack, minecraftVersion)} onChange={(event) => setPackVersions((current) => ({ ...current, [projectDetail.pack!.projectId]: event.target.value }))}>{(projectDetail.pack.versions.length ? projectDetail.pack.versions : [minecraftVersion]).map((version) => <option key={version} value={version}>{version}</option>)}</select></label>}
                 <span />
-                {projectDetail.kind === "content" && projectDetail.content && <button disabled={busy} onClick={() => void installContent(projectDetail.content!)} type="button">Instalar na instância</button>}
-                {projectDetail.kind === "modpack" && projectDetail.pack && <><button className="secondary" disabled={busy || !targetInstance} onClick={() => void installModrinth(projectDetail.pack!)} type="button">Instalar na selecionada</button><button disabled={busy} onClick={() => void createAndInstallModrinth(projectDetail.pack!)} type="button">Criar e instalar</button></>}
+                {projectDetail.kind === "content" && projectDetail.content && <button disabled={busy} onClick={() => void installContent(projectDetail.content!)} type="button">{contentType === "mod" ? "Instalar com dependências" : "Instalar na instância"}</button>}
+                {projectDetail.kind === "modpack" && projectDetail.pack && <><button className="secondary" disabled={busy || !targetInstance} onClick={() => void installModrinth(projectDetail.pack!)} type="button">{projectDetail.source === "curseforge" ? "Baixar tudo na selecionada" : "Instalar na selecionada"}</button><button disabled={busy} onClick={() => void createAndInstallModrinth(projectDetail.pack!)} type="button">{projectDetail.source === "curseforge" ? "Criar e baixar tudo" : "Criar e instalar"}</button></>}
               </footer>
             </section>
           )}
@@ -2412,11 +2818,17 @@ function LauncherApp() {
             </div>
             {javaInstallOpen && (
               <section className="java-install-picker" aria-label="Versões de Java disponíveis para instalação">
-                {([8, 17, 21] as const).map((major) => (
-                  <button className="java-install-option" disabled={busy} key={major} onClick={() => void installJava(major)} type="button">
-                    <span>Java {major}</span><small>{major === 8 ? "Minecraft 1.12–1.16" : major === 17 ? "Minecraft 1.17–1.20.4" : "Minecraft 1.20.5 ou mais recente"}</small><strong>{installingJavaMajor === major ? "Instalando…" : "Instalar"}</strong>
-                  </button>
-                ))}
+                <div className="java-install-copy"><strong>Instalar um runtime gerenciado</strong><small>O Aurora baixa o Eclipse Temurin, verifica a integridade e mantém cada versão isolada.</small></div>
+                <div className="java-recommended-options" aria-label="Versões recomendadas">
+                  {RECOMMENDED_JAVA_MAJORS.filter((major) => availableJavaMajors.includes(major)).map((major) => {
+                    const installed = javaRuntimes.some((runtime) => javaMajor(runtime.version) === major);
+                    return <button aria-pressed={javaInstallMajor === major} className={javaInstallMajor === major ? "java-version-choice selected" : "java-version-choice"} disabled={busy} key={major} onClick={() => setJavaInstallMajor(major)} type="button"><strong>Java {major}</strong><small>{installed ? "Instalado" : javaVersionDescription(major)}</small></button>;
+                  })}
+                </div>
+                <div className="java-install-controls">
+                  <label><span>Versão</span><select disabled={busy} value={javaInstallMajor} onChange={(event) => setJavaInstallMajor(Number(event.target.value))}>{availableJavaMajors.map((major) => <option key={major} value={major}>Java {major}{javaLtsMajors.includes(major) ? " · LTS" : major === 16 ? " · recomendado para este modpack" : ""}</option>)}</select></label>
+                  <button disabled={busy} onClick={() => void installJava(javaInstallMajor)} type="button">{installingJavaMajor === javaInstallMajor ? `Instalando Java ${javaInstallMajor}…` : `Instalar Java ${javaInstallMajor}`}</button>
+                </div>
               </section>
             )}
             <div className="java-runtime-list">

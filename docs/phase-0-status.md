@@ -1,6 +1,6 @@
 # Status da Fundação e da Fase 1
 
-Atualizado em 30 de agosto de 2026.
+Atualizado em 31 de agosto de 2026.
 
 ## Fase 0 — Fundação & Identidade
 
@@ -37,6 +37,12 @@ visual dentro do Minecraft para ser considerada encerrada:
 - fallback interno para arquivos CurseForge sem URL direta: o Aurora abre a
   página oficial em uma janela WebView2, aguarda o disparo da própria página,
   captura em arquivo temporário, valida o SHA-1 e instala na pasta correta;
+- catálogo de modpacks CurseForge com filtros equivalentes ao Modrinth e
+  instalação completa do `manifest.json`, incluindo arquivos obrigatórios e
+  `overrides`;
+- resolução em lote dos arquivos CurseForge e fila automática para itens sem
+  distribuição direta; dependências obrigatórias de conteúdo avulso também são
+  instaladas pelo editor;
 - skin local para o Companion 1.20.1 e conversão correta do layout legado
   64x32 para 64x64;
 - foto pública do perfil renderizada a partir da face e da segunda camada da
@@ -45,8 +51,13 @@ visual dentro do Minecraft para ser considerada encerrada:
 - cards de instância com capa do modpack, início direto, seleção visual e
   estado de processo em execução;
 - renomeação segura de instância pelo editor;
-- gerenciador de Java com inventário dos runtimes encontrados e instalação
-  verificada das linhas 8, 17 e 21;
+- gerenciador de Java com inventário dos runtimes do sistema e do Aurora,
+  catálogo dinâmico das versões disponíveis no Eclipse Temurin e instalação
+  verificada de JRE ou JDK, inclusive versões intermediárias como Java 16;
+- leitura dos requisitos de Java nos metadados Fabric, inclusive em JARs
+  internos, com seleção/instalação automática do runtime exigido antes do jogo;
+- reparo automático de perfis Fabric cujo loader é antigo demais para o Aurora
+  Companion, preservando os mods e atualizando os metadados da instância;
 - normalização segura de Markdown/HTML legado do Modrinth, convertendo imagens,
   links e vídeos sem mostrar tags cruas nem executar iframes.
 

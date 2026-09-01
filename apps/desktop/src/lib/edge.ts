@@ -67,7 +67,9 @@ export type CurseForgeCatalogRequest =
   | { action: "description"; modId: number }
   | { action: "files"; modId: number; gameVersion?: string; loader?: "forge" | "fabric" }
   | { action: "file"; modId: number; fileId: number }
-  | { action: "download"; modId: number; fileId: number };
+  | { action: "download"; modId: number; fileId: number }
+  | { action: "resolveProjects"; projectIds: number[]; gameVersion: string; loader?: "forge" | "fabric" }
+  | { action: "resolveFiles"; files: Array<{ projectId: number; fileId: number }> };
 
 export function requestCurseForgeCatalog<T>(services: FirebaseServices, body: CurseForgeCatalogRequest) {
   return request<T>(services, "/v1/curseforge", body);

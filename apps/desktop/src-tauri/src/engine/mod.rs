@@ -1,6 +1,7 @@
 //! Serviços de instância, Java e inicialização da JVM.
 
 mod companion;
+mod curseforge;
 mod download;
 mod instance;
 mod ipc;
@@ -8,16 +9,23 @@ mod jre;
 mod launch;
 mod minecraft;
 mod modpacks;
+mod runtime_requirements;
 mod tts;
 mod version;
 
 pub use companion::{install_embedded_companion, CompanionError};
+pub use curseforge::{
+    curseforge_archive_path, install_curseforge_modpack_with_progress,
+    prepare_curseforge_modpack_with_progress, read_cached_curseforge_manifest,
+    CurseForgeManifestFile, CurseForgeManifestSummary, CurseForgeResolvedFile,
+};
 pub use download::{TransferProgress, DEFAULT_DOWNLOAD_CONCURRENCY};
 pub use instance::{Instance, InstanceError, InstanceId, InstanceLayout};
 pub use ipc::{IpcEndpoint, IpcError, IpcEvent, IpcServer};
 pub use jre::{
-    discover_java_executables, ensure_managed_java, ensure_managed_java_with_progress,
-    recommended_memory_mb, JavaRuntime, JavaRuntimeError,
+    available_java_releases, discover_java_executables, discover_managed_java_executables,
+    ensure_managed_java, ensure_managed_java_with_progress, recommended_memory_mb,
+    supported_managed_java_major, JavaReleaseCatalog, JavaRuntime, JavaRuntimeError,
 };
 pub use launch::{
     LaunchCommand, LaunchError, LaunchIdentity, LauncherEngine, PreparedLaunch, VersionLaunchSpec,
@@ -30,5 +38,6 @@ pub use modpacks::{
     search_modrinth_content, search_modrinth_modpacks, ModpackError, ModpackInstallSummary,
     ModpackProgress, ModrinthContent, ModrinthPack, ModrinthSearchPage, ResolvedContentArtwork,
 };
+pub use runtime_requirements::required_java_major_for_instance;
 pub use tts::{synthesize_speech, SpeechBoundary, SpeechResult, TtsError};
 pub use version::{resolve_launch_spec, VersionResolveError};

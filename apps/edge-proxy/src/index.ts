@@ -388,8 +388,10 @@ async function curseForgeCatalog(request: Request, env: Env): Promise<Response> 
     const gameVersion = optionalBoundedText(body.gameVersion, 30, "Versão do Minecraft");
     if (gameVersion) query.set("gameVersion", gameVersion);
     const loader = optionalBoundedText(body.loader, 10, "Loader") as keyof typeof curseForgeLoaderIds | "";
-    if (contentType === "mod" && gameVersion && loader && curseForgeLoaderIds[loader]) {
+    if ((contentType === "mod" || contentType === "modpack") && gameVersion && loader && curseForgeLoaderIds[loader]) {
       query.set("modLoaderType", String(curseForgeLoaderIds[loader]));
+    } else if ((contentType === "mod" || contentType === "modpack") && gameVersion) {
+      query.set("modLoaderTypes", "[1,4]");
     }
     const sort = optionalBoundedText(body.sort, 20, "Ordenação");
     if (sort === "popular") query.set("sortField", "6");
@@ -412,6 +414,105 @@ async function curseForgeCatalog(request: Request, env: Env): Promise<Response> 
     path = "/mods/" + positiveInteger(body.modId, "Projeto") + "/files/" + positiveInteger(body.fileId, "Arquivo");
   } else if (action === "download") {
     path = "/mods/" + positiveInteger(body.modId, "Projeto") + "/files/" + positiveInteger(body.fileId, "Arquivo") + "/download-url";
+  } else if (action === "resolveProjects") {
+    if (!Array.isArray(body.projectIds) || body.projectIds.length === 0 || body.projectIds.length > 32) {
+      throw new Error("Lista de projetos inválida.");
+    }
+    const projectIds = body.projectIds.map((id) => positiveInteger(id, "Projeto"));
+    if (new Set(projectIds).size !== projectIds.length) throw new Error("A lista contém projetos duplicados.");
+    const gameVersion = boundedText(body.gameVersion, 30, "Versão do Minecraft");
+    const loader = optionalBoundedText(body.loader, 10, "Loader") as keyof typeof curseForgeLoaderIds | "";
+    if (loader && !curseForgeLoaderIds[loader]) throw new Error("Loader inválido.");
+    const projectsResponse = await fetch(curseForgeApiBase + "/mods", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json", "x-api-key": env.CURSEFORGE_API_KEY },
+      body: JSON.stringify({ modIds: projectIds, filterPcOnly: true }),
+    });
+    if (!projectsResponse.ok) throw new Error("O CurseForge não conseguiu identificar as dependências.");
+    const projectPayload = await projectsResponse.json() as { data?: Array<Record<string, unknown>> };
+    const projects = (projectPayload.data ?? []).filter((project) => typeof project.id === "number" && projectIds.includes(project.id as number));
+    const resolved = await Promise.all(projects.map(async (project) => {
+      const parameters = new URLSearchParams({ gameVersion, pageSize: "50" });
+      if (project.classId === curseForgeClassIds.mod && loader) {
+        parameters.set("modLoaderType", String(curseForgeLoaderIds[loader]));
+      }
+      const response = await fetch(`${curseForgeApiBase}/mods/${project.id}/files?${parameters}`, {
+        headers: { Accept: "application/json", "x-api-key": env.CURSEFORGE_API_KEY },
+      });
+      if (!response.ok) return { project, files: [] };
+      const payload = await response.json() as { data?: Array<Record<string, unknown>> };
+      return { project, files: payload.data ?? [] };
+    }));
+    return json({ data: resolved });
+  } else if (action === "resolveFiles") {
+    if (!Array.isArray(body.files) || body.files.length === 0 || body.files.length > 512) {
+      throw new Error("Lista de arquivos inválida.");
+    }
+    const references = body.files.map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("Referência de arquivo inválida.");
+      const value = entry as Record<string, unknown>;
+      return {
+        projectId: positiveInteger(value.projectId, "Projeto"),
+        fileId: positiveInteger(value.fileId, "Arquivo"),
+      };
+    });
+    const expectedProjects = new Map(references.map((entry) => [entry.fileId, entry.projectId]));
+    if (expectedProjects.size !== references.length) throw new Error("A lista contém arquivos duplicados.");
+    const fileIds = references.map((entry) => entry.fileId);
+    const fileResponses = await Promise.all(Array.from({ length: Math.ceil(fileIds.length / 50) }, async (_, index) => {
+      const response = await fetch(curseForgeApiBase + "/mods/files", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json", "x-api-key": env.CURSEFORGE_API_KEY },
+        body: JSON.stringify({ fileIds: fileIds.slice(index * 50, index * 50 + 50) }),
+      });
+      if (!response.ok) throw new Error("O CurseForge não conseguiu resolver os arquivos do modpack.");
+      return response.json() as Promise<{ data?: Array<Record<string, unknown>> }>;
+    }));
+    const files = fileResponses.flatMap((response) => response.data ?? []).filter((file) => {
+      const fileId = typeof file.id === "number" ? file.id : 0;
+      const modId = typeof file.modId === "number" ? file.modId : 0;
+      return expectedProjects.get(fileId) === modId;
+    });
+    if (files.length !== references.length) throw new Error("O CurseForge não retornou todos os arquivos do modpack.");
+
+    const missingDownloadIds = new Set(files
+      .filter((file) => typeof file.downloadUrl !== "string" || !file.downloadUrl.startsWith("https://"))
+      .slice(0, 12)
+      .map((file) => file.id as number));
+    const filesWithUrls = await Promise.all(files.map(async (file) => {
+      if (typeof file.downloadUrl === "string" && file.downloadUrl.startsWith("https://")) return file;
+      if (!missingDownloadIds.has(file.id as number)) return file;
+      const modId = file.modId as number;
+      const fileId = file.id as number;
+      const response = await fetch(`${curseForgeApiBase}/mods/${modId}/files/${fileId}/download-url`, {
+        headers: { Accept: "application/json", "x-api-key": env.CURSEFORGE_API_KEY },
+      });
+      if (!response.ok) return file;
+      const payload = await response.json() as { data?: string };
+      return typeof payload.data === "string" && payload.data.startsWith("https://")
+        ? { ...file, downloadUrl: payload.data }
+        : file;
+    }));
+    const projectIds = [...new Set(references.map((entry) => entry.projectId))];
+    const projectResponses = await Promise.all(Array.from({ length: Math.ceil(projectIds.length / 50) }, async (_, index) => {
+      const response = await fetch(curseForgeApiBase + "/mods", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json", "x-api-key": env.CURSEFORGE_API_KEY },
+        body: JSON.stringify({ modIds: projectIds.slice(index * 50, index * 50 + 50), filterPcOnly: true }),
+      });
+      if (!response.ok) throw new Error("O CurseForge não conseguiu identificar os projetos do modpack.");
+      return response.json() as Promise<{ data?: Array<Record<string, unknown>> }>;
+    }));
+    const projects = new Map(projectResponses
+      .flatMap((response) => response.data ?? [])
+      .filter((project) => typeof project.id === "number")
+      .map((project) => [project.id as number, project]));
+    return json({
+      data: filesWithUrls.map((file) => ({
+        ...file,
+        project: projects.get(file.modId as number),
+      })),
+    });
   } else {
     throw new Error("Ação de catálogo não permitida.");
   }
