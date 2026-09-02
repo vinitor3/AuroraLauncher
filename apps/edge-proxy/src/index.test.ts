@@ -306,3 +306,275 @@ test("envia categoryId com classe, versão e loader na busca CurseForge", async 
   }), env);
   assert.equal(response.status, 200);
 });
+
+function curseForgeRequest(token: string, body: Record<string, unknown>) {
+  return new Request("https://aurora.test/v1/curseforge", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+test("seleciona a release CurseForge estável mais recente compatível e preserva dependências", async () => {
+  const { publicJwk, token } = await firebaseIdentity("updates-compatible-user");
+  const currentSha1 = "1".repeat(40);
+  const targetSha1 = "2".repeat(40);
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
+    if (url.pathname === "/v1/mods") {
+      assert.deepEqual(JSON.parse(String(init?.body)), { modIds: [101], filterPcOnly: true });
+      return jsonResponse({ data: [{ id: 101, classId: 6, name: "Aurora Mod", slug: "aurora-mod" }] });
+    }
+    if (url.pathname === "/v1/mods/101/files") {
+      assert.equal(url.searchParams.get("gameVersion"), "1.20.1");
+      assert.equal(url.searchParams.get("modLoaderType"), "4");
+      assert.equal(url.searchParams.get("pageSize"), "50");
+      return jsonResponse({
+        data: [
+          {
+            id: 105,
+            modId: 101,
+            fileName: "beta.jar",
+            fileDate: "2026-08-31T00:00:00Z",
+            releaseType: 2,
+            gameVersions: ["1.20.1", "Fabric"],
+            hashes: [{ algo: 1, value: "5".repeat(40) }],
+          },
+          {
+            id: 104,
+            modId: 101,
+            fileName: "wrong-version.jar",
+            fileDate: "2026-08-30T00:00:00Z",
+            releaseType: 1,
+            gameVersions: ["1.21.1", "Fabric"],
+            hashes: [{ algo: 1, value: "4".repeat(40) }],
+          },
+          {
+            id: 103,
+            modId: 101,
+            fileName: "wrong-loader.jar",
+            fileDate: "2026-08-29T00:00:00Z",
+            releaseType: 1,
+            gameVersions: ["1.20.1", "Forge"],
+            hashes: [{ algo: 1, value: "3".repeat(40) }],
+          },
+          {
+            id: 102,
+            modId: 101,
+            fileName: "compatible.jar",
+            fileDate: "2026-08-28T00:00:00Z",
+            releaseType: 1,
+            gameVersions: ["1.20.1", "Fabric"],
+            hashes: [{ algo: 1, value: targetSha1 }],
+            dependencies: [{ modId: 201, relationType: 3 }],
+            downloadUrl: "https://edge.forgecdn.net/files/compatible.jar",
+          },
+        ],
+        pagination: { index: 0, pageSize: 50, resultCount: 4, totalCount: 4 },
+      });
+    }
+    throw new Error(`fetch inesperado: ${url}`);
+  };
+
+  const response = await worker.fetch(curseForgeRequest(token, {
+    action: "updates",
+    contentType: "mod",
+    gameVersion: "1.20.1",
+    loader: "fabric",
+    items: [{ projectId: 101, currentSha1 }],
+  }), env);
+  assert.equal(response.status, 200);
+  const payload = await response.json() as { data: Array<Record<string, any>> };
+  assert.equal(payload.data[0].status, "updateAvailable");
+  assert.equal(payload.data[0].targetFile.id, 102);
+  assert.equal(payload.data[0].targetFile.sha1, targetSha1);
+  assert.deepEqual(payload.data[0].targetFile.dependencies, [{ modId: 201, relationType: 3 }]);
+  assert.equal(payload.data[0].targetFile.downloadMode, "proxy");
+  assert.match(payload.data[0].targetFile.downloadUrl, /^https:\/\/aurora\.test\/v1\/curseforge\/download\?ticket=/);
+});
+
+test("marca conteúdo CurseForge com a mesma SHA-1 como atualizado", async () => {
+  const { publicJwk, token } = await firebaseIdentity("updates-current-user");
+  const sha1 = "a".repeat(40);
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
+    if (url.pathname === "/v1/mods") {
+      return jsonResponse({ data: [{ id: 202, classId: 12, name: "Aurora Pack", slug: "aurora-pack" }] });
+    }
+    if (url.pathname === "/v1/mods/202/files") {
+      return jsonResponse({
+        data: [{
+          id: 203,
+          modId: 202,
+          fileName: "aurora-pack.zip",
+          fileDate: "2026-08-30T00:00:00Z",
+          releaseType: 1,
+          gameVersions: ["1.20.1"],
+          hashes: [{ algo: 1, value: sha1.toUpperCase() }],
+          downloadUrl: "https://media.forgecdn.net/files/aurora-pack.zip",
+        }],
+        pagination: { resultCount: 1, totalCount: 1 },
+      });
+    }
+    throw new Error(`fetch inesperado: ${url}`);
+  };
+
+  const response = await worker.fetch(curseForgeRequest(token, {
+    action: "updates",
+    contentType: "resourcepack",
+    gameVersion: "1.20.1",
+    items: [{ projectId: 202, currentSha1: sha1 }],
+  }), env);
+  assert.equal(response.status, 200);
+  const payload = await response.json() as { data: Array<Record<string, any>> };
+  assert.equal(payload.data[0].status, "upToDate");
+  assert.equal(payload.data[0].currentSha1, sha1);
+  assert.equal(payload.data[0].targetFile.sha1, sha1);
+});
+
+test("bloqueia atualização quando não existe release estável compatível", async () => {
+  const { publicJwk, token } = await firebaseIdentity("updates-no-release-user");
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
+    if (url.pathname === "/v1/mods") {
+      return jsonResponse({ data: [{ id: 303, classId: 6, name: "Beta only", slug: "beta-only" }] });
+    }
+    if (url.pathname === "/v1/mods/303/files") {
+      return jsonResponse({
+        data: [{
+          id: 304,
+          modId: 303,
+          fileName: "beta-only.jar",
+          releaseType: 2,
+          gameVersions: ["1.19.2", "Forge"],
+          hashes: [{ algo: 1, value: "b".repeat(40) }],
+        }],
+        pagination: { resultCount: 1, totalCount: 1 },
+      });
+    }
+    throw new Error(`fetch inesperado: ${url}`);
+  };
+
+  const response = await worker.fetch(curseForgeRequest(token, {
+    action: "updates",
+    contentType: "mod",
+    gameVersion: "1.19.2",
+    loader: "forge",
+    items: [{ projectId: 303, currentSha1: "c".repeat(40) }],
+  }), env);
+  assert.equal(response.status, 200);
+  const payload = await response.json() as { data: Array<Record<string, unknown>> };
+  assert.equal(payload.data[0].status, "blocked");
+  assert.equal(payload.data[0].reason, "noCompatibleRelease");
+});
+
+test("mantém indicação de página oficial quando a release não possui URL direta", async () => {
+  const { publicJwk, token } = await firebaseIdentity("updates-manual-user");
+  const targetSha1 = "d".repeat(40);
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
+    if (url.pathname === "/v1/mods") {
+      return jsonResponse({ data: [{ id: 404, classId: 6552, name: "Manual Shader", slug: "manual-shader" }] });
+    }
+    if (url.pathname === "/v1/mods/404/files") {
+      return jsonResponse({
+        data: [{
+          id: 405,
+          modId: 404,
+          fileName: "manual-shader.zip",
+          fileDate: "2026-08-30T00:00:00Z",
+          releaseType: 1,
+          gameVersions: ["1.21.1"],
+          hashes: [{ algo: 1, value: targetSha1 }],
+          dependencies: [{ modId: 406, relationType: 3 }],
+        }],
+        pagination: { resultCount: 1, totalCount: 1 },
+      });
+    }
+    if (url.pathname === "/v1/mods/404/files/405/download-url") {
+      return jsonResponse({ message: "distribution disabled" }, 404);
+    }
+    throw new Error(`fetch inesperado: ${url}`);
+  };
+
+  const response = await worker.fetch(curseForgeRequest(token, {
+    action: "updates",
+    contentType: "shader",
+    gameVersion: "1.21.1",
+    items: [{ projectId: 404, currentSha1: "e".repeat(40) }],
+  }), env);
+  assert.equal(response.status, 200);
+  const payload = await response.json() as { data: Array<Record<string, any>> };
+  assert.equal(payload.data[0].status, "updateAvailable");
+  assert.equal(payload.data[0].reason, "manualDownloadRequired");
+  assert.equal(payload.data[0].targetFile.downloadMode, "officialPage");
+  assert.equal(payload.data[0].targetFile.manualDownloadRequired, true);
+  assert.equal(payload.data[0].targetFile.downloadUrl, undefined);
+  assert.deepEqual(payload.data[0].targetFile.dependencies, [{ modId: 406, relationType: 3 }]);
+});
+
+test("rejeita schema, limite, IDs e hashes inválidos na verificação de atualizações", async () => {
+  const { publicJwk, token } = await firebaseIdentity("updates-invalid-user");
+  let curseForgeCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
+    curseForgeCalls += 1;
+    throw new Error(`fetch inesperado: ${url}`);
+  };
+  const validBase = {
+    action: "updates",
+    contentType: "mod",
+    gameVersion: "1.20.1",
+    loader: "fabric",
+  };
+  const invalidBodies = [
+    { ...validBase, items: "invalid" },
+    {
+      ...validBase,
+      items: Array.from({ length: 101 }, (_, index) => ({ projectId: index + 1, currentSha1: "a".repeat(40) })),
+    },
+    { ...validBase, items: [{ projectId: 0, currentSha1: "a".repeat(40) }] },
+    { ...validBase, items: [{ projectId: 1, currentSha1: "not-a-sha1" }] },
+  ];
+  for (const body of invalidBodies) {
+    const response = await worker.fetch(curseForgeRequest(token, body), env);
+    assert.equal(response.status, 400);
+  }
+  assert.equal(curseForgeCalls, 0);
+});
+
+test("rejeita tipos e loaders herdados do protótipo na verificação de atualizações", async () => {
+  const { publicJwk, token } = await firebaseIdentity("updates-prototype-user");
+  let curseForgeCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
+    curseForgeCalls += 1;
+    throw new Error(`fetch inesperado: ${url}`);
+  };
+  const item = { projectId: 1, currentSha1: "a".repeat(40) };
+  const inheritedType = await worker.fetch(curseForgeRequest(token, {
+    action: "updates",
+    contentType: "toString",
+    gameVersion: "1.20.1",
+    items: [item],
+  }), env);
+  assert.equal(inheritedType.status, 400);
+  const inheritedLoader = await worker.fetch(curseForgeRequest(token, {
+    action: "updates",
+    contentType: "mod",
+    gameVersion: "1.20.1",
+    loader: "constructor",
+    items: [item],
+  }), env);
+  assert.equal(inheritedLoader.status, 400);
+  assert.equal(curseForgeCalls, 0);
+});
