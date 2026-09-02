@@ -397,6 +397,79 @@ test("seleciona a release CurseForge estável mais recente compatível e preserv
   assert.match(payload.data[0].targetFile.downloadUrl, /^https:\/\/aurora\.test\/v1\/curseforge\/download\?ticket=/);
 });
 
+test("usa o fileId instalado e preserva o loader exato ao verificar um modpack", async () => {
+  const { publicJwk, token } = await firebaseIdentity("updates-modpack-file-user");
+  const targetSha1 = "6".repeat(40);
+  let fileCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
+    if (url.pathname === "/v1/mods") {
+      assert.deepEqual(JSON.parse(String(init?.body)), { modIds: [601], filterPcOnly: true });
+      return jsonResponse({ data: [{ id: 601, classId: 4471, name: "Aurora Pack", slug: "aurora-pack" }] });
+    }
+    if (url.pathname === "/v1/mods/601/files") {
+      fileCalls += 1;
+      assert.equal(url.searchParams.get("gameVersion"), "1.20.1");
+      assert.equal(url.searchParams.get("modLoaderType"), "4");
+      return jsonResponse({
+        data: [
+          {
+            id: 603,
+            modId: 601,
+            fileName: "aurora-pack-forge.zip",
+            fileDate: "2026-09-02T00:00:00Z",
+            releaseType: 1,
+            gameVersions: ["1.20.1", "Forge"],
+            hashes: [{ algo: 1, value: "7".repeat(40) }],
+          },
+          {
+            id: 602,
+            modId: 601,
+            fileName: "aurora-pack-fabric.zip",
+            fileDate: "2026-09-01T00:00:00Z",
+            releaseType: 1,
+            gameVersions: ["1.20.1", "Fabric"],
+            hashes: [{ algo: 1, value: targetSha1 }],
+            downloadUrl: "https://edge.forgecdn.net/files/aurora-pack-fabric.zip",
+          },
+        ],
+        pagination: { index: 0, pageSize: 50, resultCount: 2, totalCount: 2 },
+      });
+    }
+    throw new Error(`fetch inesperado: ${url}`);
+  };
+
+  const response = await worker.fetch(curseForgeRequest(token, {
+    action: "updates",
+    contentType: "modpack",
+    gameVersion: "1.20.1",
+    loader: "fabric",
+    items: [{ projectId: 601, currentFileId: 602 }],
+  }), env);
+  assert.equal(response.status, 200);
+  const payload = await response.json() as { data: Array<Record<string, any>> };
+  assert.equal(payload.data[0].status, "upToDate");
+  assert.equal(payload.data[0].currentFileId, 602);
+  assert.equal(payload.data[0].currentSha1, undefined);
+  assert.equal(payload.data[0].targetFile.id, 602);
+  assert.equal(payload.data[0].targetFile.sha1, targetSha1);
+  assert.equal(fileCalls, 1);
+
+  const missingLoader = await worker.fetch(curseForgeRequest(token, {
+    action: "updates",
+    contentType: "modpack",
+    gameVersion: "1.20.1",
+    items: [{ projectId: 601, currentFileId: 602 }],
+  }), env);
+  assert.equal(missingLoader.status, 200);
+  const missingLoaderPayload = await missingLoader.json() as { data: Array<Record<string, unknown>> };
+  assert.equal(missingLoaderPayload.data[0].status, "blocked");
+  assert.equal(missingLoaderPayload.data[0].reason, "loaderRequired");
+  assert.equal(missingLoaderPayload.data[0].currentFileId, 602);
+  assert.equal(fileCalls, 1);
+});
+
 test("marca conteúdo CurseForge com a mesma SHA-1 como atualizado", async () => {
   const { publicJwk, token } = await firebaseIdentity("updates-current-user");
   const sha1 = "a".repeat(40);
@@ -543,6 +616,53 @@ test("rejeita schema, limite, IDs e hashes inválidos na verificação de atuali
     },
     { ...validBase, items: [{ projectId: 0, currentSha1: "a".repeat(40) }] },
     { ...validBase, items: [{ projectId: 1, currentSha1: "not-a-sha1" }] },
+  ];
+  for (const body of invalidBodies) {
+    const response = await worker.fetch(curseForgeRequest(token, body), env);
+    assert.equal(response.status, 400);
+  }
+  assert.equal(curseForgeCalls, 0);
+});
+
+test("exige exatamente um identificador atual e reserva fileId para modpacks", async () => {
+  const { publicJwk, token } = await firebaseIdentity("updates-current-identity-user");
+  let curseForgeCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
+    curseForgeCalls += 1;
+    throw new Error(`fetch inesperado: ${url}`);
+  };
+  const sha1 = "a".repeat(40);
+  const invalidBodies = [
+    {
+      action: "updates",
+      contentType: "mod",
+      gameVersion: "1.20.1",
+      loader: "fabric",
+      items: [{ projectId: 1, currentSha1: sha1, currentFileId: 2 }],
+    },
+    {
+      action: "updates",
+      contentType: "mod",
+      gameVersion: "1.20.1",
+      loader: "fabric",
+      items: [{ projectId: 1 }],
+    },
+    {
+      action: "updates",
+      contentType: "mod",
+      gameVersion: "1.20.1",
+      loader: "fabric",
+      items: [{ projectId: 1, currentFileId: 2 }],
+    },
+    {
+      action: "updates",
+      contentType: "modpack",
+      gameVersion: "1.20.1",
+      loader: "fabric",
+      items: [{ projectId: 1, currentSha1: sha1 }],
+    },
   ];
   for (const body of invalidBodies) {
     const response = await worker.fetch(curseForgeRequest(token, body), env);

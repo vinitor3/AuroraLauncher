@@ -94,8 +94,10 @@ export type CurseForgeCatalogRequest =
 
 export type CurseForgeUpdateRequestItem = {
   projectId: number;
-  currentSha1: string;
-};
+} & (
+  | { currentSha1: string; currentFileId?: never }
+  | { currentFileId: number; currentSha1?: never }
+);
 
 export type CurseForgeUpdateReason =
   | "loaderRequired"
@@ -134,13 +136,15 @@ export type CurseForgeUpdateFile = {
 
 export type CurseForgeUpdateResult = {
   projectId: number;
-  currentSha1: string;
   project: CurseForgeUpdateProject;
   targetFile?: CurseForgeUpdateFile;
   status: "updateAvailable" | "upToDate" | "blocked";
   reason?: CurseForgeUpdateReason;
   message: string;
-};
+} & (
+  | { currentSha1: string; currentFileId?: never }
+  | { currentFileId: number; currentSha1?: never }
+);
 
 export type CurseForgeUpdatesResponse = { data: CurseForgeUpdateResult[] };
 

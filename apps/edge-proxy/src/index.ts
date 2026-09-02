@@ -880,7 +880,10 @@ async function curseForgeHealth(env: Env): Promise<Response> {
 
 type CurseForgeContentType = keyof typeof curseForgeClassIds;
 type CurseForgeLoader = keyof typeof curseForgeLoaderIds;
-type CurseForgeUpdateEntry = { projectId: number; currentSha1: string };
+type CurseForgeUpdateEntry = { projectId: number } & (
+  | { currentSha1: string; currentFileId?: never }
+  | { currentFileId: number; currentSha1?: never }
+);
 type CurseForgeUpdateReason =
   | "loaderRequired"
   | "projectNotFound"
@@ -913,7 +916,7 @@ function compatibleCurseForgeUpdateFile(
   const expectedExtension = contentType === "mod" ? ".jar" : ".zip";
   if (!filename.endsWith(expectedExtension) || (contentType === "modpack" && file.isServerPack === true)) return false;
   if (!Array.isArray(file.gameVersions) || !file.gameVersions.includes(gameVersion)) return false;
-  if (contentType !== "mod") return true;
+  if (contentType !== "mod" && contentType !== "modpack") return true;
   return Boolean(loader) && file.gameVersions.some(
     (version) => typeof version === "string" && version.toLowerCase() === loader,
   );
@@ -943,7 +946,7 @@ async function latestCurseForgeUpdateFile(
   let index = 0;
   for (let page = 0; page < curseForgeUpdatePageLimit; page += 1) {
     const parameters = new URLSearchParams({ gameVersion, pageSize: "50", index: String(index) });
-    if (contentType === "mod" && loader) {
+    if ((contentType === "mod" || contentType === "modpack") && loader) {
       parameters.set("modLoaderType", String(curseForgeLoaderIds[loader]));
     }
     const response = await requireCurseForge(
@@ -1003,7 +1006,9 @@ function blockedCurseForgeUpdate(
 ): Record<string, unknown> {
   return {
     projectId: entry.projectId,
-    currentSha1: entry.currentSha1,
+    ...(entry.currentSha1 !== undefined
+      ? { currentSha1: entry.currentSha1 }
+      : { currentFileId: entry.currentFileId }),
     project,
     status: "blocked",
     reason,
@@ -1038,10 +1043,28 @@ async function curseForgeUpdates(
     const item = raw as Record<string, unknown>;
     const projectId = positiveInteger(item.projectId, "Projeto");
     if (!Number.isSafeInteger(projectId)) throw new Error("Projeto inválido.");
-    if (typeof item.currentSha1 !== "string" || !/^[a-f0-9]{40}$/i.test(item.currentSha1)) {
-      throw new Error("SHA-1 instalado inválido.");
+    const hasCurrentSha1 = Object.prototype.hasOwnProperty.call(item, "currentSha1");
+    const hasCurrentFileId = Object.prototype.hasOwnProperty.call(item, "currentFileId");
+    if (hasCurrentSha1 === hasCurrentFileId) {
+      throw new Error("Informe exatamente uma versão instalada.");
     }
-    return { projectId, currentSha1: item.currentSha1.toLowerCase() };
+    if (contentType === "modpack" && !hasCurrentFileId) {
+      throw new Error("O arquivo instalado do modpack é obrigatório.");
+    }
+    if (contentType !== "modpack" && !hasCurrentSha1) {
+      throw new Error("O SHA-1 instalado é obrigatório.");
+    }
+    if (hasCurrentSha1) {
+      if (typeof item.currentSha1 !== "string" || !/^[a-f0-9]{40}$/i.test(item.currentSha1)) {
+        throw new Error("SHA-1 instalado inválido.");
+      }
+      return { projectId, currentSha1: item.currentSha1.toLowerCase() };
+    }
+    const currentFileId = positiveInteger(item.currentFileId, "Arquivo instalado");
+    if (!Number.isSafeInteger(currentFileId)) {
+      throw new Error("Arquivo instalado inválido.");
+    }
+    return { projectId, currentFileId };
   });
   if (new Set(items.map((item) => item.projectId)).size !== items.length) {
     throw new Error("A lista contém projetos duplicados.");
@@ -1079,7 +1102,7 @@ async function curseForgeUpdates(
         "O projeto não pertence ao tipo de conteúdo selecionado.",
       );
     }
-    if (contentType === "mod" && !loader) {
+    if ((contentType === "mod" || contentType === "modpack") && !loader) {
       return blockedCurseForgeUpdate(
         item,
         project,
@@ -1108,7 +1131,9 @@ async function curseForgeUpdates(
       );
     }
 
-    const upToDate = targetSha1 === item.currentSha1;
+    const upToDate = item.currentSha1 !== undefined
+      ? targetSha1 === item.currentSha1
+      : latest.file.id === item.currentFileId;
     const resolvedUrl = upToDate
       ? (validCurseForgeCdnUrl(latest.file.downloadUrl) ? latest.file.downloadUrl : undefined)
       : await resolvableCurseForgeDownloadUrl(env, item.projectId, latest.file);
@@ -1124,7 +1149,9 @@ async function curseForgeUpdates(
     if (upToDate) {
       return {
         projectId: item.projectId,
-        currentSha1: item.currentSha1,
+        ...(item.currentSha1 !== undefined
+          ? { currentSha1: item.currentSha1 }
+          : { currentFileId: item.currentFileId }),
         project,
         targetFile,
         status: "upToDate",
@@ -1134,7 +1161,9 @@ async function curseForgeUpdates(
     const manualDownloadRequired = !resolvedUrl;
     return {
       projectId: item.projectId,
-      currentSha1: item.currentSha1,
+      ...(item.currentSha1 !== undefined
+        ? { currentSha1: item.currentSha1 }
+        : { currentFileId: item.currentFileId }),
       project,
       targetFile,
       status: "updateAvailable",
