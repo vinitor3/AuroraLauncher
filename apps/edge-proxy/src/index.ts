@@ -33,14 +33,20 @@ const firebaseJwksUrl =
 const curseForgeApiBase = "https://api.curseforge.com/v1";
 const supabaseBase = "https://pgbzkinjfwbncifurirb.supabase.co";
 const appearanceBucket = "aurora-appearance";
-const auroraApiRevision = "2026-09-02-content-updates-v4";
+const auroraApiRevision = "2026-09-02-content-updates-v5";
 const minecraftGameId = 432;
 const curseForgeClassIds = { mod: 6, modpack: 4471, resourcepack: 12, shader: 6552 } as const;
 const curseForgeLoaderIds = { forge: 1, fabric: 4 } as const;
 const curseForgeRequestTimeoutMs = 15_000;
 const curseForgeDownloadTicketLifetimeMs = 8 * 60 * 60 * 1_000;
-const curseForgeUpdateBatchLimit = 100;
+// A Firebase key lookup, one batched project lookup, four paginated file lookups,
+// one exact installed-file lookup and one optional download lookup still fit below
+// the Workers Free 50-subrequest ceiling for four entries, including the retries
+// used by every required CurseForge lookup. The optional download lookup is not
+// retried because falling back to the official project page is safe.
+const curseForgeUpdateBatchLimit = 4;
 const curseForgeUpdatePageLimit = 4;
+const curseForgeRetryAfterCeilingMs = 2_000;
 
 class PublicError extends Error {
   readonly status: number;
@@ -91,9 +97,10 @@ async function fetchCurseForge(
   env: Env,
   path: string,
   init: RequestInit = {},
+  maximumAttempts = 2,
 ): Promise<Response> {
   let lastResponse: Response | undefined;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
     try {
       const response = await fetch(curseForgeApiBase + path, {
         ...init,
@@ -102,18 +109,29 @@ async function fetchCurseForge(
       });
       lastResponse = response;
       if (response.status !== 429 && response.status < 500) return response;
-      if (attempt === 0) await response.body?.cancel();
+      if (attempt + 1 < maximumAttempts) {
+        const retryAfter = response.headers.get("Retry-After")?.trim() ?? "";
+        const seconds = /^\d+(?:\.\d+)?$/.test(retryAfter) ? Number(retryAfter) * 1_000 : Number.NaN;
+        const date = Number.isFinite(seconds) || !retryAfter ? Number.NaN : Date.parse(retryAfter) - Date.now();
+        const requestedDelay = Number.isFinite(seconds)
+          ? seconds
+          : Number.isFinite(date)
+            ? date
+            : 250;
+        await response.body?.cancel();
+        await delay(Math.max(0, Math.min(requestedDelay, curseForgeRetryAfterCeilingMs)));
+      }
     } catch (cause) {
       console.error("CurseForge upstream network failure", {
         path: path.split("?")[0],
         attempt: attempt + 1,
         message: cause instanceof Error ? cause.message.slice(0, 160) : "falha de rede",
       });
-      if (attempt === 1) {
+      if (attempt + 1 >= maximumAttempts) {
         throw new PublicError("O CurseForge demorou para responder. Tente novamente em instantes.", 503);
       }
+      await delay(250);
     }
-    if (attempt === 0) await delay(250);
   }
   return lastResponse!;
 }
@@ -888,6 +906,9 @@ type CurseForgeUpdateReason =
   | "loaderRequired"
   | "projectNotFound"
   | "contentTypeMismatch"
+  | "installedFileNotFound"
+  | "installedFileContextMismatch"
+  | "installedVersionNotOlder"
   | "noCompatibleRelease"
   | "scanLimitReached"
   | "missingSha1"
@@ -903,7 +924,7 @@ function curseForgeSha1(file: Record<string, unknown>): string | undefined {
   return typeof hash?.value === "string" ? hash.value.toLowerCase() : undefined;
 }
 
-function compatibleCurseForgeUpdateFile(
+function curseForgeFileMatchesContext(
   file: Record<string, unknown>,
   projectId: number,
   contentType: CurseForgeContentType,
@@ -911,7 +932,7 @@ function compatibleCurseForgeUpdateFile(
   loader: CurseForgeLoader | "",
 ): boolean {
   if (typeof file.id !== "number" || !Number.isSafeInteger(file.id) || file.id <= 0
-    || file.modId !== projectId || file.releaseType !== 1 || file.isAvailable === false) return false;
+    || file.modId !== projectId) return false;
   const filename = typeof file.fileName === "string" ? file.fileName.toLowerCase() : "";
   const expectedExtension = contentType === "mod" ? ".jar" : ".zip";
   if (!filename.endsWith(expectedExtension) || (contentType === "modpack" && file.isServerPack === true)) return false;
@@ -922,28 +943,58 @@ function compatibleCurseForgeUpdateFile(
   );
 }
 
-function compareCurseForgeUpdateFiles(
+function compatibleCurseForgeUpdateFile(
+  file: Record<string, unknown>,
+  projectId: number,
+  contentType: CurseForgeContentType,
+  gameVersion: string,
+  loader: CurseForgeLoader | "",
+): boolean {
+  return file.releaseType === 1
+    && file.isAvailable !== false
+    && curseForgeFileMatchesContext(file, projectId, contentType, gameVersion, loader);
+}
+
+function compareCurseForgeFileVersions(
   left: Record<string, unknown>,
   right: Record<string, unknown>,
 ): number {
   const leftDate = typeof left.fileDate === "string" ? Date.parse(left.fileDate) : Number.NaN;
   const rightDate = typeof right.fileDate === "string" ? Date.parse(right.fileDate) : Number.NaN;
-  const dateDifference = (Number.isFinite(rightDate) ? rightDate : Number.NEGATIVE_INFINITY)
-    - (Number.isFinite(leftDate) ? leftDate : Number.NEGATIVE_INFINITY);
-  if (dateDifference !== 0) return dateDifference;
+  if (Number.isFinite(leftDate) && Number.isFinite(rightDate) && leftDate !== rightDate) {
+    return leftDate - rightDate;
+  }
   const leftId = typeof left.id === "number" && Number.isSafeInteger(left.id) ? left.id : 0;
   const rightId = typeof right.id === "number" && Number.isSafeInteger(right.id) ? right.id : 0;
-  return rightId - leftId;
+  return leftId - rightId;
+}
+
+function curseForgeFileMatchesEntry(
+  file: Record<string, unknown>,
+  entry: CurseForgeUpdateEntry,
+): boolean {
+  return entry.currentSha1 !== undefined
+    ? curseForgeSha1(file) === entry.currentSha1
+    : file.id === entry.currentFileId;
 }
 
 async function latestCurseForgeUpdateFile(
   env: Env,
+  entry: CurseForgeUpdateEntry,
   projectId: number,
   contentType: CurseForgeContentType,
   gameVersion: string,
   loader: CurseForgeLoader | "",
-): Promise<{ file?: Record<string, unknown>; truncated: boolean }> {
+): Promise<{
+  file?: Record<string, unknown>;
+  installedFile?: Record<string, unknown>;
+  installedContextMismatch: boolean;
+  truncated: boolean;
+}> {
   let index = 0;
+  let file: Record<string, unknown> | undefined;
+  let installedFile: Record<string, unknown> | undefined;
+  let installedContextMismatch = false;
   for (let page = 0; page < curseForgeUpdatePageLimit; page += 1) {
     const parameters = new URLSearchParams({ gameVersion, pageSize: "50", index: String(index) });
     if ((contentType === "mod" || contentType === "modpack") && loader) {
@@ -959,25 +1010,58 @@ async function latestCurseForgeUpdateFile(
       pagination?: { index?: number; pageSize?: number; resultCount?: number; totalCount?: number };
     }>(response, "content-updates-files");
     if (!Array.isArray(payload.data)) throw invalidCurseForgeResponse();
-    const compatible = payload.data
-      .filter((file) => compatibleCurseForgeUpdateFile(file, projectId, contentType, gameVersion, loader))
-      .sort(compareCurseForgeUpdateFiles);
-    if (compatible[0]) return { file: compatible[0], truncated: false };
+    for (const candidate of payload.data) {
+      if (compatibleCurseForgeUpdateFile(candidate, projectId, contentType, gameVersion, loader)
+        && (!file || compareCurseForgeFileVersions(candidate, file) > 0)) {
+        file = candidate;
+      }
+      if (curseForgeFileMatchesEntry(candidate, entry)) {
+        if (curseForgeFileMatchesContext(candidate, projectId, contentType, gameVersion, loader)) {
+          if (!installedFile || compareCurseForgeFileVersions(candidate, installedFile) > 0) {
+            installedFile = candidate;
+          }
+        } else {
+          installedContextMismatch = true;
+        }
+      }
+    }
 
-    const resultCount = typeof payload.pagination?.resultCount === "number"
-      && Number.isInteger(payload.pagination.resultCount)
-      && payload.pagination.resultCount >= 0
-      ? payload.pagination.resultCount
-      : payload.data.length;
+    const resultCount = payload.data.length;
     const totalCount = typeof payload.pagination?.totalCount === "number"
       && Number.isInteger(payload.pagination.totalCount)
       && payload.pagination.totalCount >= 0
       ? payload.pagination.totalCount
-      : index + resultCount;
-    if (resultCount === 0 || index + resultCount >= totalCount) return { truncated: false };
+      : undefined;
+    if (resultCount === 0) {
+      if (totalCount !== undefined && index < totalCount) throw invalidCurseForgeResponse();
+      return { file, installedFile, installedContextMismatch, truncated: false };
+    }
+    const hasMore = totalCount !== undefined ? index + resultCount < totalCount : resultCount >= 50;
+    if (!hasMore) return { file, installedFile, installedContextMismatch, truncated: false };
+    if (page + 1 >= curseForgeUpdatePageLimit) {
+      return { file, installedFile, installedContextMismatch, truncated: true };
+    }
     index += resultCount;
   }
-  return { truncated: true };
+  return { file, installedFile, installedContextMismatch, truncated: true };
+}
+
+async function exactCurseForgeInstalledFile(
+  env: Env,
+  projectId: number,
+  fileId: number,
+): Promise<Record<string, unknown> | undefined> {
+  const response = await fetchCurseForge(env, `/mods/${projectId}/files/${fileId}`);
+  if (response.status === 404) {
+    await response.body?.cancel();
+    return undefined;
+  }
+  if (!response.ok) throw await curseForgeFailure(response, "content-updates-installed-file");
+  const payload = await readCurseForgeJson<{ data?: unknown }>(response, "content-updates-installed-file");
+  if (!payload.data || typeof payload.data !== "object" || Array.isArray(payload.data)) {
+    throw invalidCurseForgeResponse();
+  }
+  return payload.data as Record<string, unknown>;
 }
 
 async function resolvableCurseForgeDownloadUrl(
@@ -988,7 +1072,9 @@ async function resolvableCurseForgeDownloadUrl(
   if (validCurseForgeCdnUrl(file.downloadUrl)) return file.downloadUrl;
   const fileId = typeof file.id === "number" && Number.isSafeInteger(file.id) && file.id > 0 ? file.id : 0;
   if (!fileId) throw invalidCurseForgeResponse();
-  const response = await fetchCurseForge(env, `/mods/${projectId}/files/${fileId}/download-url`);
+  // This optional lookup deliberately has no retry so a four-item update scan
+  // remains below the Workers Free subrequest ceiling in its worst case.
+  const response = await fetchCurseForge(env, `/mods/${projectId}/files/${fileId}/download-url`, {}, 1);
   if (response.status === 403 || response.status === 404) {
     await response.body?.cancel();
     return undefined;
@@ -1110,15 +1196,51 @@ async function curseForgeUpdates(
         "Informe Forge ou Fabric para preservar a compatibilidade deste mod.",
       );
     }
-    const latest = await latestCurseForgeUpdateFile(env, item.projectId, contentType, gameVersion, loader);
+    const latest = await latestCurseForgeUpdateFile(
+      env,
+      item,
+      item.projectId,
+      contentType,
+      gameVersion,
+      loader,
+    );
+    if (latest.truncated) {
+      return blockedCurseForgeUpdate(
+        item,
+        project,
+        "scanLimitReached",
+        "Há mais arquivos do que o Aurora consegue verificar nesta chamada. Nenhuma atualização foi sugerida sem uma varredura completa.",
+      );
+    }
+    let installedFile = latest.installedFile;
+    let installedContextMismatch = latest.installedContextMismatch;
+    if (!installedFile && !installedContextMismatch && item.currentFileId !== undefined) {
+      const exactFile = await exactCurseForgeInstalledFile(env, item.projectId, item.currentFileId);
+      if (exactFile) {
+        if (!curseForgeFileMatchesEntry(exactFile, item)
+          || !curseForgeFileMatchesContext(exactFile, item.projectId, contentType, gameVersion, loader)) {
+          installedContextMismatch = true;
+        } else {
+          installedFile = exactFile;
+        }
+      }
+    }
+    if (!installedFile) {
+      return blockedCurseForgeUpdate(
+        item,
+        project,
+        installedContextMismatch ? "installedFileContextMismatch" : "installedFileNotFound",
+        installedContextMismatch
+          ? "O arquivo instalado não pertence a este projeto, tipo, Minecraft e loader."
+          : "Não foi possível comprovar o arquivo instalado neste projeto e contexto do CurseForge.",
+      );
+    }
     if (!latest.file) {
       return blockedCurseForgeUpdate(
         item,
         project,
-        latest.truncated ? "scanLimitReached" : "noCompatibleRelease",
-        latest.truncated
-          ? "Há muitos arquivos para verificar automaticamente com segurança. Abra a página oficial do projeto."
-          : `Não há release estável compatível com Minecraft ${gameVersion}${loader ? ` e ${loader}` : ""}.`,
+        "noCompatibleRelease",
+        `Não há release estável compatível com Minecraft ${gameVersion}${loader ? ` e ${loader}` : ""}.`,
       );
     }
     const targetSha1 = curseForgeSha1(latest.file);
@@ -1131,9 +1253,17 @@ async function curseForgeUpdates(
       );
     }
 
-    const upToDate = item.currentSha1 !== undefined
-      ? targetSha1 === item.currentSha1
-      : latest.file.id === item.currentFileId;
+    const installedSha1 = curseForgeSha1(installedFile);
+    const upToDate = latest.file.id === installedFile.id
+      || Boolean(installedSha1 && targetSha1 === installedSha1);
+    if (!upToDate && compareCurseForgeFileVersions(latest.file, installedFile) <= 0) {
+      return blockedCurseForgeUpdate(
+        item,
+        project,
+        "installedVersionNotOlder",
+        "A versão instalada é tão nova quanto ou mais nova que a release estável encontrada. O Aurora não fará downgrade.",
+      );
+    }
     const resolvedUrl = upToDate
       ? (validCurseForgeCdnUrl(latest.file.downloadUrl) ? latest.file.downloadUrl : undefined)
       : await resolvableCurseForgeDownloadUrl(env, item.projectId, latest.file);
@@ -1183,7 +1313,9 @@ async function curseForgeCatalog(request: Request, env: Env, userId: string): Pr
   let path = "";
   const query = new URLSearchParams();
   if (action === "updates") {
-    enforceRateLimit(`curseforge-updates:${userId}`, 4);
+    // Three content categories can require four chunks each, followed by one
+    // modpack check. The global per-user limit remains the outer ceiling.
+    enforceRateLimit(`curseforge-updates:${userId}`, 13);
     return await curseForgeUpdates(request, env, body);
   } else if (action === "search") {
     const pageSize = body.pageSize ?? 20;

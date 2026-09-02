@@ -225,7 +225,7 @@ test("preserva a classificação 429 depois do retry final", async () => {
   let calls = 0;
   globalThis.fetch = async () => {
     calls += 1;
-    return jsonResponse({ message: "rate limited" }, 429);
+    return jsonResponse({ message: "rate limited" }, 429, { "Retry-After": "0" });
   };
 
   const response = await worker.fetch(new Request("https://aurora.test/health/curseforge"), env);
@@ -333,8 +333,34 @@ test("seleciona a release CurseForge estável mais recente compatível e preserv
       assert.equal(url.searchParams.get("gameVersion"), "1.20.1");
       assert.equal(url.searchParams.get("modLoaderType"), "4");
       assert.equal(url.searchParams.get("pageSize"), "50");
+      if (url.searchParams.get("index") === "5") {
+        return jsonResponse({
+          data: [{
+            id: 106,
+            modId: 101,
+            fileName: "newest-compatible.jar",
+            fileDate: "2026-09-01T00:00:00Z",
+            releaseType: 1,
+            gameVersions: ["1.20.1", "Fabric"],
+            hashes: [{ algo: 1, value: targetSha1 }],
+            dependencies: [{ modId: 201, relationType: 3 }],
+            downloadUrl: "https://edge.forgecdn.net/files/newest-compatible.jar",
+          }],
+          pagination: { index: 5, pageSize: 50, resultCount: 1, totalCount: 6 },
+        });
+      }
+      assert.equal(url.searchParams.get("index"), "0");
       return jsonResponse({
         data: [
+          {
+            id: 101,
+            modId: 101,
+            fileName: "installed.jar",
+            fileDate: "2026-08-01T00:00:00Z",
+            releaseType: 2,
+            gameVersions: ["1.20.1", "Fabric"],
+            hashes: [{ algo: 1, value: currentSha1 }],
+          },
           {
             id: 105,
             modId: 101,
@@ -369,12 +395,10 @@ test("seleciona a release CurseForge estável mais recente compatível e preserv
             fileDate: "2026-08-28T00:00:00Z",
             releaseType: 1,
             gameVersions: ["1.20.1", "Fabric"],
-            hashes: [{ algo: 1, value: targetSha1 }],
-            dependencies: [{ modId: 201, relationType: 3 }],
-            downloadUrl: "https://edge.forgecdn.net/files/compatible.jar",
+            hashes: [{ algo: 1, value: "6".repeat(40) }],
           },
         ],
-        pagination: { index: 0, pageSize: 50, resultCount: 4, totalCount: 4 },
+        pagination: { index: 0, pageSize: 50, resultCount: 5, totalCount: 6 },
       });
     }
     throw new Error(`fetch inesperado: ${url}`);
@@ -390,17 +414,18 @@ test("seleciona a release CurseForge estável mais recente compatível e preserv
   assert.equal(response.status, 200);
   const payload = await response.json() as { data: Array<Record<string, any>> };
   assert.equal(payload.data[0].status, "updateAvailable");
-  assert.equal(payload.data[0].targetFile.id, 102);
+  assert.equal(payload.data[0].targetFile.id, 106);
   assert.equal(payload.data[0].targetFile.sha1, targetSha1);
   assert.deepEqual(payload.data[0].targetFile.dependencies, [{ modId: 201, relationType: 3 }]);
   assert.equal(payload.data[0].targetFile.downloadMode, "proxy");
   assert.match(payload.data[0].targetFile.downloadUrl, /^https:\/\/aurora\.test\/v1\/curseforge\/download\?ticket=/);
 });
 
-test("usa o fileId instalado e preserva o loader exato ao verificar um modpack", async () => {
+test("busca o fileId instalado exato e preserva o loader ao verificar um modpack", async () => {
   const { publicJwk, token } = await firebaseIdentity("updates-modpack-file-user");
   const targetSha1 = "6".repeat(40);
-  let fileCalls = 0;
+  let pageCalls = 0;
+  let exactCalls = 0;
   globalThis.fetch = async (input, init) => {
     const url = new URL(String(input));
     if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
@@ -409,7 +434,7 @@ test("usa o fileId instalado e preserva o loader exato ao verificar um modpack",
       return jsonResponse({ data: [{ id: 601, classId: 4471, name: "Aurora Pack", slug: "aurora-pack" }] });
     }
     if (url.pathname === "/v1/mods/601/files") {
-      fileCalls += 1;
+      pageCalls += 1;
       assert.equal(url.searchParams.get("gameVersion"), "1.20.1");
       assert.equal(url.searchParams.get("modLoaderType"), "4");
       return jsonResponse({
@@ -417,25 +442,28 @@ test("usa o fileId instalado e preserva o loader exato ao verificar um modpack",
           {
             id: 603,
             modId: 601,
-            fileName: "aurora-pack-forge.zip",
+            fileName: "aurora-pack-fabric-new.zip",
             fileDate: "2026-09-02T00:00:00Z",
-            releaseType: 1,
-            gameVersions: ["1.20.1", "Forge"],
-            hashes: [{ algo: 1, value: "7".repeat(40) }],
-          },
-          {
-            id: 602,
-            modId: 601,
-            fileName: "aurora-pack-fabric.zip",
-            fileDate: "2026-09-01T00:00:00Z",
             releaseType: 1,
             gameVersions: ["1.20.1", "Fabric"],
             hashes: [{ algo: 1, value: targetSha1 }],
-            downloadUrl: "https://edge.forgecdn.net/files/aurora-pack-fabric.zip",
+            downloadUrl: "https://edge.forgecdn.net/files/aurora-pack-fabric-new.zip",
           },
         ],
-        pagination: { index: 0, pageSize: 50, resultCount: 2, totalCount: 2 },
+        pagination: { index: 0, pageSize: 50, resultCount: 1, totalCount: 1 },
       });
+    }
+    if (url.pathname === "/v1/mods/601/files/602") {
+      exactCalls += 1;
+      return jsonResponse({ data: {
+        id: 602,
+        modId: 601,
+        fileName: "aurora-pack-fabric.zip",
+        fileDate: "2026-09-01T00:00:00Z",
+        releaseType: 1,
+        gameVersions: ["1.20.1", "Fabric"],
+        hashes: [{ algo: 1, value: "5".repeat(40) }],
+      } });
     }
     throw new Error(`fetch inesperado: ${url}`);
   };
@@ -449,12 +477,13 @@ test("usa o fileId instalado e preserva o loader exato ao verificar um modpack",
   }), env);
   assert.equal(response.status, 200);
   const payload = await response.json() as { data: Array<Record<string, any>> };
-  assert.equal(payload.data[0].status, "upToDate");
+  assert.equal(payload.data[0].status, "updateAvailable");
   assert.equal(payload.data[0].currentFileId, 602);
   assert.equal(payload.data[0].currentSha1, undefined);
-  assert.equal(payload.data[0].targetFile.id, 602);
+  assert.equal(payload.data[0].targetFile.id, 603);
   assert.equal(payload.data[0].targetFile.sha1, targetSha1);
-  assert.equal(fileCalls, 1);
+  assert.equal(pageCalls, 1);
+  assert.equal(exactCalls, 1);
 
   const missingLoader = await worker.fetch(curseForgeRequest(token, {
     action: "updates",
@@ -467,7 +496,8 @@ test("usa o fileId instalado e preserva o loader exato ao verificar um modpack",
   assert.equal(missingLoaderPayload.data[0].status, "blocked");
   assert.equal(missingLoaderPayload.data[0].reason, "loaderRequired");
   assert.equal(missingLoaderPayload.data[0].currentFileId, 602);
-  assert.equal(fileCalls, 1);
+  assert.equal(pageCalls, 1);
+  assert.equal(exactCalls, 1);
 });
 
 test("marca conteúdo CurseForge com a mesma SHA-1 como atualizado", async () => {
@@ -524,9 +554,10 @@ test("bloqueia atualização quando não existe release estável compatível", a
           id: 304,
           modId: 303,
           fileName: "beta-only.jar",
+          fileDate: "2026-08-29T00:00:00Z",
           releaseType: 2,
           gameVersions: ["1.19.2", "Forge"],
-          hashes: [{ algo: 1, value: "b".repeat(40) }],
+          hashes: [{ algo: 1, value: "c".repeat(40) }],
         }],
         pagination: { resultCount: 1, totalCount: 1 },
       });
@@ -558,17 +589,28 @@ test("mantém indicação de página oficial quando a release não possui URL di
     }
     if (url.pathname === "/v1/mods/404/files") {
       return jsonResponse({
-        data: [{
-          id: 405,
-          modId: 404,
-          fileName: "manual-shader.zip",
-          fileDate: "2026-08-30T00:00:00Z",
-          releaseType: 1,
-          gameVersions: ["1.21.1"],
-          hashes: [{ algo: 1, value: targetSha1 }],
-          dependencies: [{ modId: 406, relationType: 3 }],
-        }],
-        pagination: { resultCount: 1, totalCount: 1 },
+        data: [
+          {
+            id: 405,
+            modId: 404,
+            fileName: "manual-shader.zip",
+            fileDate: "2026-08-30T00:00:00Z",
+            releaseType: 1,
+            gameVersions: ["1.21.1"],
+            hashes: [{ algo: 1, value: targetSha1 }],
+            dependencies: [{ modId: 406, relationType: 3 }],
+          },
+          {
+            id: 403,
+            modId: 404,
+            fileName: "installed-shader.zip",
+            fileDate: "2026-08-29T00:00:00Z",
+            releaseType: 1,
+            gameVersions: ["1.21.1"],
+            hashes: [{ algo: 1, value: "e".repeat(40) }],
+          },
+        ],
+        pagination: { resultCount: 2, totalCount: 2 },
       });
     }
     if (url.pathname === "/v1/mods/404/files/405/download-url") {
@@ -593,6 +635,206 @@ test("mantém indicação de página oficial quando a release não possui URL di
   assert.deepEqual(payload.data[0].targetFile.dependencies, [{ modId: 406, relationType: 3 }]);
 });
 
+test("bloqueia a sugestão quando o limite de páginas é atingido mesmo após achar candidato", async () => {
+  const { publicJwk, token } = await firebaseIdentity("updates-scan-cap-user");
+  const currentSha1 = "1".repeat(40);
+  let pageCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
+    if (url.pathname === "/v1/mods") {
+      return jsonResponse({ data: [{ id: 701, classId: 6, name: "Long history", slug: "long-history" }] });
+    }
+    if (url.pathname === "/v1/mods/701/files") {
+      const index = Number(url.searchParams.get("index"));
+      pageCalls += 1;
+      return jsonResponse({
+        data: [{
+          id: 710 + index,
+          modId: 701,
+          fileName: `page-${index}.jar`,
+          fileDate: `2026-08-${String(index + 10).padStart(2, "0")}T00:00:00Z`,
+          releaseType: 1,
+          gameVersions: ["1.20.1", "Fabric"],
+          hashes: [{ algo: 1, value: index === 0 ? currentSha1 : String(index + 1).repeat(40) }],
+          downloadUrl: `https://edge.forgecdn.net/files/page-${index}.jar`,
+        }],
+        pagination: { index, pageSize: 50, resultCount: 1, totalCount: 5 },
+      });
+    }
+    throw new Error(`fetch inesperado: ${url}`);
+  };
+
+  const response = await worker.fetch(curseForgeRequest(token, {
+    action: "updates",
+    contentType: "mod",
+    gameVersion: "1.20.1",
+    loader: "fabric",
+    items: [{ projectId: 701, currentSha1 }],
+  }), env);
+  assert.equal(response.status, 200);
+  const payload = await response.json() as { data: Array<Record<string, unknown>> };
+  assert.equal(payload.data[0].status, "blocked");
+  assert.equal(payload.data[0].reason, "scanLimitReached");
+  assert.equal(payload.data[0].targetFile, undefined);
+  assert.equal(pageCalls, 4);
+});
+
+test("não oferece downgrade quando a versão instalada é mais nova que a release estável", async () => {
+  const { publicJwk, token } = await firebaseIdentity("updates-no-downgrade-user");
+  const currentSha1 = "8".repeat(40);
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
+    if (url.pathname === "/v1/mods") {
+      return jsonResponse({ data: [{ id: 801, classId: 6, name: "Preview mod", slug: "preview-mod" }] });
+    }
+    if (url.pathname === "/v1/mods/801/files") {
+      return jsonResponse({
+        data: [
+          {
+            id: 803,
+            modId: 801,
+            fileName: "installed-beta.jar",
+            fileDate: "2026-09-02T00:00:00Z",
+            releaseType: 2,
+            gameVersions: ["1.20.1", "Forge"],
+            hashes: [{ algo: 1, value: currentSha1 }],
+          },
+          {
+            id: 802,
+            modId: 801,
+            fileName: "older-stable.jar",
+            fileDate: "2026-09-01T00:00:00Z",
+            releaseType: 1,
+            gameVersions: ["1.20.1", "Forge"],
+            hashes: [{ algo: 1, value: "9".repeat(40) }],
+          },
+        ],
+        pagination: { resultCount: 2, totalCount: 2 },
+      });
+    }
+    throw new Error(`fetch inesperado: ${url}`);
+  };
+
+  const response = await worker.fetch(curseForgeRequest(token, {
+    action: "updates",
+    contentType: "mod",
+    gameVersion: "1.20.1",
+    loader: "forge",
+    items: [{ projectId: 801, currentSha1 }],
+  }), env);
+  const payload = await response.json() as { data: Array<Record<string, unknown>> };
+  assert.equal(payload.data[0].status, "blocked");
+  assert.equal(payload.data[0].reason, "installedVersionNotOlder");
+  assert.equal(payload.data[0].targetFile, undefined);
+});
+
+test("rejeita fileId instalado fora do projeto e contexto solicitados", async () => {
+  const { publicJwk, token } = await firebaseIdentity("updates-current-context-user");
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
+    if (url.pathname === "/v1/mods") {
+      return jsonResponse({ data: [{ id: 901, classId: 4471, name: "Context pack", slug: "context-pack" }] });
+    }
+    if (url.pathname === "/v1/mods/901/files") {
+      return jsonResponse({
+        data: [{
+          id: 903,
+          modId: 901,
+          fileName: "target.zip",
+          fileDate: "2026-09-02T00:00:00Z",
+          releaseType: 1,
+          gameVersions: ["1.20.1", "Fabric"],
+          hashes: [{ algo: 1, value: "3".repeat(40) }],
+        }],
+        pagination: { resultCount: 1, totalCount: 1 },
+      });
+    }
+    if (url.pathname === "/v1/mods/901/files/902") {
+      return jsonResponse({ data: {
+        id: 902,
+        modId: 901,
+        fileName: "wrong-loader.zip",
+        fileDate: "2026-09-01T00:00:00Z",
+        releaseType: 1,
+        gameVersions: ["1.20.1", "Forge"],
+      } });
+    }
+    throw new Error(`fetch inesperado: ${url}`);
+  };
+
+  const response = await worker.fetch(curseForgeRequest(token, {
+    action: "updates",
+    contentType: "modpack",
+    gameVersion: "1.20.1",
+    loader: "fabric",
+    items: [{ projectId: 901, currentFileId: 902 }],
+  }), env);
+  const payload = await response.json() as { data: Array<Record<string, unknown>> };
+  assert.equal(payload.data[0].status, "blocked");
+  assert.equal(payload.data[0].reason, "installedFileContextMismatch");
+});
+
+test("aceita no máximo quatro projetos por chamada de atualização", async () => {
+  const { publicJwk, token } = await firebaseIdentity("updates-four-items-user");
+  const projectIds = [1001, 1002, 1003, 1004];
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
+    if (url.pathname === "/v1/mods") {
+      assert.deepEqual(JSON.parse(String(init?.body)), { modIds: projectIds, filterPcOnly: true });
+      return jsonResponse({ data: projectIds.map((id) => ({ id, classId: 12, name: `Pack ${id}` })) });
+    }
+    const match = url.pathname.match(/^\/v1\/mods\/(\d+)\/files$/);
+    if (match) {
+      const projectId = Number(match[1]);
+      const sha1 = String(projectId % 10).repeat(40);
+      return jsonResponse({
+        data: [{
+          id: projectId + 10,
+          modId: projectId,
+          fileName: `${projectId}.zip`,
+          fileDate: "2026-09-01T00:00:00Z",
+          releaseType: 1,
+          gameVersions: ["1.20.1"],
+          hashes: [{ algo: 1, value: sha1 }],
+        }],
+        pagination: { resultCount: 1, totalCount: 1 },
+      });
+    }
+    throw new Error(`fetch inesperado: ${url}`);
+  };
+
+  const response = await worker.fetch(curseForgeRequest(token, {
+    action: "updates",
+    contentType: "resourcepack",
+    gameVersion: "1.20.1",
+    items: projectIds.map((projectId) => ({ projectId, currentSha1: String(projectId % 10).repeat(40) })),
+  }), env);
+  assert.equal(response.status, 200);
+  const payload = await response.json() as { data: Array<Record<string, unknown>> };
+  assert.equal(payload.data.length, 4);
+  assert.ok(payload.data.every((result) => result.status === "upToDate"));
+});
+
+test("permite os treze chunks necessários ao scan completo antes do limite específico", async () => {
+  const { publicJwk, token } = await firebaseIdentity("updates-rate-window-user");
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
+    throw new Error(`fetch inesperado: ${url}`);
+  };
+  for (let index = 0; index < 13; index += 1) {
+    const response = await worker.fetch(curseForgeRequest(token, { action: "updates" }), env);
+    assert.equal(response.status, 400);
+  }
+  const limited = await worker.fetch(curseForgeRequest(token, { action: "updates" }), env);
+  assert.equal(limited.status, 429);
+  assert.match(await limited.text(), /muitas solicitações/i);
+});
+
 test("rejeita schema, limite, IDs e hashes inválidos na verificação de atualizações", async () => {
   const { publicJwk, token } = await firebaseIdentity("updates-invalid-user");
   let curseForgeCalls = 0;
@@ -612,7 +854,7 @@ test("rejeita schema, limite, IDs e hashes inválidos na verificação de atuali
     { ...validBase, items: "invalid" },
     {
       ...validBase,
-      items: Array.from({ length: 101 }, (_, index) => ({ projectId: index + 1, currentSha1: "a".repeat(40) })),
+      items: Array.from({ length: 5 }, (_, index) => ({ projectId: index + 1, currentSha1: "a".repeat(40) })),
     },
     { ...validBase, items: [{ projectId: 0, currentSha1: "a".repeat(40) }] },
     { ...validBase, items: [{ projectId: 1, currentSha1: "not-a-sha1" }] },
