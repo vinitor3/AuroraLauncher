@@ -33,7 +33,7 @@ const firebaseJwksUrl =
 const curseForgeApiBase = "https://api.curseforge.com/v1";
 const supabaseBase = "https://pgbzkinjfwbncifurirb.supabase.co";
 const appearanceBucket = "aurora-appearance";
-const auroraApiRevision = "2026-09-02-content-updates-v5";
+const auroraApiRevision = "2026-09-02-content-updates-v6";
 const minecraftGameId = 432;
 const curseForgeClassIds = { mod: 6, modpack: 4471, resourcepack: 12, shader: 6552 } as const;
 const curseForgeLoaderIds = { forge: 1, fabric: 4 } as const;
@@ -1313,9 +1313,11 @@ async function curseForgeCatalog(request: Request, env: Env, userId: string): Pr
   let path = "";
   const query = new URLSearchParams();
   if (action === "updates") {
-    // Three content categories can require four chunks each, followed by one
-    // modpack check. The global per-user limit remains the outer ceiling.
-    enforceRateLimit(`curseforge-updates:${userId}`, 13);
+    // One complete desktop cycle can use 13 chunks for the scan, four to
+    // revalidate a reviewed 16-item batch and another 13 after commit. Keep
+    // that safe cycle below the authenticated route ceiling without dropping
+    // the mandatory pre-commit revalidation.
+    enforceRateLimit(`curseforge-updates:${userId}`, 32);
     return await curseForgeUpdates(request, env, body);
   } else if (action === "search") {
     const pageSize = body.pageSize ?? 20;
@@ -1778,7 +1780,15 @@ export default {
     try {
       const claims = await verifyFirebaseToken(request, env);
       const userId = claims.user_id ?? claims.sub;
-      enforceRateLimit(userId);
+      if (url.pathname === "/v1/curseforge") {
+        // CurseForge update scans are deliberately split into <=4 projects so
+        // every Worker invocation stays under the subrequest limit. Give that
+        // authenticated route its own bounded budget; assistant/appearance
+        // keep the stricter shared budget below.
+        enforceRateLimit(`curseforge:${userId}`, 48);
+      } else {
+        enforceRateLimit(userId);
+      }
       if (url.pathname === "/v1/assistant") return await askGemini(request, env);
       if (url.pathname === "/v1/curseforge") return await curseForgeCatalog(request, env, userId);
       if (url.pathname === "/v1/appearance") return await uploadAppearance(request, env, userId);

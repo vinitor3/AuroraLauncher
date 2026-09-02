@@ -819,14 +819,14 @@ test("aceita no máximo quatro projetos por chamada de atualização", async () 
   assert.ok(payload.data.every((result) => result.status === "upToDate"));
 });
 
-test("permite os treze chunks necessários ao scan completo antes do limite específico", async () => {
+test("reserva o ciclo completo de scan, confirmação e refresh antes do limite específico", async () => {
   const { publicJwk, token } = await firebaseIdentity("updates-rate-window-user");
   globalThis.fetch = async (input) => {
     const url = new URL(String(input));
     if (url.hostname === "www.googleapis.com") return jsonResponse({ keys: [publicJwk] });
     throw new Error(`fetch inesperado: ${url}`);
   };
-  for (let index = 0; index < 13; index += 1) {
+  for (let index = 0; index < 32; index += 1) {
     const response = await worker.fetch(curseForgeRequest(token, { action: "updates" }), env);
     assert.equal(response.status, 400);
   }
