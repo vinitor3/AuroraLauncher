@@ -46,6 +46,8 @@ O release preflight recompila as 27 combinações e compara o conteúdo normaliz
 
 ## Roteiro runtime obrigatório
 
+Skins **0.2.3** substitui 0.2.2 na próxima build do launcher: a prévia guarda somente o PNG e não altera metadados da biblioteca/skin ativa, inclusive quando a textura é idêntica e o modelo é diferente. 0.2.2 permanece imutável como histórico. Estado das nove combinações: **IMPLEMENTADO MAS NÃO HOMOLOGADO**, até repetição do roteiro abaixo.
+
 1. Instância limpa e hashes de instalador/JAR.
 2. Java/loader corretos e launch sem argumento sensível.
 3. Handshake IPC e rejeição de nonce inválido.

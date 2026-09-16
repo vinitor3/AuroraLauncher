@@ -9,7 +9,7 @@ import com.aurora.core.api.ui.AuroraSettingsRegistry;
 /** Service-loaded official module. Aurora Core owns its lifecycle. */
 public final class AuroraSkinsModule implements AuroraModule {
     @Override public AuroraModuleMetadata metadata() {
-        return new AuroraModuleMetadata("aurora_skins", "Skins", "0.2.2", "skin", "1.1.2");
+        return new AuroraModuleMetadata("aurora_skins", "Skins", "0.2.3", "skin", "1.1.2");
     }
 
     @Override public void initialize(AuroraModuleContext context) throws Exception {

@@ -8,7 +8,7 @@ dependencies {
     forge "net.minecraftforge:forge:${rootProject.forge_version}"
     common(project(path: ":common", configuration: "namedElements")) { transitive false }
     shadowCommon(project(path: ":common", configuration: "transformProductionForge")) { transitive false }
-    shadowCommon files(rootProject.file("../../core/build/libs/aurora-skins-core-0.2.2.jar"))
+    shadowCommon files(rootProject.file("../../core/build/libs/aurora-skins-core-0.2.3.jar"))
 }
 
 processResources {

@@ -33,6 +33,25 @@ final class AuroraSkinStoreTest {
         assertEquals(first.contentHash(), store.history().get(0).contentHash());
     }
 
+    @Test void previewOfSameTextureMustNotChangeSavedModelOrName() throws Exception {
+        Path png = temporary.resolve("active.png");
+        ImageIO.write(new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB), "png", png.toFile());
+        AuroraSkinStore store = new AuroraSkinStore(temporary.resolve("library"));
+        SkinEntry active = store.importSkin(png, "Minha skin", SkinModel.SLIM);
+        store.setActive(active);
+        SkinEntry candidate = new SkinEntry("remote", "Prévia", "MCStat", SkinModel.WIDE,
+            "aurora-online", "https://aurora.example/skin.png", active.contentHash(), null, active.tags());
+        SkinEntry preview = store.cacheCatalogSkin(png, candidate);
+        assertEquals(SkinModel.WIDE, preview.model());
+        assertEquals(SkinModel.SLIM, store.active().model());
+        assertEquals("Minha skin", store.list().get(0).name());
+        AuroraSkinStore reopened = new AuroraSkinStore(store.root());
+        assertEquals(SkinModel.SLIM, reopened.active().model());
+        store.importCatalogSkin(preview.file(), preview);
+        assertEquals("Prévia", store.list().get(0).name());
+        assertEquals(1, store.list().size());
+    }
+
     @Test void rejectsImagesWithInvalidDimensions() throws Exception {
         Path png = temporary.resolve("invalid.png");
         ImageIO.write(new BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB), "png", png.toFile());

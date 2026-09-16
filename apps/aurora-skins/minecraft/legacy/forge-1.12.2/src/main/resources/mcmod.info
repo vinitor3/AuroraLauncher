@@ -3,7 +3,7 @@
     "modid": "aurora_skins",
     "name": "Aurora Skins",
     "description": "Biblioteca e renderização de skins integradas ao Aurora Core.",
-    "version": "0.2.2",
+    "version": "0.2.3",
     "mcversion": "1.12.2",
     "clientSideOnly": true,
     "requiredMods": ["aurora_core@[1.1.2,)"]

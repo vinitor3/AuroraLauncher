@@ -40,8 +40,17 @@ export function SkinPreviewCanvas({ skinModel, skinUrl }: { skinModel: "classic"
       viewer.resetSkin();
       return;
     }
-    void viewer.loadSkin(skinUrl, { model: skinModel === "classic" ? "default" : "slim" })
-      .catch(() => setPreviewError(true));
+    const image = new Image();
+    let cancelled = false;
+    image.crossOrigin = "anonymous";
+    image.onload = () => {
+      if (cancelled || viewerRef.current !== viewer) return;
+      try { viewer.loadSkin(image, { model: skinModel === "classic" ? "default" : "slim" }); }
+      catch { setPreviewError(true); }
+    };
+    image.onerror = () => { if (!cancelled) setPreviewError(true); };
+    image.src = skinUrl;
+    return () => { cancelled = true; image.onload = null; image.onerror = null; image.src = ""; };
   }, [skinModel, skinUrl]);
 
   return (

@@ -60,6 +60,7 @@ public final class AuroraSkinStore {
     public synchronized SkinEntry importCatalogSkin(Path source, SkinEntry catalogEntry)
             throws IOException, SkinValidationException {
         SkinEntry entry = cacheCatalogSkin(source, catalogEntry);
+        writeMetadata(entry);
         appendUnique(root.resolve("library.index"), entry.contentHash(), Integer.MAX_VALUE);
         return entry;
     }
@@ -81,7 +82,7 @@ public final class AuroraSkinStore {
         SkinEntry entry = new SkinEntry(catalogEntry.id(), catalogEntry.name(), catalogEntry.author(),
             catalogEntry.model(), catalogEntry.providerId(), catalogEntry.source(), hash, target,
             catalogEntry.tags());
-        writeMetadata(entry);
+        // A preview owns only its returned entry and PNG cache, never saved library metadata.
         return entry;
     }
 

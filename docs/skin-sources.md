@@ -83,4 +83,4 @@ As rotas Aurora são `GET /v1/skins/players?query=Not`, `GET /v1/skins/profile/N
 `npm --prefix apps/edge-proxy test`, `npm --prefix apps/edge-proxy run check`, `npm --prefix apps/desktop run build` e `npm run skins:build`.
 Execute o script de matriz com **JDK 21** em JAVA_HOME (os projetos antigos selecionam toolchain 17 e bytecode Java 8). O exemplo visual do desktop em `examples/skins.html` usa as mesmas peças de busca e não salva conta/skin.
 
-Estado de gameplay do Skins 0.2.2: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. As correções anteriores de avatar, botão e SLF4J permanecem; build não substitui teste visual/mundo/servidor nas nove combinações.
+Estado de gameplay do Skins 0.2.3: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. As correções anteriores de avatar, botão e SLF4J permanecem; build não substitui teste visual/mundo/servidor nas nove combinações.
