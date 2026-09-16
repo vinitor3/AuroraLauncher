@@ -1,0 +1,4 @@
+# Optional. Without MC_API_KEY, mc-api is called anonymously.
+MC_API_KEY=
+# Local development only. Production uses Cloudflare Worker secrets.
+mcstat_API_KEY=

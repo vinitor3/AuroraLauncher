@@ -59,6 +59,13 @@ public final class AuroraSkinStore {
 
     public synchronized SkinEntry importCatalogSkin(Path source, SkinEntry catalogEntry)
             throws IOException, SkinValidationException {
+        SkinEntry entry = cacheCatalogSkin(source, catalogEntry);
+        appendUnique(root.resolve("library.index"), entry.contentHash(), Integer.MAX_VALUE);
+        return entry;
+    }
+
+    public synchronized SkinEntry cacheCatalogSkin(Path source, SkinEntry catalogEntry)
+            throws IOException, SkinValidationException {
         if (catalogEntry == null) throw new SkinValidationException("Item de catálogo inválido.");
         validate(source);
         String hash = sha256(source);
@@ -75,7 +82,6 @@ public final class AuroraSkinStore {
             catalogEntry.model(), catalogEntry.providerId(), catalogEntry.source(), hash, target,
             catalogEntry.tags());
         writeMetadata(entry);
-        appendUnique(root.resolve("library.index"), hash, Integer.MAX_VALUE);
         return entry;
     }
 

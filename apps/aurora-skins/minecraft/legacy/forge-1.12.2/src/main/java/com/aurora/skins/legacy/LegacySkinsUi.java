@@ -35,7 +35,50 @@ final class LegacySkinsUi {
     LegacySkinsUi(AuroraSkinsRuntime runtime) { this.runtime = runtime; }
 
     @SubscribeEvent public void onTick(TickEvent.ClientTickEvent event) {
-        if (event.phase == TickEvent.Phase.END) LegacySkinManager.applyToLocalPlayer();
+        if (event.phase == TickEvent.Phase.END) {
+            LegacySkinManager.applyToLocalPlayer();
+            Object current = LegacyMinecraft.field(LegacyMinecraft.minecraft(), "currentScreen", "field_71462_r");
+            java.util.Iterator<State> iterator = states.values().iterator();
+            while (iterator.hasNext()) {
+                State state = iterator.next();
+                if (state.screen != current) { state.request++; state.previewRequest++; state.renderer.close(); iterator.remove(); }
+                else if (state.search != null) invokeAny(state.search, "updateCursorCounter", "func_146178_a");
+            }
+        }
+    }
+
+    @SubscribeEvent public void onKeyboard(GuiScreenEvent.KeyboardInputEvent.Pre event) {
+        State state = states.get(invoke(event, "getGui"));
+        if (state == null || state.search == null) return;
+        try {
+            Class<?> keyboard = Class.forName("org.lwjgl.input.Keyboard");
+            if (!Boolean.TRUE.equals(keyboard.getMethod("getEventKeyState").invoke(null))) return;
+            char character = (Character)keyboard.getMethod("getEventCharacter").invoke(null);
+            int key = (Integer)keyboard.getMethod("getEventKey").invoke(null);
+            if (key == 1) return;
+            Object handled = LegacyMinecraft.invoke(state.search, new String[] {"textboxKeyTyped", "func_146201_a"}, character, key);
+            if (Boolean.TRUE.equals(handled)) {
+                event.setCanceled(true);
+                String query = String.valueOf(invokeAny(state.search, "getText", "func_146179_b"));
+                if (!query.equals(state.query)) { state.query = query; state.catalogPage = 0; state.selected = 0; refresh(state); }
+            }
+        } catch (ReflectiveOperationException ignored) { }
+    }
+
+    @SubscribeEvent public void onMouse(GuiScreenEvent.MouseInputEvent.Pre event) {
+        Object screen = invoke(event, "getGui"); State state = states.get(screen);
+        if (state == null || state.search == null) return;
+        try {
+            Class<?> mouse = Class.forName("org.lwjgl.input.Mouse");
+            if (!Boolean.TRUE.equals(mouse.getMethod("getEventButtonState").invoke(null))) return;
+            Object minecraft = LegacyMinecraft.minecraft();
+            int x = (Integer)mouse.getMethod("getEventX").invoke(null) * width(screen)
+                / Math.max(1, integer(LegacyMinecraft.field(minecraft, "displayWidth", "field_71443_c"), width(screen)));
+            int y = height(screen) - (Integer)mouse.getMethod("getEventY").invoke(null) * height(screen)
+                / Math.max(1, integer(LegacyMinecraft.field(minecraft, "displayHeight", "field_71440_d"), height(screen))) - 1;
+            int button = (Integer)mouse.getMethod("getEventButton").invoke(null);
+            LegacyMinecraft.invoke(state.search, new String[] {"mouseClicked", "func_146192_a"}, x, y, button);
+        } catch (ReflectiveOperationException ignored) { }
     }
 
     @SubscribeEvent public void onInit(GuiScreenEvent.InitGuiEvent.Post event) {
@@ -60,7 +103,8 @@ final class LegacySkinsUi {
         int id = integer(LegacyMinecraft.field(pressed, "id", "field_146127_k"), -1);
         if (id == OPEN) { open(screen, new Runnable() { @Override public void run() { closeToVanilla(screen); }}); return; }
         State state = states.get(screen); if (state == null) return;
-        if (id == CLOSE) { states.remove(screen); state.close.run(); return; }
+        if (id == CLOSE) { state.request++; state.previewRequest++; state.renderer.close(); runtime.catalogProvider().cancelSearch(); states.remove(screen); state.close.run(); return; }
+        if (state.busy && (id == APPLY || id == FAVORITE || id == MODEL || id == IMPORT)) return;
         if (id == LIBRARY || id == FAVORITES || id == HISTORY || id == EXPLORE) {
             state.request++; state.view = id == FAVORITES ? 1 : id == HISTORY ? 2 : id == EXPLORE ? 3 : 0;
             state.selected = 0; if (state.view == 3) state.catalogPage = 0; refresh(state); rebuild(screen, state); return;
@@ -74,6 +118,7 @@ final class LegacySkinsUi {
                     state.catalogPage--; state.selected = 0; refresh(state);
                 } else state.selected = (state.selected + amount + state.entries.size()) % state.entries.size();
             }
+            if (state.entries.isEmpty() && state.view == 3 && state.catalogHasMore && id == NEXT) { state.catalogPage++; refresh(state); }
             rebuild(screen, state); return;
         }
         if (id == APPLY) apply(state);
@@ -86,6 +131,20 @@ final class LegacySkinsUi {
     @SubscribeEvent public void onBackground(GuiScreenEvent.BackgroundDrawnEvent event) {
         Object screen = invoke(event, "getGui"); if (!states.containsKey(screen)) return;
         AuroraSkinsLayout layout = AuroraSkinsLayout.calculate(width(screen), height(screen));
+        State state = states.get(screen);
+        if (state.search == null || state.screenWidth != width(screen) || state.screenHeight != height(screen)) {
+            try {
+                Object font = LegacyMinecraft.field(screen, "fontRenderer", "field_146289_q");
+                Class<?> type = Class.forName("net.minecraft.client.gui.GuiTextField");
+                AuroraSkinsLayout.Slot searchSlot = layout.search();
+                state.search = type.getConstructor(int.class, Class.forName("net.minecraft.client.gui.FontRenderer"),
+                    int.class, int.class, int.class, int.class).newInstance(0, font, searchSlot.x(), searchSlot.y(), searchSlot.width(), searchSlot.height());
+                LegacyMinecraft.invoke(state.search, new String[] {"setMaxStringLength", "func_146203_f"}, 80);
+                LegacyMinecraft.invoke(state.search, new String[] {"setText", "func_146180_a"}, state.query);
+                state.screenWidth = width(screen); state.screenHeight = height(screen);
+            } catch (ReflectiveOperationException ignored) { }
+        }
+        if (!state.busy) refreshPreview(state);
         drawRect(layout.panelLeft(), layout.panelTop(), layout.panelRight(), layout.panelBottom(), 0xE61A112B);
         drawRect(layout.panelLeft(), layout.panelTop(), layout.panelLeft() + 3, layout.panelBottom(), 0xFFB78CFF);
     }
@@ -145,6 +204,12 @@ final class LegacySkinsUi {
         try {
             state.entries = state.view == 1 ? runtime.store().favorites() : state.view == 2 ? runtime.store().history()
                 : runtime.store().list();
+            if (!state.query.trim().isEmpty()) {
+                List<SkinEntry> filtered = new ArrayList<SkinEntry>();
+                String query = state.query.trim().toLowerCase(java.util.Locale.ROOT);
+                for (SkinEntry entry : state.entries) if (entry.name().toLowerCase(java.util.Locale.ROOT).contains(query)) filtered.add(entry);
+                state.entries = filtered;
+            }
             if (state.selected >= state.entries.size()) state.selected = Math.max(0, state.entries.size() - 1);
             state.status = state.entries.isEmpty() ? "Nenhuma skin aqui. Importe um PNG 64x64 ou 64x32." : "";
         } catch (Exception error) { state.entries = Collections.emptyList(); state.status = "Não foi possível ler a biblioteca local."; }
@@ -153,7 +218,7 @@ final class LegacySkinsUi {
     private void refreshCatalog(final State state) {
         final int request = ++state.request;
         state.busy = true; state.status = "Buscando no catálogo Aurora...";
-        runtime.catalogProvider().search("", state.catalogPage, 12).whenComplete((page, error) ->
+        runtime.catalogProvider().searchDebounced(state.query, state.catalogPage, 12).whenComplete((page, error) ->
             LegacyMinecraft.execute(new Runnable() { @Override public void run() {
                 if (request != state.request || state.view != 3) return;
                 state.busy = false;
@@ -172,6 +237,18 @@ final class LegacySkinsUi {
     }
 
     private SkinEntry selected(State state) { return state.entries.isEmpty() ? null : state.entries.get(state.selected); }
+    private void refreshPreview(final State state) {
+        SkinEntry entry = selected(state);
+        String key = entry == null ? "" : entry.id() + ":" + entry.contentHash() + ":" + entry.model().id();
+        if (key.equals(state.previewKey)) return;
+        state.previewKey = key; final int request = ++state.previewRequest; state.renderer.close();
+        if (entry == null) return;
+        runtime.catalogProvider().preview(entry).whenComplete((installed, error) -> LegacyMinecraft.execute(() -> {
+            if (request != state.previewRequest || !states.containsKey(state.screen)) return;
+            if (error != null || installed == null) { state.status = "Prévia indisponível."; return; }
+            try { state.renderer.setSkin(installed); } catch (Exception failure) { state.status = "Prévia indisponível."; }
+        }));
+    }
     private void apply(final State state) { SkinEntry entry = selected(state); if (entry == null) return;
         withInstalled(state, entry, "Não foi possível aplicar esta skin.", new InstalledAction() {
             @Override public void run(SkinEntry installed) throws Exception {
@@ -200,9 +277,11 @@ final class LegacySkinsUi {
     }
 
     private void withInstalled(final State state, SkinEntry entry, final String errorMessage, final InstalledAction action) {
+        final int request = ++state.request;
         state.busy = true; state.status = "Preparando e verificando esta skin...";
         runtime.materialize(entry).whenComplete((installed, error) -> LegacyMinecraft.execute(new Runnable() {
             @Override public void run() {
+                if (request != state.request || !states.containsKey(state.screen)) return;
                 try {
                     if (error != null || installed == null) throw new IllegalStateException();
                     action.run(installed);
@@ -237,6 +316,9 @@ final class LegacySkinsUi {
     private void drawPage(Object screen, State state, int mouseX, int mouseY) {
         AuroraSkinsLayout layout = AuroraSkinsLayout.calculate(width(screen), height(screen));
         drawText(screen, "AURORA SKINS", width(screen) / 2 - 36, 15, 0xF2EAFF);
+        if (state.search != null) invokeAny(state.search, "drawTextBox", "func_146194_f");
+        if (state.view == 3 && !layout.compact()) drawText(screen, "Tema, #tag ou @jogador / @UUID", layout.search().x(), layout.search().y() - 10, 0xB9AACB);
+        if (!state.busy) refreshPreview(state);
         SkinEntry entry = selected(state); int textX = layout.textX(), textY = layout.textY();
         if (entry != null) {
             drawText(screen, fit(screen, entry.name(), layout.textWidth()), textX, textY, 0xF2EAFF);
@@ -260,7 +342,8 @@ final class LegacySkinsUi {
 
     private void renderPreview(Object screen, AuroraPlayerPreview preview, int mouseX, int mouseY, int x, int y, int scale, PreviewState state) {
         preview.aim(mouseX, mouseY, x, y - scale, 180, 150); long now = System.nanoTime(); preview.update((now - state.lastFrame) / 1_000_000_000F); state.lastFrame = now;
-        Aurora.services().previews().render(screen, x, y, scale, preview);
+        if (state instanceof State) ((State)state).renderer.render(screen, x, y, scale, preview);
+        else Aurora.services().previews().render(screen, x, y, scale, preview);
     }
 
     private void closeToVanilla(Object screen) { states.remove(screen); invokeAny(screen, "initGui", "func_73866_w_"); }
@@ -290,6 +373,9 @@ final class LegacySkinsUi {
         final Object screen; final Runnable close; List<SkinEntry> entries = Collections.emptyList();
         int selected, view, catalogPage, request; boolean catalogHasMore, busy;
         String status = ""; SkinModel importModel = SkinModel.WIDE;
+        String query = "", previewKey = ""; Object search;
+        int screenWidth, screenHeight, previewRequest;
+        final LegacySkinPreviewRenderer renderer = new LegacySkinPreviewRenderer();
         State(Object screen, Runnable close) { this.screen = screen; this.close = close; }
     }
     private interface InstalledAction { void run(SkinEntry entry) throws Exception; }

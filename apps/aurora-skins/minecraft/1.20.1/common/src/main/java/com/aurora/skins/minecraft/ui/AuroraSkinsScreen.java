@@ -31,6 +31,9 @@ public final class AuroraSkinsScreen extends Screen {
 
     private final Screen parent;
     private final AuroraPlayerPreview preview = new AuroraPlayerPreview();
+    private final MinecraftSkinPreviewRenderer selectionPreview = new MinecraftSkinPreviewRenderer();
+    private String previewKey = "";
+    private int previewRequest;
     private View view = View.LIBRARY;
     private List<SkinEntry> entries = Collections.emptyList();
     private int selectedIndex;
@@ -76,6 +79,7 @@ public final class AuroraSkinsScreen extends Screen {
         search = new EditBox(font, searchSlot.x(), searchSlot.y(), searchSlot.width(), searchSlot.height(),
             Component.translatable("aurora_skins.search"));
         search.setHint(Component.translatable("aurora_skins.search_hint"));
+        search.setMaxLength(80);
         search.setResponder(value -> {
             if (view == View.EXPLORE) catalogPage = 0;
             refresh();
@@ -154,7 +158,7 @@ public final class AuroraSkinsScreen extends Screen {
         status = Component.translatable("aurora_skins.catalog_loading").getString();
         updateControls();
         AuroraSkinsRuntime runtime = AuroraSkinsClient.runtime();
-        runtime.catalogProvider().search(query, catalogPage, 12).whenComplete((page, error) ->
+        runtime.catalogProvider().searchDebounced(query, catalogPage, 12).whenComplete((page, error) ->
             minecraft.execute(() -> {
                 if (request != catalogRequest || view != View.EXPLORE) return;
                 busy = false;
@@ -183,7 +187,7 @@ public final class AuroraSkinsScreen extends Screen {
     }
 
     private void move(int direction) {
-        if (entries.isEmpty()) return;
+        if (entries.isEmpty()) { if (view == View.EXPLORE && catalogHasMore) { catalogPage++; refreshCatalog(); } return; }
         if (view == View.EXPLORE) {
             if (direction > 0 && selectedIndex == entries.size() - 1 && catalogHasMore) {
                 catalogPage++;
@@ -305,13 +309,30 @@ public final class AuroraSkinsScreen extends Screen {
         }
     }
 
+    private void refreshPreview() {
+        final SkinEntry entry = selected();
+        String key = entry == null ? "" : entry.id() + ":" + entry.contentHash() + ":" + entry.model().id();
+        if (previewKey.equals(key)) return;
+        previewKey = key;
+        final int request = ++previewRequest;
+        selectionPreview.close();
+        if (entry == null) return;
+        AuroraSkinsClient.runtime().catalogProvider().preview(entry).whenComplete((installed, error) ->
+            minecraft.execute(() -> {
+                if (request != previewRequest || minecraft.screen != this) return;
+                if (error != null || installed == null) { status = "Não foi possível carregar a prévia."; return; }
+                try { selectionPreview.setSkin(installed); }
+                catch (Exception failure) { status = "Não foi possível carregar a prévia."; }
+            }));
+    }
+
     private void updateControls() {
+        if (!busy) refreshPreview();
         SkinEntry entry = selected();
         boolean available = entry != null;
         if (previousButton != null) previousButton.active = !busy && available
             && (entries.size() > 1 || view == View.EXPLORE && catalogPage > 0);
-        if (nextButton != null) nextButton.active = !busy && available
-            && (entries.size() > 1 || view == View.EXPLORE && catalogHasMore);
+        if (nextButton != null) nextButton.active = !busy && (entries.size() > 1 || view == View.EXPLORE && catalogHasMore);
         if (applyButton != null) applyButton.active = !busy && available;
         if (favoriteButton != null) {
             favoriteButton.active = !busy && available;
@@ -335,6 +356,7 @@ public final class AuroraSkinsScreen extends Screen {
         graphics.fill(current.panelLeft(), current.panelTop(), current.panelRight(), current.panelBottom(), PANEL);
         graphics.fill(current.panelLeft(), current.panelTop(), current.panelLeft() + 3, current.panelBottom(), ACCENT);
         graphics.drawCenteredString(font, title, width / 2, 14, TEXT);
+        if (view == View.EXPLORE && !current.compact()) graphics.drawString(font, "Tema, #tag ou @jogador / @UUID", current.search().x(), current.search().y() - 10, MUTED, false);
 
         int previewX = current.previewX();
         int previewY = current.previewY();
@@ -343,7 +365,7 @@ public final class AuroraSkinsScreen extends Screen {
         long now = System.nanoTime();
         preview.update((now - lastFrame) / 1_000_000_000.0F);
         lastFrame = now;
-        Aurora.services().previews().render(graphics, previewX, previewY, scale, preview);
+        selectionPreview.render(graphics, previewX, previewY, scale, preview);
 
         SkinEntry entry = selected();
         int textX = current.textX();
@@ -369,7 +391,8 @@ public final class AuroraSkinsScreen extends Screen {
         return shortened + "…";
     }
 
-    @Override public void onClose() { minecraft.setScreen(parent); }
+    @Override public void onClose() { previewRequest++; selectionPreview.close(); AuroraSkinsClient.runtime().catalogProvider().cancelSearch(); minecraft.setScreen(parent); }
+    @Override public void removed() { previewRequest++; selectionPreview.close(); super.removed(); }
     @Override public boolean isPauseScreen() { return false; }
 
     private interface InstalledAction { void run(SkinEntry entry) throws Exception; }

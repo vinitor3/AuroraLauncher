@@ -1,0 +1,10 @@
+.online-skin-search { display: grid; gap: 10px; min-width: 0; }
+.online-skin-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 6px; max-height: 228px; overflow-y: auto; }
+.online-player-result, .online-catalog-result { text-align: left; min-width: 0; padding: 10px; }
+.online-player-result strong, .online-player-result small, .online-catalog-result strong, .online-catalog-result small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.online-skin-results small { opacity: .65; font-size: 11px; margin-top: 4px; }
+.online-catalog-result { display: flex; gap: 8px; align-items: center; }
+.online-catalog-result canvas { width: 40px; height: 40px; flex-shrink: 0; image-rendering: pixelated; border-radius: 5px; background: #1a112b; }
+.online-catalog-result span { min-width: 0; }
+.online-skin-pagination { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.online-skin-search .muted { font-size: 12px; margin: 0; line-height: 1.5; }

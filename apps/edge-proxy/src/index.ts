@@ -1,7 +1,13 @@
-export interface Env {
+import { SkinService } from "./skins/SkinService.ts";
+import { SkinApiError } from "./skins/http.ts";
+import { skinImageUrl, type PlayerSkinEnv } from "./skins/models.ts";
+
+export interface Env extends PlayerSkinEnv {
   FIREBASE_PROJECT_ID: string;
   GEMINI_API_KEY: string;
   CURSEFORGE_API_KEY: string;
+  mcstat_API_KEY?: string;
+  MCSTAT_API_KEY?: string;
   SUPABASE_API_KEY?: string;
   SUPABASE_API_KEY_SERVICE_ROLE?: string;
 }
@@ -19,6 +25,7 @@ type FirebaseClaims = {
 type JwtHeader = { alg: string; kid?: string };
 type RateWindow = { startedAt: number; count: number };
 type HealthSnapshot = { body: string; expiresAt: number; status: number };
+type TimedPromise<T> = { expiresAt: number; value: Promise<T> };
 
 const windows = new Map<string, RateWindow>();
 const curseForgeResolvedDownloads = new Map<string, { expiresAt: number; url: string }>();
@@ -31,14 +38,21 @@ const textDecoder = new TextDecoder();
 const firebaseJwksUrl =
   "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 const curseForgeApiBase = "https://api.curseforge.com/v1";
+const mcstatApiBase = "https://mcstat.org/api/v1";
 const supabaseBase = "https://pgbzkinjfwbncifurirb.supabase.co";
 const appearanceBucket = "aurora-appearance";
-const auroraApiRevision = "2026-09-01-curseforge-categories-v3";
+const auroraApiRevision = "2026-09-16-player-skins-v1";
 const minecraftGameId = 432;
 const curseForgeClassIds = { mod: 6, modpack: 4471, resourcepack: 12, shader: 6552 } as const;
 const curseForgeLoaderIds = { forge: 1, fabric: 4 } as const;
 const curseForgeRequestTimeoutMs = 15_000;
 const curseForgeDownloadTicketLifetimeMs = 8 * 60 * 60 * 1_000;
+const mcstatListPageSize = 24;
+const mcstatRequestTimeoutMs = 2_500;
+const mcstatMaxResponseBytes = 256 * 1024;
+const mcstatMaxSkinBytes = 256 * 1024;
+const mcstatPageCacheMillis = 5 * 60 * 1_000;
+const mcstatImageCacheMillis = 60 * 60 * 1_000;
 
 class PublicError extends Error {
   readonly status: number;
@@ -57,6 +71,42 @@ function curseForgeApiKey(env: Env): string {
   const value = env.CURSEFORGE_API_KEY?.trim() ?? "";
   const quoted = value.match(/^(["'])(.*)\1$/s);
   return (quoted?.[2] ?? value).trim();
+}
+
+function mcstatApiKey(env: Env): string {
+  const value = (env.mcstat_API_KEY ?? env.MCSTAT_API_KEY ?? "").trim();
+  const quoted = value.match(/^(["'])(.*)\1$/s);
+  return (quoted?.[2] ?? value).trim();
+}
+
+function cachedPromise<T>(
+  cache: Map<string, TimedPromise<T>>,
+  key: string,
+  lifetime: number,
+  maximumEntries: number,
+  loader: () => Promise<T>,
+): Promise<T> {
+  const now = Date.now();
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > now) return cached.value;
+  cache.delete(key);
+  if (cache.size >= maximumEntries) {
+    for (const [candidate, value] of cache) {
+      if (value.expiresAt <= now) cache.delete(candidate);
+    }
+    while (cache.size >= maximumEntries) {
+      const oldest = cache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      cache.delete(oldest);
+    }
+  }
+  const value = loader();
+  const entry = { expiresAt: now + lifetime, value };
+  cache.set(key, entry);
+  void value.catch(() => {
+    if (cache.get(key) === entry) cache.delete(key);
+  });
+  return value;
 }
 
 async function mapWithConcurrency<T, R>(
@@ -1127,6 +1177,47 @@ type CatalogSkin = {
   tags: string[];
 };
 
+type McstatSkin = {
+  name: string;
+  model: "classic" | "slim";
+  tags: string[];
+  author: string;
+  pngUrl: string;
+};
+
+type McstatPage = {
+  skins: Array<McstatSkin | undefined>;
+  total: number;
+  totalPages: number;
+};
+
+type McstatImage = {
+  bytes: Uint8Array;
+  hash: string;
+  url: string;
+};
+
+type CatalogProtocolSkin = {
+  id: string;
+  name: string;
+  author: string;
+  model: "classic" | "slim";
+  hash: string;
+  source: string;
+  tags: string[];
+};
+
+const mcstatPageCache = new Map<string, TimedPromise<McstatPage>>();
+const mcstatImageCache = new Map<string, TimedPromise<McstatImage>>();
+let mcstatCooldownUntil = 0;
+const playerServices = new WeakMap<Env, SkinService>();
+
+function playerSkinService(env: Env): SkinService {
+  let service = playerServices.get(env);
+  if (!service) { service = new SkinService(env); playerServices.set(env, service); }
+  return service;
+}
+
 const catalogSkins: CatalogSkin[] = [
   { id: "aurora-voyager", name: "Viajante Aurora", model: "slim", skin: 0xdcc1a0, hair: 0x241739, primary: 0x7652b8, accent: 0xb78cff, dark: 0x181125, tags: ["aurora", "cosmos", "espaço", "neon", "roxo"] },
   { id: "solar-ninja", name: "Ninja Solar", model: "slim", skin: 0xe7b78e, hair: 0x19151b, primary: 0xe86f22, accent: 0xffc34a, dark: 0x202027, tags: ["anime", "ninja", "naruto", "shinobi", "laranja"] },
@@ -1255,40 +1346,460 @@ function catalogBase64(value: string): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-async function skinCatalogResponse(request: Request): Promise<Response> {
+function boundedUtf8(value: string, maximum: number, fallback = ""): string {
+  const clean = value.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!clean) return fallback;
+  let result = "";
+  for (const character of clean) {
+    if (textEncoder.encode(result + character).length > maximum) break;
+    result += character;
+  }
+  return result || fallback;
+}
+
+function mcstatTags(value: unknown): string[] {
+  const result = ["mcstat"];
+  if (!Array.isArray(value)) return result;
+  for (const candidate of value) {
+    if (typeof candidate !== "string") continue;
+    const tag = boundedUtf8(candidate.replace(/,/g, " "), 40);
+    if (!tag || result.includes(tag)) continue;
+    const next = [...result, tag];
+    if (textEncoder.encode(next.join(",")).length > 500) break;
+    result.push(tag);
+    if (result.length >= 12) break;
+  }
+  return result;
+}
+
+function validMcstatSkinUrl(value: unknown): URL | undefined {
+  if (typeof value !== "string" || value.length < 1 || value.length > 1_000) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.hostname !== "mcstat.org" || url.username || url.password
+      || (url.port && url.port !== "443") || url.hash
+      || !url.pathname.startsWith("/media/skins/published/") || !url.pathname.endsWith(".png")) {
+      return undefined;
+    }
+    return url;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readBoundedResponse(response: Response, maximum: number): Promise<Uint8Array> {
+  const declared = Number(response.headers.get("Content-Length"));
+  if (Number.isFinite(declared) && declared > maximum) {
+    await response.body?.cancel();
+    throw new Error("Resposta do MCStat excedeu o limite permitido.");
+  }
+  if (!response.body) return new Uint8Array();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > maximum) {
+      await reader.cancel();
+      throw new Error("Resposta do MCStat excedeu o limite permitido.");
+    }
+    chunks.push(value);
+  }
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return Array.from(digest, (item) => item.toString(16).padStart(2, "0")).join("");
+}
+
+function parseMcstatSkin(value: unknown): McstatSkin | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const skin = value as Record<string, unknown>;
+  const pngUrl = validMcstatSkinUrl(skin.pngPath);
+  const name = typeof skin.name === "string" ? boundedUtf8(skin.name, 96) : "";
+  if (!pngUrl || !name) return undefined;
+  const owner = skin.owner && typeof skin.owner === "object" && !Array.isArray(skin.owner)
+    ? skin.owner as Record<string, unknown>
+    : undefined;
+  const username = typeof owner?.username === "string" ? boundedUtf8(owner.username, 72) : "";
+  return {
+    name,
+    model: skin.model === "slim" ? "slim" : "classic",
+    tags: mcstatTags(skin.tags),
+    author: boundedUtf8(username ? `${username} · MCStat` : "MCStat", 96, "MCStat"),
+    pngUrl: pngUrl.toString(),
+  };
+}
+
+async function fetchMcstatPage(env: Env, query: string, page: number, deadline: AbortSignal): Promise<McstatPage> {
+  const key = mcstatApiKey(env);
+  if (!key) throw new Error("MCStat não configurado.");
+  const cacheKey = `${query}\n${page}`;
+  return cachedPromise(mcstatPageCache, cacheKey, mcstatPageCacheMillis, 256, async () => {
+    if (Date.now() < mcstatCooldownUntil) throw new Error("MCStat em espera por limite de chamadas.");
+    enforceRateLimit("mcstat-catalog-upstream", 30);
+    const url = new URL(mcstatApiBase + "/skins");
+    url.searchParams.set("page", String(page));
+    url.searchParams.set("limit", String(mcstatListPageSize));
+    url.searchParams.set("sort", "popular");
+    if (query) url.searchParams.set(query.startsWith("#") ? "tag" : "search", query.replace(/^#/, ""));
+    let response: Response;
+    try {
+      response = await fetch(url.toString(), {
+        headers: { Accept: "application/json", "X-API-Key": key },
+        redirect: "manual",
+        signal: AbortSignal.any([deadline, AbortSignal.timeout(mcstatRequestTimeoutMs)]),
+        cf: { cacheEverything: true, cacheTtl: 300 },
+      });
+    } catch {
+      throw new Error("MCStat não respondeu a tempo.");
+    }
+    if (!response.ok) {
+      if (response.status === 429) {
+        const retry = response.headers.get("Retry-After") ?? "60";
+        const duration = Number(retry) || (Date.parse(retry) - Date.now()) / 1000 || 60;
+        mcstatCooldownUntil = Date.now() + Math.max(1, Math.min(86400, duration)) * 1000;
+      } else mcstatCooldownUntil = Date.now() + 30000;
+      await response.body?.cancel();
+      console.error("MCStat skin API unavailable", { status: response.status });
+      throw new Error("MCStat temporariamente indisponível.");
+    }
+    const bytes = await readBoundedResponse(response, mcstatMaxResponseBytes);
+    let payload: unknown;
+    try {
+      payload = JSON.parse(textDecoder.decode(bytes));
+    } catch {
+      throw new Error("Resposta inválida do MCStat.");
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new Error("Resposta inválida do MCStat.");
+    }
+    const root = payload as Record<string, unknown>;
+    const data = root.data && typeof root.data === "object" && !Array.isArray(root.data)
+      ? root.data as Record<string, unknown>
+      : undefined;
+    const pagination = data?.pagination && typeof data.pagination === "object" && !Array.isArray(data.pagination)
+      ? data.pagination as Record<string, unknown>
+      : undefined;
+    if (root.success !== true || !data || !Array.isArray(data.skins) || !pagination) {
+      throw new Error("Resposta inválida do MCStat.");
+    }
+    const total = pagination.total;
+    const totalPages = pagination.totalPages;
+    if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0
+      || typeof totalPages !== "number" || !Number.isSafeInteger(totalPages) || totalPages < 0) {
+      throw new Error("Paginação inválida do MCStat.");
+    }
+    return {
+      skins: data.skins.slice(0, mcstatListPageSize).map(parseMcstatSkin),
+      total,
+      totalPages,
+    };
+  });
+}
+
+async function fetchMcstatRange(
+  env: Env,
+  query: string,
+  start: number,
+  count: number,
+  deadline: AbortSignal,
+): Promise<{ skins: McstatSkin[]; total: number }> {
+  const firstPageNumber = Math.floor(start / mcstatListPageSize) + 1;
+  const firstOffset = start % mcstatListPageSize;
+  const first = await fetchMcstatPage(env, query, firstPageNumber, deadline);
+  const skins = first.skins.slice(firstOffset, firstOffset + count);
+  const consumed = Math.min(count, mcstatListPageSize - firstOffset);
+  if (consumed < count && firstPageNumber < first.totalPages) {
+    const second = await fetchMcstatPage(env, query, firstPageNumber + 1, deadline);
+    skins.push(...second.skins.slice(0, count - consumed));
+  }
+  return { skins: skins.filter((skin): skin is McstatSkin => Boolean(skin)), total: first.total };
+}
+
+async function validateSkinPng(bytes: Uint8Array): Promise<void> {
+  const { width, height } = pngDimensions(bytes);
+  if (width !== 64 || (height !== 64 && height !== 32)) throw new Error("Dimensões inválidas da skin.");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 8;
+  let palette = false;
+  let ended = false;
+  const compressed: Uint8Array[] = [];
+  while (offset + 12 <= bytes.length) {
+    const size = view.getUint32(offset);
+    if (size > bytes.length - offset - 12) throw new Error("PNG truncado.");
+    const type = textDecoder.decode(bytes.subarray(offset + 4, offset + 8));
+    if (offset === 8 && (type !== "IHDR" || size !== 13)) throw new Error("IHDR inválido.");
+    if (offset !== 8 && type === "IHDR") throw new Error("IHDR duplicado.");
+    if (crc32(bytes.subarray(offset + 4, offset + 8 + size)) !== view.getUint32(offset + 8 + size)) throw new Error("CRC PNG inválido.");
+    if (type === "PLTE") palette = size > 0 && size <= 768 && size % 3 === 0;
+    if (type === "IDAT") compressed.push(bytes.subarray(offset + 8, offset + 8 + size));
+    offset += size + 12;
+    if (type === "IEND") { ended = size === 0 && offset === bytes.length; break; }
+  }
+  const depth = bytes[24];
+  const color = bytes[25];
+  const channels = ({ 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 } as Record<number, number>)[color];
+  const depths = color === 0 ? [1, 2, 4, 8, 16] : color === 3 ? [1, 2, 4, 8] : [8, 16];
+  if (!ended || !compressed.length || !channels || !depths.includes(depth) || bytes[26] !== 0
+    || bytes[27] !== 0 || bytes[28] > 1 || (color === 3 && !palette)) throw new Error("Estrutura PNG inválida.");
+  const stream = new Blob([concatBytes(...compressed)]).stream().pipeThrough(new DecompressionStream("deflate"));
+  const raw = await readBoundedResponse(new Response(stream), 33000);
+  const passes = bytes[28] === 0 ? [[0, 0, 1, 1]] : [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]];
+  let position = 0;
+  for (const [x, y, dx, dy] of passes) {
+    const columns = Math.max(0, Math.ceil((width - x) / dx));
+    const rows = Math.max(0, Math.ceil((height - y) / dy));
+    if (!columns) continue;
+    const rowBytes = Math.ceil(columns * channels * depth / 8);
+    for (let row = 0; row < rows; row++) {
+      if (position >= raw.length || raw[position] > 4) throw new Error("Filtro PNG inválido.");
+      position += rowBytes + 1;
+    }
+  }
+  if (position !== raw.length) throw new Error("Dados PNG incompletos.");
+}
+
+async function fetchMcstatImage(value: string, env?: Env, deadline?: AbortSignal): Promise<McstatImage> {
+  const safeUrl = env ? skinImageUrl(value) : validMcstatSkinUrl(value)?.href;
+  const url = safeUrl ? new URL(safeUrl) : undefined;
+  if (!url) throw new Error("URL de skin MCStat inválida.");
+  return cachedPromise(mcstatImageCache, url.toString(), mcstatImageCacheMillis, 64, async () => {
+    let response: Response;
+    try {
+      response = env && url.hostname === "mc-api.bisai.dev"
+        ? await playerSkinService(env).getTextureResponse(url.toString(), deadline)
+        : await fetch(url.toString(), {
+        headers: { Accept: "image/png" },
+        redirect: "manual",
+        signal: deadline ? AbortSignal.any([deadline, AbortSignal.timeout(mcstatRequestTimeoutMs)]) : AbortSignal.timeout(mcstatRequestTimeoutMs),
+        cf: { cacheEverything: true, cacheTtl: 86_400 },
+      });
+    } catch (cause) {
+      if (cause instanceof SkinApiError) throw cause;
+      throw new Error("Imagem do MCStat indisponível.");
+    }
+    if (response.status !== 200 || !(response.headers.get("Content-Type") ?? "").toLowerCase().startsWith("image/png")) {
+      await response.body?.cancel();
+      throw new Error("Imagem inválida do MCStat.");
+    }
+    const bytes = await readBoundedResponse(response, mcstatMaxSkinBytes);
+    await validateSkinPng(bytes);
+    return { bytes, hash: await sha256Hex(bytes), url: url.toString() };
+  });
+}
+
+async function mcstatCatalogSkin(skin: McstatSkin, deadline: AbortSignal): Promise<CatalogProtocolSkin> {
+  const image = await fetchMcstatImage(skin.pngUrl, undefined, deadline);
+  return {
+    id: `mcstat-${image.hash.slice(0, 32)}`,
+    name: skin.name,
+    author: skin.author,
+    model: skin.model,
+    hash: image.hash,
+    source: `/v1/skins/catalog/mcstat/${image.hash}/${catalogBase64(image.url)}.png`,
+    tags: skin.tags,
+  };
+}
+
+async function builtinCatalogSkin(skin: CatalogSkin): Promise<CatalogProtocolSkin> {
+  const bytes = catalogSkinPng(skin);
+  return {
+    id: skin.id,
+    name: skin.name,
+    author: "Aurora Studio",
+    model: skin.model,
+    hash: await sha256Hex(bytes),
+    source: `/v1/skins/catalog/${skin.id}.png`,
+    tags: skin.tags,
+  };
+}
+
+function catalogLine(skin: CatalogProtocolSkin): string {
+  return [
+    skin.id,
+    catalogBase64(skin.name),
+    catalogBase64(skin.author),
+    skin.model,
+    skin.hash,
+    catalogBase64(skin.source),
+    catalogBase64(skin.tags.join(",")),
+  ].join("\t");
+}
+
+async function skinCatalogResponse(request: Request, env: Env): Promise<Response> {
+  // Total upstream budget remains below the desktop/mod 12-second read timeout.
+  const deadline = AbortSignal.timeout(9000);
   const url = new URL(request.url);
   const page = Number.parseInt(url.searchParams.get("page") ?? "0", 10);
   const pageSize = Number.parseInt(url.searchParams.get("pageSize") ?? "12", 10);
   if (!Number.isInteger(page) || page < 0 || page > 100000 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 24) {
     return error("Paginação inválida.");
   }
-  const query = normalizeCatalogText((url.searchParams.get("query") ?? "").slice(0, 80));
-  const matches = catalogSkins.filter((skin) => !query || normalizeCatalogText(`${skin.name} ${skin.tags.join(" ")}`).includes(query));
-  const start = Math.min(matches.length, page * pageSize);
-  const selected = matches.slice(start, start + pageSize);
-  const lines = ["AURORA_SKINS_CATALOG_V1", `page\t${page}\tmore\t${start + selected.length < matches.length ? 1 : 0}`];
-  for (const skin of selected) {
-    const bytes = catalogSkinPng(skin);
-    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-    const hash = Array.from(digest, (item) => item.toString(16).padStart(2, "0")).join("");
-    lines.push([
-      skin.id,
-      catalogBase64(skin.name),
-      catalogBase64("Aurora Studio"),
-      skin.model,
-      hash,
-      catalogBase64(`/v1/skins/catalog/${skin.id}.png`),
-      catalogBase64(skin.tags.join(",")),
-    ].join("\t"));
+  const rawQuery = boundedUtf8((url.searchParams.get("query") ?? "").slice(0, 80), 80);
+  const query = normalizeCatalogText(rawQuery.replace(/^#/, ""));
+  const localMatches = catalogSkins.filter((skin) => !query
+    || normalizeCatalogText(`${skin.name} ${skin.tags.join(" ")}`).includes(query));
+  const start = page * pageSize;
+  const end = start + pageSize;
+  const selectedLocal = localMatches.slice(start, Math.min(end, localMatches.length));
+  const remoteStart = Math.max(0, start - localMatches.length);
+  const remoteCount = Math.max(0, end - localMatches.length) - remoteStart;
+  let remoteTotal = 0;
+  let remoteSkins: McstatSkin[] = [];
+  let mcstatOnline = false;
+  if (mcstatApiKey(env) && (remoteCount > 0 || end >= localMatches.length)) {
+    try {
+      const remote = await fetchMcstatRange(env, rawQuery, remoteStart, Math.max(1, remoteCount), deadline);
+      remoteTotal = remote.total;
+      remoteSkins = remote.skins.slice(0, remoteCount);
+      mcstatOnline = true;
+    } catch (cause) {
+      console.error("MCStat skin catalog fallback", {
+        reason: cause instanceof Error ? cause.message.slice(0, 120) : "falha desconhecida",
+      });
+    }
   }
+  const entries: CatalogProtocolSkin[] = [];
+  for (const skin of selectedLocal) entries.push(await builtinCatalogSkin(skin));
+  const hydrated = await mapWithConcurrency(remoteSkins, Math.min(12, remoteSkins.length), async (skin) => {
+    try {
+      return await mcstatCatalogSkin(skin, deadline);
+    } catch (cause) {
+      console.error("MCStat skin ignored", {
+        reason: cause instanceof Error ? cause.message.slice(0, 120) : "falha desconhecida",
+      });
+      return undefined;
+    }
+  });
+  const hashes = new Set(entries.map((entry) => entry.hash));
+  for (const entry of hydrated) {
+    if (entry && !hashes.has(entry.hash)) {
+      hashes.add(entry.hash);
+      entries.push(entry);
+    }
+  }
+  const total = localMatches.length + (mcstatOnline ? remoteTotal : 0);
+  if (url.searchParams.get("format") === "json") {
+    return json({ entries, page, hasMore: end < total, sources: mcstatOnline ? ["aurora", "mcstat"] : ["aurora"] });
+  }
+  const lines = ["AURORA_SKINS_CATALOG_V1", `page\t${page}\tmore\t${end < total ? 1 : 0}`];
+  lines.push(...entries.map(catalogLine));
   return new Response(lines.join("\n") + "\n", {
     status: 200,
     headers: {
       "Content-Type": "text/tab-separated-values; charset=utf-8",
       "Access-Control-Allow-Origin": "*",
       "Cache-Control": "public, max-age=300",
+      "X-Aurora-Catalog-Sources": mcstatOnline ? "aurora, mcstat" : "aurora",
     },
   });
+}
+
+async function mcstatSkinAsset(pathname: string): Promise<Response> {
+  const match = pathname.match(/^\/v1\/skins\/catalog\/mcstat\/([0-9a-f]{64})\/([A-Za-z0-9_-]{1,1800})\.png$/);
+  if (!match) return error("Skin não encontrada.", 404);
+  let source: string;
+  try {
+    source = textDecoder.decode(fromBase64Url(match[2]));
+  } catch {
+    return error("Skin não encontrada.", 404);
+  }
+  if (!validMcstatSkinUrl(source)) return error("Origem de skin não permitida.", 403);
+  try {
+    const image = await fetchMcstatImage(source);
+    if (image.hash !== match[1]) return error("A skin do MCStat foi atualizada; pesquise novamente.", 409);
+    return new Response(image.bytes, {
+      status: 200,
+      headers: {
+        "Content-Type": "image/png",
+        "Content-Length": String(image.bytes.length),
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "public, max-age=86400, immutable",
+        ETag: `"${image.hash}"`,
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
+  } catch (cause) {
+    console.error("MCStat skin asset fallback", {
+      reason: cause instanceof Error ? cause.message.slice(0, 120) : "falha desconhecida",
+    });
+    return error("A skin do MCStat não está disponível agora.", 502);
+  }
+}
+
+function playerProtocolMetadata(metadata: Record<string, unknown>): string {
+  const serialized = JSON.stringify(metadata);
+  if (textEncoder.encode(serialized).length <= 12288) return serialized;
+  const bounded: Record<string, unknown> = { truncated: true };
+  // Preserve the useful autocomplete fields before other provider metadata.
+  for (const key of [...new Set(["current", "last_seen", "name", "uuid", ...Object.keys(metadata)])]) {
+    if (!Object.hasOwn(metadata, key) || key === "__proto__") continue;
+    const candidate = { ...bounded, [key]: metadata[key] };
+    if (textEncoder.encode(JSON.stringify(candidate)).length <= 12288) bounded[key] = metadata[key];
+  }
+  return JSON.stringify(bounded);
+}
+
+async function playerSkinRoute(request: Request, env: Env): Promise<Response> {
+  try {
+    const deadline = AbortSignal.timeout(9000);
+    enforceRateLimit(`player-skins:${request.headers.get("CF-Connecting-IP") ?? "unknown"}`, 60);
+    const url = new URL(request.url);
+    const service = playerSkinService(env);
+    if (url.pathname === "/v1/skins/players") {
+      const players = await service.autocompleteSkinNames(url.searchParams.get("query") ?? "");
+      if (url.searchParams.get("format") === "tsv") {
+        return new Response("AURORA_PLAYERS_V1\n" + players.map((player) => [player.name, player.uuid ?? "",
+          player.source, catalogBase64(playerProtocolMetadata(player.metadata))].join("\t")).join("\n") + "\n", {
+          headers: { "Content-Type": "text/tab-separated-values; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=60" },
+        });
+      }
+      return json({ players });
+    }
+    if (url.pathname.startsWith("/v1/skins/profile/")) {
+      const id = decodeURIComponent(url.pathname.slice("/v1/skins/profile/".length));
+      const profile = await service.getPlayerProfile(id, url.searchParams.get("history") === "1");
+      let image: McstatImage;
+      try { image = await fetchMcstatImage(profile.textureUrl, env, deadline); }
+      catch (cause) {
+        if (profile.skinUrl === profile.textureUrl || deadline.aborted || (cause instanceof SkinApiError && cause.status === 429)) throw cause;
+        image = await fetchMcstatImage(profile.skinUrl, env, deadline);
+      }
+      const source = `/v1/skins/player-texture/${image.hash}/${catalogBase64(image.url)}.png`;
+      const entry: CatalogProtocolSkin = { id: `player-${profile.uuid}`, name: profile.name, author: profile.source,
+        model: profile.model, hash: image.hash, source, tags: ["player", profile.source] };
+      if (url.searchParams.get("format") === "catalog") {
+        return new Response("AURORA_SKINS_CATALOG_V1\npage\t0\tmore\t0\n" + catalogLine(entry) + "\n", {
+          headers: { "Content-Type": "text/tab-separated-values; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=60" },
+        });
+      }
+      return json({ ...profile, skinUrl: new URL(source, url).href, contentHash: image.hash });
+    }
+    const match = url.pathname.match(/^\/v1\/skins\/player-texture\/([0-9a-f]{64})\/([A-Za-z0-9_-]{1,1800})\.png$/);
+    if (!match) return error("Skin não encontrada.", 404);
+    const source = textDecoder.decode(fromBase64Url(match[2]));
+    const safe = skinImageUrl(source);
+    if (!safe || safe !== source || new URL(safe).pathname.includes("/render/")) return error("Origem de skin não permitida.", 403);
+    const image = await fetchMcstatImage(safe, env);
+    if (image.hash !== match[1]) return error("A skin mudou. Pesquise novamente.", 409);
+    return new Response(image.bytes, { headers: { "Content-Type": "image/png", "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "public, max-age=86400, immutable", "X-Content-Type-Options": "nosniff", ETag: `"${image.hash}"` } });
+  } catch (cause) {
+    const status = cause instanceof SkinApiError || cause instanceof PublicError ? cause.status : 503;
+    const response = error(cause instanceof SkinApiError || cause instanceof PublicError ? cause.message : "Não foi possível carregar a skin agora.", status);
+    if (cause instanceof SkinApiError && cause.retryAfter > 0) response.headers.set("Retry-After", String(cause.retryAfter));
+    return response;
+  }
 }
 
 function skinCatalogAsset(pathname: string): Response {
@@ -1337,7 +1848,12 @@ export default {
       }
     }
     if (request.method === "GET" && url.pathname === "/v1/curseforge/download") return await curseForgeDownload(request, env);
-    if (request.method === "GET" && url.pathname === "/v1/skins/catalog") return await skinCatalogResponse(request);
+    if (request.method === "GET" && (url.pathname === "/v1/skins/players" || url.pathname.startsWith("/v1/skins/profile/")
+      || url.pathname.startsWith("/v1/skins/player-texture/"))) return await playerSkinRoute(request, env);
+    if (request.method === "GET" && url.pathname === "/v1/skins/catalog") return await skinCatalogResponse(request, env);
+    if (request.method === "GET" && url.pathname.startsWith("/v1/skins/catalog/mcstat/")) {
+      return await mcstatSkinAsset(url.pathname);
+    }
     if (request.method === "GET" && url.pathname.startsWith("/v1/skins/catalog/")) return skinCatalogAsset(url.pathname);
     if (request.method !== "POST") return error("Rota não encontrada.", 404);
     try {

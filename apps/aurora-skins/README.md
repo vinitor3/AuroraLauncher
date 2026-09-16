@@ -1,6 +1,6 @@
 # Aurora Skins
 
-Aurora Skins 0.2.1 é o módulo oficial, independente e client-side para aparência dentro do Minecraft. O Launcher instala a build correta automaticamente depois do Aurora Core 1.1.2 e antes do Companion 0.2.3.
+Aurora Skins 0.2.2 é o módulo oficial, independente e client-side para aparência dentro do Minecraft. O Launcher instala a build correta automaticamente depois do Aurora Core 1.1.2 e antes do Companion 0.2.3.
 
 ## Estado
 
@@ -20,21 +20,23 @@ Nesta versão estão implementados:
 - preview com duas camadas e cabeça/corpo suavizados em direção ao mouse;
 - layout responsivo para resoluções lógicas pequenas e diferentes GUI scales.
 
-Permanecem **NÃO IMPLEMENTADOS** nesta entrega: grade visual de thumbnails, sincronização de favoritos/skin ativa pela API Aurora e propagação de skins entre jogadores no multiplayer. O catálogo usa somente o endpoint oficial do Aurora e desenhos originais; não é feito scraping de sites sem API permitida.
+O catálogo agora agrega MCStat e os desenhos originais Aurora, e a busca de jogadores usa mc-api com fallback MCStat. Digite `@nome`/`@UUID` em Explorar, ou `#tag` no catálogo. A prévia exibe a skin selecionada sem aplicá-la. Veja [fontes, configuração, limites e exemplos](../../docs/skin-sources.md).
+
+Permanecem **NÃO IMPLEMENTADOS** nesta entrega: grade de thumbnails dentro do Minecraft, sincronização de favoritos/skin ativa pela API Aurora e propagação de skins entre jogadores no multiplayer. No desktop existe grade de resultados. Não há scraping de sites: os mods usam somente o Worker Aurora e este consulta as APIs oficiais.
 
 ## Matriz
 
 | Minecraft | Loader | Java runtime | Build JDK | Core mínimo | Skins |
 | --- | --- | ---: | ---: | --- | --- |
-| 1.12.2 | Forge 14.23.5.2860 | 8 | 17, release 8 | 1.1.2 | 0.2.1 |
-| 1.16.5 | Fabric 0.16.14 | 8 | 17, release 8 | 1.1.2 | 0.2.1 |
-| 1.16.5 | Forge 36.2.42 | 8 | 17, release 8 | 1.1.2 | 0.2.1 |
-| 1.19.2 | Fabric 0.16.14 | 17 | 17 | 1.1.2 | 0.2.1 |
-| 1.19.2 | Forge 43.4.16 | 17 | 17 | 1.1.2 | 0.2.1 |
-| 1.20.1 | Fabric 0.16.14 | 17 | 17 | 1.1.2 | 0.2.1 |
-| 1.20.1 | Forge 47.4.23 | 17 | 17 | 1.1.2 | 0.2.1 |
-| 1.21.1 | Fabric 0.16.14 | 21 | 21 | 1.1.2 | 0.2.1 |
-| 1.21.1 | Forge 52.1.12 | 21 | 21 | 1.1.2 | 0.2.1 |
+| 1.12.2 | Forge 14.23.5.2860 | 8 | 17, release 8 | 1.1.2 | 0.2.2 |
+| 1.16.5 | Fabric 0.16.14 | 8 | 17, release 8 | 1.1.2 | 0.2.2 |
+| 1.16.5 | Forge 36.2.42 | 8 | 17, release 8 | 1.1.2 | 0.2.2 |
+| 1.19.2 | Fabric 0.16.14 | 17 | 17 | 1.1.2 | 0.2.2 |
+| 1.19.2 | Forge 43.4.16 | 17 | 17 | 1.1.2 | 0.2.2 |
+| 1.20.1 | Fabric 0.16.14 | 17 | 17 | 1.1.2 | 0.2.2 |
+| 1.20.1 | Forge 47.4.23 | 17 | 17 | 1.1.2 | 0.2.2 |
+| 1.21.1 | Fabric 0.16.14 | 21 | 21 | 1.1.2 | 0.2.2 |
+| 1.21.1 | Forge 52.1.12 | 21 | 21 | 1.1.2 | 0.2.2 |
 
 NeoForge está fora do escopo atual.
 
@@ -43,7 +45,7 @@ NeoForge está fora do escopo atual.
 - `core`: modelo, catálogo online/fallback, cache, validação, favoritos, histórico e geometrias responsivas;
 - `minecraft/1.16.5`, `1.19.2`, `1.20.1`, `1.21.1`: adaptadores Fabric/Forge;
 - `minecraft/legacy/forge-1.12.2`: adaptador Forge legado isolado;
-- `releases/skins/0.2.1`: artefatos imutáveis embarcados no Launcher.
+- `releases/skins/0.2.2`: artefatos imutáveis embarcados no Launcher.
 
 Para compilar e testar toda a matriz sem alterar releases:
 

@@ -4,6 +4,7 @@ import com.aurora.skins.api.SkinEntry;
 import com.aurora.skins.api.SkinModel;
 import com.aurora.skins.api.SkinPage;
 import com.aurora.skins.api.SkinProvider;
+import com.aurora.skins.api.PlayerSuggestion;
 import com.aurora.skins.storage.AuroraSkinStore;
 import com.aurora.skins.storage.SkinValidationException;
 
@@ -52,6 +53,7 @@ public final class AuroraCatalogProvider implements SkinProvider {
     private final BuiltinSkinCatalog fallback;
     private final URI endpoint;
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<String, CacheEntry>();
+    private final SearchDebouncer debouncer = new SearchDebouncer();
     private volatile long unavailableUntil;
     private volatile boolean online;
 
@@ -68,7 +70,64 @@ public final class AuroraCatalogProvider implements SkinProvider {
     @Override public String id() { return "aurora-catalog"; }
     public boolean online() { return online; }
 
+    public CompletableFuture<SkinPage> searchDebounced(final String query, final int page, final int pageSize) {
+        return debouncer.submit(() -> search(query, page, pageSize));
+    }
+    public void cancelSearch() { debouncer.cancel(); }
+
+    public CompletableFuture<List<PlayerSuggestion>> searchPlayers(final String query) {
+        return CompletableFuture.supplyAsync(() -> {
+            String clean = query == null ? "" : query.trim();
+            if (!clean.matches("[A-Za-z0-9_]{3,16}")) return Collections.<PlayerSuggestion>emptyList();
+            try {
+                URI uri = endpoint.resolve("players?format=tsv&query=" + URLEncoder.encode(clean, "UTF-8"));
+                String[] lines = fetchText(uri).replace("\r", "").split("\n");
+                if (lines.length == 0 || !"AURORA_PLAYERS_V1".equals(lines[0])) throw new IOException("Busca inválida.");
+                List<PlayerSuggestion> result = new ArrayList<PlayerSuggestion>();
+                for (int i = 1; i < lines.length; i++) {
+                    if (lines[i].trim().isEmpty()) continue;
+                    String[] fields = lines[i].split("\t", -1);
+                    if (fields.length != 4 || !fields[0].matches("[A-Za-z0-9_]{1,16}")
+                            || !fields[1].matches("(?:[0-9a-f]{32})?")) throw new IOException("Jogador inválido.");
+                    result.add(new PlayerSuggestion(fields[0], fields[1], fields[2], decode(fields[3], 16384)));
+                    if (result.size() > 12) throw new IOException("Muitos resultados.");
+                }
+                return result;
+            } catch (IOException error) { throw new CompletionException(error); }
+        }, EXECUTOR);
+    }
+
+    public CompletableFuture<SkinEntry> getPlayerProfile(final String identifier) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (identifier == null || !identifier.matches("(?:[A-Za-z0-9_]{1,16}|[0-9a-fA-F]{32}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})"))
+                throw new CompletionException(new IOException("Nome ou UUID inválido."));
+            try {
+                URI uri = endpoint.resolve("profile/" + identifier + "?format=catalog");
+                SkinPage page = parse(fetchText(uri), uri);
+                if (page.entries().size() != 1) throw new IOException("Perfil sem skin.");
+                return page.entries().get(0);
+            } catch (IOException error) { throw new CompletionException(error); }
+        }, EXECUTOR);
+    }
+
+    public CompletableFuture<List<PlayerSuggestion>> autocompleteSkinNames(String query) { return searchPlayers(query); }
+    public String getSkinImageUrlFromProfile(SkinEntry profile) { return profile.source(); }
+
     @Override public CompletableFuture<SkinPage> search(final String query, final int page, final int pageSize) {
+        if (query != null && query.trim().startsWith("@")) {
+            final String name = query.trim().substring(1).trim();
+            if (name.matches("(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})")) {
+                return getPlayerProfile(name).thenApply(entry -> new SkinPage(Collections.singletonList(entry), 0, false));
+            }
+            return autocompleteSkinNames(name).thenApply(players -> {
+                List<SkinEntry> entries = new ArrayList<SkinEntry>();
+                for (PlayerSuggestion player : players) entries.add(new SkinEntry("player-" + player.identifier(),
+                    player.name(), player.provider(), SkinModel.WIDE, "aurora-player", player.identifier(),
+                    "pending-" + player.identifier(), null, Collections.singletonList("player")));
+                online = true;
+                return new SkinPage(entries, 0, false);
+            });
+        }
         return CompletableFuture.supplyAsync(() -> {
             int current = Math.max(0, page);
             int size = Math.max(1, Math.min(24, pageSize));
@@ -80,6 +139,7 @@ public final class AuroraCatalogProvider implements SkinProvider {
             if (now >= unavailableUntil) {
                 try {
                     SkinPage result = fetchPage(safeQuery, current, size);
+                    if (cache.size() >= 128) cache.clear();
                     cache.put(key, new CacheEntry(result, now));
                     online = true;
                     return result;
@@ -99,18 +159,26 @@ public final class AuroraCatalogProvider implements SkinProvider {
     }
 
     public CompletableFuture<SkinEntry> materialize(final SkinEntry entry) {
+        return prepare(entry, true);
+    }
+
+    public CompletableFuture<SkinEntry> preview(final SkinEntry entry) { return prepare(entry, false); }
+
+    private CompletableFuture<SkinEntry> prepare(final SkinEntry entry, final boolean importToLibrary) {
+        if (entry != null && "aurora-player".equals(entry.providerId()))
+            return getPlayerProfile(entry.source()).thenCompose(profile -> prepare(profile, importToLibrary));
         return CompletableFuture.supplyAsync(() -> {
             try {
                 if (entry == null) throw new IOException("Skin inválida.");
                 if (entry.file() != null && Files.isRegularFile(entry.file())) {
-                    return store.importCatalogSkin(entry.file(), entry);
+                    return importToLibrary ? store.importCatalogSkin(entry.file(), entry) : entry;
                 }
                 if (!"aurora-online".equals(entry.providerId())) {
                     throw new IOException("A origem desta skin não está disponível.");
                 }
                 Path downloaded = download(entry);
                 try {
-                    return store.importCatalogSkin(downloaded, entry);
+                    return importToLibrary ? store.importCatalogSkin(downloaded, entry) : store.cacheCatalogSkin(downloaded, entry);
                 } finally {
                     Files.deleteIfExists(downloaded);
                 }
@@ -124,6 +192,11 @@ public final class AuroraCatalogProvider implements SkinProvider {
         String separator = endpoint.toString().contains("?") ? "&" : "?";
         URI requestUri = URI.create(endpoint + separator + "query="
             + URLEncoder.encode(query, "UTF-8") + "&page=" + page + "&pageSize=" + pageSize);
+        return parse(fetchText(requestUri), requestUri);
+    }
+
+    private String fetchText(URI requestUri) throws IOException {
+        requireSameOrigin(requestUri, endpoint);
         HttpURLConnection connection = open(requestUri);
         connection.setRequestProperty("Accept", "text/tab-separated-values");
         int status = connection.getResponseCode();
@@ -138,7 +211,7 @@ public final class AuroraCatalogProvider implements SkinProvider {
         } finally {
             connection.disconnect();
         }
-        return parse(new String(response, StandardCharsets.UTF_8), requestUri);
+        return new String(response, StandardCharsets.UTF_8);
     }
 
     private Path download(SkinEntry entry) throws IOException {
@@ -203,7 +276,7 @@ public final class AuroraCatalogProvider implements SkinProvider {
         validateNetworkUri(uri);
         HttpURLConnection connection = (HttpURLConnection) uri.toURL().openConnection();
         connection.setConnectTimeout(2500);
-        connection.setReadTimeout(4000);
+        connection.setReadTimeout(12000);
         connection.setUseCaches(false);
         connection.setInstanceFollowRedirects(false);
         connection.setRequestMethod("GET");

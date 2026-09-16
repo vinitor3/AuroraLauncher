@@ -19,6 +19,24 @@ import net.minecraft.resources.ResourceLocation;
 import java.util.UUID;
 
 public final class MinecraftSkinPreviewRenderer implements AuroraPreviewRenderer {
+    private ResourceLocation previewTexture;
+    private String previewModel = "classic";
+    public void setSkin(com.aurora.skins.api.SkinEntry entry) throws java.io.IOException {
+        close();
+        if (entry == null || entry.file() == null) return;
+        try (java.io.InputStream input = java.nio.file.Files.newInputStream(entry.file())) {
+            com.mojang.blaze3d.platform.NativeImage image = AuroraSkinManager.normalizeLegacySkin(
+                com.mojang.blaze3d.platform.NativeImage.read(input));
+            previewTexture = new ResourceLocation("aurora_skins", "preview/" + entry.contentHash());
+            Minecraft.getInstance().getTextureManager().register(previewTexture,
+                new net.minecraft.client.renderer.texture.DynamicTexture(image));
+            previewModel = entry.model().id();
+        }
+    }
+    public void close() {
+        if (previewTexture != null) Minecraft.getInstance().getTextureManager().release(previewTexture);
+        previewTexture = null;
+    }
     private PlayerModel<AbstractClientPlayer> wide;
     private PlayerModel<AbstractClientPlayer> slim;
 
@@ -29,8 +47,8 @@ public final class MinecraftSkinPreviewRenderer implements AuroraPreviewRenderer
                 wide = new PlayerModel<AbstractClientPlayer>(0.0F, false);
                 slim = new PlayerModel<AbstractClientPlayer>(0.0F, true);
             }
-            PlayerModel<AbstractClientPlayer> model = "slim".equals(AuroraSkinManager.model()) ? slim : wide;
-            ResourceLocation texture = AuroraSkinManager.skin();
+            PlayerModel<AbstractClientPlayer> model = "slim".equals(previewTexture == null ? AuroraSkinManager.model() : previewModel) ? slim : wide;
+            ResourceLocation texture = previewTexture == null ? AuroraSkinManager.skin() : previewTexture;
             if (texture == null) texture = DefaultPlayerSkin.getDefaultSkin(new UUID(0L, 0L));
             PoseStack matrices = (PoseStack) nativeContext;
             matrices.pushPose();

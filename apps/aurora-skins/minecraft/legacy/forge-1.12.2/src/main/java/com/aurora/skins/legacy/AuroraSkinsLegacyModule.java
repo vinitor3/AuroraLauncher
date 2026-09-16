@@ -11,7 +11,7 @@ import net.minecraftforge.common.MinecraftForge;
 public final class AuroraSkinsLegacyModule implements AuroraModule {
     private LegacySkinsUi ui;
     @Override public AuroraModuleMetadata metadata() {
-        return new AuroraModuleMetadata("aurora_skins", "Skins", "0.2.1", "skin", "1.1.2");
+        return new AuroraModuleMetadata("aurora_skins", "Skins", "0.2.2", "skin", "1.1.2");
     }
     @Override public void initialize(AuroraModuleContext context) throws Exception {
         System.setProperty("java.awt.headless", "false");

@@ -5,7 +5,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { IdleAnimation, SkinViewer } from "skinview3d";
+import { SkinPreviewCanvas } from "./features/skins/SkinPreviewCanvas";
 import {
   bundledFirebaseConfig,
   createFirebaseServices,
@@ -29,6 +29,7 @@ import {
   type CatalogCategoryOption,
 } from "./lib/catalogCategories";
 import { deleteLocalSkin, listLocalSkins, saveLocalSkin, type LocalSkin } from "./lib/localSkins";
+import { OnlineSkinSearch } from "./features/skins/OnlineSkinSearch";
 
 type EngineStatus = { dataDirectory: string; ready: boolean };
 type Instance = {
@@ -820,58 +821,6 @@ function AuthScreen({
   );
 }
 
-function SkinPreviewCanvas({ skinModel, skinUrl }: { skinModel: "classic" | "slim"; skinUrl: string }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const viewerRef = useRef<SkinViewer | null>(null);
-  const [previewError, setPreviewError] = useState(false);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const idle = new IdleAnimation();
-    idle.speed = 0.65;
-    const viewer = new SkinViewer({
-      animation: idle,
-      background: 0x090714,
-      canvas,
-      enableControls: true,
-      height: 390,
-      width: 320,
-      zoom: 0.76,
-    });
-    viewer.autoRotate = true;
-    viewer.autoRotateSpeed = 0.32;
-    viewer.controls.enablePan = false;
-    viewer.controls.minDistance = 24;
-    viewer.controls.maxDistance = 90;
-    viewerRef.current = viewer;
-    return () => {
-      viewerRef.current = null;
-      viewer.dispose();
-    };
-  }, []);
-
-  useEffect(() => {
-    const viewer = viewerRef.current;
-    if (!viewer) return;
-    setPreviewError(false);
-    if (!skinUrl.trim()) {
-      viewer.resetSkin();
-      return;
-    }
-    void viewer.loadSkin(skinUrl, { model: skinModel === "classic" ? "default" : "slim" })
-      .catch(() => setPreviewError(true));
-  }, [skinModel, skinUrl]);
-
-  return (
-    <div className="skin-viewer-shell">
-      <canvas aria-label="Prévia 3D interativa da skin selecionada" className="skin-preview-canvas" ref={canvasRef} />
-      {!skinUrl.trim() && <div className="skin-preview-placeholder"><span>◇</span><strong>Selecione uma skin</strong></div>}
-      {previewError && <div className="skin-preview-placeholder error"><span>!</span><strong>Não foi possível abrir este PNG</strong></div>}
-      <span className="skin-viewer-help">Arraste para girar · role para aproximar</span>
-    </div>
-  );
-}
 
 function LauncherApp() {
   const [services, setServices] = useState<FirebaseServices>(() =>
@@ -934,7 +883,6 @@ function LauncherApp() {
   const [favoriteName, setFavoriteName] = useState("");
   const [favoriteSearch, setFavoriteSearch] = useState("");
   const [skinAddMode, setSkinAddMode] = useState<SkinAddMode>("file");
-  const [skinUsername, setSkinUsername] = useState("");
   const [localSkins, setLocalSkins] = useState<LocalSkinView[]>([]);
   const [selectedLocalSkinId, setSelectedLocalSkinId] = useState("");
   const [localSkinPath, setLocalSkinPath] = useState("");
@@ -2389,18 +2337,6 @@ function LauncherApp() {
       setBusy(false);
     }
   }
-  function selectSkinFromUsername() {
-    const username = skinUsername.trim();
-    if (!MINECRAFT_NICK_PATTERN.test(username)) {
-      setNotice("Digite um nick Minecraft válido para procurar uma skin.");
-      return;
-    }
-    setSkinUrl(`https://minotar.net/skin/${username}`);
-    setSelectedLocalSkinId("");
-    setFavoriteName(username);
-    setSkinUsername("");
-    setNotice(`Skin pública de ${username} selecionada. Guarde-a localmente ou clique em Equipar.`);
-  }
   async function renameEditingInstance(event: FormEvent) {
     event.preventDefault();
     const oldId = editingInstance;
@@ -2949,11 +2885,14 @@ function LauncherApp() {
                   <div className="import-tabs">
                     <button className={skinAddMode === "file" ? "selected compact" : "secondary compact"} onClick={() => setSkinAddMode("file")} type="button">Arquivo</button>
                     <button className={skinAddMode === "url" ? "selected compact" : "secondary compact"} onClick={() => setSkinAddMode("url")} type="button">URL</button>
-                    <button className={skinAddMode === "username" ? "selected compact" : "secondary compact"} onClick={() => setSkinAddMode("username")} type="button">Por nick</button>
+                    <button className={skinAddMode === "username" ? "selected compact" : "secondary compact"} onClick={() => setSkinAddMode("username")} type="button">Buscar online</button>
                   </div>
                   {skinAddMode === "file" && <label className="file-input">Escolher PNG da skin<input accept="image/png" disabled={busy} onChange={(event) => void uploadAppearance("skin", event.target.files?.[0])} type="file" /></label>}
                   {skinAddMode === "url" && <input value={skinUrl} onChange={(event) => { setSkinUrl(event.target.value); setSelectedLocalSkinId(""); }} placeholder="Cole a URL HTTPS da skin PNG" />}
-                  {skinAddMode === "username" && <div className="username-search"><input value={skinUsername} onChange={(event) => setSkinUsername(sanitizeMinecraftNickname(event.target.value))} placeholder="Pesquisar por nick Minecraft" maxLength={16} /><button onClick={selectSkinFromUsername} type="button">Pesquisar</button></div>}
+                  {skinAddMode === "username" && <OnlineSkinSearch workerUrl={services.config.workerUrl || "https://aurora-api.aurora-edge-proxy.workers.dev"} onSelect={(skin) => {
+                    setSkinUrl(skin.skinUrl); setSkinModel(skin.model); setFavoriteName(skin.name); setSelectedLocalSkinId("");
+                    setNotice(`Skin ${skin.name} selecionada. Guarde localmente ou clique em Equipar no jogo.`);
+                  }} />}
                   <div className="model-row"><span>Modelo</span><select value={skinModel} onChange={(event) => setSkinModel(event.target.value as "classic" | "slim")}><option value="classic">Clássico</option><option value="slim">Slim</option></select></div>
                 </div>
                 <div className="library-toolbar">

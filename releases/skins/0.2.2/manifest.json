@@ -1,0 +1,52 @@
+{
+  "version": "0.2.2",
+  "coreMinimum": "1.1.2",
+  "runtimeStatus": "IMPLEMENTADO MAS NÃO HOMOLOGADO",
+  "artifacts": [
+    {
+      "path": "1.12.2/forge/aurora-skins-forge-1.12.2-0.2.2.jar",
+      "sha256": "cd71a3f6756442184191ce3b3ad12525bf490629e5edbe6141bb3eaa35bb4693",
+      "size": 91130
+    },
+    {
+      "path": "1.16.5/fabric/aurora-skins-fabric-1.16.5-0.2.2.jar",
+      "sha256": "337e59ea09e69b611b8233b3fdfba13a62713416006c3e46232e99fb4e325cb3",
+      "size": 83847
+    },
+    {
+      "path": "1.16.5/forge/aurora-skins-forge-1.16.5-0.2.2.jar",
+      "sha256": "e9cb9e96d7cc5230f5256073242bec3ee2a0eef881d8d85bfff4bdf07983db6d",
+      "size": 84403
+    },
+    {
+      "path": "1.19.2/fabric/aurora-skins-fabric-1.19.2-0.2.2.jar",
+      "sha256": "aa690cc8ee5e3b9e2d58e69a75a355a80aa277979d01d7fb9b6dcc6fb9d423c9",
+      "size": 83997
+    },
+    {
+      "path": "1.19.2/forge/aurora-skins-forge-1.19.2-0.2.2.jar",
+      "sha256": "6c2cdd2370e73e6b29493617fdeb7aa88203f41a4b87b6878dd2534838e5fedf",
+      "size": 84322
+    },
+    {
+      "path": "1.20.1/fabric/aurora-skins-fabric-1.20.1-0.2.2.jar",
+      "sha256": "f41f5db0d301ae539a35c914c306afc0d9b75c1c73741d3dc0395c6dc2596de7",
+      "size": 85529
+    },
+    {
+      "path": "1.20.1/forge/aurora-skins-forge-1.20.1-0.2.2.jar",
+      "sha256": "395cf4ae522edc658aa33306fc5bc3c9dc9af939c751f18f4c1e52ef48b6b74d",
+      "size": 85856
+    },
+    {
+      "path": "1.21.1/fabric/aurora-skins-fabric-1.21.1-0.2.2.jar",
+      "sha256": "cac697999d0e44af951718c63bbc424984b3551407c4080e9d45bce2a4b7f70d",
+      "size": 77204
+    },
+    {
+      "path": "1.21.1/forge/aurora-skins-forge-1.21.1-0.2.2.jar",
+      "sha256": "399892667f2bf1882bb378ead66a5b76f30613e720d5caf517e594fd66397767",
+      "size": 77669
+    }
+  ]
+}

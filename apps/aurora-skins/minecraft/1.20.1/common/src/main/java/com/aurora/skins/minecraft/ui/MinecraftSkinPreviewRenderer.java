@@ -22,6 +22,24 @@ import java.util.UUID;
 
 /** Renders a real player model without requiring a world or local player entity. */
 public final class MinecraftSkinPreviewRenderer implements AuroraPreviewRenderer {
+    private ResourceLocation previewTexture;
+    private String previewModel = "classic";
+    public void setSkin(com.aurora.skins.api.SkinEntry entry) throws java.io.IOException {
+        close();
+        if (entry == null || entry.file() == null) return;
+        try (java.io.InputStream input = java.nio.file.Files.newInputStream(entry.file())) {
+            com.mojang.blaze3d.platform.NativeImage image = AuroraSkinManager.normalizeLegacySkin(
+                com.mojang.blaze3d.platform.NativeImage.read(input));
+            previewTexture = new ResourceLocation("aurora_skins", "preview/" + entry.contentHash());
+            Minecraft.getInstance().getTextureManager().register(previewTexture,
+                new net.minecraft.client.renderer.texture.DynamicTexture(image));
+            previewModel = entry.model().id();
+        }
+    }
+    public void close() {
+        if (previewTexture != null) Minecraft.getInstance().getTextureManager().release(previewTexture);
+        previewTexture = null;
+    }
     private PlayerModel<AbstractClientPlayer> wide;
     private PlayerModel<AbstractClientPlayer> slim;
 
@@ -36,8 +54,8 @@ public final class MinecraftSkinPreviewRenderer implements AuroraPreviewRenderer
                 slim = new PlayerModel<AbstractClientPlayer>(
                     minecraft.getEntityModels().bakeLayer(ModelLayers.PLAYER_SLIM), true);
             }
-            PlayerModel<AbstractClientPlayer> model = "slim".equals(AuroraSkinManager.model()) ? slim : wide;
-            ResourceLocation texture = AuroraSkinManager.skin();
+            PlayerModel<AbstractClientPlayer> model = "slim".equals(previewTexture == null ? AuroraSkinManager.model() : previewModel) ? slim : wide;
+            ResourceLocation texture = previewTexture == null ? AuroraSkinManager.skin() : previewTexture;
             if (texture == null) texture = DefaultPlayerSkin.getDefaultSkin(new UUID(0L, 0L));
 
             graphics.flush();

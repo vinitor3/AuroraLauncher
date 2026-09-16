@@ -8,15 +8,33 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 final class LegacySkinPreviewRenderer implements AuroraPreviewRenderer {
+    private Object previewTexture;
+    private String previewModel = "classic";
+    void setSkin(com.aurora.skins.api.SkinEntry entry) throws Exception {
+        close();
+        java.awt.image.BufferedImage image = com.aurora.skins.image.SkinImageNormalizer.normalize(javax.imageio.ImageIO.read(entry.file().toFile()));
+        Object dynamic = Class.forName("net.minecraft.client.renderer.texture.DynamicTexture")
+            .getConstructor(java.awt.image.BufferedImage.class).newInstance(image);
+        Object manager = LegacyMinecraft.invoke(LegacyMinecraft.minecraft(), new String[] {"getTextureManager", "func_110434_K"});
+        previewTexture = LegacyMinecraft.invoke(manager, new String[] {"getDynamicTextureLocation", "func_110578_a"}, "aurora_skins_preview", dynamic);
+        previewModel = entry.model().id();
+    }
+    void close() {
+        if (previewTexture != null) {
+            Object manager = LegacyMinecraft.invoke(LegacyMinecraft.minecraft(), new String[] {"getTextureManager", "func_110434_K"});
+            LegacyMinecraft.invoke(manager, new String[] {"deleteTexture", "func_147645_c"}, previewTexture);
+        }
+        previewTexture = null;
+    }
     private Object playerModel;
     private String builtForModel = "";
 
     @Override public boolean render(Object nativeContext, int x, int y, int scale, AuroraPlayerPreview pose) {
         try {
-            Object texture = LegacySkinManager.texture();
+            Object texture = previewTexture == null ? LegacySkinManager.texture() : previewTexture;
             if (texture == null) texture = LegacySkinManager.defaultTexture();
             if (texture == null) return false;
-            String modelName = LegacySkinManager.model();
+            String modelName = previewTexture == null ? LegacySkinManager.model() : previewModel;
             if (playerModel == null || !builtForModel.equals(modelName)) {
                 Class<?> type = Class.forName("net.minecraft.client.model.ModelPlayer");
                 Constructor<?> constructor = type.getConstructor(float.class, boolean.class);

@@ -4,11 +4,13 @@ import test, { afterEach } from "node:test";
 import worker from "./index.ts";
 
 const apiKey = "test-curseforge-key";
+const mcstatKey = "test-mcstat-key";
 const env = {
   CURSEFORGE_API_KEY: apiKey,
   FIREBASE_PROJECT_ID: "test-project",
   GEMINI_API_KEY: "test-gemini-key",
 } as never;
+const envWithMcstat = { ...env, mcstat_API_KEY: mcstatKey } as never;
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -79,6 +81,121 @@ test("publica catálogo de skins pesquisável com PNG íntegro", async () => {
   assert.deepEqual(Array.from(png.slice(0, 8)), [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const digest = Buffer.from(await crypto.subtle.digest("SHA-256", png)).toString("hex");
   assert.equal(digest, fields[4]);
+});
+
+test("agrega skins do MCStat sem expor a chave e entrega PNG verificado", async () => {
+  const fixtureResponse = await worker.fetch(new Request(
+    "https://aurora.test/v1/skins/catalog/solar-ninja.png",
+  ), env);
+  const fixture = new Uint8Array(await fixtureResponse.arrayBuffer());
+  const calls: Array<{ url: string; headers: Headers }> = [];
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    const headers = new Headers(init?.headers);
+    calls.push({ url: url.toString(), headers });
+    if (url.origin === "https://mcstat.org" && url.pathname === "/api/v1/skins") {
+      assert.equal(headers.get("X-API-Key"), mcstatKey);
+      assert.equal(url.searchParams.get("page"), "1");
+      assert.equal(url.searchParams.get("limit"), "24");
+      assert.equal(url.searchParams.get("sort"), "popular");
+      assert.equal(url.searchParams.get("search"), "community-knight");
+      return jsonResponse({
+        success: true,
+        data: {
+          skins: [{
+            id: "skin-test-id",
+            slug: "community-knight",
+            name: "Community Knight",
+            model: "slim",
+            tags: ["medieval", "armor"],
+            pngPath: "https://mcstat.org/media/skins/published/community-knight.png",
+            owner: { username: "Builder" },
+          }],
+          pagination: { page: 1, limit: 24, total: 1, totalPages: 1 },
+        },
+      });
+    }
+    if (url.toString() === "https://mcstat.org/media/skins/published/community-knight.png") {
+      assert.equal(headers.get("X-API-Key"), null);
+      return new Response(fixture, {
+        status: 200,
+        headers: { "Content-Type": "image/png", "Content-Length": String(fixture.length) },
+      });
+    }
+    throw new Error(`fetch inesperado: ${url}`);
+  };
+
+  const catalog = await worker.fetch(new Request(
+    "https://aurora.test/v1/skins/catalog?query=community-knight&page=0&pageSize=12",
+  ), envWithMcstat);
+  assert.equal(catalog.status, 200);
+  assert.equal(catalog.headers.get("X-Aurora-Catalog-Sources"), "aurora, mcstat");
+  const payload = await catalog.text();
+  assert.doesNotMatch(payload, new RegExp(mcstatKey));
+  const lines = payload.trimEnd().split("\n");
+  assert.equal(lines.length, 3);
+  const fields = lines[2].split("\t");
+  assert.match(fields[0], /^mcstat-[0-9a-f]{32}$/);
+  assert.equal(Buffer.from(fields[1], "base64url").toString("utf8"), "Community Knight");
+  assert.equal(Buffer.from(fields[2], "base64url").toString("utf8"), "Builder · MCStat");
+  assert.equal(fields[3], "slim");
+  assert.match(fields[4], /^[0-9a-f]{64}$/);
+  const assetPath = Buffer.from(fields[5], "base64url").toString("utf8");
+  assert.match(assetPath, /^\/v1\/skins\/catalog\/mcstat\/[0-9a-f]{64}\//);
+  assert.doesNotMatch(assetPath, new RegExp(mcstatKey));
+
+  const asset = await worker.fetch(new Request(`https://aurora.test${assetPath}`), envWithMcstat);
+  assert.equal(asset.status, 200);
+  assert.equal(asset.headers.get("Content-Type"), "image/png");
+  const downloaded = new Uint8Array(await asset.arrayBuffer());
+  const digest = Buffer.from(await crypto.subtle.digest("SHA-256", downloaded)).toString("hex");
+  assert.equal(digest, fields[4]);
+  assert.equal(calls.length, 2);
+});
+
+test("ignora origem MCStat fora da allowlist e mantém o catálogo seguro", async () => {
+  let calls = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    calls += 1;
+    assert.equal(url.pathname, "/api/v1/skins");
+    return jsonResponse({
+      success: true,
+      data: {
+        skins: [{
+          name: "Unsafe Skin",
+          model: "classic",
+          tags: [],
+          pngPath: "https://example.invalid/skin.png",
+        }],
+        pagination: { page: 1, limit: 24, total: 1, totalPages: 1 },
+      },
+    });
+  };
+
+  const catalog = await worker.fetch(new Request(
+    "https://aurora.test/v1/skins/catalog?query=unsafe-source&page=0&pageSize=12",
+  ), envWithMcstat);
+  assert.equal(catalog.status, 200);
+  assert.equal((await catalog.text()).trimEnd().split("\n").length, 2);
+  const encoded = base64Url(new TextEncoder().encode("https://example.invalid/skin.png"));
+  const asset = await worker.fetch(new Request(
+    `https://aurora.test/v1/skins/catalog/mcstat/${"0".repeat(64)}/${encoded}.png`,
+  ), envWithMcstat);
+  assert.equal(asset.status, 403);
+  assert.equal(calls, 1);
+});
+
+test("mantém as skins Aurora quando a API MCStat está indisponível", async () => {
+  globalThis.fetch = async () => jsonResponse({ error: "rate limited" }, 429);
+  const catalog = await worker.fetch(new Request(
+    "https://aurora.test/v1/skins/catalog?query=naruto&page=0&pageSize=12",
+  ), envWithMcstat);
+  assert.equal(catalog.status, 200);
+  assert.equal(catalog.headers.get("X-Aurora-Catalog-Sources"), "aurora");
+  const lines = (await catalog.text()).trimEnd().split("\n");
+  assert.equal(lines.length, 3);
+  assert.equal(lines[2].split("\t")[0], "solar-ninja");
 });
 
 async function firebaseIdentity(userId: string) {

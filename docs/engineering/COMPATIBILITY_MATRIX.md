@@ -25,6 +25,8 @@ mundo/servidor não foi aberto nessa execução, portanto a linha continua parci
 
 ## Instalação pelo Launcher
 
+Atualização de 16/09/2026: **Skins 0.2.2** tem nove JARs compilados (1.12.2 Forge e Fabric/Forge 1.16.5, 1.19.2, 1.20.1, 1.21.1), busca mc-api/MCStat, debounce e prévia do resultado. Os hashes estão em `releases/skins/0.2.2/manifest.json`; o código do launcher passou a embarcar essa matriz. **IMPLEMENTADO MAS NÃO HOMOLOGADO**: nenhum runtime/gameplay de 0.2.2 está comprovado. A tabela e a evidência Cave Horror acima são históricas do conjunto 0.2.1/alpha.5, não homologam 0.2.2. Não foi substituído o instalador alpha.5.
+
 Para cada instância Fabric/Forge suportada, o Launcher instala por troca atômica:
 
 1. Aurora Core 1.1.2, após validar tamanho, SHA-256 e assinatura Ed25519;

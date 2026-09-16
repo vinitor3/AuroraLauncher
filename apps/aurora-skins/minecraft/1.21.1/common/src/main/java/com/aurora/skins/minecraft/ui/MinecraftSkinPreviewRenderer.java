@@ -21,6 +21,24 @@ import net.minecraft.resources.ResourceLocation;
 import java.util.UUID;
 
 public final class MinecraftSkinPreviewRenderer implements AuroraPreviewRenderer {
+    private ResourceLocation previewTexture;
+    private String previewModel = "classic";
+    public void setSkin(com.aurora.skins.api.SkinEntry entry) throws java.io.IOException {
+        close();
+        if (entry == null || entry.file() == null) return;
+        try (java.io.InputStream input = java.nio.file.Files.newInputStream(entry.file())) {
+            com.mojang.blaze3d.platform.NativeImage image = AuroraSkinManager.normalizeLegacySkin(
+                com.mojang.blaze3d.platform.NativeImage.read(input));
+            previewTexture = ResourceLocation.fromNamespaceAndPath("aurora_skins", "preview/" + entry.contentHash());
+            Minecraft.getInstance().getTextureManager().register(previewTexture,
+                new net.minecraft.client.renderer.texture.DynamicTexture(image));
+            previewModel = entry.model().id();
+        }
+    }
+    public void close() {
+        if (previewTexture != null) Minecraft.getInstance().getTextureManager().release(previewTexture);
+        previewTexture = null;
+    }
     private PlayerModel<AbstractClientPlayer> wide, slim;
     @Override public boolean render(Object nativeContext, int x, int y, int scale, AuroraPlayerPreview pose) {
         if (!(nativeContext instanceof GuiGraphics graphics)) return false;
@@ -30,8 +48,8 @@ public final class MinecraftSkinPreviewRenderer implements AuroraPreviewRenderer
                 wide = new PlayerModel<>(minecraft.getEntityModels().bakeLayer(ModelLayers.PLAYER), false);
                 slim = new PlayerModel<>(minecraft.getEntityModels().bakeLayer(ModelLayers.PLAYER_SLIM), true);
             }
-            PlayerModel<AbstractClientPlayer> model = "slim".equals(AuroraSkinManager.model()) ? slim : wide;
-            ResourceLocation texture = AuroraSkinManager.skin();
+            PlayerModel<AbstractClientPlayer> model = "slim".equals(previewTexture == null ? AuroraSkinManager.model() : previewModel) ? slim : wide;
+            ResourceLocation texture = previewTexture == null ? AuroraSkinManager.skin() : previewTexture;
             if (texture == null) texture = DefaultPlayerSkin.get(new UUID(0L, 0L)).texture();
             graphics.flush(); PoseStack matrices = graphics.pose(); matrices.pushPose(); matrices.translate(x, y - scale * 1.5D, 120.0D);
             matrices.scale(scale, scale, -scale); matrices.mulPose(Axis.YP.rotationDegrees(pose.bodyYaw()));

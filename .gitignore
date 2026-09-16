@@ -19,6 +19,9 @@ apps/edge-proxy/.wrangler/
 **/.env
 **/.env.*
 !**/.env.example
+**/.dev.vars
+**/.dev.vars.*
+!**/.dev.vars.example
 
 # Logs and temporary files
 *.log

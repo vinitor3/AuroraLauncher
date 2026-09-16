@@ -132,7 +132,7 @@ public final class AuroraSkinManager {
         }
     }
 
-    private static NativeImage normalizeLegacySkin(NativeImage image) {
+    public static NativeImage normalizeLegacySkin(NativeImage image) {
         if (image.getHeight() != 32) return image;
         NativeImage normalized = new NativeImage(64, 64, true);
         normalized.copyFrom(image);

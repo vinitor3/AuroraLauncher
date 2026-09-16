@@ -48,7 +48,7 @@ public final class AuroraSkinManager {
             });
         } catch (Exception error) { System.err.println("[Aurora Skins] Não foi possível carregar a textura: " + error.getMessage()); } });
     }
-    private static NativeImage normalizeLegacySkin(NativeImage image) {
+    public static NativeImage normalizeLegacySkin(NativeImage image) {
         if (image.getHeight() != 32) return image;
         NativeImage normalized = new NativeImage(64, 64, true); normalized.copyFrom(image); image.close(); normalized.fillRect(0, 32, 64, 32, 0);
         normalized.copyRect(4,16,16,32,4,4,true,false); normalized.copyRect(8,16,16,32,4,4,true,false);
