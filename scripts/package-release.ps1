@@ -38,6 +38,19 @@ function Write-NewUtf8 {
     try { $writer.Write($Content) } finally { $writer.Dispose() }
 }
 
+function Get-AuroraFileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    # Available even when Windows PowerShell cannot auto-load Get-FileHash.
+    $stream = [IO.File]::OpenRead($Path)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        return [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+        $stream.Dispose()
+    }
+}
+
 Push-Location -LiteralPath $repositoryRoot
 try {
     # Fail before the official build recompiles the full 27-JAR matrix.
@@ -122,14 +135,14 @@ try {
                 mod = $mod.Name
                 version = $modVersion
                 path = $publishedJar.Substring($repositoryRoot.Length + 1).Replace('\', '/')
-                sha256 = (Get-FileHash -LiteralPath $publishedJar -Algorithm SHA256).Hash.ToLowerInvariant()
+                sha256 = Get-AuroraFileSha256 $publishedJar
             }
         }
     }
 
     $stagedInstaller = Join-Path $runDirectory $artifactName
     [IO.File]::Copy($installer.FullName, $stagedInstaller, $false)
-    $hash = (Get-FileHash -LiteralPath $stagedInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+    $hash = Get-AuroraFileSha256 $stagedInstaller
     $manifest = [ordered]@{
         schemaVersion = 1
         product = $productName
