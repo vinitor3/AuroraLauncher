@@ -1,10 +1,12 @@
 mod commands;
+mod manual_downloads;
 
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(commands::IpcSessions::default())
         .manage(commands::RunningInstances::default())
+        .manage(manual_downloads::ManualDownloads::default())
         .invoke_handler(tauri::generate_handler![
             commands::engine_status,
             commands::list_instances,
@@ -30,6 +32,7 @@ fn main() {
             commands::scan_instance_modpack_update,
             commands::apply_instance_modpack_update,
             commands::open_manual_content_download,
+            commands::cancel_manual_content_download,
             commands::resolve_content_artwork,
             commands::list_instance_content,
             commands::set_instance_content_enabled,

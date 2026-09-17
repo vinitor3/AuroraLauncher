@@ -35,9 +35,10 @@ versionados. Uma chave já exposta deve ser revogada e substituída.
   locais têm poda para não crescerem indefinidamente. Isso atende à
   [autenticação exigida para downloads do CDN](https://blog.curseforge.com/introducing-api-key-authentication-for-curseforge-file-downloads/);
 - arquivos que o CurseForge não autoriza baixar diretamente nunca são obtidos
-  por uma URL construída ou contorno do bloqueio. O launcher abre a página
-  oficial, captura o download iniciado por ela, valida o SHA-1 publicado e
-  continua automaticamente com o próximo item da fila.
+  por uma URL construída ou contorno do bloqueio. O desktop primeiro reutiliza
+  o arquivo local com SHA-1 válido ou procura esse SHA-1 exato na API oficial
+  Modrinth. Sem cópia idêntica, abre a página oficial CurseForge, captura o
+  download iniciado por ela, valida o SHA-1 e continua com o próximo item.
 - falhas de filtro, limite, indisponibilidade e autorização recebem mensagens
   distintas; consultas têm timeout e repetem uma vez somente em `429`/`5xx`.
 
@@ -82,3 +83,29 @@ launcher que use as ações em lote `resolveFiles`, `resolveProjects` e
 Firebase Functions e Secret Manager do Google não são necessários para esta
 integração; Firebase continua responsável apenas pela identidade e pelos dados
 do perfil.
+
+## Automação de arquivos externos (fonte posterior à alpha.6)
+
+**IMPLEMENTADO MAS NÃO HOMOLOGADO.** Sem instalador novo nesta etapa.
+
+- A alternativa Modrinth usa `version_file/{sha1}?algorithm=sha1`, nunca busca
+  por nome nem troca de versão. Somente HTTPS `cdn.modrinth.com` é aceito,
+  inclusive nos redirecionamentos; tamanho e hash são conferidos antes do rename.
+- O ZIP de manifesto CurseForge não é substituído por um `.mrpack` Modrinth.
+- Na página oficial, navegação para HTTPS `*.forgecdn.net` é permitida, corrigindo
+  o bloqueio que poderia impedir o download. Não há URLs de CDN construídas,
+  scripts de contorno, ocultação da página ou bypass de CAPTCHA/confirmação.
+- A fila é serial e cada tentativa tem UUID próprio. Sucesso libera o bloqueio
+  de alteração da instância antes de notificar a próxima tentativa. Eventos
+  antigos, duplicados ou de downloads rejeitados não concluem outro arquivo.
+- Fechar a janela, desmontar a interface ou atingir dez minutos encerra a
+  sessão e impede publicação tardia. Cancelamento do mirror é cooperativo
+  entre blocos; uma leitura de rede já bloqueada pode demorar até seu timeout,
+  mas não pode instalar um arquivo depois do cancelamento.
+- Arquivos temporários ficam na mesma pasta do destino e são publicados por
+  rename somente após validação. Falha de hash/publicação preserva o arquivo
+  existente. Links, junções e caminhos fora da instância são recusados.
+- A página ainda pode exigir interação humana. A instalação completa pela
+  página real/WebView2 e dentro do Minecraft continua **PRECISA DE TESTE**.
+
+Evidências e comandos: [tarefa de downloads externos](task-external-downloads.md).

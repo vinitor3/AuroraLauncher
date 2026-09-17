@@ -5,6 +5,7 @@ mod content_updates;
 mod core;
 mod curseforge;
 mod download;
+mod external_downloads;
 mod instance;
 mod ipc;
 mod jre;
@@ -36,6 +37,10 @@ pub use curseforge::{
     CurseForgeManifestFile, CurseForgeManifestSummary, CurseForgeResolvedFile,
 };
 pub use download::{TransferProgress, DEFAULT_DOWNLOAD_CONCURRENCY};
+pub use external_downloads::{
+    download_modrinth_mirror_with_progress, is_modrinth_mirror_url, resolve_modrinth_file_by_sha1,
+    ExternalDownloadError, ModrinthMirrorFile,
+};
 pub use instance::{Instance, InstanceError, InstanceId, InstanceLayout};
 pub use ipc::{IpcEndpoint, IpcError, IpcEvent, IpcServer, IpcSessionProfile};
 pub use jre::{

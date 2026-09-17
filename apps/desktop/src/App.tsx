@@ -35,6 +35,7 @@ import {
   type CatalogCategoryOption,
 } from "./lib/catalogCategories";
 import { deleteLocalSkin, listLocalSkins, saveLocalSkin, type LocalSkin } from "./lib/localSkins";
+import { ExternalDownloadQueue, type ExternalDownloadEvent } from "./lib/externalDownloadQueue";
 import { OnlineSkinSearch } from "./features/skins/OnlineSkinSearch";
 import { ContentUpdatesView } from "./features/content-updates/ContentUpdatesView";
 import { UpdateReviewDialog } from "./features/content-updates/UpdateReviewDialog";
@@ -212,13 +213,6 @@ type DownloadProgress = {
   totalFiles: number;
   activeDownloads: number;
   bytesPerSecond: number;
-};
-type ManualDownloadResult = {
-  instanceId: string;
-  filename: string;
-  contentType: ContentType | "modpack";
-  status: "downloading" | "completed" | "failed";
-  error?: string;
 };
 type SpeechBoundary = { offsetMs: number; durationMs: number; text: string };
 type SpeechResult = { audioBase64: string; mimeType: string; boundaries: SpeechBoundary[] };
@@ -971,11 +965,15 @@ function LauncherApp() {
   const updateScanRequestRef = useRef({ generation: 0, id: "" });
   const curseForgeUpdateCacheRef = useRef(new Map<string, CurseForgeUpdatesResponse["data"][number]>());
   const curseForgeCompletedScansRef = useRef(new Set<string>());
-  const manualDownloadWaiters = useRef(new Map<string, {
-    resolve: () => void;
-    reject: (error: Error) => void;
-    timeout: number;
-  }>());
+  const [externalDownloadQueue] = useState(() => new ExternalDownloadQueue({
+    open: (request) => invoke("open_manual_content_download", {
+      ...request,
+      projectId: request.projectId ?? null,
+      fileId: request.fileId ?? null,
+    }),
+    cancel: (requestId) => invoke("cancel_manual_content_download", { requestId }),
+    onStart: ({ filename }) => setNotice(`Buscando download automático de “${filename}”… Se o site pedir confirmação, conclua na página.`),
+  }));
   useEffect(() => {
     activeInstanceRef.current = { editingInstance, targetInstance };
   }, [editingInstance, targetInstance]);
@@ -1107,29 +1105,22 @@ function LauncherApp() {
   useEffect(() => {
     let disposed = false;
     let stopListening: (() => void) | undefined;
-    void listen<ManualDownloadResult>("aurora-manual-download", (event) => {
+    void listen<ExternalDownloadEvent>("aurora-manual-download", (event) => {
       if (disposed) return;
       const result = event.payload;
-      const waiterKey = `${result.instanceId}\u0000${result.filename}`;
-      const waiter = manualDownloadWaiters.current.get(waiterKey);
+      if (!externalDownloadQueue.accept(result)) return;
+      if (result.status === "resolving") {
+        setNotice(`Buscando download automático de “${result.filename}”… Se o site pedir confirmação, conclua na página.`);
+        return;
+      }
       if (result.status === "downloading") {
         setNotice(`Recebendo “${result.filename}” dentro do Aurora…`);
         return;
       }
       setDownloadProgress(undefined);
       if (result.status === "failed") {
-        if (waiter) {
-          window.clearTimeout(waiter.timeout);
-          manualDownloadWaiters.current.delete(waiterKey);
-          waiter.reject(new Error(result.error ?? "arquivo não validado"));
-        }
         setNotice(`O download interno de “${result.filename}” falhou: ${result.error ?? "arquivo não validado"}`);
         return;
-      }
-      if (waiter) {
-        window.clearTimeout(waiter.timeout);
-        manualDownloadWaiters.current.delete(waiterKey);
-        waiter.resolve();
       }
       setNotice(`“${result.filename}” foi validado e instalado automaticamente.`);
       void refresh();
@@ -1150,13 +1141,9 @@ function LauncherApp() {
     return () => {
       disposed = true;
       stopListening?.();
-      for (const waiter of manualDownloadWaiters.current.values()) {
-        window.clearTimeout(waiter.timeout);
-        waiter.reject(new Error("o download foi interrompido"));
-      }
-      manualDownloadWaiters.current.clear();
+      void externalDownloadQueue.cancelAll();
     };
-  }, []);
+  }, [externalDownloadQueue]);
   useEffect(() => {
     if (!notice || noticeHovered || busy) return;
     const timer = window.setTimeout(() => setNotice(""), 6500);
@@ -1364,7 +1351,7 @@ function LauncherApp() {
     }, 1_000);
     return () => window.clearInterval(timer);
   }, [services]);
-  async function downloadFromOfficialCurseForgePage(options: {
+  async function downloadCurseForgeContentAutomatically(options: {
     id: string;
     pageUrl: string;
     filename: string;
@@ -1373,40 +1360,7 @@ function LauncherApp() {
     projectId?: number;
     fileId?: number;
   }) {
-    const key = `${options.id}\u0000${options.filename}`;
-    if (manualDownloadWaiters.current.has(key)) {
-      throw new Error(`“${options.filename}” já está na fila de downloads.`);
-    }
-    let resolveDownload!: () => void;
-    let rejectDownload!: (error: Error) => void;
-    const completion = new Promise<void>((resolve, reject) => {
-      resolveDownload = resolve;
-      rejectDownload = reject;
-    });
-    const timeout = window.setTimeout(() => {
-      manualDownloadWaiters.current.delete(key);
-      rejectDownload(new Error("o CurseForge não iniciou o download dentro de 10 minutos"));
-    }, 10 * 60 * 1000);
-    manualDownloadWaiters.current.set(key, { resolve: resolveDownload, reject: rejectDownload, timeout });
-    try {
-      await invoke("open_manual_content_download", {
-        id: options.id,
-        pageUrl: options.pageUrl,
-        filename: options.filename,
-        contentType: options.contentType,
-        sha1: options.sha1,
-        projectId: options.projectId ?? null,
-        fileId: options.fileId ?? null,
-      });
-      await completion;
-    } catch (error) {
-      const waiter = manualDownloadWaiters.current.get(key);
-      if (waiter) {
-        window.clearTimeout(waiter.timeout);
-        manualDownloadWaiters.current.delete(key);
-      }
-      throw error;
-    }
+    await externalDownloadQueue.enqueue({ ...options, requestId: crypto.randomUUID() });
   }
 
   async function createInstance(event: FormEvent) {
@@ -1590,8 +1544,7 @@ function LauncherApp() {
       archiveUrl = resolved?.data;
     }
     if (!archiveUrl) {
-      setNotice(`O autor exige a página oficial. O Aurora baixará “${packFile.fileName}” e continuará automaticamente.`);
-      await downloadFromOfficialCurseForgePage({
+      await downloadCurseForgeContentAutomatically({
         id,
         pageUrl: curseForgeDownloadPage(pack.slug, packFile.id, "modpack", pack.websiteUrl),
         filename: packFile.fileName,
@@ -1633,13 +1586,14 @@ function LauncherApp() {
         }
         if (!file.downloadUrl) {
           if (!project?.slug) throw new Error(`O projeto ${projectId} não possui página oficial válida.`);
-          setNotice(`Baixando pela página oficial: ${project.name || file.fileName}…`);
-          await downloadFromOfficialCurseForgePage({
+          await downloadCurseForgeContentAutomatically({
             id,
             pageUrl: curseForgeDownloadPage(project.slug, file.id, "mod", project.links?.websiteUrl),
             filename: file.fileName,
             contentType: "mod",
             sha1,
+            projectId,
+            fileId: file.id,
           });
         }
         resolvedFiles.push({
@@ -2044,7 +1998,7 @@ function LauncherApp() {
           status: requiresOfficialPage || dependencyBlocked ? "blocked" as const : match.status,
           reasonCode: dependencyBlocked ? "missingRequiredDependencies" : match.reason,
           reason: requiresOfficialPage
-            ? "O autor exige o download pela página oficial do CurseForge; a troca automática fica bloqueada para preservar o arquivo atual."
+            ? "O CurseForge não disponibilizou uma URL direta; a troca automática fica bloqueada para preservar o arquivo atual."
             : dependencyBlocked
               ? `A nova versão exige ${missingDependencies.length === 1 ? "a dependência" : "as dependências"} CurseForge ${missingDependencies.join(", ")}. Instale ${missingDependencies.length === 1 ? "essa dependência" : "essas dependências"} antes de atualizar.`
             : match.message,
@@ -2188,7 +2142,7 @@ function LauncherApp() {
                   status: requiresOfficialPage || automaticApplyUnavailable ? "blocked" : match.status,
                   reasonCode: automaticApplyUnavailable ? "curseForgeModpackApplyUnavailable" : match.reason,
                   reason: requiresOfficialPage
-                    ? "O autor exige o download pela página oficial; a atualização automática do modpack não pode substituir arquivos com segurança."
+                    ? "O CurseForge não disponibilizou uma URL direta; a atualização automática do modpack não pode substituir arquivos com segurança."
                     : automaticApplyUnavailable
                       ? `A versão ${match.targetFile?.displayName || match.targetFile?.fileName || "mais recente"} está disponível, mas este modpack CurseForge não possui um plano transacional aplicável. Nada foi alterado.`
                     : match.message,
@@ -2812,12 +2766,14 @@ function LauncherApp() {
               sha1,
             });
           } else {
-            await downloadFromOfficialCurseForgePage({
+            await downloadCurseForgeContentAutomatically({
               id,
               pageUrl: curseForgeDownloadPage(candidate.project.slug, candidate.file.id, candidate.type, candidate.project.links?.websiteUrl),
               filename: candidate.file.fileName,
               contentType: candidate.type,
               sha1,
+              projectId: candidate.project.id,
+              fileId: candidate.file.id,
             });
           }
           rememberContentArtworkData(id, candidate.file.fileName, candidate.type, {

@@ -29,6 +29,9 @@ conteúdo e execução dentro do Minecraft ainda exigem homologação.
 - URLs diretas são baixadas em paralelo. Quando a distribuição direta está
   bloqueada, a página oficial é aberta dentro do Aurora, o arquivo disparado
   pela página é validado e a fila segue automaticamente.
+  Na fonte posterior à alpha.6, o launcher tenta primeiro uma cópia oficial
+  Modrinth de SHA-1 idêntico e corrige redirecionamentos/cancelamentos da fila;
+  consulte `task-external-downloads.md`. Nenhum instalador novo foi gerado.
 - Conteúdo avulso CurseForge instala também sua árvore de dependências
   obrigatórias, limitada e sem ciclos.
 - Mods avulsos do Modrinth também resolvem recursivamente as dependências

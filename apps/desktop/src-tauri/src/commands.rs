@@ -3,10 +3,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use aurora_launcher_core::{
@@ -41,10 +38,7 @@ use aurora_launcher_core::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
-use tauri::{
-    webview::DownloadEvent, AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
-};
-use uuid::Uuid;
+use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,16 +72,6 @@ pub struct InstanceContentSummary {
 pub struct InstanceContentFile {
     name: String,
     enabled: bool,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ManualDownloadEvent {
-    instance_id: String,
-    filename: String,
-    content_type: String,
-    status: String,
-    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -179,7 +163,7 @@ fn emit_download_progress(app: &AppHandle, label: impl Into<String>, percent: f6
     );
 }
 
-fn emit_transfer_progress(app: &AppHandle, progress: TransferProgress) {
+pub(crate) fn emit_transfer_progress(app: &AppHandle, progress: TransferProgress) {
     emit_download_event(
         app,
         DownloadProgressEvent {
@@ -801,14 +785,14 @@ pub async fn install_remote_content(
     .map_err(|error| format!("a instalação do conteúdo falhou: {error}"))?
 }
 
-/// Abre a página oficial de um arquivo bloqueado em uma janela do Aurora. A
-/// própria página cumpre a contagem regressiva; o WebView apenas captura o
-/// download, valida o SHA-1 publicado e o instala na instância.
+/// Reutiliza o arquivo verificado, procura uma cópia oficial com SHA-1 idêntico
+/// ou captura o download autorizado pela própria página do CurseForge.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn open_manual_content_download(
     app: AppHandle,
     running: tauri::State<'_, RunningInstances>,
+    request_id: String,
     id: String,
     page_url: String,
     filename: String,
@@ -824,7 +808,7 @@ pub async fn open_manual_content_download(
     let instance_id = id.as_str().to_owned();
     let instance = layout(&app)?.open(id);
     let mutation_lock =
-        Arc::new(acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?);
+        acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
     instance
         .ensure_layout()
         .map_err(|error| error.to_string())?;
@@ -848,93 +832,31 @@ pub async fn open_manual_content_download(
             .join(content_folder(&content_type)?)
             .join(&filename)
     };
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("não foi possível preparar o download: {error}"))?;
-    }
-    let temporary = destination.with_file_name(format!(
-        ".{}.{}.aurora-manual-download",
-        Uuid::new_v4().simple(),
-        filename
-    ));
-    let label = format!("curseforge-download-{}", Uuid::new_v4().simple());
-    let download_started = Arc::new(AtomicBool::new(false));
-    let handler_started = Arc::clone(&download_started);
-    let handler_app = app.clone();
-    let handler_label = label.clone();
-    let handler_instance_id = instance_id.clone();
-    let handler_filename = filename.clone();
-    let handler_content_type = content_type.clone();
-    let handler_destination = destination.clone();
-    let handler_temporary = temporary.clone();
-    let handler_sha1 = sha1.clone();
-    let handler_mutation_lock = mutation_lock;
+    crate::manual_downloads::start(
+        app,
+        crate::manual_downloads::Request {
+            request_id,
+            instance_id,
+            filename,
+            content_type,
+            sha1,
+            page_url: parsed_url,
+            root: instance.root().to_path_buf(),
+            destination,
+        },
+        mutation_lock,
+    )
+    .await
+}
 
-    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(parsed_url))
-        .title(format!("Aurora · Baixando {filename}"))
-        .inner_size(980.0, 720.0)
-        .min_inner_size(720.0, 520.0)
-        .center()
-        .on_navigation(|url| is_curseforge_host(url.host_str()))
-        .on_download(move |_webview, event| match event {
-            DownloadEvent::Requested { destination, .. } => {
-                if handler_started.swap(true, Ordering::SeqCst) {
-                    return false;
-                }
-                *destination = handler_temporary.clone();
-                let _ = handler_app.emit(
-                    "aurora-manual-download",
-                    ManualDownloadEvent {
-                        instance_id: handler_instance_id.clone(),
-                        filename: handler_filename.clone(),
-                        content_type: handler_content_type.clone(),
-                        status: "downloading".to_owned(),
-                        error: None,
-                    },
-                );
-                true
-            }
-            DownloadEvent::Finished { path, success, .. } => {
-                let _keep_mutation_lock = &handler_mutation_lock;
-                let result = if success {
-                    finalize_manual_download(
-                        path.as_deref(),
-                        &handler_temporary,
-                        &handler_destination,
-                        &handler_sha1,
-                    )
-                } else {
-                    Err("o CurseForge não concluiu o download".to_owned())
-                };
-                if result.is_err() {
-                    let _ = fs::remove_file(&handler_temporary);
-                }
-                let _ = handler_app.emit(
-                    "aurora-manual-download",
-                    ManualDownloadEvent {
-                        instance_id: handler_instance_id.clone(),
-                        filename: handler_filename.clone(),
-                        content_type: handler_content_type.clone(),
-                        status: if result.is_ok() {
-                            "completed"
-                        } else {
-                            "failed"
-                        }
-                        .to_owned(),
-                        error: result.err(),
-                    },
-                );
-                if let Some(window) = handler_app.get_webview_window(&handler_label) {
-                    let _ = window.close();
-                }
-                true
-            }
-            _ => true,
-        })
-        .build()
-        .map_err(|error| format!("não foi possível abrir o download dentro do Aurora: {error}"))?;
-
-    Ok(())
+#[tauri::command]
+pub async fn cancel_manual_content_download(
+    app: AppHandle,
+    request_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::manual_downloads::cancel(&app, &request_id))
+        .await
+        .map_err(|_| "não foi possível cancelar o download".to_owned())?
 }
 
 fn content_folder(content_type: &str) -> Result<&'static str, String> {
@@ -947,6 +869,7 @@ fn content_folder(content_type: &str) -> Result<&'static str, String> {
 }
 
 fn validate_content_filename(filename: &str, content_type: &str) -> Result<(), String> {
+    safe_content_filename(filename)?;
     if filename.is_empty()
         || filename.len() > 255
         || filename.contains(['/', '\\'])
@@ -1055,22 +978,40 @@ fn is_curseforge_host(host: Option<&str>) -> bool {
     host.is_some_and(|host| host == "curseforge.com" || host.ends_with(".curseforge.com"))
 }
 
-fn finalize_manual_download(
+pub(crate) fn finalize_manual_download(
     reported_path: Option<&std::path::Path>,
     temporary: &std::path::Path,
     destination: &std::path::Path,
     expected_sha1: &str,
 ) -> Result<(), String> {
     let downloaded = reported_path.unwrap_or(temporary);
-    if downloaded != temporary || !temporary.is_file() {
+    if downloaded != temporary {
         return Err("o navegador interno não entregou o arquivo esperado".to_owned());
     }
-    let metadata = fs::metadata(temporary)
+    verify_manual_download_file(temporary, expected_sha1)?;
+    // Both paths are siblings: rename replaces atomically without deleting the
+    // previous file first. A failed rename therefore preserves that file.
+    fs::rename(temporary, destination)
+        .map_err(|error| format!("não foi possível instalar o conteúdo: {error}"))
+}
+
+pub(crate) fn verify_manual_download_file(path: &Path, expected_sha1: &str) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("não foi possível verificar o arquivo: {error}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("o download não é um arquivo regular".to_owned());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err("o download não pode ser um link ou ponto de análise".to_owned());
+        }
+    }
     if metadata.len() == 0 || metadata.len() > 2 * 1024 * 1024 * 1024 {
         return Err("o arquivo baixado tem um tamanho inválido".to_owned());
     }
-    let mut file = fs::File::open(temporary)
+    let mut file = fs::File::open(path)
         .map_err(|error| format!("não foi possível verificar o arquivo: {error}"))?;
     let mut digest = Sha1::new();
     let mut buffer = [0u8; 128 * 1024];
@@ -1086,12 +1027,7 @@ fn finalize_manual_download(
     if !format!("{:x}", digest.finalize()).eq_ignore_ascii_case(expected_sha1) {
         return Err("o SHA-1 do arquivo baixado não corresponde ao publicado".to_owned());
     }
-    if destination.exists() {
-        fs::remove_file(destination)
-            .map_err(|error| format!("não foi possível substituir o conteúdo anterior: {error}"))?;
-    }
-    fs::rename(temporary, destination)
-        .map_err(|error| format!("não foi possível instalar o conteúdo: {error}"))
+    Ok(())
 }
 
 #[tauri::command]
@@ -2478,6 +2414,8 @@ mod tests {
         assert!(validate_content_filename("modpack.zip", "modpack").is_ok());
         assert!(validate_content_filename("../example.jar", "mod").is_err());
         assert!(validate_content_filename("example.exe", "mod").is_err());
+        assert!(validate_content_filename("bad:stream.jar", "mod").is_err());
+        assert!(validate_content_filename("CON.jar", "mod").is_err());
     }
 
     #[test]
@@ -2489,7 +2427,24 @@ mod tests {
         fs::create_dir_all(&directory).expect("diretório temporário");
         let temporary = directory.join("download.part");
         let destination = directory.join("example.jar");
+        fs::write(&destination, b"previous file").unwrap();
         fs::write(&temporary, b"hello").expect("arquivo temporário");
+        assert!(finalize_manual_download(
+            Some(&temporary),
+            &temporary,
+            &destination,
+            "0000000000000000000000000000000000000000",
+        )
+        .is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"previous file");
+        assert!(finalize_manual_download(
+            Some(&destination),
+            &temporary,
+            &destination,
+            "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d",
+        )
+        .is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"previous file");
         finalize_manual_download(
             Some(&temporary),
             &temporary,
@@ -2498,6 +2453,28 @@ mod tests {
         )
         .expect("hash correto deve publicar o arquivo");
         assert_eq!(fs::read(&destination).expect("arquivo final"), b"hello");
+        assert!(!temporary.exists());
         fs::remove_dir_all(directory).expect("limpeza temporária");
+    }
+
+    #[test]
+    fn manual_download_failed_publication_does_not_delete_destination() {
+        let directory =
+            std::env::temp_dir().join(format!("aurora-publish-test-{}", uuid::Uuid::new_v4()));
+        let destination = directory.join("existing-folder");
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("keep.txt"), b"keep").unwrap();
+        let temporary = directory.join("download.part");
+        fs::write(&temporary, b"hello").unwrap();
+        assert!(finalize_manual_download(
+            None,
+            &temporary,
+            &destination,
+            "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        )
+        .is_err());
+        assert_eq!(fs::read(destination.join("keep.txt")).unwrap(), b"keep");
+        assert!(temporary.exists());
+        fs::remove_dir_all(directory).unwrap();
     }
 }

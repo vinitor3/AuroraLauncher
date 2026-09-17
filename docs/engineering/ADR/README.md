@@ -17,5 +17,6 @@
 | [013](ADR-013-distribution.md) | GitHub Releases imutáveis | Proposta |
 | [014](ADR-014-microsoft-auth.md) | entitlement antes de distribuição pública | Decisão: não por enquanto |
 | [015](ADR-015-aurora-core.md) | Core modular, IPC único e módulos isolados | Aceita |
+| [017](ADR-017-external-content-downloads.md) | Download externo por SHA-1 oficial e fila correlacionada | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 
 Estados mudam somente por novo ADR que substitua o anterior ou por revisão explícita deste arquivo.
