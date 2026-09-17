@@ -88,11 +88,71 @@ export type CurseForgeCatalogRequest =
   | { action: "files"; modId: number; gameVersion?: string; loader?: "forge" | "fabric" }
   | { action: "file"; modId: number; fileId: number }
   | { action: "download"; modId: number; fileId: number }
+  | { action: "updates"; contentType: "mod" | "shader" | "resourcepack" | "modpack"; gameVersion: string; loader?: "forge" | "fabric"; items: CurseForgeUpdateRequestItem[] }
   | { action: "resolveProjects"; projectIds: number[]; gameVersion: string; loader?: "forge" | "fabric" }
   | { action: "resolveFiles"; files: Array<{ projectId: number; fileId: number }> };
 
+export type CurseForgeUpdateRequestItem = {
+  projectId: number;
+} & (
+  | { currentSha1: string; currentFileId?: never }
+  | { currentFileId: number; currentSha1?: never }
+);
+
+export type CurseForgeUpdateReason =
+  | "loaderRequired"
+  | "projectNotFound"
+  | "contentTypeMismatch"
+  | "installedFileNotFound"
+  | "installedFileContextMismatch"
+  | "installedVersionNotOlder"
+  | "noCompatibleRelease"
+  | "scanLimitReached"
+  | "missingSha1"
+  | "manualDownloadRequired";
+
+export type CurseForgeUpdateProject = {
+  id: number;
+  classId?: number;
+  name?: string;
+  slug?: string;
+  links?: { websiteUrl?: string };
+  logo?: { thumbnailUrl?: string; url?: string };
+};
+
+export type CurseForgeUpdateFile = {
+  id: number;
+  modId: number;
+  fileName: string;
+  displayName?: string;
+  fileDate?: string;
+  fileLength?: number;
+  releaseType: number;
+  gameVersions: string[];
+  hashes: Array<{ algo: number; value: string }>;
+  dependencies?: Array<{ modId: number; relationType: number }>;
+  downloadUrl?: string;
+  sha1: string;
+  downloadMode: "proxy" | "officialPage";
+  manualDownloadRequired: boolean;
+};
+
+export type CurseForgeUpdateResult = {
+  projectId: number;
+  project: CurseForgeUpdateProject;
+  targetFile?: CurseForgeUpdateFile;
+  status: "updateAvailable" | "upToDate" | "blocked";
+  reason?: CurseForgeUpdateReason;
+  message: string;
+} & (
+  | { currentSha1: string; currentFileId?: never }
+  | { currentFileId: number; currentSha1?: never }
+);
+
+export type CurseForgeUpdatesResponse = { data: CurseForgeUpdateResult[] };
+
 export function requestCurseForgeCatalog<T>(services: FirebaseServices, body: CurseForgeCatalogRequest) {
-  const timeoutMs = body.action === "resolveFiles" || body.action === "resolveProjects"
+  const timeoutMs = body.action === "resolveFiles" || body.action === "resolveProjects" || body.action === "updates"
     ? 300_000
     : 45_000;
   return request<T>(services, "/v1/curseforge", body, timeoutMs);
