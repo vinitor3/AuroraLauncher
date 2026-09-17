@@ -91,3 +91,22 @@ Build de JAR não é homologação. Mudança no Companion deve registrar Minecra
 ## Documentação a atualizar
 
 Mudanças materiais atualizam o documento de domínio, `docs/engineering/COMPATIBILITY_MATRIX.md` quando afetarem runtime, e o task file correspondente. Decisões arquiteturais novas ou revertidas exigem ADR.
+
+## Coordenação entre chats e economia de contexto
+
+- Cada tarefa entrega branch, commit, arquivos relevantes, testes executados e
+  pendências em um resumo curto. Ler documentos de domínio sob demanda; não
+  recarregar todo o histórico ou todos os documentos a cada turno.
+- Ao pedir “integrar todos os chats e gerar instalador”, uma única tarefa
+  coordena a integração. As demais concluem suas alterações e testes focados,
+  sem gerar instaladores paralelos nem publicar versões concorrentes do Worker.
+- Usar `npm run release:status` para listar worktrees pendentes. Integrar apenas
+  entregas concluídas, preservar mudanças em andamento e resolver conflitos com
+  base no código e nos responsáveis; nunca descartar alterações para liberar o build.
+- Depois de integrar, testar o conjunto, ajustar a versão e fazer commit,
+  executar `npm run release:package` uma vez. O comando conserva as verificações
+  oficiais, salva logs em `.aurora` e produz instalador, SHA-256 e manifesto.
+- Consultar somente o final dos logs e expandir a leitura quando houver falha.
+  Não repetir testes ou delegações já concluídos sem mudança relevante.
+- Comandos e limites: `docs/release-workflow.md`. Economia de contexto não
+  substitui testes, validação de secrets ou homologação dentro do Minecraft.

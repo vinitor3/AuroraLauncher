@@ -63,8 +63,14 @@ launcher que use as ações em lote `resolveFiles` e `resolveProjects`.
   presente em `CURSEFORGE_API_KEY` recebeu `403 API Key missing or invalid` na
   busca oficial. O proprietário precisa renovar a chave aprovada pelo
   [processo oficial do CurseForge](https://support.curseforge.com/support/solutions/articles/9000208346-about-the-curseforge-api-and-how-to-apply-for-a-key)
-  e atualizar o secret com `wrangler secret put CURSEFORGE_API_KEY`. O endpoint
-  de saúde deve retornar HTTP 200 antes de anunciar o catálogo como disponível.
+  e atualizar o secret com `wrangler secret put CURSEFORGE_API_KEY`.
+- em 17 de setembro de 2026, após a configuração da nova chave, o Worker de
+  revisão `2026-09-16-player-skins-v1` retornou HTTP 200 em `/health/curseforge`,
+  com um resultado de busca e 52 categorias reais. A credencial está operacional.
+  O binding utilizado é exatamente `CURSEFORGE_API_KEY`; um secret adicional
+  chamado `CURSEFORGE_API_KEY_2` não é utilizado e não ativa rotação automática.
+  Este teste confirma acesso ao catálogo; não substitui instalação real de cada
+  tipo de conteúdo nem homologação dentro do Minecraft.
 
 Firebase Functions e Secret Manager do Google não são necessários para esta
 integração; Firebase continua responsável apenas pela identidade e pelos dados
