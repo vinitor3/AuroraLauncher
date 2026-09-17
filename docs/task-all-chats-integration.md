@@ -1,5 +1,19 @@
 # Tarefa — integração das modificações do Aurora
 
+## Integração atual de 17/09/2026
+
+As entregas locais foram reunidas em `codex/aur-release-20260917`, versão
+`0.1.1-alpha.6`: catálogos/filtros, Core 1.1.2, Skins 0.2.3, Companion 0.2.3,
+busca de skins e atualizador de conteúdo. O preflight confirmou os nove worktrees
+sem entregas pendentes de integração. O Worker integrado está publicado e
+CurseForge responde HTTP 200 com a chave renovada.
+
+O comando `npm run release:package` gera uma única release e seu manifesto;
+`npm run release:status` consulta pendências. Consulte `release-workflow.md`.
+Os detalhes abaixo preservam a release histórica alpha.4. Compilação não
+substitui homologação dentro do Minecraft; atualização automática de modpacks
+CurseForge permanece bloqueada, conforme `task-content-updates.md`.
+
 ## Estado
 
 **CONCLUÍDO no código e compilado em 31 de agosto de 2026.**

@@ -24,7 +24,7 @@
 | R-016 | P2 | Edge TTS não oficial/instável | teste depende de serviço externo e está ignored | fallback sem voz, aviso de privacidade e adaptador substituível |
 | R-017 | P2 | CAS GC apaga blob vivo | subsistema ainda ausente | raízes explícitas, GC dry-run, transação SQLite e fixtures de crash |
 | R-018 | P2 | conteúdo CurseForge sem autorização | alguns arquivos não têm URL direta e o CDN passou a exigir `x-api-key` | página oficial/manual quando bloqueado; tickets HMAC e gateway restrito a `forgecdn.net` quando autorizado |
-| R-023 | P0 | chave CurseForge de produção inválida | `/health/curseforge` recebe HTTP 403 `API Key missing or invalid` na busca oficial em 01/09/2026 | proprietário renovar chave aprovada, atualizar secret do Worker e exigir health HTTP 200 antes de release |
+| R-023 | P0 mitigado | CONCLUÍDO: credencial CurseForge renovada | `/health/curseforge` HTTP 200, 1 resultado e 52 categorias em 17/09/2026 após deploy `d9669ec0` | manter chave somente no Worker e verificar health antes de release; instalações reais ainda precisam de homologação |
 
 ## Política
 

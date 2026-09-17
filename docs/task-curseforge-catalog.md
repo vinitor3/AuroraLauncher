@@ -2,10 +2,11 @@
 
 ## Estado
 
-**IMPLEMENTADO MAS NÃO HOMOLOGADO.** O código e o Worker foram publicados em
-1º de setembro de 2026, mas a chave de produção é recusada com HTTP 403 na
-busca oficial e precisa ser renovada pelo proprietário. Nenhum novo instalador
-foi gerado nesta tarefa.
+**IMPLEMENTADO MAS NÃO HOMOLOGADO.** Em 17 de setembro de 2026 a nova chave
+de produção foi validada: `/health/curseforge` retorna HTTP 200, um resultado
+de busca e 52 categorias. O Worker integrado inclui catálogo, skins e updater;
+a release desktop unificada é a `0.1.1-alpha.6`. Instalação real de cada tipo de
+conteúdo e execução dentro do Minecraft ainda exigem homologação.
 
 ## Escopo entregue
 
@@ -41,12 +42,20 @@ foi gerado nesta tarefa.
 - Downloads bloqueados continuam respeitando a página oficial do CurseForge;
   o launcher não constrói URLs de CDN para contornar a escolha do autor.
 - NeoForge e outros loaders permanecem fora do escopo; somente Forge e Fabric.
-- O Worker atualizado está em produção e `/health` confirma sua revisão. O
-  smoke real `/health/curseforge` falha corretamente enquanto a chave atual for
-  recusada; não há fallback para API não oficial.
-- Nenhum instalador foi gerado nesta tarefa.
+- O Worker atualizado está em produção e `/health` confirma sua revisão.
+  A chave canônica `CURSEFORGE_API_KEY` está operacional; `_2` não é utilizada.
+  Não há fallback para API não oficial.
 
-## Evidência
+## Validação operacional em 17/09/2026
+
+- Revisão: `2026-09-17-integrated-catalog-skins-updates-v1`.
+- Deployment: `d9669ec0-50ed-4eec-a59f-337b13244a7d`.
+- `/health` e `/health/curseforge`: HTTP 200 após o deploy integrado.
+- 56 testes do Worker aprovados, incluindo os fluxos CurseForge e skins.
+- Build integrado do frontend aprovado; release coordenada conforme
+  `release-workflow.md`. Consulte o manifesto do instalador para a proveniência.
+
+## Evidência histórica de 01/09/2026
 
 - Build React/Vite e verificação TypeScript concluídos.
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` e `cargo test`
