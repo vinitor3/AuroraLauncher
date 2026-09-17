@@ -5,8 +5,8 @@
   "scripts": {
     "desktop:dev": "npm --prefix apps/desktop run tauri dev",
     "release:preflight": "powershell -ExecutionPolicy Bypass -File scripts/release-preflight.ps1",
-    "release:status": "powershell -ExecutionPolicy Bypass -File scripts/release-status.ps1",
-    "release:package": "powershell -ExecutionPolicy Bypass -File scripts/package-release.ps1",
+    "release:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-status.ps1",
+    "release:package": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1",
     "release:verify-mods": "powershell -ExecutionPolicy Bypass -File scripts/verify-mod-release-matrix.ps1",
     "desktop:build": "npm run release:verify-mods && npm run release:preflight && npm --prefix apps/desktop run tauri build",
     "desktop:test": "npm --prefix apps/desktop run build",
