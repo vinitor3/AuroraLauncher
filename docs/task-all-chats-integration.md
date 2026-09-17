@@ -14,6 +14,24 @@ Os detalhes abaixo preservam a release histórica alpha.4. Compilação não
 substitui homologação dentro do Minecraft; atualização automática de modpacks
 CurseForge permanece bloqueada, conforme `task-content-updates.md`.
 
+### Artefato alpha.6
+
+**CONCLUÍDO:** compilação e empacotamento oficiais em 17/09/2026.
+
+- Instalador: `releases/Aurora Smart Launcher_0.1.1-alpha.6_x64-setup.exe`.
+- Tamanho: 6.711.975 bytes.
+- SHA-256: `5fc73a636ab3867593af5601a522e01765f9d7171e3f14e26e2faa7ba8046e5a`.
+- Fonte compilada: `cecb010e2beec2d1988083330423dce5e7a4d0d0`.
+- Manifesto e `.sha256` adjacentes; os 27 hashes do manifesto foram reconferidos.
+- Validação integrada: frontend, fmt/clippy, 63 testes Rust aprovados e 2 online
+  ignorados, 56 testes do Worker aprovados, matriz 27/27 e preflight antes/depois.
+- O lançamento mantém o lock da instância até o processo do jogo ser removido
+  do acompanhamento, impedindo concorrência com o updater enquanto acompanhado.
+- O build escolhe Java 17/21 por módulo automaticamente. SHA-256 usa .NET para
+  funcionar também no Windows PowerShell sem o cmdlet opcional de hashing.
+- Assinatura Authenticode: `NotSigned`. Instalação e execução dentro do
+  Minecraft: **NÃO VERIFICADO** nesta integração.
+
 ## Estado
 
 **CONCLUÍDO no código e compilado em 31 de agosto de 2026.**
