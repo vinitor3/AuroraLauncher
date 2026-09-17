@@ -37,6 +37,12 @@ O release preflight recompila as 27 combinações e compara o conteúdo normaliz
 
 ## Compatibilidade do launcher
 
+Release alpha.7 (17/09/2026): instalador recompilado com Core 1.1.2,
+Skins 0.2.3 e Companion 0.2.3; matriz de fontes 27/27, 50 testes desktop e
+88 testes Rust aprovados. As correções abaixo agora estão no instalador,
+mas os testes de runtime real continuam pendentes. Evidência:
+`../task-release-alpha7.md`.
+
 - Guarda-roupa, correção de 17/09/2026: recuperação da skin local por PNG,
   seleção equipada persistente e espera da recuperação antes de iniciar o jogo.
   O launch prioriza o modelo Slim/Clássico equipado local, mesmo quando o perfil

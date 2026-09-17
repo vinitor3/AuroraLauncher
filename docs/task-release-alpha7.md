@@ -22,13 +22,27 @@ externo faz parte desta release. Contas, instâncias e skins pessoais preservada
 
 ## Validação e publicação
 
-Preparação: **PARCIAL**. Executar suíte Node, fmt/clippy/test Rust e
-`npm run release:package` (preflight, matriz dos 27 mods e build Tauri).
-Logs em `.aurora`; atualizar este documento após empacotamento.
+Empacotamento: **CONCLUÍDO**. Fonte do build: `3799143` (checkout limpo).
 
-O manifesto final registra commit, versão, tamanho, SHA-256 e hashes dos JARs.
-Nenhum gate será desabilitado nem artefato anterior sobrescrito.
+- Suíte Node desktop: 50 testes aprovados.
+- Rust: fmt e clippy aprovados; 88 testes aprovados e 3 testes online opcionais
+  ignorados, sem falha. Execução serial para evitar instabilidade conhecida IPC.
+- Build oficial via `npm run release:package` e `npm run desktop:build`:
+  Core 1.1.2, Skins 0.2.3 e Companion 0.2.3, 9/9 arquivos em cada matriz.
+- Build TypeScript/Vite e Tauri/NSIS aprovados; preflights inicial e final
+  aprovaram as 13 worktrees. Nenhum gate desabilitado.
+- Logs: `.aurora/logs/alpha7-*` e
+  `.aurora/release-runs/20260917-103653-491d3844/build.log`.
+
+Artefato: `releases/Aurora Smart Launcher_0.1.1-alpha.7_x64-setup.exe`,
+6.764.928 bytes. Produto e versão dos metadados PE conferidos.
+
+SHA-256: `7c2fea709c80dc94c19e028e99a7460da42178d65be1302f887ac83eb5169eb1`.
+O `.sha256` e o `.manifest.json` acompanham o instalador; o manifesto registra
+fonte, tamanho e os 27 hashes dos módulos. Releases anteriores preservadas.
 
 Gameplay: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. A próxima build instalada e o
 comportamento no Minecraft ainda **PRECISA DE TESTE**.
-Assinatura digital: **NÃO VERIFICADO** nesta preparação.
+Authenticode do instalador: `NotSigned` (conferido após o build). O Windows
+pode mostrar aviso de editor desconhecido. O instalador não foi executado
+automaticamente; nenhum push ou deploy foi realizado.
