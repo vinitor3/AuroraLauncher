@@ -22,6 +22,25 @@ No cadastro, a observação aguarda a criação do documento do perfil antes de
 consultá-lo. Credenciais recusadas mantêm o formulário de login. A animação
 não impõe atraso mínimo e respeita `prefers-reduced-motion`.
 
+## Animação de carregamento
+
+Reforço visual na fonte posterior à alpha.7: dois anéis com partículas giram
+em sentidos opostos, o logo flutua e pulsa, três pontos alternam a luminosidade
+e uma faixa indeterminada percorre a barra. As animações são CSS e não adicionam
+espera, timers ou dependências à restauração de sessão.
+
+Antes, `prefers-reduced-motion: reduce` desligava todos os indicadores e deixava
+a barra completamente preenchida. Agora esse modo elimina deslocamento, escala
+e rotação, oculta a barra e mantém apenas a mudança suave de opacidade dos pontos
+(ciclo de 2,4 s). Não modifica configurações do Windows nem força movimento
+espacial para quem prefere reduzi-lo. O erro remove os indicadores de carga e
+interrompe os ciclos decorativos; retentativa e login continuam disponíveis.
+
+Fixture local: `/examples/startup-motion.html`, usando o componente e CSS de
+produção sem autenticação. Permite comparar amostras reais de animação, simular
+o media query reduzido e verificar os callbacks de erro. A simulação altera
+somente a regra CSS da página de teste, nunca a preferência do sistema.
+
 ## Console e diagnóstico
 
 O executável Windows de release usa `windows_subsystem = "windows"`; o console
