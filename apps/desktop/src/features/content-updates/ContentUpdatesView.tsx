@@ -18,11 +18,16 @@ type ContentUpdatesViewProps = {
   filter: ContentUpdateFilter;
   scanning: boolean;
   applying: boolean;
+  busy: boolean;
   running: boolean;
   lastBackupAvailable: boolean;
   modpackUpdate?: ModpackUpdate | null;
   modpackScanError?: string;
+  query: string;
+  scanIssueCount: number;
+  totalAttention: number;
   onFilterChange: (filter: ContentUpdateFilter) => void;
+  onQueryChange: (query: string) => void;
   onToggleSelection: (filename: string) => void;
   onSelectAvailable: (items: ContentUpdateItem[]) => void;
   onCheckAgain: () => void;
@@ -73,11 +78,16 @@ export function ContentUpdatesView({
   filter,
   scanning,
   applying,
+  busy,
   running,
   lastBackupAvailable,
   modpackUpdate,
   modpackScanError,
+  query,
+  scanIssueCount,
+  totalAttention,
   onFilterChange,
+  onQueryChange,
   onToggleSelection,
   onSelectAvailable,
   onCheckAgain,
@@ -89,7 +99,9 @@ export function ContentUpdatesView({
   const available = items.filter((item) => item.status === "updateAvailable");
   const upToDate = items.filter((item) => item.status === "upToDate");
   const attention = items.filter((item) => item.status === "blocked" || item.status === "unmanaged");
-  const visible = filter === "all" ? items : items.filter((item) => item.status === filter);
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visible = (filter === "all" ? items : items.filter((item) => item.status === filter))
+    .filter((item) => !normalizedQuery || `${itemTitle(item)} ${item.filename}`.toLocaleLowerCase().includes(normalizedQuery));
   const selectedItems = available.filter((item) => selectedFilenames.includes(item.filename));
   const selectedProvider = selectedItems[0]?.provider ?? (selectedItems.length ? "modrinth" : undefined);
   const availableGroups = (["modrinth", "curseforge"] as const)
@@ -97,11 +109,10 @@ export function ContentUpdatesView({
     .filter((group) => group.items.length > 0);
   const typeLabel = contentType === "mod" ? "mods" : contentType === "shader" ? "shaders" : "pacotes de recursos";
   const showModpackUpdate = Boolean(modpackUpdate && (modpackUpdate.source || modpackUpdate.projectId));
-  const totalIncludingModpack = totalAvailable + (showModpackUpdate && modpackUpdate?.status === "updateAvailable" ? 1 : 0);
-  const hasAttention = attention.length > 0 || Boolean(showModpackUpdate && (modpackUpdate?.status === "blocked" || modpackUpdate?.status === "unmanaged"));
+  const interactionBlocked = busy || scanning || applying;
 
   return (
-    <div className="updates-view">
+    <div aria-busy={scanning || applying} className="updates-view">
       {running && (
         <div aria-live="polite" className="updates-running-warning" role="status">
           <span aria-hidden="true">■</span>
@@ -125,7 +136,7 @@ export function ContentUpdatesView({
             {modpackUpdate.reasonCode === "manualDownloadRequired" ? "Download oficial necessário" : modpackUpdate.status === "updateAvailable" ? "Nova versão" : modpackUpdate.status === "upToDate" ? "Atualizado" : modpackUpdate.status === "blocked" ? "Bloqueado" : "Não gerenciado"}
           </span>
           {modpackUpdate.status === "updateAvailable" && (
-            <button className="compact" disabled={applying || running} onClick={() => onReviewModpack(modpackUpdate)} type="button">Revisar atualização</button>
+            <button className="compact" disabled={interactionBlocked || running} onClick={() => onReviewModpack(modpackUpdate)} type="button">Revisar atualização</button>
           )}
         </section>
       )}
@@ -133,10 +144,10 @@ export function ContentUpdatesView({
 
       <section className="updates-summary-card" aria-label="Resumo das atualizações">
         <div className="updates-summary-heading">
-          <div><p className="eyebrow">CONTEÚDO DA INSTÂNCIA</p><h3>{totalIncludingModpack > 0 ? `${totalIncludingModpack} ${totalIncludingModpack === 1 ? "atualização encontrada" : "atualizações encontradas"}` : hasAttention ? "Verificação concluída" : "Tudo sob controle"}</h3><small>{scanning ? "Verificando versões compatíveis…" : formatCheckedAt(scan?.scannedAt)}</small></div>
+          <div><p className="eyebrow">CONTEÚDO DA INSTÂNCIA</p><h3>{scanning ? "Verificando conteúdo…" : scanIssueCount > 0 ? "Verificação parcial" : totalAvailable > 0 ? `${totalAvailable} ${totalAvailable === 1 ? "atualização encontrada" : "atualizações encontradas"}` : totalAttention > 0 ? "Verificação concluída" : "Tudo sob controle"}</h3><small>{scanning ? "Comparando versões sem alterar arquivos…" : formatCheckedAt(scan?.scannedAt)}</small></div>
           <div className="updates-summary-actions">
-            {lastBackupAvailable && <button className="secondary compact" disabled={applying || running} onClick={onReviewRollback} type="button">↶ Desfazer última atualização</button>}
-            <button className="secondary compact" disabled={scanning || applying} onClick={onCheckAgain} type="button">{scanning ? "Verificando…" : "↻ Verificar novamente"}</button>
+            {lastBackupAvailable && <button className="secondary compact" disabled={interactionBlocked || running} onClick={onReviewRollback} type="button">↶ Desfazer última atualização</button>}
+            <button className="secondary compact" disabled={interactionBlocked} onClick={onCheckAgain} type="button">{scanning ? "Verificando…" : "↻ Verificar novamente"}</button>
           </div>
         </div>
         <div className="update-metrics" aria-live="polite">
@@ -148,6 +159,10 @@ export function ContentUpdatesView({
       {scan?.warning && <p className="updates-inline-warning" role="status">{scan.warning}</p>}
 
       <div className="updates-toolbar">
+        <label className="updates-search">
+          <span aria-hidden="true">⌕</span>
+          <input aria-label={`Buscar ${typeLabel} por nome`} onChange={(event) => onQueryChange(event.target.value)} placeholder="Buscar por nome" value={query} />
+        </label>
         <div className="update-filter-pills" aria-label="Filtrar estado da atualização" role="group">
           {FILTERS.map((entry) => {
             const count = entry.value === "all" ? items.length : items.filter((item) => item.status === entry.value).length;
@@ -157,7 +172,7 @@ export function ContentUpdatesView({
         {availableGroups.length > 0 && <div className="update-provider-selection">{availableGroups.map((group) => {
           const selected = group.items.every((item) => selectedFilenames.includes(item.filename));
           const providerName = group.provider === "curseforge" ? "CurseForge" : "Modrinth";
-          return <button className="secondary compact" disabled={applying} key={group.provider} onClick={() => onSelectAvailable(selected ? [] : group.items)} type="button">{selected ? "Limpar seleção" : availableGroups.length > 1 ? `Selecionar ${providerName} (${group.items.length})` : "Selecionar disponíveis"}</button>;
+          return <button className="secondary compact" disabled={interactionBlocked} key={group.provider} onClick={() => onSelectAvailable(selected ? [] : group.items)} type="button">{selected ? "Limpar seleção" : availableGroups.length > 1 ? `Selecionar ${providerName} (${group.items.length})` : "Selecionar disponíveis"}</button>;
         })}</div>}
       </div>
 
@@ -168,7 +183,7 @@ export function ContentUpdatesView({
       ) : items.length === 0 ? (
         <div className="updates-empty"><span>◇</span><strong>Nenhum {typeLabel} para verificar</strong><p>Adicione conteúdo pelo catálogo e volte aqui para acompanhar as versões.</p></div>
       ) : visible.length === 0 ? (
-        <div className="updates-empty compact"><span>⌕</span><strong>Nada neste filtro</strong><p>Escolha outro estado para ver os demais arquivos.</p></div>
+        <div className="updates-empty compact"><span>⌕</span><strong>Nenhum resultado</strong><p>{normalizedQuery ? "Tente outro nome ou limpe a busca." : "Escolha outro estado para ver os demais arquivos."}</p></div>
       ) : (
         <div className="update-item-list">
           {visible.map((item) => {
@@ -181,7 +196,7 @@ export function ContentUpdatesView({
             const selectionLocked = Boolean(selectedProvider && selectedProvider !== itemProvider);
             return (
               <article className={`update-item-row ${item.status} ${selected ? "selected" : ""}`} key={`${contentType}-${item.filename}`}>
-                <input aria-label={`Selecionar atualização de ${itemTitle(item)}`} checked={selected} className="content-select" disabled={!canUpdate || applying || selectionLocked} onChange={() => onToggleSelection(item.filename)} title={selectionLocked ? "Atualize cada catálogo em uma etapa separada" : undefined} type="checkbox" />
+                <input aria-label={`Selecionar atualização de ${itemTitle(item)}`} checked={selected} className="content-select" disabled={!canUpdate || interactionBlocked || selectionLocked} onChange={() => onToggleSelection(item.filename)} title={selectionLocked ? "Atualize cada catálogo em uma etapa separada" : undefined} type="checkbox" />
                 <span className="update-item-artwork">
                   <span aria-hidden="true">{contentType === "mod" ? "◆" : contentType === "shader" ? "✦" : "▧"}</span>
                   {item.iconUrl && <img alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} src={item.iconUrl} />}
@@ -192,7 +207,7 @@ export function ContentUpdatesView({
                   {canUpdate ? <p><span>{currentVersionLabel(item)}</span><b aria-hidden="true">→</b><span>{targetVersionLabel(item)}</span></p> : <p>{item.reason || (item.status === "upToDate" ? `Versão ${currentVersionLabel(item)}` : status.label)}</p>}
                 </div>
                 <span className={`update-state-badge ${item.status}`} title={item.reason}><i aria-hidden="true">{status.icon}</i>{status.label}</span>
-                {canUpdate && <button className="compact" disabled={applying || running} onClick={() => onReviewItems([item])} type="button">Atualizar</button>}
+                {canUpdate && <button className="compact" disabled={interactionBlocked || running} onClick={() => onReviewItems([item])} type="button">Atualizar</button>}
               </article>
             );
           })}
@@ -202,8 +217,8 @@ export function ContentUpdatesView({
       {selectedItems.length > 0 && (
         <div aria-live="polite" className="update-selection-bar">
           <span><strong>{selectedItems.length}</strong> selecionado(s)</span>
-          <button aria-label="Limpar seleção de atualizações" className="secondary compact" disabled={applying} onClick={() => onSelectAvailable([])} type="button">Limpar</button>
-          <button disabled={applying || running} onClick={() => onReviewItems(selectedItems)} type="button">Revisar e atualizar</button>
+          <button aria-label="Limpar seleção de atualizações" className="secondary compact" disabled={interactionBlocked} onClick={() => onSelectAvailable([])} type="button">Limpar</button>
+          <button disabled={interactionBlocked || running} onClick={() => onReviewItems(selectedItems)} type="button">Revisar e atualizar</button>
         </div>
       )}
     </div>

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   currentVersionLabel,
   modpackCurrentVersionLabel,
@@ -32,6 +32,12 @@ function confirmationLabel(request: UpdateReviewRequest, busy: boolean) {
   return busy ? "Atualizando…" : `Confirmar ${request.items.length === 1 ? "atualização" : `${request.items.length} atualizações`}`;
 }
 
+function progressLabel(request: UpdateReviewRequest) {
+  if (request.kind === "rollback") return "Restaurando o backup e verificando os arquivos…";
+  if (request.kind === "modpack") return "Atualizando o modpack com snapshot protegido…";
+  return "Baixando, verificando e trocando os arquivos selecionados…";
+}
+
 export function UpdateReviewDialog({
   request,
   instanceName,
@@ -42,16 +48,48 @@ export function UpdateReviewDialog({
   onCancel,
   onConfirm,
 }: UpdateReviewDialogProps) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const cancelRef = useRef(onCancel);
+  const busyRef = useRef(busy);
+  cancelRef.current = onCancel;
+  busyRef.current = busy;
   useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusable = () => [...(dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    ) ?? [])].filter((element) => element.getAttribute("aria-hidden") !== "true");
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) {
+      if (event.key === "Escape" && !busyRef.current) {
         event.preventDefault();
-        onCancel();
+        cancelRef.current();
+        return;
+      }
+      if (event.key === "Tab") {
+        const controls = focusable();
+        if (controls.length === 0) {
+          event.preventDefault();
+          dialogRef.current?.focus();
+          return;
+        }
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (event.shiftKey && (document.activeElement === first || !dialogRef.current?.contains(document.activeElement))) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || !dialogRef.current?.contains(document.activeElement))) {
+          event.preventDefault();
+          first.focus();
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busy, onCancel]);
+    const frame = window.requestAnimationFrame(() => (focusable()[0] ?? dialogRef.current)?.focus());
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", onKeyDown);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
 
   const descriptionId = "update-review-description";
   return (
@@ -59,8 +97,11 @@ export function UpdateReviewDialog({
       aria-describedby={descriptionId}
       aria-labelledby="update-review-title"
       aria-modal="true"
+      aria-busy={busy}
       className="update-review-dialog"
+      ref={dialogRef}
       role="dialog"
+      tabIndex={-1}
     >
       <header className="update-review-header">
         <div>
@@ -120,10 +161,17 @@ export function UpdateReviewDialog({
         )}
 
         {error && <p aria-live="assertive" className="update-review-error">{error}</p>}
+        {busy && (
+          <div aria-live="polite" className="update-review-progress" role="status">
+            <span aria-hidden="true" className="update-spinner" />
+            <div><strong>Alteração em andamento</strong><p>{progressLabel(request)}</p></div>
+            <progress aria-label={progressLabel(request)} />
+          </div>
+        )}
       </div>
 
       <footer className="update-review-actions">
-        <button autoFocus className="secondary" disabled={busy} onClick={onCancel} type="button">Cancelar</button>
+        <button className="secondary" disabled={busy} onClick={onCancel} type="button">Cancelar</button>
         <button disabled={busy} onClick={onConfirm} type="button">{confirmationLabel(request, busy)}</button>
       </footer>
     </section>

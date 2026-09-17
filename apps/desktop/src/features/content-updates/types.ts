@@ -71,6 +71,7 @@ export type ContentUpdateSummary = {
 export type ContentRollbackSummary = {
   transactionId?: string;
   restoredFiles: Array<string | {
+    contentType?: UpdateContentType | "modpack";
     replacedFilename: string;
     restoredFilename: string;
     projectId?: string;

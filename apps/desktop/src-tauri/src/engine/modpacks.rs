@@ -1,6 +1,6 @@
 //! Catálogo e instalação segura de modpacks públicos do Modrinth.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
@@ -23,6 +23,12 @@ use super::{
 };
 
 const MODRINTH_API: &str = "https://api.modrinth.com/v2";
+const MAX_MRPACK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_PACK_FILE_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_PACK_TOTAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+const MAX_OVERRIDE_FILES: usize = 10_000;
+const MAX_OVERRIDE_FILE_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_OVERRIDE_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum ModpackError {
@@ -48,6 +54,8 @@ pub enum ModpackError {
     Minecraft(#[from] InstallError),
     #[error("integridade inválida para {0}")]
     Integrity(PathBuf),
+    #[error("não foi possível preparar a atualização: {0}")]
+    UpdatePreparation(String),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -615,7 +623,7 @@ where
             .filter(|url| url.starts_with("https://"))
             .ok_or(ModpackError::MissingDownload)?;
         let target_folder = if root { folder } else { "mods" };
-        requests.push(content_download_request(
+        requests.push(modrinth_download_request(
             url,
             &instance.root().join(target_folder).join(filename),
             filename,
@@ -766,10 +774,94 @@ pub fn install_modrinth_modpack_with_progress<F>(
     project_id: &str,
     minecraft_version: &str,
     forge_java: Option<&Path>,
+    progress: F,
+) -> Result<ModpackInstallSummary, ModpackError>
+where
+    F: FnMut(ModpackProgress),
+{
+    install_modrinth_modpack_selected_with_progress(
+        instance,
+        project_id,
+        minecraft_version,
+        None,
+        None,
+        forge_java,
+        |_| Ok(()),
+        progress,
+    )
+}
+
+/// Instala uma versão exata já revalidada pelo updater. Diferente do fluxo
+/// inicial, este caminho nunca escolhe outro loader ou uma versão mais nova
+/// entre a revisão do plano e a aplicação.
+pub fn install_modrinth_modpack_version_with_progress<F>(
+    instance: &Instance,
+    project_id: &str,
+    minecraft_version: &str,
+    loader: &str,
+    pack_version_id: &str,
+    forge_java: Option<&Path>,
+    progress: F,
+) -> Result<ModpackInstallSummary, ModpackError>
+where
+    F: FnMut(ModpackProgress),
+{
+    install_modrinth_modpack_selected_with_progress(
+        instance,
+        project_id,
+        minecraft_version,
+        Some(loader),
+        Some(pack_version_id),
+        forge_java,
+        |_| Ok(()),
+        progress,
+    )
+}
+
+/// Variante usada pelo atualizador transacional. O callback recebe todos os
+/// caminhos que o pacote pode alterar depois que o mrpack foi validado, mas
+/// antes de qualquer escrita na instância.
+#[allow(clippy::too_many_arguments)]
+pub fn install_modrinth_modpack_version_transactional_with_progress<F, P>(
+    instance: &Instance,
+    project_id: &str,
+    minecraft_version: &str,
+    loader: &str,
+    pack_version_id: &str,
+    forge_java: Option<&Path>,
+    preflight: P,
+    progress: F,
+) -> Result<ModpackInstallSummary, ModpackError>
+where
+    F: FnMut(ModpackProgress),
+    P: FnMut(&[PathBuf]) -> Result<(), ModpackError>,
+{
+    install_modrinth_modpack_selected_with_progress(
+        instance,
+        project_id,
+        minecraft_version,
+        Some(loader),
+        Some(pack_version_id),
+        forge_java,
+        preflight,
+        progress,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn install_modrinth_modpack_selected_with_progress<F, P>(
+    instance: &Instance,
+    project_id: &str,
+    minecraft_version: &str,
+    required_loader: Option<&str>,
+    pack_version_id: Option<&str>,
+    forge_java: Option<&Path>,
+    mut preflight: P,
     mut progress: F,
 ) -> Result<ModpackInstallSummary, ModpackError>
 where
     F: FnMut(ModpackProgress),
+    P: FnMut(&[PathBuf]) -> Result<(), ModpackError>,
 {
     progress(ModpackProgress::stage(
         "Consultando versões do modpack",
@@ -784,14 +876,19 @@ where
         .as_array()
         .and_then(|versions| {
             versions.iter().find(|version| {
-                version["game_versions"]
-                    .as_array()
-                    .is_some_and(|game_versions| {
-                        game_versions
-                            .iter()
-                            .any(|game_version| game_version.as_str() == Some(minecraft_version))
-                    })
-                    && supported_project_loader(version).is_some()
+                pack_version_id.is_none_or(|id| version["id"].as_str() == Some(id))
+                    && version["version_type"].as_str() == Some("release")
+                    && version["game_versions"]
+                        .as_array()
+                        .is_some_and(|game_versions| {
+                            game_versions.iter().any(|game_version| {
+                                game_version.as_str() == Some(minecraft_version)
+                            })
+                        })
+                    && required_loader.map_or_else(
+                        || supported_project_loader(version).is_some(),
+                        |required| version_supports_loader(version, required),
+                    )
             })
         })
         .ok_or_else(|| ModpackError::NoCompatibleVersion(minecraft_version.to_owned()))?;
@@ -819,32 +916,40 @@ where
         .as_str()
         .ok_or(ModpackError::MissingDownload)?;
     let pack_filename = pack_file["filename"].as_str().unwrap_or("modpack.mrpack");
+    let pack_size = pack_file["size"]
+        .as_u64()
+        .filter(|size| *size > 0 && *size <= MAX_MRPACK_BYTES)
+        .ok_or(ModpackError::InvalidResponse)?;
     let temporary_pack = instance.root().join(".aurora-modpack.mrpack");
-    let pack_request = content_download_request(
+    let pack_request = modrinth_download_request(
         pack_url,
         &temporary_pack,
         pack_filename,
         pack_file.pointer("/hashes/sha1").and_then(Value::as_str),
         pack_file.pointer("/hashes/sha512").and_then(Value::as_str),
-        pack_file["size"].as_u64(),
+        Some(pack_size),
     )?;
     download_one_with_progress(&client, pack_request, |item| {
         progress(ModpackProgress::transfer(item.map_total(3.0, 15.0)))
     })?;
     progress(ModpackProgress::stage("Verificando o pacote", 15.0));
-
-    let result = install_pack_archive(
-        instance,
-        &temporary_pack,
-        &client,
-        project_id,
-        minecraft_version,
-        selected,
-        forge_java,
-        &mut progress,
-    )?;
+    let result = (|| {
+        let mutable_paths = planned_pack_paths(&temporary_pack)?;
+        preflight(&mutable_paths)?;
+        install_pack_archive(
+            instance,
+            &temporary_pack,
+            &client,
+            project_id,
+            minecraft_version,
+            selected,
+            required_loader,
+            forge_java,
+            &mut progress,
+        )
+    })();
     let _ = fs::remove_file(&temporary_pack);
-    Ok(result)
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -855,6 +960,7 @@ fn install_pack_archive<F>(
     project_id: &str,
     minecraft_version: &str,
     selected_version: &Value,
+    required_loader: Option<&str>,
     forge_java: Option<&Path>,
     progress: &mut F,
 ) -> Result<ModpackInstallSummary, ModpackError>
@@ -864,6 +970,7 @@ where
     instance
         .ensure_layout()
         .map_err(|error| ModpackError::Io(io::Error::other(error)))?;
+    let managed_paths = planned_pack_paths(pack_path)?;
     let mut archive = ZipArchive::new(File::open(pack_path)?)?;
     let mut index_contents = String::new();
     archive
@@ -899,6 +1006,9 @@ where
                 .unwrap_or_else(|| "desconhecido".to_owned());
             return Err(ModpackError::UnsupportedLoader(unsupported));
         };
+    if required_loader.is_some_and(|required| required != loader) {
+        return Err(ModpackError::UnsupportedLoader(loader.to_owned()));
+    }
 
     progress(ModpackProgress::stage(
         format!("Preparando Minecraft {minecraft_version} com {loader}"),
@@ -934,9 +1044,10 @@ where
         .as_array()
         .ok_or(ModpackError::InvalidResponse)?;
     let mut pack_downloads = Vec::with_capacity(files.len());
+    let mut total_download_bytes = 0u64;
     for file in files {
         let relative =
-            safe_relative_path(file["path"].as_str().ok_or(ModpackError::InvalidResponse)?)?;
+            safe_modpack_install_path(file["path"].as_str().ok_or(ModpackError::InvalidResponse)?)?;
         let url = file["downloads"]
             .as_array()
             .and_then(|downloads| {
@@ -947,13 +1058,21 @@ where
             })
             .ok_or(ModpackError::MissingDownload)?;
         let label = relative.display().to_string();
-        pack_downloads.push(content_download_request(
+        let file_size = file["fileSize"]
+            .as_u64()
+            .filter(|size| *size <= MAX_PACK_FILE_BYTES)
+            .ok_or(ModpackError::InvalidResponse)?;
+        total_download_bytes = total_download_bytes
+            .checked_add(file_size)
+            .filter(|total| *total <= MAX_PACK_TOTAL_BYTES)
+            .ok_or(ModpackError::InvalidResponse)?;
+        pack_downloads.push(modrinth_download_request(
             url,
             &instance.root().join(&relative),
             &label,
             file.pointer("/hashes/sha1").and_then(Value::as_str),
             file.pointer("/hashes/sha512").and_then(Value::as_str),
-            file["fileSize"].as_u64(),
+            Some(file_size),
         )?);
     }
     let batch = download_many(
@@ -977,14 +1096,44 @@ where
         .as_str()
         .unwrap_or("versão do modpack")
         .to_owned();
+    let pack_version_id = selected_version["id"]
+        .as_str()
+        .ok_or(ModpackError::InvalidResponse)?;
+    let version_number = selected_version["version_number"]
+        .as_str()
+        .ok_or(ModpackError::InvalidResponse)?;
+    let owned_files = managed_paths
+        .iter()
+        .filter(|relative| relative.as_path() != Path::new("aurora-modpack.json"))
+        .map(|relative| {
+            let path = instance.root().join(relative);
+            let metadata = fs::metadata(&path)?;
+            if !metadata.is_file() {
+                return Err(ModpackError::Integrity(path));
+            }
+            let sha1 = sha1_file(&path).ok_or_else(|| ModpackError::Integrity(path.clone()))?;
+            let relative = relative
+                .to_str()
+                .map(|value| value.replace('\\', "/"))
+                .ok_or_else(|| ModpackError::UnsafePath(relative.display().to_string()))?;
+            Ok(serde_json::json!({
+                "path": relative,
+                "sha1": sha1,
+                "size": metadata.len(),
+            }))
+        })
+        .collect::<Result<Vec<_>, ModpackError>>()?;
     let marker = serde_json::json!({
         "source": "modrinth",
         "projectId": project_id,
+        "packVersionId": pack_version_id,
+        "versionNumber": version_number,
         "name": name,
         "versionName": version_name,
         "minecraft": minecraft_version,
         "loader": loader,
         "versionId": minecraft.version_id,
+        "ownedFiles": owned_files,
     });
     fs::write(
         instance.root().join("aurora-modpack.json"),
@@ -1012,8 +1161,54 @@ fn client() -> Client {
         .timeout(std::time::Duration::from_secs(10 * 60))
         .pool_idle_timeout(std::time::Duration::from_secs(90))
         .pool_max_idle_per_host(DEFAULT_DOWNLOAD_CONCURRENCY)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 || !safe_redirect_target(attempt.url()) {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        }))
         .build()
         .expect("cliente HTTP deve inicializar")
+}
+
+fn safe_redirect_target(url: &Url) -> bool {
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    url.host_str()
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|host| {
+            host == "cdn.modrinth.com"
+                || host.ends_with(".modrinth.com")
+                || host == "aurora-api.aurora-edge-proxy.workers.dev"
+        })
+}
+
+fn modrinth_download_request(
+    url: &str,
+    destination: &Path,
+    label: &str,
+    sha1: Option<&str>,
+    sha512: Option<&str>,
+    expected_size: Option<u64>,
+) -> Result<DownloadRequest, ModpackError> {
+    let parsed = Url::parse(url).map_err(|_| ModpackError::MissingDownload)?;
+    let host_is_modrinth = parsed
+        .host_str()
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|host| host == "cdn.modrinth.com" || host.ends_with(".modrinth.com"));
+    if !safe_redirect_target(&parsed) || !host_is_modrinth {
+        return Err(ModpackError::MissingDownload);
+    }
+    content_download_request(
+        parsed.as_str(),
+        destination,
+        label,
+        sha1,
+        sha512,
+        expected_size,
+    )
 }
 
 fn get_json(client: &Client, url: &str) -> Result<Value, ModpackError> {
@@ -1037,17 +1232,132 @@ fn supported_project_loader(version: &Value) -> Option<&'static str> {
     }
 }
 
+fn version_supports_loader(version: &Value, loader: &str) -> bool {
+    matches!(loader, "fabric" | "forge")
+        && version["loaders"]
+            .as_array()
+            .is_some_and(|loaders| loaders.iter().any(|item| item.as_str() == Some(loader)))
+}
+
 fn safe_relative_path(value: &str) -> Result<PathBuf, ModpackError> {
     let path = Path::new(value);
     if path.is_absolute()
         || value.is_empty()
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
+        || path.components().any(|component| match component {
+            Component::Normal(name) => name
+                .to_str()
+                .is_none_or(|name| !windows_component_safe(name)),
+            _ => true,
+        })
     {
         return Err(ModpackError::UnsafePath(value.to_owned()));
     }
     Ok(path.to_path_buf())
+}
+
+fn windows_component_safe(value: &str) -> bool {
+    if value.is_empty()
+        || value.ends_with(['.', ' '])
+        || value
+            .chars()
+            .any(|character| character.is_control() || r#"<>:"/\|?*"#.contains(character))
+    {
+        return false;
+    }
+    let stem = value
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    !matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        && !(stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit()
+            && stem.as_bytes()[3] != b'0')
+}
+
+fn safe_modpack_install_path(value: &str) -> Result<PathBuf, ModpackError> {
+    let path = safe_relative_path(value)?;
+    let first = path
+        .components()
+        .next()
+        .and_then(|component| match component {
+            Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .ok_or_else(|| ModpackError::UnsafePath(value.to_owned()))?
+        .to_ascii_lowercase();
+    if matches!(
+        first.as_str(),
+        ".aurora"
+            | "assets"
+            | "libraries"
+            | "versions"
+            | "natives"
+            | "saves"
+            | "screenshots"
+            | "logs"
+            | "crash-reports"
+            | "backups"
+            | "replay_recordings"
+    ) {
+        return Err(ModpackError::UnsafePath(value.to_owned()));
+    }
+    Ok(path)
+}
+
+fn planned_pack_paths(pack_path: &Path) -> Result<Vec<PathBuf>, ModpackError> {
+    let mut archive = ZipArchive::new(File::open(pack_path)?)?;
+    let mut paths = HashMap::new();
+    {
+        let mut index_contents = String::new();
+        archive
+            .by_name("modrinth.index.json")?
+            .read_to_string(&mut index_contents)?;
+        let index: Value =
+            serde_json::from_str(&index_contents).map_err(|_| ModpackError::InvalidResponse)?;
+        if index["formatVersion"].as_u64() != Some(1) {
+            return Err(ModpackError::InvalidResponse);
+        }
+        let files = index["files"]
+            .as_array()
+            .ok_or(ModpackError::InvalidResponse)?;
+        for file in files {
+            insert_planned_path(
+                &mut paths,
+                safe_modpack_install_path(
+                    file["path"].as_str().ok_or(ModpackError::InvalidResponse)?,
+                )?,
+            )?;
+        }
+    }
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index)?;
+        let name = entry.name().replace('\\', "/");
+        let Some(relative) = name.strip_prefix("overrides/") else {
+            continue;
+        };
+        if relative.is_empty() || entry.is_dir() {
+            continue;
+        }
+        insert_planned_path(&mut paths, safe_modpack_install_path(relative)?)?;
+    }
+    insert_planned_path(&mut paths, PathBuf::from("aurora-modpack.json"))?;
+    let mut paths = paths.into_values().collect::<Vec<_>>();
+    paths.sort();
+    Ok(paths)
+}
+
+fn insert_planned_path(
+    paths: &mut HashMap<String, PathBuf>,
+    path: PathBuf,
+) -> Result<(), ModpackError> {
+    let key = path.to_string_lossy().to_lowercase();
+    if paths.get(&key).is_some_and(|existing| existing != &path) {
+        return Err(ModpackError::UnsafePath(path.display().to_string()));
+    }
+    paths.insert(key, path);
+    Ok(())
 }
 
 fn content_download_request(
@@ -1090,8 +1400,9 @@ fn extract_overrides(
     instance_root: &Path,
 ) -> Result<usize, ModpackError> {
     let mut extracted = 0usize;
+    let mut total_bytes = 0u64;
     for index in 0..archive.len() {
-        let mut entry = archive.by_index(index)?;
+        let entry = archive.by_index(index)?;
         let name = entry.name().replace('\\', "/");
         let Some(relative) = name.strip_prefix("overrides/") else {
             continue;
@@ -1099,14 +1410,26 @@ fn extract_overrides(
         if relative.is_empty() || entry.is_dir() {
             continue;
         }
-        let relative = safe_relative_path(relative)?;
+        if extracted >= MAX_OVERRIDE_FILES || entry.size() > MAX_OVERRIDE_FILE_BYTES {
+            return Err(ModpackError::InvalidResponse);
+        }
+        total_bytes = total_bytes
+            .checked_add(entry.size())
+            .filter(|total| *total <= MAX_OVERRIDE_TOTAL_BYTES)
+            .ok_or(ModpackError::InvalidResponse)?;
+        let relative = safe_modpack_install_path(relative)?;
         let destination = instance_root.join(relative);
         let parent = destination
             .parent()
             .ok_or_else(|| ModpackError::UnsafePath(name))?;
         fs::create_dir_all(parent)?;
         let mut output = File::create(destination)?;
-        io::copy(&mut entry, &mut output)?;
+        let expected = entry.size();
+        let mut limited = entry.take(expected.saturating_add(1));
+        let copied = io::copy(&mut limited, &mut output)?;
+        if copied != expected {
+            return Err(ModpackError::InvalidResponse);
+        }
         extracted += 1;
     }
     Ok(extracted)
@@ -1115,8 +1438,8 @@ fn extract_overrides(
 #[cfg(test)]
 mod tests {
     use super::{
-        list_modrinth_categories, push_modrinth_category_facet, safe_relative_path,
-        validated_modrinth_category, ModrinthCategory,
+        list_modrinth_categories, push_modrinth_category_facet, safe_modpack_install_path,
+        safe_relative_path, validated_modrinth_category, ModrinthCategory,
     };
 
     #[test]
@@ -1124,6 +1447,22 @@ mod tests {
         assert!(safe_relative_path("../outside.jar").is_err());
         assert!(safe_relative_path("C:\\outside.jar").is_err());
         assert!(safe_relative_path("mods/example.jar").is_ok());
+    }
+
+    #[test]
+    fn refuses_pack_targets_in_user_or_runtime_directories() {
+        for path in [
+            "saves/world/level.dat",
+            "screenshots/image.png",
+            "logs/latest.log",
+            "crash-reports/crash.txt",
+            "versions/1.20.1/profile.json",
+            ".aurora/private.json",
+        ] {
+            assert!(safe_modpack_install_path(path).is_err(), "{path}");
+        }
+        assert!(safe_modpack_install_path("mods/example.jar").is_ok());
+        assert!(safe_modpack_install_path("config/example.toml").is_ok());
     }
 
     #[test]

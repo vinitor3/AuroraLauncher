@@ -12,6 +12,9 @@ use std::time::Duration;
 use aurora_launcher_core::{
     auth::{offline_uuid_for_nickname, validate_nickname},
     engine::{
+        acquire_instance_mutation_lock, apply_content_updates as apply_verified_content_updates,
+        apply_modrinth_modpack_update_with_progress as apply_verified_modpack_update,
+        apply_remote_content_updates as apply_verified_remote_content_updates,
         available_java_releases, discover_java_executables, discover_managed_java_executables,
         ensure_managed_java_with_progress, install_curseforge_modpack_with_progress,
         install_embedded_companion, install_embedded_core, install_embedded_skins,
@@ -22,13 +25,17 @@ use aurora_launcher_core::{
         prepare_curseforge_modpack_with_progress, read_cached_curseforge_manifest,
         required_java_major, required_java_major_for_instance, resolve_launch_spec,
         resolve_modrinth_content_artwork,
+        rollback_last_content_update as rollback_verified_content_update,
+        scan_content_updates as scan_verified_content_updates, scan_modrinth_modpack_update,
         search_modrinth_content as search_modrinth_catalog_content,
         search_modrinth_modpacks as search_modrinth_catalog, supported_managed_java_major,
+        ContentUpdateApplySummary, ContentUpdateRollbackSummary, ContentUpdateScan,
         CurseForgeManifestSummary, CurseForgeResolvedFile, InstallSummary, InstanceId,
         InstanceLayout, IpcEvent, IpcServer, IpcSessionProfile, JavaReleaseCatalog, JavaRuntime,
         LaunchIdentity, LauncherEngine, MinecraftInstaller, ModpackInstallSummary, ModpackProgress,
-        ModrinthCategory, ModrinthContent, ModrinthSearchPage, ResolvedContentArtwork,
-        SpeechResult, TransferProgress,
+        ModpackUpdateApplySummary, ModpackUpdateScan, ModrinthCategory, ModrinthContent,
+        ModrinthSearchPage, RemoteContentUpdate, ResolvedContentArtwork, SpeechResult,
+        TransferProgress,
     },
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -370,6 +377,49 @@ fn update_modpack_launch_profile(
     .map_err(|error| format!("não foi possível atualizar os metadados: {error}"))
 }
 
+fn validate_instance_update_context(
+    instance: &aurora_launcher_core::engine::Instance,
+    minecraft_version: &str,
+    loader: &str,
+) -> Result<(), String> {
+    if !matches!(loader, "fabric" | "forge") {
+        return Err("somente Forge e Fabric podem receber atualizações".to_owned());
+    }
+    for filename in ["aurora-modpack.json", "aurora-instance.json"] {
+        let path = instance.root().join(filename);
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let document = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .map_err(|_| format!("o perfil da instância em {filename} está corrompido"))?;
+        let stored_minecraft = document["minecraft"].as_str();
+        let stored_loader = document["loader"]
+            .as_str()
+            .or_else(|| {
+                document["source"]
+                    .as_str()
+                    .filter(|value| matches!(*value, "fabric" | "forge"))
+            })
+            .or_else(|| document["versionId"].as_str().and_then(loader_for_profile));
+        if let Some(stored_minecraft) = stored_minecraft {
+            if stored_minecraft != minecraft_version {
+                return Err(format!(
+                    "a instância usa Minecraft {stored_minecraft}, não {minecraft_version}"
+                ));
+            }
+        }
+        if let Some(stored_loader) = stored_loader {
+            if stored_loader != loader {
+                return Err(format!("a instância usa {stored_loader}, não {loader}"));
+            }
+        }
+        if stored_minecraft.is_some() && stored_loader.is_some() {
+            return Ok(());
+        }
+    }
+    Err("não foi possível confirmar a versão e o loader desta instância".to_owned())
+}
+
 #[tauri::command]
 pub fn engine_status(app: AppHandle) -> Result<EngineStatus, String> {
     let data_directory = data_directory(&app)?;
@@ -537,10 +587,14 @@ pub fn delete_instance(
 #[tauri::command]
 pub async fn install_vanilla(
     app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
     id: String,
     minecraft_version: String,
 ) -> Result<InstallSummary, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de alterar esta instância".to_owned());
+    }
     let instance = layout(&app)?.open(id);
     emit_download_progress(
         &app,
@@ -549,6 +603,8 @@ pub async fn install_vanilla(
     );
     let progress_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _mutation_lock =
+            acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
         let result = MinecraftInstaller::new()
             .install_vanilla_with_progress(&instance, &minecraft_version, |progress| {
                 emit_transfer_progress(&progress_app, progress);
@@ -565,10 +621,14 @@ pub async fn install_vanilla(
 #[tauri::command]
 pub async fn install_fabric(
     app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
     id: String,
     minecraft_version: String,
 ) -> Result<InstallSummary, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de alterar esta instância".to_owned());
+    }
     let instance = layout(&app)?.open(id);
     emit_download_progress(
         &app,
@@ -577,6 +637,8 @@ pub async fn install_fabric(
     );
     let progress_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _mutation_lock =
+            acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
         let result = MinecraftInstaller::new()
             .install_fabric_loader_with_progress(&instance, &minecraft_version, None, |progress| {
                 emit_transfer_progress(&progress_app, progress);
@@ -595,11 +657,15 @@ pub async fn install_fabric(
 #[tauri::command]
 pub async fn install_forge(
     app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
     id: String,
     minecraft_version: String,
     forge_version: String,
 ) -> Result<InstallSummary, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de alterar esta instância".to_owned());
+    }
     let instance = layout(&app)?.open(id);
     let runtime_data_directory = data_directory(&app)?;
     emit_download_progress(&app, format!("Preparando Forge {forge_version}"), 1.0);
@@ -614,6 +680,8 @@ pub async fn install_forge(
             },
         )
         .map_err(|error| error.to_string())?;
+        let _mutation_lock =
+            acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
         let result = MinecraftInstaller::new()
             .install_forge_with_java_and_progress(
                 &instance,
@@ -698,6 +766,7 @@ pub async fn search_modrinth_content(
 #[tauri::command]
 pub async fn install_remote_content(
     app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
     id: String,
     url: String,
     filename: String,
@@ -705,10 +774,15 @@ pub async fn install_remote_content(
     sha1: Option<String>,
 ) -> Result<String, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de alterar o conteúdo".to_owned());
+    }
     let instance = layout(&app)?.open(id);
     emit_download_progress(&app, format!("Baixando {filename}"), 1.0);
     let progress_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _mutation_lock =
+            acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
         let result = install_remote_project(
             &instance,
             &url,
@@ -732,6 +806,7 @@ pub async fn install_remote_content(
 #[allow(clippy::too_many_arguments)]
 pub async fn open_manual_content_download(
     app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
     id: String,
     page_url: String,
     filename: String,
@@ -741,8 +816,13 @@ pub async fn open_manual_content_download(
     file_id: Option<u64>,
 ) -> Result<(), String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de alterar o conteúdo".to_owned());
+    }
     let instance_id = id.as_str().to_owned();
     let instance = layout(&app)?.open(id);
+    let mutation_lock =
+        Arc::new(acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?);
     instance
         .ensure_layout()
         .map_err(|error| error.to_string())?;
@@ -786,6 +866,7 @@ pub async fn open_manual_content_download(
     let handler_destination = destination.clone();
     let handler_temporary = temporary.clone();
     let handler_sha1 = sha1.clone();
+    let handler_mutation_lock = mutation_lock;
 
     WebviewWindowBuilder::new(&app, label, WebviewUrl::External(parsed_url))
         .title(format!("Aurora · Baixando {filename}"))
@@ -812,6 +893,7 @@ pub async fn open_manual_content_download(
                 true
             }
             DownloadEvent::Finished { path, success, .. } => {
+                let _keep_mutation_lock = &handler_mutation_lock;
                 let result = if success {
                     finalize_manual_download(
                         path.as_deref(),
@@ -920,6 +1002,7 @@ pub async fn prepare_curseforge_modpack(
 #[tauri::command]
 pub async fn install_curseforge_modpack(
     app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
     id: String,
     project_id: u64,
     file_id: u64,
@@ -927,6 +1010,9 @@ pub async fn install_curseforge_modpack(
     icon_url: Option<String>,
 ) -> Result<ModpackInstallSummary, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de alterar esta instância".to_owned());
+    }
     let instance = layout(&app)?.open(id);
     let manifest = read_cached_curseforge_manifest(&instance, project_id, file_id)
         .map_err(|error| error.to_string())?;
@@ -943,6 +1029,8 @@ pub async fn install_curseforge_modpack(
             },
         )
         .map_err(|error| error.to_string())?;
+        let _mutation_lock =
+            acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
         install_curseforge_modpack_with_progress(
             &instance,
             project_id,
@@ -1023,11 +1111,15 @@ pub async fn resolve_content_artwork(
 #[tauri::command]
 pub async fn install_modrinth_modpack(
     app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
     id: String,
     project_id: String,
     minecraft_version: String,
 ) -> Result<ModpackInstallSummary, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de alterar esta instância".to_owned());
+    }
     let instance = layout(&app)?.open(id);
     let runtime_data_directory = data_directory(&app)?;
     emit_download_progress(
@@ -1046,6 +1138,8 @@ pub async fn install_modrinth_modpack(
             },
         )
         .map_err(|error| error.to_string())?;
+        let _mutation_lock =
+            acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
         install_modrinth_archive(
             &instance,
             &project_id,
@@ -1065,6 +1159,7 @@ pub async fn install_modrinth_modpack(
 #[tauri::command]
 pub async fn install_modrinth_content(
     app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
     id: String,
     project_id: String,
     minecraft_version: String,
@@ -1072,10 +1167,15 @@ pub async fn install_modrinth_content(
     loader: Option<String>,
 ) -> Result<String, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de alterar o conteúdo".to_owned());
+    }
     let instance = layout(&app)?.open(id);
     emit_download_progress(&app, format!("Baixando conteúdo {project_id}"), 1.0);
     let progress_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let _mutation_lock =
+            acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
         let result = install_modrinth_project(
             &instance,
             &project_id,
@@ -1090,6 +1190,185 @@ pub async fn install_modrinth_content(
     })
     .await
     .map_err(|error| format!("a instalação do conteúdo falhou: {error}"))?
+}
+
+#[tauri::command]
+pub async fn scan_instance_content_updates(
+    app: AppHandle,
+    id: String,
+    content_type: String,
+    minecraft_version: String,
+    loader: String,
+) -> Result<ContentUpdateScan, String> {
+    let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    let instance = layout(&app)?.open(id);
+    if !instance.root().is_dir() {
+        return Err("a instância não existe mais".to_owned());
+    }
+    validate_instance_update_context(&instance, &minecraft_version, &loader)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        scan_verified_content_updates(&instance, &content_type, &minecraft_version, &loader)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("a verificação de atualizações falhou: {error}"))?
+}
+
+#[tauri::command]
+pub async fn apply_instance_content_updates(
+    app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
+    id: String,
+    content_type: String,
+    filenames: Vec<String>,
+    minecraft_version: String,
+    loader: String,
+) -> Result<ContentUpdateApplySummary, String> {
+    let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de atualizar o conteúdo".to_owned());
+    }
+    let instance = layout(&app)?.open(id);
+    validate_instance_update_context(&instance, &minecraft_version, &loader)?;
+    emit_download_progress(&app, "Revalidando atualizações", 2.0);
+    let progress_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let summary = apply_verified_content_updates(
+            &instance,
+            &content_type,
+            &filenames,
+            &minecraft_version,
+            &loader,
+        )
+        .map_err(|error| error.to_string())?;
+        emit_download_progress(&progress_app, "Atualização concluída", 100.0);
+        Ok(summary)
+    })
+    .await
+    .map_err(|error| format!("a atualização de conteúdo falhou: {error}"))?
+}
+
+#[tauri::command]
+pub async fn apply_remote_content_updates(
+    app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
+    id: String,
+    content_type: String,
+    updates: Vec<RemoteContentUpdate>,
+    minecraft_version: String,
+    loader: String,
+) -> Result<ContentUpdateApplySummary, String> {
+    let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de atualizar o conteúdo".to_owned());
+    }
+    let instance = layout(&app)?.open(id);
+    validate_instance_update_context(&instance, &minecraft_version, &loader)?;
+    emit_download_progress(&app, "Validando atualizações CurseForge", 2.0);
+    let progress_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let summary = apply_verified_remote_content_updates(
+            &instance,
+            &content_type,
+            &updates,
+            &minecraft_version,
+            &loader,
+        )
+        .map_err(|error| error.to_string())?;
+        emit_download_progress(&progress_app, "Atualização concluída", 100.0);
+        Ok(summary)
+    })
+    .await
+    .map_err(|error| format!("a atualização de conteúdo falhou: {error}"))?
+}
+
+#[tauri::command]
+pub async fn rollback_last_content_update(
+    app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
+    id: String,
+) -> Result<ContentUpdateRollbackSummary, String> {
+    let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de desfazer uma atualização".to_owned());
+    }
+    let instance = layout(&app)?.open(id);
+    tauri::async_runtime::spawn_blocking(move || {
+        rollback_verified_content_update(&instance).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("o rollback da atualização falhou: {error}"))?
+}
+
+#[tauri::command]
+pub async fn scan_instance_modpack_update(
+    app: AppHandle,
+    id: String,
+) -> Result<ModpackUpdateScan, String> {
+    let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    let instance = layout(&app)?.open(id);
+    if !instance.root().is_dir() {
+        return Err("a instância não existe mais".to_owned());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        scan_modrinth_modpack_update(&instance).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("a verificação do modpack falhou: {error}"))?
+}
+
+#[tauri::command]
+pub async fn apply_instance_modpack_update(
+    app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
+    id: String,
+) -> Result<ModpackUpdateApplySummary, String> {
+    let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de atualizar o modpack".to_owned());
+    }
+    let instance = layout(&app)?.open(id);
+    if !instance.root().is_dir() {
+        return Err("a instância não existe mais".to_owned());
+    }
+    let marker_path = instance.root().join("aurora-modpack.json");
+    let marker = serde_json::from_slice::<serde_json::Value>(
+        &fs::read(&marker_path)
+            .map_err(|error| format!("não foi possível ler o perfil do modpack: {error}"))?,
+    )
+    .map_err(|_| "o perfil do modpack está corrompido".to_owned())?;
+    if marker["source"].as_str() != Some("modrinth") {
+        return Err(
+            "a atualização automática de modpack está disponível para instalações Modrinth"
+                .to_owned(),
+        );
+    }
+    let minecraft_version = marker["minecraft"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "o perfil não informa a versão do Minecraft".to_owned())?
+        .to_owned();
+    let runtime_data_directory = data_directory(&app)?;
+    emit_download_progress(&app, "Revalidando atualização do modpack", 1.0);
+    let progress_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let java = ensure_managed_java_with_progress(
+            &runtime_data_directory,
+            required_java_major(&minecraft_version),
+            |mut progress| {
+                progress.total_percent *= 0.1;
+                emit_transfer_progress(&progress_app, progress);
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        apply_verified_modpack_update(&instance, Some(java.executable()), |mut progress| {
+            progress.percent = 10.0 + progress.percent * 0.9;
+            emit_modpack_progress(&progress_app, progress);
+        })
+        .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("a atualização do modpack falhou: {error}"))?
 }
 
 #[tauri::command]
@@ -1143,12 +1422,35 @@ fn instance_content_folder(content_type: &str) -> Result<&'static str, String> {
 
 fn safe_content_filename(filename: &str) -> Result<&str, String> {
     if filename.is_empty()
+        || filename.len() > 255
         || filename == "."
         || filename == ".."
+        || filename.ends_with(['.', ' '])
+        || filename
+            .chars()
+            .any(|character| character.is_control() || "<>:\"/\\|?*".contains(character))
         || std::path::Path::new(filename)
             .file_name()
             .and_then(|name| name.to_str())
             != Some(filename)
+    {
+        return Err("nome de arquivo de conteúdo inválido".to_owned());
+    }
+    let stem = filename
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(['.', ' '])
+        .to_ascii_lowercase();
+    if matches!(stem.as_str(), "con" | "prn" | "aux" | "nul")
+        || ((stem.starts_with("com") || stem.starts_with("lpt"))
+            && stem.get(3..).is_some_and(|suffix| {
+                suffix.len() == 1
+                    && suffix
+                        .chars()
+                        .next()
+                        .is_some_and(|digit| ('1'..='9').contains(&digit))
+            }))
     {
         return Err("nome de arquivo de conteúdo inválido".to_owned());
     }
@@ -1158,15 +1460,22 @@ fn safe_content_filename(filename: &str) -> Result<&str, String> {
 #[tauri::command]
 pub fn set_instance_content_enabled(
     app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
     id: String,
     content_type: String,
     filename: String,
     enabled: bool,
 ) -> Result<(), String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de alterar o conteúdo".to_owned());
+    }
     let folder = instance_content_folder(&content_type)?;
     let filename = safe_content_filename(&filename)?;
-    let directory = layout(&app)?.open(id).root().join(folder);
+    let instance = layout(&app)?.open(id);
+    let _mutation_lock =
+        acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
+    let directory = instance.root().join(folder);
     let active = directory.join(filename);
     let inactive = directory.join(format!("{filename}.disabled"));
     let (source, destination) = if enabled {
@@ -1187,15 +1496,22 @@ pub fn set_instance_content_enabled(
 #[tauri::command]
 pub fn set_instance_content_enabled_bulk(
     app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
     id: String,
     content_type: String,
     filenames: Vec<String>,
     enabled: bool,
 ) -> Result<usize, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de alterar o conteúdo".to_owned());
+    }
     let folder = instance_content_folder(&content_type)?;
     let filenames = unique_content_filenames(filenames)?;
-    let directory = layout(&app)?.open(id).root().join(folder);
+    let instance = layout(&app)?.open(id);
+    let _mutation_lock =
+        acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
+    let directory = instance.root().join(folder);
     let mut changes = Vec::with_capacity(filenames.len());
     for filename in filenames {
         let active = directory.join(&filename);
@@ -1227,14 +1543,21 @@ pub fn set_instance_content_enabled_bulk(
 #[tauri::command]
 pub fn remove_instance_content(
     app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
     id: String,
     content_type: String,
     filenames: Vec<String>,
 ) -> Result<usize, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("feche o Minecraft antes de alterar o conteúdo".to_owned());
+    }
     let folder = instance_content_folder(&content_type)?;
     let filenames = unique_content_filenames(filenames)?;
-    let directory = layout(&app)?.open(id).root().join(folder);
+    let instance = layout(&app)?.open(id);
+    let _mutation_lock =
+        acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
+    let directory = instance.root().join(folder);
     let mut targets = Vec::with_capacity(filenames.len());
     for filename in filenames {
         let active = directory.join(&filename);
@@ -1263,7 +1586,7 @@ fn unique_content_filenames(filenames: Vec<String>) -> Result<Vec<String>, Strin
     let mut unique = Vec::with_capacity(filenames.len());
     for filename in filenames {
         let filename = safe_content_filename(&filename)?.to_owned();
-        if seen.insert(filename.clone()) {
+        if seen.insert(filename.to_lowercase()) {
             unique.push(filename);
         }
     }
@@ -1375,8 +1698,9 @@ pub fn read_instance_launch_profile(
                         })
                     })
                     .map(str::to_owned);
-                let loader_priority = if version_id.to_ascii_lowercase().contains("fabric")
-                    || version_id.to_ascii_lowercase().contains("forge")
+                let normalized_id = version_id.to_ascii_lowercase();
+                let loader_priority = if !normalized_id.contains("neoforge")
+                    && (normalized_id.contains("fabric") || normalized_id.contains("forge"))
                 {
                     0
                 } else {
@@ -1879,7 +2203,9 @@ fn png_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
 
 fn loader_for_profile(version_id: &str) -> Option<&'static str> {
     let version_id = version_id.to_ascii_lowercase();
-    if version_id.contains("fabric") {
+    if version_id.contains("neoforge") {
+        None
+    } else if version_id.contains("fabric") {
         Some("fabric")
     } else if version_id.contains("forge") {
         Some("forge")
