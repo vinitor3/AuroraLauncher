@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'gradle-java.ps1')
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 $CompanionRoot = Join-Path $RepositoryRoot "apps\companion-mod"
 $Gradle = Join-Path $CompanionRoot "gradlew.bat"
@@ -21,7 +22,8 @@ function Invoke-CompanionGradle {
     )
 
     Write-Host "[Aurora Companion] $ProjectDirectory $($Properties -join ' ')"
-    & $Gradle -p $ProjectDirectory clean build --no-daemon @Properties
+    # Companion 1.21.1 uses Java/Shadow with toolchain 17, not the Loom 21 runner.
+    Invoke-AuroraGradleWithJava -JavaVersion 17 -Executable $Gradle -Arguments (@('-p', $ProjectDirectory, 'clean', 'build', '--no-daemon') + $Properties)
     if ($LASTEXITCODE -ne 0) {
         throw "Gradle falhou em $ProjectDirectory com código $LASTEXITCODE."
     }
