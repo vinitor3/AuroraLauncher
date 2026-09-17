@@ -60,6 +60,13 @@ arquivo atual. Se o commit for interrompido, a próxima operação recupera o
 estado anterior. O rollback também falha fechado se o usuário modificou um dos
 arquivos depois da atualização.
 
+Na integração alpha.6, o lançamento também adquire o lock de mutação antes de
+ler o perfil ou instalar Core/Skins/Companion e o mantém no registro do processo
+do jogo até seu encerramento ser detectado. Assim outra janela do Aurora não
+pode atualizar a mesma instância enquanto esse launcher acompanha o jogo. O
+teste de regressão confirma bloqueio durante o registro e liberação na limpeza
+do processo. Encerrar o launcher ainda encerra a posse desse lock.
+
 Modpacks Modrinth são reconsultados e atualizados por uma versão exata do mesmo
 projeto, Minecraft e loader. O Aurora preserva extras locais e protege os
 caminhos mutáveis do pack com snapshot e journal. Modpacks CurseForge são

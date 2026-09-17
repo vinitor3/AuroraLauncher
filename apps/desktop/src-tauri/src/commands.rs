@@ -31,11 +31,11 @@ use aurora_launcher_core::{
         search_modrinth_modpacks as search_modrinth_catalog, supported_managed_java_major,
         ContentUpdateApplySummary, ContentUpdateRollbackSummary, ContentUpdateScan,
         CurseForgeManifestSummary, CurseForgeResolvedFile, InstallSummary, InstanceId,
-        InstanceLayout, IpcEvent, IpcServer, IpcSessionProfile, JavaReleaseCatalog, JavaRuntime,
-        LaunchIdentity, LauncherEngine, MinecraftInstaller, ModpackInstallSummary, ModpackProgress,
-        ModpackUpdateApplySummary, ModpackUpdateScan, ModrinthCategory, ModrinthContent,
-        ModrinthSearchPage, RemoteContentUpdate, ResolvedContentArtwork, SpeechResult,
-        TransferProgress,
+        InstanceLayout, InstanceMutationGuard, IpcEvent, IpcServer, IpcSessionProfile,
+        JavaReleaseCatalog, JavaRuntime, LaunchIdentity, LauncherEngine, MinecraftInstaller,
+        ModpackInstallSummary, ModpackProgress, ModpackUpdateApplySummary, ModpackUpdateScan,
+        ModrinthCategory, ModrinthContent, ModrinthSearchPage, RemoteContentUpdate,
+        ResolvedContentArtwork, SpeechResult, TransferProgress,
     },
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -229,6 +229,8 @@ pub struct IpcSessions(Mutex<BTreeMap<u32, IpcServer>>);
 struct RunningInstance {
     instance_id: String,
     child: Child,
+    // The OS lock also excludes updates from another launcher process.
+    _mutation_lock: InstanceMutationGuard,
 }
 
 #[derive(Default)]
@@ -1747,6 +1749,8 @@ pub fn launch_instance(
     }
     let instance_id = id.as_str().to_owned();
     let instance = layout(&app)?.open(id);
+    let mutation_lock =
+        acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
     let java = JavaRuntime::from_executable(java_executable).map_err(|error| error.to_string())?;
     let uuid = offline_uuid_for_nickname(&nickname).map_err(|error| error.to_string())?;
     let mut spec =
@@ -1843,7 +1847,14 @@ pub fn launch_instance(
         }
         return Err("esta instância já está rodando".to_owned());
     }
-    processes.insert(process_id, RunningInstance { instance_id, child });
+    processes.insert(
+        process_id,
+        RunningInstance {
+            instance_id,
+            child,
+            _mutation_lock: mutation_lock,
+        },
+    );
     Ok(LaunchSummary {
         process_id,
         version_id,
@@ -2374,6 +2385,53 @@ mod tests {
         finalize_manual_download, is_curseforge_host, java_property_path, png_dimensions,
         unique_content_filenames, validate_content_filename,
     };
+
+    #[test]
+    fn game_tracking_keeps_mutations_locked_until_process_cleanup() {
+        use aurora_launcher_core::engine::{ContentUpdateError, InstanceId, InstanceLayout};
+        use std::process::{Command, Stdio};
+
+        let directory =
+            std::env::temp_dir().join(format!("aurora-game-lock-test-{}", uuid::Uuid::new_v4()));
+        let instance =
+            InstanceLayout::new(&directory).open(InstanceId::parse("locked-game").unwrap());
+        instance.ensure_layout().unwrap();
+        let guard = super::acquire_instance_mutation_lock(&instance).unwrap();
+        // Listing the test binary exits without running tests or starting a game.
+        let child = Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let process_id = child.id();
+        let mut processes = std::collections::BTreeMap::new();
+        processes.insert(
+            process_id,
+            super::RunningInstance {
+                instance_id: "locked-game".to_owned(),
+                child,
+                _mutation_lock: guard,
+            },
+        );
+        assert!(matches!(
+            super::acquire_instance_mutation_lock(&instance),
+            Err(ContentUpdateError::Busy)
+        ));
+        processes
+            .get_mut(&process_id)
+            .unwrap()
+            .child
+            .wait()
+            .unwrap();
+        assert_eq!(
+            super::prune_finished_processes(&mut processes),
+            vec![process_id]
+        );
+        let released = super::acquire_instance_mutation_lock(&instance).unwrap();
+        drop(released);
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[cfg(target_os = "windows")]
     #[test]
