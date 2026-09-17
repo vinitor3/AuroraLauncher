@@ -1,6 +1,6 @@
 # Compatibility Matrix
 
-Atualizado em 2026-09-01. `BUILD` significa JAR compilado e inspecionado; `RUNTIME` exige o roteiro completo em uma instância real. Core 1.1.2, Skins 0.2.1 e Companion 0.2.3 formam a matriz embarcada no Launcher 0.1.1-alpha.5.
+Atualizado em 2026-09-02. `BUILD` significa JAR compilado e inspecionado; `RUNTIME` exige o roteiro completo em uma instância real. Core 1.1.2, Skins 0.2.1 e Companion 0.2.3 formam a matriz embarcada no Launcher 0.1.1-alpha.6.
 
 | Minecraft | Loader | Java | Core build | Skins build | Companion build | Runtime do conjunto | Estado |
 | --- | --- | ---: | :---: | :---: | :---: | :---: | --- |

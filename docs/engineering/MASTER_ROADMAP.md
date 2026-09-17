@@ -43,10 +43,10 @@ P0 bloqueia segurança, rastreabilidade ou promessa principal. P1 entrega valor 
 
 ## Wave 3 — matriz e updater mínimo
 
-- Portar HUD para 1.19.2, 1.16.5 e 1.21.1; legado 1.12.2 por último.
-- Definir inventário normalizado e resolver puro.
-- Atualizar um mod Modrinth com snapshot de arquivos/configs e rollback.
-- CurseForge apenas onde a API/autor permitir download; caso contrário manter ação manual oficial.
+- Portar HUD para 1.19.2, 1.16.5 e 1.21.1; legado 1.12.2 por último — pendente.
+- Inventário normalizado e resolução compatível de conteúdo — implementado, aguardando homologação runtime.
+- Atualização Modrinth com staging, snapshot mínimo e rollback — implementada, aguardando homologação runtime.
+- CurseForge somente onde a API/autor permite download; ação manual oficial nos demais casos — implementado para conteúdo individual. Modpack permanece detectável, sem aplicação automática.
 
 ## Wave 4 — recovery local
 

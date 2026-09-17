@@ -1,6 +1,7 @@
 # Engenharia Aurora
 
-Baseline geral auditado em 2026-08-30; Companion reauditado em 2026-08-31.
+Baseline geral auditado em 2026-08-30; Companion reauditado em 2026-08-31 e
+updater de conteúdo implementado/auditado em 2026-09-02.
 
 ## Mudança de segurança preparada nesta branch
 
@@ -24,5 +25,8 @@ As regras Firestore locais agora bloqueiam autoatribuição de `ADMIN` e payload
 14. [ADRs](ADR/README.md)
 15. [Tarefas Codex](CODEX_TASKS/README.md)
 16. [Prompts Codex](CODEX_PROMPTS/README.md)
+
+O registro específico da Fase 1.3 está em
+[`../task-content-updates.md`](../task-content-updates.md).
 
 O contexto permanente de agentes está em [`../../AGENTS.md`](../../AGENTS.md). O threat model normativo permanece no [`../../SECURITY.md`](../../SECURITY.md).

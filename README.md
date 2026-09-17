@@ -43,15 +43,16 @@ O projeto combina uma interface em **React**, um aplicativo **Tauri v2**, um nú
 
 - **Contas Aurora:** cadastro e login por nick com Firebase Auth e perfis no Firestore.
 - **Instâncias isoladas:** criação, edição, exclusão e inicialização sem misturar mundos, mods ou configurações.
-- **Minecraft e loaders:** suporte a Vanilla, Fabric e Forge com resolução automática de dependências.
+- **Minecraft e loaders:** criação de instâncias Fabric e Forge com resolução automática de dependências.
 - **Java gerenciado:** detecção de runtimes compatíveis e download de um Java isolado quando necessário.
-- **Modpacks e conteúdo:** pesquisa e instalação por Modrinth e CurseForge.
+- **Modpacks e conteúdo:** pesquisa e instalação por Modrinth e CurseForge, com filtros, imagens, páginas de detalhes e dependências obrigatórias.
 - **Gerenciador de downloads:** até oito transferências concorrentes, retomada, tentativas e hashes; a troca de destino ainda precisa do gate transacional descrito no roadmap.
 - **Conteúdo por instância:** mods, shaders e resource packs com seleção múltipla, ativação, desativação e remoção.
+- **Atualizações de conteúdo:** detecção compatível, revisão antes da troca, integridade, snapshot e rollback para mods, shaders e resource packs; atualização transacional de modpacks Modrinth e detecção segura de modpacks CurseForge.
 - **Guarda-roupa:** skins locais, favoritos, busca por nick, modelo Classic/Slim, capa e visualização 3D.
-- **Aurora Companion:** JARs 0.2.0 para Forge 1.12.2 e Fabric/Forge 1.16.5,
-  1.19.2, 1.20.1 e 1.21.1; a matriz atual tem 0/9 runtimes completos e
-  correções posteriores ainda não publicadas.
+- **Aurora Companion:** JARs 0.2.3 para Forge 1.12.2 e Fabric/Forge 1.16.5,
+  1.19.2, 1.20.1 e 1.21.1; os nove artefatos passam no gate de build, mas a
+  matriz completa ainda precisa de homologação em execução real.
 - **Aurora Core:** menu modular no jogo, avatar 3D, sessão pública, eventos, configuração versionada e instalação assinada nos mesmos nove alvos.
 - **Assistente integrado:** conversa autenticada com Gemini, entrada por texto/voz, Edge TTS e legendas.
 - **IPC seguro:** comunicação local via WebSocket em `127.0.0.1`, porta efêmera e nonce renovado a cada execução.
@@ -65,7 +66,7 @@ O projeto combina uma interface em **React**, um aplicativo **Tauri v2**, um nú
 | Companion 1.2 | 🟡 | IPC, assistente, TTS e aparência implementados; homologação visual em andamento |
 | Aurora Core 1.0 | 🟡 | Fundação modular e menu nativo compilados em 9/9; homologação runtime pendente |
 | Interface nativa do Assistente | ⏳ | Substituir a janela externa do Companion por tela/HUD nativos nas combinações suportadas |
-| Atualizações de conteúdo | ⏳ | Detectar e atualizar mods e modpacks preservando versão e loader |
+| Atualizações de conteúdo | 🟡 | Fluxo compatível e reversível implementado; homologação em instâncias reais pendente |
 | Cosméticos e emotes | 🔭 | Expandir o guarda-roupa e a integração com o Companion |
 | Distribuição estável | 🔭 | Atualizador do launcher, releases assinadas e canal público estável |
 
@@ -135,21 +136,23 @@ npm --prefix apps/edge-proxy run check
 npm --prefix functions run lint
 ```
 
-Para testar e gerar toda a matriz do Aurora Core:
+Para gerar e verificar as matrizes versionadas dos módulos:
 
 ```powershell
 npm run core:build
-```
-
-Para gerar somente o alvo de referência 1.20.1 Fabric/Forge:
-
-```powershell
+npm run skins:build
 npm run companion:build
 ```
 
-Os demais alvos usam projetos/propriedades próprios e ainda não possuem um
-comando único de matriz. Não copie o resultado sobre um JAR versionado em
-`releases`; consulte o [dossiê técnico do Companion](docs/engineering/COMPANION_AUDIT.md).
+O instalador oficial executa o comparador das 27 combinações antes do bundle:
+
+```powershell
+npm run desktop:build
+```
+
+Não copie manualmente um resultado sobre JAR versionado em `releases`; o
+preflight usa staging e bloqueia divergências. Consulte o
+[dossiê técnico do Companion](docs/engineering/COMPANION_AUDIT.md).
 
 ## Segurança e privacidade
 
@@ -170,6 +173,7 @@ comando único de matriz. Não copie o resultado sobre um JAR versionado em
 - [Dossiê e auditoria do Companion](docs/engineering/COMPANION_AUDIT.md)
 - [Aurora Core](docs/aurora-core.md)
 - [Backend CurseForge](docs/curseforge-backend.md)
+- [Fase 1.3 — atualizações de conteúdo](docs/task-content-updates.md)
 - [Configuração do Firebase](docs/firebase-setup.md)
 - [Armazenamento de aparências](docs/supabase-storage.md)
 - [Avisos de terceiros](THIRD_PARTY_NOTICES.md)

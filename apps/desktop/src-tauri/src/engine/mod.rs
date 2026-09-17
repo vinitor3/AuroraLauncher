@@ -1,6 +1,7 @@
 //! Serviços de instância, Java e inicialização da JVM.
 
 mod companion;
+mod content_updates;
 mod core;
 mod curseforge;
 mod download;
@@ -16,6 +17,15 @@ mod tts;
 mod version;
 
 pub use companion::{install_embedded_companion, CompanionError};
+pub use content_updates::{
+    acquire_instance_mutation_lock, apply_content_updates,
+    apply_modrinth_modpack_update_with_progress, apply_remote_content_updates,
+    rollback_last_content_update, scan_content_updates, scan_modrinth_modpack_update,
+    AppliedContentUpdate, ContentUpdateApplySummary, ContentUpdateError, ContentUpdateItem,
+    ContentUpdateRollbackSummary, ContentUpdateScan, ContentUpdateStatus, InstanceMutationGuard,
+    ModpackUpdateApplySummary, ModpackUpdateScan, ModpackUpdateStatus, RemoteContentUpdate,
+    RestoredContentUpdate,
+};
 pub use core::{
     aurora_core_manifest, install_embedded_core, AuroraCoreBuild, AuroraCoreError,
     AuroraCoreManifest,
@@ -39,8 +49,9 @@ pub use launch::{
 pub use minecraft::{required_java_major, InstallError, InstallSummary, MinecraftInstaller};
 pub use modpacks::{
     install_modrinth_content, install_modrinth_content_with_progress, install_modrinth_modpack,
-    install_modrinth_modpack_with_progress, install_remote_content,
-    install_remote_content_with_progress, list_modrinth_categories,
+    install_modrinth_modpack_version_transactional_with_progress,
+    install_modrinth_modpack_version_with_progress, install_modrinth_modpack_with_progress,
+    install_remote_content, install_remote_content_with_progress, list_modrinth_categories,
     resolve_modrinth_content_artwork, search_modrinth_content, search_modrinth_modpacks,
     ModpackError, ModpackInstallSummary, ModpackProgress, ModrinthCategory, ModrinthContent,
     ModrinthPack, ModrinthSearchPage, ResolvedContentArtwork,

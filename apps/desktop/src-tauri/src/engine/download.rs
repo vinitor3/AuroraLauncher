@@ -319,6 +319,12 @@ fn download_one(
     sender: &mpsc::Sender<WorkerEvent>,
 ) -> Result<bool, DownloadError> {
     if request.destination.is_file()
+        && request.expected_size.is_none_or(|expected| {
+            request
+                .destination
+                .metadata()
+                .is_ok_and(|metadata| metadata.len() == expected)
+        })
         && request
             .expected_hash
             .as_ref()
@@ -388,6 +394,9 @@ fn download_one(
                 return Ok(false);
             }
             Err(error) => {
+                if matches!(error, DownloadError::Integrity(_)) {
+                    let _ = fs::remove_file(&temporary);
+                }
                 last_error = Some(error);
                 if attempt + 1 < MAX_ATTEMPTS {
                     thread::sleep(Duration::from_millis(250 * (1 << attempt)));
@@ -414,6 +423,12 @@ fn download_attempt(
     } else {
         0
     };
+    if request
+        .expected_size
+        .is_some_and(|expected| resume_from > expected)
+    {
+        return Err(DownloadError::Integrity(request.destination.clone()));
+    }
     let mut builder = client.get(&request.url);
     if resume_from > 0 {
         builder = builder.header(RANGE, format!("bytes={resume_from}-"));
@@ -438,6 +453,11 @@ fn download_attempt(
         })?;
     let starting_bytes = if append { resume_from } else { 0 };
     let response_length = response.content_length();
+    if let (Some(expected), Some(response_length)) = (request.expected_size, response_length) {
+        if response_length.saturating_add(starting_bytes) != expected {
+            return Err(DownloadError::Integrity(request.destination.clone()));
+        }
+    }
     let total = request
         .expected_size
         .or_else(|| response_length.map(|length| length.saturating_add(starting_bytes)));
@@ -469,6 +489,12 @@ fn download_attempt(
         if size == 0 {
             break;
         }
+        if request
+            .expected_size
+            .is_some_and(|expected| current.saturating_add(size as u64) > expected)
+        {
+            return Err(DownloadError::Integrity(request.destination.clone()));
+        }
         output
             .write_all(&buffer[..size])
             .map_err(|source| DownloadError::Io {
@@ -486,6 +512,12 @@ fn download_attempt(
         path: temporary.to_path_buf(),
         source,
     })?;
+    if request
+        .expected_size
+        .is_some_and(|expected| current != expected)
+    {
+        return Err(DownloadError::Integrity(request.destination.clone()));
+    }
     Ok(())
 }
 
@@ -622,5 +654,58 @@ mod tests {
             b"aurora-parallel-download"
         );
         fs::remove_dir_all(test_directory).expect("limpeza do teste");
+    }
+
+    fn one_response_download(body: &'static [u8], expected_size: u64) -> DownloadError {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("porta local de teste");
+        let address = listener.local_addr().expect("endereço local");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("conexão do gerenciador");
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .expect("cabeçalho HTTP");
+            stream.write_all(body).expect("corpo HTTP");
+        });
+        let directory = std::env::temp_dir().join(format!(
+            "aurora-download-size-test-{}-{}",
+            std::process::id(),
+            address.port()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let request = DownloadRequest {
+            url: format!("http://{address}/file"),
+            destination: directory.join("file.bin"),
+            label: "file.bin".to_owned(),
+            expected_hash: Some(ExpectedHash::Sha1("00".repeat(20))),
+            expected_size: Some(expected_size),
+        };
+        let client = Client::builder().build().unwrap();
+        let (sender, _receiver) = mpsc::channel();
+        let temporary = directory.join("file.bin.aurora-download");
+        let error = download_attempt(&client, 0, &request, &temporary, &sender).unwrap_err();
+        server.join().unwrap();
+        let _ = fs::remove_dir_all(directory);
+        error
+    }
+
+    #[test]
+    fn rejects_response_larger_than_expected_before_publishing() {
+        assert!(matches!(
+            one_response_download(b"too large", 3),
+            DownloadError::Integrity(_)
+        ));
+    }
+
+    #[test]
+    fn rejects_truncated_response_before_publishing() {
+        assert!(matches!(
+            one_response_download(b"tiny", 12),
+            DownloadError::Integrity(_)
+        ));
     }
 }

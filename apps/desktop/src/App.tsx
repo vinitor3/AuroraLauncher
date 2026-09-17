@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { register } from "@tauri-apps/plugin-global-shortcut";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -256,6 +256,7 @@ const DEFAULT_FORGE_VERSION: Record<string, string> = {
   "1.21.1": "52.0.57",
 };
 const UPDATE_CONTENT_TYPES: ContentType[] = ["mod", "shader", "resourcepack"];
+const EDITOR_VIEWS: EditorView[] = ["installed", "updates", "discover"];
 
 function formatBytes(value?: number) {
   if (!value || value < 1) return "0 B";
@@ -303,6 +304,12 @@ function missingRequiredCurseForgeDependencies(
 
 function contentArtworkKey(contentType: ContentType, filename: string) {
   return `${contentType}:${filename}`;
+}
+
+function registeredArtworkSource(artwork?: ContentArtworkEntry): CatalogSource | undefined {
+  if (artwork?.source) return artwork.source;
+  if (!artwork?.projectId) return undefined;
+  return /^\d+$/.test(artwork.projectId) ? "curseforge" : "modrinth";
 }
 
 function curseForgeDownloadPage(slug: string, fileId: number, contentType: ContentType | "modpack", websiteUrl?: string) {
@@ -918,6 +925,7 @@ function LauncherApp() {
   const [contentUpdateScans, setContentUpdateScans] = useState<Partial<Record<ContentType, ContentUpdateScanView>>>({});
   const [selectedUpdateFilenames, setSelectedUpdateFilenames] = useState<string[]>([]);
   const [contentUpdateFilter, setContentUpdateFilter] = useState<ContentUpdateFilter>("all");
+  const [contentUpdateQuery, setContentUpdateQuery] = useState("");
   const [updatesScanning, setUpdatesScanning] = useState(false);
   const [updatesApplying, setUpdatesApplying] = useState(false);
   const [lastBackupAvailable, setLastBackupAvailable] = useState(false);
@@ -958,7 +966,11 @@ function LauncherApp() {
   const avatarMigrationRef = useRef("");
   const localAvatarMigrationRef = useRef("");
   const activeInstanceRef = useRef({ editingInstance, targetInstance });
+  const editorOpenRequestRef = useRef({ generation: 0, id: "" });
   const lastArtworkMigrationRef = useRef<{ id: string; migrations: ContentArtworkMigration[] } | null>(null);
+  const updateScanRequestRef = useRef({ generation: 0, id: "" });
+  const curseForgeUpdateCacheRef = useRef(new Map<string, CurseForgeUpdatesResponse["data"][number]>());
+  const curseForgeCompletedScansRef = useRef(new Set<string>());
   const manualDownloadWaiters = useRef(new Map<string, {
     resolve: () => void;
     reject: (error: Error) => void;
@@ -967,6 +979,28 @@ function LauncherApp() {
   useEffect(() => {
     activeInstanceRef.current = { editingInstance, targetInstance };
   }, [editingInstance, targetInstance]);
+  function clearContentUpdatePlan() {
+    setContentUpdateScans({});
+    setSelectedUpdateFilenames([]);
+    setModpackUpdate(undefined);
+    setModpackScanError("");
+    setUpdateReview(undefined);
+    setUpdateReviewError("");
+  }
+  function invalidateContentUpdatePlan() {
+    updateScanRequestRef.current = {
+      generation: updateScanRequestRef.current.generation + 1,
+      id: "",
+    };
+    setUpdatesScanning(false);
+    clearContentUpdatePlan();
+  }
+  function closeInstanceEditor() {
+    editorOpenRequestRef.current = { generation: editorOpenRequestRef.current.generation + 1, id: "" };
+    invalidateContentUpdatePlan();
+    activeInstanceRef.current = { ...activeInstanceRef.current, editingInstance: "" };
+    setEditingInstance("");
+  }
   useEffect(() => {
     if (!editingInstance) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -974,7 +1008,7 @@ function LauncherApp() {
       if (updateReview) return;
       event.preventDefault();
       if (projectDetail) setProjectDetail(undefined);
-      else if (!busy) setEditingInstance("");
+      else if (!busy) closeInstanceEditor();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -1659,6 +1693,7 @@ function LauncherApp() {
       setNotice("Escolha uma instância antes de instalar o modpack.");
       return;
     }
+    if (editingInstance === targetInstance) invalidateContentUpdatePlan();
     setBusy(true);
     setNotice(`Preparando “${pack.title}”. O Aurora vai baixar e verificar todos os arquivos do modpack…`);
     try {
@@ -1702,8 +1737,62 @@ function LauncherApp() {
       setBusy(false);
     }
   }
+  async function rehydrateContentArtwork(
+    id: string,
+    current: InstanceContent,
+    seed: Record<string, ContentArtworkEntry> = {},
+    stillCurrent: () => boolean = () => true,
+  ) {
+    let persisted: Record<string, ContentArtworkEntry> = {};
+    try {
+      persisted = JSON.parse(window.localStorage.getItem(`aurora.contentArtwork.${id}`) ?? "{}") as Record<string, ContentArtworkEntry>;
+    } catch {
+      persisted = {};
+    }
+    const known = activeInstanceRef.current.editingInstance === id ? contentArtwork : {};
+    const actualKeys = new Set([
+      ...current.mods.map((file) => contentArtworkKey("mod", file.name)),
+      ...current.shaderpacks.map((file) => contentArtworkKey("shader", file.name)),
+      ...current.resourcepacks.map((file) => contentArtworkKey("resourcepack", file.name)),
+    ]);
+    const mergedArtwork = Object.fromEntries(
+      Object.entries({ ...known, ...seed, ...persisted }).filter(([key]) => actualKeys.has(key)),
+    ) as Record<string, ContentArtworkEntry>;
+    const resolvedGroups = await Promise.all(UPDATE_CONTENT_TYPES.map(async (type) => {
+      try {
+        return { type, items: await invoke<ResolvedContentArtwork[]>("resolve_content_artwork", { id, contentType: type }) };
+      } catch {
+        return { type, items: [] as ResolvedContentArtwork[] };
+      }
+    }));
+    for (const group of resolvedGroups) {
+      for (const item of group.items) {
+        const key = contentArtworkKey(group.type, item.filename);
+        if (!actualKeys.has(key)) continue;
+        const registered = mergedArtwork[key];
+        const source = registeredArtworkSource(registered);
+        if (source === "curseforge") continue;
+        mergedArtwork[key] = {
+          iconUrl: registered?.iconUrl ?? item.iconUrl,
+          projectId: registered?.projectId ?? item.projectId,
+          source: source ?? "modrinth",
+          title: registered?.title ?? item.title,
+        };
+      }
+    }
+    if (!stillCurrent()) return mergedArtwork;
+    window.localStorage.setItem(`aurora.contentArtwork.${id}`, JSON.stringify(mergedArtwork));
+    setContentArtwork(mergedArtwork);
+    return mergedArtwork;
+  }
   async function openEditor(id: string) {
+    const editorRequest = { generation: editorOpenRequestRef.current.generation + 1, id };
+    editorOpenRequestRef.current = editorRequest;
+    const editorIsCurrent = () => editorOpenRequestRef.current.generation === editorRequest.generation
+      && editorOpenRequestRef.current.id === id;
+    invalidateContentUpdatePlan();
     setActiveSection("instances");
+    activeInstanceRef.current = { ...activeInstanceRef.current, editingInstance: id };
     setEditingInstance(id);
     setRenameDraft(id);
     setEditorView("installed");
@@ -1711,14 +1800,9 @@ function LauncherApp() {
     setInstalledContentFilter("");
     setContentQuery("");
     setContentResults([]);
-    setContentUpdateScans({});
-    setSelectedUpdateFilenames([]);
     setContentUpdateFilter("all");
+    setContentUpdateQuery("");
     setLastBackupAvailable(false);
-    setModpackUpdate(undefined);
-    setModpackScanError("");
-    setUpdateReview(undefined);
-    setUpdateReviewError("");
     let savedArtwork: Record<string, ContentArtworkEntry> = {};
     try {
       const savedArtworkText = window.localStorage.getItem(`aurora.contentArtwork.${id}`);
@@ -1726,28 +1810,17 @@ function LauncherApp() {
     } catch {
       savedArtwork = {};
     }
+    if (!editorIsCurrent()) return;
     setContentArtwork(savedArtwork);
-    await selectInstance(id);
+    await selectInstance(id, editorIsCurrent);
+    if (!editorIsCurrent()) return;
     try {
       const current = await invoke<InstanceContent>("list_instance_content", { id });
+      if (!editorIsCurrent()) return;
       setInstanceContent(current);
-      const resolvedGroups = await Promise.all((["mod", "shader", "resourcepack"] as ContentType[]).map(async (type) => {
-        try {
-          return { type, items: await invoke<ResolvedContentArtwork[]>("resolve_content_artwork", { id, contentType: type }) };
-        } catch {
-          return { type, items: [] as ResolvedContentArtwork[] };
-        }
-      }));
-      const mergedArtwork = { ...savedArtwork };
-      for (const group of resolvedGroups) {
-        for (const item of group.items) {
-          mergedArtwork[contentArtworkKey(group.type, item.filename)] = { projectId: item.projectId, title: item.title, iconUrl: item.iconUrl, source: "modrinth" };
-        }
-      }
-      setContentArtwork(mergedArtwork);
-      window.localStorage.setItem(`aurora.contentArtwork.${id}`, JSON.stringify(mergedArtwork));
+      await rehydrateContentArtwork(id, current, savedArtwork, editorIsCurrent);
     } catch (error) {
-      setNotice(`Não foi possível abrir o conteúdo da instância: ${String(error)}`);
+      if (editorIsCurrent()) setNotice(`Não foi possível abrir o conteúdo da instância: ${String(error)}`);
     }
   }
   async function openInstanceLog(id: string) {
@@ -1767,6 +1840,7 @@ function LauncherApp() {
   async function setContentEnabled(file: InstanceContentFile, enabled: boolean) {
     const id = editingInstance || targetInstance;
     if (!id) return;
+    invalidateContentUpdatePlan();
     setBusy(true);
     try {
       await invoke("set_instance_content_enabled", {
@@ -1789,6 +1863,7 @@ function LauncherApp() {
       (file) => selectedContentNames.includes(file.name) && file.enabled !== enabled,
     );
     if (!id || filesToChange.length === 0) return;
+    invalidateContentUpdatePlan();
     setBusy(true);
     try {
       const changed = await invoke<number>("set_instance_content_enabled_bulk", {
@@ -1812,6 +1887,7 @@ function LauncherApp() {
       `Desinstalar ${selectedContentNames.length} item(ns) da instância “${id}”? Esta ação remove os arquivos selecionados.`,
     );
     if (!confirmed) return;
+    invalidateContentUpdatePlan();
     setBusy(true);
     try {
       const removed = await invoke<number>("remove_instance_content", {
@@ -1846,23 +1922,26 @@ function LauncherApp() {
     setSelectedContentNames([]);
     setSelectedUpdateFilenames([]);
     setContentUpdateFilter("all");
+    setContentUpdateQuery("");
     setInstalledContentFilter("");
     setContentQuery("");
     setContentCategoryFilter("");
     setContentResults([]);
     if (editorView === "discover") void loadContentCatalog({ type: nextType, query: "", category: "", sort: "popular" });
   }
-  async function selectInstance(id: string) {
+  async function selectInstance(id: string, stillCurrent: () => boolean = () => true) {
+    activeInstanceRef.current = { ...activeInstanceRef.current, targetInstance: id };
     setTargetInstance(id);
     try {
       const saved = await invoke<InstanceLaunchProfile>("read_instance_launch_profile", { id });
+      if (!stillCurrent()) return;
       if (saved.versionId) setInstalledVersionId(saved.versionId);
       if (saved.minecraftVersion) {
         setInstalledMinecraftVersion(saved.minecraftVersion);
         setMinecraftVersion(saved.minecraftVersion);
       }
     } catch (error) {
-      setNotice(`Não foi possível ler a configuração de “${id}”: ${String(error)}`);
+      if (stillCurrent()) setNotice(`Não foi possível ler a configuração de “${id}”: ${String(error)}`);
     }
   }
   function instanceLoader(): LoaderChoice | undefined {
@@ -1878,16 +1957,19 @@ function LauncherApp() {
     return { gameVersion, loader: loader as LoaderChoice };
   }
   async function mergeCurseForgeUpdateItems(
+    id: string,
     type: ContentType,
     items: ContentUpdateItem[],
     gameVersion: string,
     loader: LoaderChoice,
     installedProjectIds: ReadonlySet<number>,
+    scanIsCurrent: () => boolean,
   ): Promise<{ items: ContentUpdateItem[]; warning?: string }> {
-    const maxCandidates = 16;
+    // One page per category keeps a full scan + confirmation + refresh below the
+    // Worker updates quota. Cached pages let subsequent explicit checks advance.
+    const maxCandidatesPerCycle = 16;
     const candidates: Array<{ projectId: number; item: ContentUpdateItem }> = [];
     const seenProjects = new Set<number>();
-    let candidateLimitReached = false;
     for (const item of items) {
       const projectId = Number(item.projectId);
       if (item.status !== "unmanaged"
@@ -1896,18 +1978,26 @@ function LauncherApp() {
         || !item.currentSha1?.match(/^[a-f0-9]{40}$/i)
         || seenProjects.has(projectId)) continue;
       seenProjects.add(projectId);
-      if (candidates.length >= maxCandidates) {
-        candidateLimitReached = true;
-        continue;
-      }
       candidates.push({ projectId, item });
     }
     if (candidates.length === 0) return { items };
     if (!services) return { items, warning: "Entre na conta Aurora para verificar os itens reconhecidos pelo CurseForge." };
-    const responseItems: CurseForgeUpdatesResponse["data"] = [];
+    const cachePrefix = `${id}\u0000${type}\u0000`;
+    const scanKey = `${id}\u0000${type}`;
+    const cacheKey = (projectId: number, sha1: string) => `${cachePrefix}${projectId}\u0000${sha1.toLowerCase()}`;
+    const candidateKeys = new Set(candidates.map(({ projectId, item }) => cacheKey(projectId, item.currentSha1!)));
+    for (const key of curseForgeUpdateCacheRef.current.keys()) {
+      if (key.startsWith(cachePrefix) && !candidateKeys.has(key)) curseForgeUpdateCacheRef.current.delete(key);
+    }
+    if (curseForgeCompletedScansRef.current.has(scanKey)) {
+      for (const key of candidateKeys) curseForgeUpdateCacheRef.current.delete(key);
+      curseForgeCompletedScansRef.current.delete(scanKey);
+    }
+    const pendingCandidates = candidates.filter(({ projectId, item }) => !curseForgeUpdateCacheRef.current.has(cacheKey(projectId, item.currentSha1!)));
+    const cycleCandidates = pendingCandidates.slice(0, maxCandidatesPerCycle);
     let requestFailure = "";
-    for (let index = 0; index < candidates.length; index += 4) {
-      const chunk = candidates.slice(index, index + 4);
+    for (let index = 0; index < cycleCandidates.length && scanIsCurrent(); index += 4) {
+      const chunk = cycleCandidates.slice(index, index + 4);
       try {
         const response = await requestCurseForgeCatalog<CurseForgeUpdatesResponse>(services, {
           action: "updates",
@@ -1916,7 +2006,11 @@ function LauncherApp() {
           loader: type === "mod" ? loader : undefined,
           items: chunk.map(({ projectId, item }) => ({ projectId, currentSha1: item.currentSha1! })),
         });
-        responseItems.push(...response.data);
+        for (const entry of response.data) {
+          if (typeof entry.currentSha1 === "string") {
+            curseForgeUpdateCacheRef.current.set(cacheKey(entry.projectId, entry.currentSha1), entry);
+          }
+        }
       } catch (error) {
         requestFailure = updaterErrorMessage(error);
         break;
@@ -1924,10 +2018,9 @@ function LauncherApp() {
     }
     try {
       const resolved = new Map<string, CurseForgeUpdatesResponse["data"][number]>();
-      for (const entry of responseItems) {
-        if (typeof entry.currentSha1 === "string") {
-          resolved.set(`${entry.projectId}:${entry.currentSha1.toLowerCase()}`, entry);
-        }
+      for (const { projectId, item } of candidates) {
+        const entry = curseForgeUpdateCacheRef.current.get(cacheKey(projectId, item.currentSha1!));
+        if (entry && typeof entry.currentSha1 === "string") resolved.set(`${entry.projectId}:${entry.currentSha1.toLowerCase()}`, entry);
       }
       const merged = items.map((item) => {
         const projectId = Number(item.projectId);
@@ -1957,9 +2050,12 @@ function LauncherApp() {
             : match.message,
         };
       });
+      const resolvedCount = candidates.filter(({ projectId, item }) => curseForgeUpdateCacheRef.current.has(cacheKey(projectId, item.currentSha1!))).length;
+      const remaining = candidates.length - resolvedCount;
+      if (!requestFailure && remaining === 0) curseForgeCompletedScansRef.current.add(scanKey);
       const warnings = [
-        candidateLimitReached
-          ? "Os primeiros 16 projetos CurseForge desta categoria foram verificados; os demais continuam como não identificados para respeitar o limite seguro do serviço."
+        remaining > 0
+          ? `${resolvedCount} de ${candidates.length} projetos CurseForge desta categoria foram verificados. Clique em “Verificar novamente” para continuar com os ${remaining} restantes.`
           : "",
         requestFailure
           ? `A consulta CurseForge foi interrompida; os resultados já recebidos foram preservados e os demais continuam como não identificados: ${requestFailure}`
@@ -1973,13 +2069,22 @@ function LauncherApp() {
       return { items, warning: `CurseForge não pôde ser consultado: ${updaterErrorMessage(error)}` };
     }
   }
-  async function scanAllContentUpdates(options: { id?: string; announce?: boolean } = {}) {
+  async function scanAllContentUpdates(options: { id?: string; announce?: boolean; allowDuringApply?: boolean } = {}) {
     const id = options.id || editingInstance || targetInstance;
-    if (!id || updatesScanning) return;
+    if (!id) return;
+    if (busy || (updatesApplying && !options.allowDuringApply)) {
+      if (options.announce !== false) setNotice("Aguarde a operação atual terminar antes de verificar atualizações.");
+      return;
+    }
+    const scanRequest = { generation: updateScanRequestRef.current.generation + 1, id };
+    updateScanRequestRef.current = scanRequest;
+    const scanIsCurrent = () => updateScanRequestRef.current.generation === scanRequest.generation
+      && updateScanRequestRef.current.id === id;
+    clearContentUpdatePlan();
     setUpdatesScanning(true);
-    setModpackScanError("");
     try {
       const { gameVersion, loader } = await readUpdaterContext(id);
+      if (!scanIsCurrent()) return;
       const scannedAt = new Date().toISOString();
       let artworkForScan = contentArtwork;
       try {
@@ -1998,13 +2103,22 @@ function LauncherApp() {
           });
           const identifiedItems = result.items.map((item) => {
             const artwork = artworkForScan[contentArtworkKey(type, item.filename)];
+            const registeredSource = registeredArtworkSource(artwork);
+            const keepCurseForgeOwnership = registeredSource === "curseforge" && item.status !== "auroraManaged";
             return {
               ...item,
               contentType: type,
-              iconUrl: item.iconUrl ?? artwork?.iconUrl,
-              provider: item.provider ?? artwork?.source,
-              projectId: item.projectId ?? artwork?.projectId,
-              title: item.title ?? artwork?.title,
+              iconUrl: artwork?.iconUrl ?? item.iconUrl,
+              provider: registeredSource ?? item.provider,
+              projectId: artwork?.projectId ?? item.projectId,
+              title: artwork?.title ?? item.title,
+              ...(keepCurseForgeOwnership ? {
+                status: "unmanaged" as const,
+                targetVersionId: undefined,
+                targetVersionNumber: undefined,
+                targetFilename: undefined,
+                reason: undefined,
+              } : {}),
             };
           });
           return [type, { ...result, items: identifiedItems, scannedAt }];
@@ -2019,27 +2133,30 @@ function LauncherApp() {
           }];
         }
       }));
+      if (!scanIsCurrent()) return;
       const installedProjectIds = new Set<number>();
       for (const [, result] of scannedResults) {
         for (const item of result.items) {
           const projectId = Number(item.projectId);
-          if (Number.isSafeInteger(projectId) && projectId > 0) installedProjectIds.add(projectId);
+          if (item.enabled && Number.isSafeInteger(projectId) && projectId > 0) installedProjectIds.add(projectId);
         }
       }
       const results: Array<readonly [ContentType, ContentUpdateScanView]> = await Promise.all(scannedResults.map(async ([type, result]) => {
         if (result.error) return [type, result] as const;
-        const curseForge = await mergeCurseForgeUpdateItems(type, result.items, gameVersion, loader, installedProjectIds);
+        const curseForge = await mergeCurseForgeUpdateItems(id, type, result.items, gameVersion, loader, installedProjectIds, scanIsCurrent);
         return [type, { ...result, items: curseForge.items, warning: curseForge.warning }] as const;
       }));
+      if (!scanIsCurrent()) return;
       const nextScans = Object.fromEntries(results) as Record<ContentType, ContentUpdateScanView>;
       setContentUpdateScans(nextScans);
-      setSelectedUpdateFilenames([]);
       setLastBackupAvailable(results.some(([, result]) => Boolean(result.rollbackAvailable ?? result.lastBackupAvailable)));
 
       let resolvedPack: ModpackUpdate | null = null;
       let packScanFailed = false;
+      let packScanError = "";
       try {
         let pack = await invoke<ModpackUpdate | null>("scan_instance_modpack_update", { id });
+        if (!scanIsCurrent()) return;
         if (pack) {
           const instance = instances.find((candidate) => candidate.id === id);
           pack = { ...pack, name: pack.name || instance?.displayName || id };
@@ -2056,6 +2173,7 @@ function LauncherApp() {
                 loader: (pack.loader === "forge" || pack.loader === "fabric") ? pack.loader : loader,
                 items: [{ projectId, currentFileId }],
               });
+              if (!scanIsCurrent()) return;
               const match = response.data.find((entry) => entry.projectId === projectId && entry.currentFileId === currentFileId);
               if (match) {
                 const requiresOfficialPage = Boolean(match.targetFile?.manualDownloadRequired || match.reason === "manualDownloadRequired");
@@ -2084,16 +2202,17 @@ function LauncherApp() {
               };
             }
           } catch (error) {
-            setModpackScanError(`CurseForge não pôde ser consultado: ${updaterErrorMessage(error)}`);
+            packScanError = `CurseForge não pôde ser consultado: ${updaterErrorMessage(error)}`;
           }
         }
         resolvedPack = pack;
-        setModpackUpdate(pack);
       } catch (error) {
         packScanFailed = true;
-        setModpackUpdate(null);
-        setModpackScanError(updaterErrorMessage(error));
+        packScanError = updaterErrorMessage(error);
       }
+      if (!scanIsCurrent()) return;
+      setModpackUpdate(resolvedPack);
+      setModpackScanError(packScanError);
 
       const failed = results.filter(([, result]) => Boolean(result.error)).length;
       const contentFound = results.reduce((total, [, result]) => total + result.items.filter((item) => item.status === "updateAvailable").length, 0);
@@ -2112,14 +2231,15 @@ function LauncherApp() {
               : `“${id}” está com o conteúdo atualizado.`);
       }
     } catch (error) {
+      if (!scanIsCurrent()) return;
       const message = updaterErrorMessage(error);
       const scannedAt = new Date().toISOString();
       setContentUpdateScans(Object.fromEntries(UPDATE_CONTENT_TYPES.map((type) => [type, { items: [], contentType: type, scannedAt, error: message }])) as unknown as Record<ContentType, ContentUpdateScanView>);
       setModpackUpdate(null);
       setModpackScanError(message);
-      setNotice(`Não foi possível verificar atualizações: ${message}`);
+      if (options.announce !== false) setNotice(`Não foi possível verificar atualizações: ${message}`);
     } finally {
-      setUpdatesScanning(false);
+      if (scanIsCurrent()) setUpdatesScanning(false);
     }
   }
   function showContentUpdates() {
@@ -2128,7 +2248,26 @@ function LauncherApp() {
     setContentUpdateFilter("all");
     if (Object.keys(contentUpdateScans).length === 0) void scanAllContentUpdates();
   }
+  function activateEditorView(view: EditorView) {
+    if (view === "updates") showContentUpdates();
+    else if (view === "discover") showContentCatalog();
+    else setEditorView("installed");
+  }
+  function handleEditorViewKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, view: EditorView) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const currentIndex = EDITOR_VIEWS.indexOf(view);
+    const nextIndex = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? EDITOR_VIEWS.length - 1
+        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + EDITOR_VIEWS.length) % EDITOR_VIEWS.length;
+    const nextView = EDITOR_VIEWS[nextIndex];
+    activateEditorView(nextView);
+    window.requestAnimationFrame(() => document.getElementById(`editor-view-tab-${nextView}`)?.focus());
+  }
   function toggleUpdateSelection(filename: string) {
+    if (busy || updatesScanning || updatesApplying) return;
     const item = contentUpdateScans[contentType]?.items.find((candidate) => candidate.filename === filename);
     if (!item) return;
     if (selectedUpdateFilenames.includes(filename)) {
@@ -2145,6 +2284,7 @@ function LauncherApp() {
     setSelectedUpdateFilenames((current) => [...current, filename]);
   }
   function selectAvailableUpdates(items: ContentUpdateItem[]) {
+    if (busy || updatesScanning || updatesApplying) return;
     if (items.length === 0) {
       setSelectedUpdateFilenames([]);
       return;
@@ -2153,6 +2293,10 @@ function LauncherApp() {
     setSelectedUpdateFilenames(items.filter((item) => (item.provider ?? "modrinth") === provider).map((item) => item.filename));
   }
   function requestUpdateReview(request: UpdateReviewRequest) {
+    if (busy || updatesScanning || updatesApplying) {
+      setNotice("Aguarde a operação atual terminar antes de revisar atualizações.");
+      return;
+    }
     if (runningInstances.some((running) => running.instanceId === editingInstance)) {
       setNotice("Feche o Minecraft antes de alterar o conteúdo desta instância.");
       return;
@@ -2161,20 +2305,28 @@ function LauncherApp() {
     setUpdateReview(request);
   }
   async function refreshContentAfterUpdate(id: string) {
-    setInstanceContent(await invoke<InstanceContent>("list_instance_content", { id }));
+    const current = await invoke<InstanceContent>("list_instance_content", { id });
+    setInstanceContent(current);
+    await rehydrateContentArtwork(id, current, {}, () => activeInstanceRef.current.editingInstance === id);
     await selectInstance(id);
-    await scanAllContentUpdates({ id, announce: false });
+    await scanAllContentUpdates({ id, announce: false, allowDuringApply: true });
   }
   async function applyReviewedUpdate() {
     const request = updateReview;
     const id = editingInstance || targetInstance;
     if (!request || !id || updatesApplying) return;
+    if (busy || updatesScanning) {
+      setUpdateReviewError("Aguarde a operação atual terminar antes de continuar.");
+      return;
+    }
     if (runningInstances.some((running) => running.instanceId === id)) {
       setUpdateReviewError("Feche o Minecraft antes de continuar.");
       return;
     }
     setUpdatesApplying(true);
     setUpdateReviewError("");
+    let backendCommitted = false;
+    let committedMessage = "";
     try {
       if (request.kind === "content") {
         const { gameVersion, loader } = await readUpdaterContext(id);
@@ -2190,7 +2342,7 @@ function LauncherApp() {
           for (const scan of Object.values(contentUpdateScans)) {
             for (const scannedItem of scan?.items ?? []) {
               const projectId = Number(scannedItem.projectId);
-              if (Number.isSafeInteger(projectId) && projectId > 0) installedProjectIds.add(projectId);
+              if (scannedItem.enabled && Number.isSafeInteger(projectId) && projectId > 0) installedProjectIds.add(projectId);
             }
           }
           const refreshed = new Map<string, CurseForgeUpdatesResponse["data"][number]>();
@@ -2275,6 +2427,8 @@ function LauncherApp() {
             loader,
           });
         }
+        backendCommitted = true;
+        committedMessage = summary.message || `${summary.updatedFiles.length} arquivo(s) atualizado(s) com backup pronto para desfazer.`;
         const reviewedByFilename = new Map(request.items.map((item) => [item.filename, item]));
         const artworkMigrations = summary.updatedFiles.map((file): ContentArtworkMigration => {
           const reviewed = reviewedByFilename.get(file.previousFilename);
@@ -2294,35 +2448,54 @@ function LauncherApp() {
         lastArtworkMigrationRef.current = { id, migrations: artworkMigrations };
         setLastBackupAvailable(Boolean(summary.rollbackAvailable ?? summary.backupAvailable));
         setSelectedUpdateFilenames([]);
-        setNotice(summary.message || `${summary.updatedFiles.length} arquivo(s) atualizado(s) com backup pronto para desfazer.`);
+        setNotice(committedMessage);
       } else if (request.kind === "modpack") {
+        if (request.modpack.source !== "modrinth") throw new Error("A atualização automática de modpacks CurseForge permanece bloqueada porque não há um plano transacional seguro.");
         const summary = await invoke<ModpackUpdateSummary>("apply_instance_modpack_update", { id });
+        backendCommitted = true;
+        committedMessage = summary.message || `O modpack foi atualizado para ${summary.versionNumber || "a versão compatível mais recente"}; ${summary.updatedFileCount} arquivo(s) foram verificados${summary.preservedExtras ? ` e ${summary.preservedExtras} extra(s) locais foram preservados` : ""}.`;
         setLastBackupAvailable(summary.rollbackAvailable);
-        setNotice(summary.message || `O modpack foi atualizado para ${summary.versionNumber || "a versão compatível mais recente"}; ${summary.updatedFileCount} arquivo(s) foram verificados${summary.preservedExtras ? ` e ${summary.preservedExtras} extra(s) locais foram preservados` : ""}.`);
+        setNotice(committedMessage);
       } else {
         const summary = await invoke<ContentRollbackSummary>("rollback_last_content_update", { id });
+        backendCommitted = true;
+        committedMessage = `${summary.restoredFiles.length} arquivo(s) restaurado(s) a partir do último backup.`;
+        const previousMigrations = lastArtworkMigrationRef.current?.id === id
+          ? lastArtworkMigrationRef.current.migrations
+          : [];
         const detailedMigrations = summary.restoredFiles.flatMap((file): ContentArtworkMigration[] => typeof file === "string"
           ? []
-          : [{ fromFilename: file.replacedFilename, toFilename: file.restoredFilename }]);
-        const fallbackMigrations = lastArtworkMigrationRef.current?.id === id
-          ? lastArtworkMigrationRef.current.migrations.map((migration) => ({
+          : file.contentType === "modpack"
+            ? []
+            : [{
+              contentType: UPDATE_CONTENT_TYPES.includes(file.contentType as ContentType)
+                ? file.contentType as ContentType
+                : previousMigrations.find((migration) => migration.toFilename === file.replacedFilename && migration.fromFilename === file.restoredFilename)?.contentType,
+              fromFilename: file.replacedFilename,
+              toFilename: file.restoredFilename,
+            }]);
+        const fallbackMigrations = previousMigrations.map((migration) => ({
             contentType: migration.contentType,
             fromFilename: migration.toFilename,
             toFilename: migration.fromFilename,
-          }))
-          : [];
+          }));
         migrateContentArtwork(id, detailedMigrations.length > 0 ? detailedMigrations : fallbackMigrations);
         lastArtworkMigrationRef.current = null;
         setLastBackupAvailable(false);
         setSelectedUpdateFilenames([]);
-        setNotice(`${summary.restoredFiles.length} arquivo(s) restaurado(s) a partir do último backup.`);
+        setNotice(committedMessage);
       }
       setUpdateReview(undefined);
       await refreshContentAfterUpdate(id);
     } catch (error) {
       const message = updaterErrorMessage(error);
-      setUpdateReviewError(message);
-      setNotice(`A alteração não foi aplicada: ${message}`);
+      if (backendCommitted) {
+        invalidateContentUpdatePlan();
+        setNotice(`${committedMessage} A alteração foi concluída, mas a tela não pôde ser atualizada: ${message}. Use “Verificar novamente”.`);
+      } else {
+        setUpdateReviewError(message);
+        setNotice(`A alteração não foi aplicada: ${message}`);
+      }
     } finally {
       setUpdatesApplying(false);
     }
@@ -2517,7 +2690,8 @@ function LauncherApp() {
     }
     const nextArtwork = { ...stored };
     for (const migration of migrations) {
-      const types = migration.contentType ? [migration.contentType] : UPDATE_CONTENT_TYPES;
+      const inferredTypes = UPDATE_CONTENT_TYPES.filter((type) => Boolean(nextArtwork[contentArtworkKey(type, migration.fromFilename)]));
+      const types = migration.contentType ? [migration.contentType] : inferredTypes.length === 1 ? inferredTypes : [];
       for (const type of types) {
         const previousKey = contentArtworkKey(type, migration.fromFilename);
         const nextKey = contentArtworkKey(type, migration.toFilename);
@@ -2554,6 +2728,7 @@ function LauncherApp() {
       setNotice("Instale Fabric ou Forge nessa instância antes de adicionar mods.");
       return;
     }
+    invalidateContentUpdatePlan();
     setBusy(true);
     try {
       let filename: string;
@@ -2907,6 +3082,8 @@ function LauncherApp() {
     const oldId = editingInstance;
     const newId = renameDraft.trim();
     if (!oldId || !newId || oldId === newId) return;
+    editorOpenRequestRef.current = { generation: editorOpenRequestRef.current.generation + 1, id: "" };
+    invalidateContentUpdatePlan();
     setBusy(true);
     try {
       const renamed = await invoke<Instance>("rename_instance", { id: oldId, newId });
@@ -2916,6 +3093,8 @@ function LauncherApp() {
         window.localStorage.setItem(`aurora.contentArtwork.${renamed.id}`, storedArtwork);
         window.localStorage.removeItem(oldArtworkKey);
       }
+      editorOpenRequestRef.current = { generation: editorOpenRequestRef.current.generation + 1, id: renamed.id };
+      activeInstanceRef.current = { editingInstance: renamed.id, targetInstance: renamed.id };
       setEditingInstance(renamed.id);
       setRenameDraft(renamed.id);
       setTargetInstance(renamed.id);
@@ -2939,7 +3118,7 @@ function LauncherApp() {
         setInstalledVersionId("");
         setInstalledMinecraftVersion("");
       }
-      if (editingInstance === id) setEditingInstance("");
+      if (editingInstance === id) closeInstanceEditor();
       await refresh();
       setNotice(`Instância “${id}” excluída.`);
     } catch (error) {
@@ -3034,7 +3213,22 @@ function LauncherApp() {
   const editingInstanceIsRunning = runningInstances.some((running) => running.instanceId === editingInstance);
   const currentUpdateScan = contentUpdateScans[contentType];
   const updateCountFor = (type: ContentType) => contentUpdateScans[type]?.items.filter((item) => item.status === "updateAvailable").length ?? 0;
-  const totalAvailableUpdates = UPDATE_CONTENT_TYPES.reduce((total, type) => total + updateCountFor(type), 0);
+  const visibleModpackUpdate = Boolean(modpackUpdate && (modpackUpdate.source || modpackUpdate.projectId));
+  const totalAvailableUpdates = UPDATE_CONTENT_TYPES.reduce((total, type) => total + updateCountFor(type), 0)
+    + (visibleModpackUpdate && modpackUpdate?.status === "updateAvailable" ? 1 : 0);
+  const totalUpdateAttention = UPDATE_CONTENT_TYPES.reduce((total, type) => total + (contentUpdateScans[type]?.items.filter((item) => item.status === "blocked" || item.status === "unmanaged").length ?? 0), 0)
+    + (visibleModpackUpdate && (modpackUpdate?.status === "blocked" || modpackUpdate?.status === "unmanaged") ? 1 : 0);
+  const updateScanIssueCount = UPDATE_CONTENT_TYPES.filter((type) => Boolean(contentUpdateScans[type]?.error)).length + (modpackScanError ? 1 : 0);
+  const updateTabBadge = updatesScanning ? "…" : totalAvailableUpdates > 0 ? String(totalAvailableUpdates) : updateScanIssueCount > 0 || totalUpdateAttention > 0 ? "!" : "";
+  const updateTabLabel = updatesScanning
+    ? "Atualizações: verificando conteúdo"
+    : totalAvailableUpdates > 0
+      ? `Atualizações: ${totalAvailableUpdates} ${totalAvailableUpdates === 1 ? "disponível" : "disponíveis"}`
+      : updateScanIssueCount > 0
+        ? `Atualizações: ${updateScanIssueCount} etapa${updateScanIssueCount === 1 ? "" : "s"} com erro`
+        : totalUpdateAttention > 0
+          ? `Atualizações: ${totalUpdateAttention} item${totalUpdateAttention === 1 ? "" : "s"} precisa${totalUpdateAttention === 1 ? "" : "m"} de atenção`
+          : "Atualizações";
   const modpackCategoryKey = catalogCategoryKey(catalogSource, "modpack");
   const contentCategoryKey = catalogCategoryKey(contentSource, contentType);
   const modpackCategoryGroups = groupedCatalogCategories(catalogCategories[modpackCategoryKey] ?? []);
@@ -3265,15 +3459,15 @@ function LauncherApp() {
                   <div>
                   <p className="eyebrow">EDITANDO INSTÂNCIA</p>
                   <form className="editor-name-form" onSubmit={renameEditingInstance}>
-                    <input aria-label="Nome da instância" disabled={busy || runningInstances.some((running) => running.instanceId === editingInstance)} maxLength={64} onChange={(event) => setRenameDraft(event.target.value)} value={renameDraft} />
-                    <button className="secondary compact" disabled={busy || !renameDraft.trim() || renameDraft.trim() === editingInstance || runningInstances.some((running) => running.instanceId === editingInstance)} type="submit">Salvar nome</button>
+                    <input aria-label="Nome da instância" disabled={busy || updatesScanning || updatesApplying || runningInstances.some((running) => running.instanceId === editingInstance)} maxLength={64} onChange={(event) => setRenameDraft(event.target.value)} value={renameDraft} />
+                    <button className="secondary compact" disabled={busy || updatesScanning || updatesApplying || !renameDraft.trim() || renameDraft.trim() === editingInstance || runningInstances.some((running) => running.instanceId === editingInstance)} type="submit">Salvar nome</button>
                   </form>
                     <span>{enabledContentCount} ativos · {selectedContentFiles.length} nesta categoria{totalAvailableUpdates > 0 ? ` · ${totalAvailableUpdates} ${totalAvailableUpdates === 1 ? "atualização" : "atualizações"}` : ""}</span>
                   </div>
                 </div>
                 <div className="editor-heading-actions">
                   <button className="secondary compact" disabled={busy || updatesApplying} onClick={() => void openInstanceFolder(editingInstance)} type="button">Abrir pasta</button>
-                  <button aria-label="Fechar editor" className="editor-close" disabled={updatesApplying} onClick={() => setEditingInstance("")} type="button">×</button>
+                  <button aria-label="Fechar editor" className="editor-close" disabled={updatesApplying} onClick={closeInstanceEditor} type="button">×</button>
                 </div>
               </div>
               <div className="content-tabs">
@@ -3282,11 +3476,11 @@ function LauncherApp() {
                 <button aria-label={`Pacotes de recursos: ${instanceContent.resourcepacks.length} instalados, ${updateCountFor("resourcepack")} atualizações`} className={contentType === "resourcepack" ? "selected compact" : "secondary compact"} onClick={() => selectContentType("resourcepack")} type="button">Pacotes de recursos <span>{instanceContent.resourcepacks.length}</span>{updateCountFor("resourcepack") > 0 && <em>{updateCountFor("resourcepack")} ↑</em>}</button>
               </div>
               <div className="editor-view-tabs" role="tablist" aria-label="Conteúdo da instância">
-                <button aria-selected={editorView === "installed"} className={editorView === "installed" ? "active" : ""} onClick={() => setEditorView("installed")} role="tab" type="button">Instalados</button>
-                <button aria-selected={editorView === "updates"} className={editorView === "updates" ? "active" : ""} onClick={showContentUpdates} role="tab" type="button">Atualizações{totalAvailableUpdates > 0 && <span className="tab-count">{totalAvailableUpdates}</span>}</button>
-                <button aria-selected={editorView === "discover"} className={editorView === "discover" ? "active" : ""} onClick={showContentCatalog} role="tab" type="button">＋ Adicionar</button>
+                <button aria-controls="editor-view-panel" aria-selected={editorView === "installed"} className={editorView === "installed" ? "active" : ""} id="editor-view-tab-installed" onClick={() => activateEditorView("installed")} onKeyDown={(event) => handleEditorViewKeyDown(event, "installed")} role="tab" tabIndex={editorView === "installed" ? 0 : -1} type="button">Instalados</button>
+                <button aria-controls="editor-view-panel" aria-label={updateTabLabel} aria-selected={editorView === "updates"} className={editorView === "updates" ? "active" : ""} id="editor-view-tab-updates" onClick={() => activateEditorView("updates")} onKeyDown={(event) => handleEditorViewKeyDown(event, "updates")} role="tab" tabIndex={editorView === "updates" ? 0 : -1} type="button">Atualizações{updateTabBadge && <span aria-hidden="true" className={`tab-count ${updatesScanning ? "scanning" : updateScanIssueCount > 0 || (totalAvailableUpdates === 0 && totalUpdateAttention > 0) ? "attention" : ""}`}>{updateTabBadge}</span>}</button>
+                <button aria-controls="editor-view-panel" aria-selected={editorView === "discover"} className={editorView === "discover" ? "active" : ""} id="editor-view-tab-discover" onClick={() => activateEditorView("discover")} onKeyDown={(event) => handleEditorViewKeyDown(event, "discover")} role="tab" tabIndex={editorView === "discover" ? 0 : -1} type="button">＋ Adicionar</button>
               </div>
-              <div className="editor-body">
+              <div aria-labelledby={`editor-view-tab-${editorView}`} className="editor-body" id="editor-view-panel" role="tabpanel" tabIndex={0}>
                 {editorView === "installed" ? (
                   <>
                     <div className="editor-toolbar">
@@ -3295,10 +3489,10 @@ function LauncherApp() {
                         <input aria-label="Buscar conteúdo instalado" onChange={(event) => setInstalledContentFilter(event.target.value)} placeholder="Buscar nos instalados" value={installedContentFilter} />
                       </label>
                       <div className="editor-bulk-actions">
-                        <button className="secondary compact" disabled={busy || visibleInstalledContent.length === 0} onClick={() => setSelectedContentNames(selectedVisibleCount === visibleInstalledContent.length ? selectedContentNames.filter((name) => !visibleInstalledContent.some((file) => file.name === name)) : [...new Set([...selectedContentNames, ...visibleInstalledContent.map((file) => file.name)])])} type="button">{selectedVisibleCount === visibleInstalledContent.length && visibleInstalledContent.length > 0 ? "Limpar visíveis" : "Selecionar visíveis"}</button>
-                        <button className="secondary compact" disabled={busy || selectedInstalledCount === 0} onClick={() => void setSelectedContentEnabled(true)} type="button">Ativar selecionados</button>
-                        <button className="secondary compact" disabled={busy || selectedInstalledCount === 0} onClick={() => void setSelectedContentEnabled(false)} type="button">Desativar selecionados</button>
-                        <button className="danger compact" disabled={busy || selectedInstalledCount === 0} onClick={() => void removeSelectedContent()} type="button">Desinstalar ({selectedInstalledCount})</button>
+                        <button className="secondary compact" disabled={busy || updatesScanning || updatesApplying || visibleInstalledContent.length === 0} onClick={() => setSelectedContentNames(selectedVisibleCount === visibleInstalledContent.length ? selectedContentNames.filter((name) => !visibleInstalledContent.some((file) => file.name === name)) : [...new Set([...selectedContentNames, ...visibleInstalledContent.map((file) => file.name)])])} type="button">{selectedVisibleCount === visibleInstalledContent.length && visibleInstalledContent.length > 0 ? "Limpar visíveis" : "Selecionar visíveis"}</button>
+                        <button className="secondary compact" disabled={busy || updatesScanning || updatesApplying || selectedInstalledCount === 0} onClick={() => void setSelectedContentEnabled(true)} type="button">Ativar selecionados</button>
+                        <button className="secondary compact" disabled={busy || updatesScanning || updatesApplying || selectedInstalledCount === 0} onClick={() => void setSelectedContentEnabled(false)} type="button">Desativar selecionados</button>
+                        <button className="danger compact" disabled={busy || updatesScanning || updatesApplying || selectedInstalledCount === 0} onClick={() => void removeSelectedContent()} type="button">Desinstalar ({selectedInstalledCount})</button>
                       </div>
                     </div>
                     <div className="installed-content content-table">
@@ -3308,7 +3502,7 @@ function LauncherApp() {
                         <div className="editor-empty compact-empty"><strong>Nenhum resultado</strong><p>Tente buscar por outra parte do nome do arquivo.</p></div>
                       ) : visibleInstalledContent.map((file) => (
                         <div className={selectedContentNames.includes(file.name) ? "content-row selected" : "content-row"} key={file.name}>
-                          <input aria-label={`Selecionar ${file.name}`} checked={selectedContentNames.includes(file.name)} className="content-select" disabled={busy} onChange={() => toggleContentSelection(file.name)} onClick={(event) => event.stopPropagation()} type="checkbox" />
+                          <input aria-label={`Selecionar ${file.name}`} checked={selectedContentNames.includes(file.name)} className="content-select" disabled={busy || updatesScanning || updatesApplying} onChange={() => toggleContentSelection(file.name)} onClick={(event) => event.stopPropagation()} type="checkbox" />
                           <ContentArtwork compact iconUrl={contentArtwork[contentArtworkKey(contentType, file.name)]?.iconUrl} title={contentArtwork[contentArtworkKey(contentType, file.name)]?.title ?? contentDisplayName(file.name)} type={contentType} />
                           <button aria-pressed={selectedContentNames.includes(file.name)} className="content-file-details content-file-select" onClick={() => toggleContentSelection(file.name)} title={file.name} type="button">
                             <strong>{contentArtwork[contentArtworkKey(contentType, file.name)]?.title ?? contentDisplayName(file.name)}</strong>
@@ -3316,7 +3510,7 @@ function LauncherApp() {
                           </button>
                           <span className={`content-status ${file.enabled ? "enabled" : ""}`}>{file.enabled ? "Ativo" : "Pausado"}</span>
                           <label className="content-toggle" onClick={(event) => event.stopPropagation()}>
-                            <input aria-label={`${file.enabled ? "Desativar" : "Ativar"} ${file.name}`} checked={file.enabled} disabled={busy} onChange={(event) => void setContentEnabled(file, event.target.checked)} type="checkbox" />
+                            <input aria-label={`${file.enabled ? "Desativar" : "Ativar"} ${file.name}`} checked={file.enabled} disabled={busy || updatesScanning || updatesApplying} onChange={(event) => void setContentEnabled(file, event.target.checked)} type="checkbox" />
                             <span aria-hidden="true" />
                           </label>
                         </div>
@@ -3326,6 +3520,7 @@ function LauncherApp() {
                 ) : editorView === "updates" ? (
                   <ContentUpdatesView
                     applying={updatesApplying}
+                    busy={busy}
                     contentType={contentType}
                     filter={contentUpdateFilter}
                     lastBackupAvailable={lastBackupAvailable}
@@ -3333,16 +3528,20 @@ function LauncherApp() {
                     modpackUpdate={modpackUpdate}
                     onCheckAgain={() => void scanAllContentUpdates()}
                     onFilterChange={setContentUpdateFilter}
+                    onQueryChange={setContentUpdateQuery}
                     onReviewItems={(items) => requestUpdateReview({ kind: "content", items })}
                     onReviewModpack={(modpack) => requestUpdateReview({ kind: "modpack", modpack })}
                     onReviewRollback={() => requestUpdateReview({ kind: "rollback" })}
                     onSelectAvailable={selectAvailableUpdates}
                     onToggleSelection={toggleUpdateSelection}
                     running={editingInstanceIsRunning}
+                    query={contentUpdateQuery}
                     scan={currentUpdateScan}
+                    scanIssueCount={updateScanIssueCount}
                     scanning={updatesScanning}
                     selectedFilenames={selectedUpdateFilenames}
                     totalAvailable={totalAvailableUpdates}
+                    totalAttention={totalUpdateAttention}
                   />
                 ) : (
                   <div className="editor-discover">

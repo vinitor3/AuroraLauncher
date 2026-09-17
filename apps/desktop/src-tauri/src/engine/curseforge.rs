@@ -192,6 +192,8 @@ where
         "source": "curseforge",
         "projectId": project_id,
         "fileId": file_id,
+        "packVersionId": file_id.to_string(),
+        "versionNumber": manifest.version_name,
         "name": manifest.name,
         "versionName": manifest.version_name,
         "minecraft": manifest.minecraft_version,
