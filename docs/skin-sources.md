@@ -7,6 +7,41 @@
 - Minecraft: Skins → Explorar. `@Not` sugere jogadores, `@Notch` pesquisa o nome, `@069a79f444e94726a5befca90e38aaf5` consulta UUID diretamente. Sem `@`, pesquisa catálogo; `#tag` filtra MCStat. Use as setas para selecionar e **Usar skin** para aplicar.
 - A prévia do resultado não altera a skin ativa nem adiciona skins à biblioteca. Aplicar/favoritar materializa um PNG validado. Todas as edições suportadas usam a mesma lógica compartilhada.
 
+## Biblioteca desktop e recuperação da equipada
+
+Correção de 17/09/2026, posterior ao instalador alpha.6:
+
+- **Minhas skins** mostra a biblioteca; **Equipada** abre a imagem e o modelo
+  efetivamente aplicados. Selecionar uma prévia não equipa automaticamente.
+- Arquivo e URL são guardados como PNG no IndexedDB, separado por conta. As
+  escritas só concluem após o commit da transação. URLs `blob:` não persistem.
+- Na reabertura, o PNG nativo equipado é comparado byte a byte com a biblioteca;
+  seu ID e modelo ficam persistidos separadamente. Se faltar a cópia nativa,
+  ela pode ser restaurada pelo PNG do ID equipado no IndexedDB.
+- Registros antigos com apenas URL são recuperados quando a origem responde,
+  com duas consultas simultâneas no máximo. Falha não remove registros nem
+  substitui um PNG válido por uma imagem vazia. Sem arquivo local nem origem
+  disponível, é necessário importar o PNG novamente.
+- URLs temporárias só são liberadas após publicar a nova lista/prévia. A skin
+  equipada usa uma imagem independente das URLs temporárias da biblioteca.
+  Miniatura e 3D mostram um aviso quando a imagem falha; o 3D tem limite de 15 s.
+- Iniciar Minecraft aguarda a recuperação inicial e usa o modelo equipado local,
+  não um modelo remoto antigo. Migrações de avatar já em andamento terminam
+  antes do envio explícito de uma nova equipagem, evitando sobrescrita atrasada.
+- Para remover a skin em uso, equipe outra primeiro. Demais skins não são
+  apagadas pela recuperação. Respostas de uma conta anterior não mudam a atual.
+
+Fixture reproduzível: `npm --prefix apps/desktop run dev -- --host 127.0.0.1 --port 1428`,
+abrir `/examples/wardrobe-recovery.html`. Usa somente PNG sintético e proprietário
+`qa-wardrobe`; recarregar verifica IndexedDB real, e os botões simulam falha e
+restauração da imagem. Não autentica nem altera dados pessoais. A navegação
+Equipada e o envio ao launch são cobertos por testes das funções reais do App,
+não por uma cópia da interface no fixture.
+
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO** no launcher empacotado. Build,
+testes automatizados e smoke visual dos componentes passaram; reabrir a próxima
+build nativa com conta real e confirmar no Minecraft ainda **PRECISA DE TESTE**.
+
 ## API confirmada
 
 Documentação consultada em 16/09/2026: [mc-api](https://mc-api.bisai.dev/docs), [OpenAPI](https://mc-api.bisai.dev/v1/openapi.json), [MCStat](https://mcstat.org/api-docs).

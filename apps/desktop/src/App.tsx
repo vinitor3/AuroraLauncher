@@ -6,6 +6,7 @@ import DOMPurify from "dompurify";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { SkinPreviewCanvas } from "./features/skins/SkinPreviewCanvas";
+import { SkinThumbnail } from "./features/skins/SkinThumbnail";
 import { StartupScreen } from "./features/auth/StartupScreen";
 import { guardSessionProfile, startSessionStartup, type SessionStartupState } from "./lib/sessionStartup";
 import {
@@ -36,7 +37,8 @@ import {
   groupedCatalogCategories,
   type CatalogCategoryOption,
 } from "./lib/catalogCategories";
-import { deleteLocalSkin, listLocalSkins, saveLocalSkin, type LocalSkin } from "./lib/localSkins";
+import { cacheLocalSkinImage, deleteLocalSkin, listLocalSkins, saveLocalSkin, updateLocalSkinSource, type LocalSkin } from "./lib/localSkins";
+import { findMatchingLocalSkin, parseEquippedSkinSelection, type EquippedSkinSelection } from "./lib/equippedSkin";
 import { ExternalDownloadQueue, type ExternalDownloadEvent } from "./lib/externalDownloadQueue";
 import { OnlineSkinSearch } from "./features/skins/OnlineSkinSearch";
 import { ContentUpdatesView } from "./features/content-updates/ContentUpdatesView";
@@ -229,6 +231,7 @@ type IpcSessionEvent = { processId: number; event: IpcEvent };
 type AuthMode = "login" | "register";
 type SkinAddMode = "file" | "url" | "username";
 type LocalSkinView = LocalSkin & { previewUrl: string };
+type EquippedSkinView = EquippedSkinSelection & { name: string; image: Blob; previewUrl: string };
 type OverlayMessage = { role: "user" | "assistant"; text: string };
 type SpeechRecognitionLike = {
   lang: string;
@@ -948,9 +951,17 @@ function LauncherApp() {
   const [favoriteSearch, setFavoriteSearch] = useState("");
   const [skinAddMode, setSkinAddMode] = useState<SkinAddMode>("file");
   const [localSkins, setLocalSkins] = useState<LocalSkinView[]>([]);
-  const [selectedLocalSkinId, setSelectedLocalSkinId] = useState("");
+  const [selectedLocalSkinId, setSelectedSkinIdState] = useState("");
+  const selectedSkinIdRef = useRef("");
+  function setSelectedLocalSkinId(id: string) { selectedSkinIdRef.current = id; setSelectedSkinIdState(id); }
   const [localSkinPath, setLocalSkinPath] = useState("");
-  const localPreviewUrls = useRef<string[]>([]);
+  const [equippedSkin, setEquippedSkin] = useState<EquippedSkinView>();
+  const [wardrobeView, setWardrobeView] = useState<"library" | "equipped">("library");
+  const [wardrobeLoading, setWardrobeLoading] = useState(false);
+  const [wardrobeReadyOwner, setWardrobeReadyOwner] = useState("");
+  const [wardrobeRetry, setWardrobeRetry] = useState(0);
+  const skinOwnerRef = useRef("");
+  const libraryLoadGeneration = useRef(0);
   const [instanceFilter, setInstanceFilter] = useState("");
   const [activeSection, setActiveSection] = useState<LauncherSection>("instances");
   const [catalogSource, setCatalogSource] = useState<CatalogSource>("modrinth");
@@ -962,6 +973,7 @@ function LauncherApp() {
   const [busy, setBusy] = useState(false);
   const avatarMigrationRef = useRef("");
   const localAvatarMigrationRef = useRef("");
+  const appearanceMigrationPending = useRef<Promise<void>>(Promise.resolve());
   const activeInstanceRef = useRef({ editingInstance, targetInstance });
   const editorOpenRequestRef = useRef({ generation: 0, id: "" });
   const lastArtworkMigrationRef = useRef<{ id: string; migrations: ContentArtworkMigration[] } | null>(null);
@@ -1045,17 +1057,48 @@ function LauncherApp() {
       setInstances((current) => current.map((instance) => updates.get(instance.id) ?? instance));
     }
   }
-  async function refreshLocalSkinLibrary(ownerId: string) {
-    localPreviewUrls.current.forEach((url) => URL.revokeObjectURL(url));
-    localPreviewUrls.current = [];
+  function isCurrentSkinOwner(ownerId: string) {
+    return skinOwnerRef.current === ownerId && services.auth.currentUser?.uid === ownerId;
+  }
+  async function refreshLocalSkinLibrary(ownerId: string, selectId?: string) {
+    if (!isCurrentSkinOwner(ownerId)) return [];
+    const generation = ++libraryLoadGeneration.current;
     const records = await listLocalSkins(ownerId);
     const views = records.map((skin) => {
       const previewUrl = skin.image ? URL.createObjectURL(skin.image) : skin.sourceUrl ?? "";
-      if (skin.image) localPreviewUrls.current.push(previewUrl);
       return { ...skin, previewUrl };
     });
+    if (!isCurrentSkinOwner(ownerId) || generation !== libraryLoadGeneration.current) {
+      views.forEach((skin) => { if (skin.image) URL.revokeObjectURL(skin.previewUrl); });
+      return [];
+    }
     setLocalSkins(views);
+    const selected = views.find((skin) => skin.id === (selectId ?? selectedSkinIdRef.current));
+    if (selected) {
+      setSelectedLocalSkinId(selected.id);
+      setSkinUrl(selected.previewUrl);
+    }
     return views;
+  }
+  async function appearanceBlob(dataBase64: string) {
+    const blob = await (await fetch(dataBase64)).blob();
+    await validateAppearanceFile("skin", new File([blob], "skin.png", { type: "image/png" }));
+    return blob;
+  }
+  async function cacheSkin(skin: LocalSkin) {
+    if (skin.image) return skin;
+    if (!skin.sourceUrl) throw new Error("O PNG desta skin não está salvo. Importe o arquivo novamente.");
+    const loaded = await invoke<AppearanceImage>("load_appearance_url", { url: skin.sourceUrl, kind: "skin" });
+    const image = await appearanceBlob(loaded.dataBase64);
+    if (!isCurrentSkinOwner(skin.ownerId)) return undefined;
+    return cacheLocalSkinImage(skin.ownerId, skin.id, image, loaded.url);
+  }
+  function rememberEquippedSkin(ownerId: string, skin: LocalSkin, model: "classic" | "slim", previewUrl: string, path: string) {
+    if (!isCurrentSkinOwner(ownerId) || !skin.image) return;
+    window.localStorage.setItem(`aurora.equippedSkin.${ownerId}`, JSON.stringify({ id: skin.id, skinModel: model }));
+    window.localStorage.setItem(`aurora.localSkinPath.${ownerId}`, path);
+    setLocalSkinPath(path);
+    setEquippedSkin({ id: skin.id, name: skin.name, skinModel: model, previewUrl, image: skin.image });
   }
   useEffect(() => {
     let disposed = false;
@@ -1204,64 +1247,83 @@ function LauncherApp() {
       );
   }, [profile]);
   useEffect(() => {
-    if (!profile) return;
-    if (!selectedLocalSkinId) setSkinUrl(profile.skinUrl ?? "");
-    setCapeUrl(profile.capeUrl ?? "");
-    setSkinModel(profile.skinModel);
-    setLocalSkinPath(window.localStorage.getItem(`aurora.localSkinPath.${profile.uid}`) ?? "");
-  }, [profile]);
-  useEffect(() => {
-    if (!profile?.skinUrl || profile.avatarUrl === profile.skinUrl || !services) return;
+    if (!profile?.skinUrl || profile.avatarUrl === profile.skinUrl || !services || busy || wardrobeLoading || wardrobeReadyOwner !== profile.uid) return;
     const migrationKey = `${profile.uid}:${profile.skinUrl}`;
     if (avatarMigrationRef.current === migrationKey) return;
     avatarMigrationRef.current = migrationKey;
-    void (async () => {
+    let cancelled = false;
+    const migrate = appearanceMigrationPending.current.then(async () => {
       try {
+        if (cancelled || !isCurrentSkinOwner(profile.uid)) return;
         const next = await saveAuroraAppearance(services, profile, {
           avatarUrl: profile.skinUrl,
           skinUrl: profile.skinUrl,
           capeUrl: profile.capeUrl,
           skinModel: profile.skinModel,
         });
-        setProfile(next);
+        if (!cancelled && isCurrentSkinOwner(profile.uid)) setProfile(next);
       } catch {
         // O perfil continua utilizável; uma nova tentativa ocorre quando a skin for equipada novamente.
       }
-    })();
-  }, [profile?.uid, profile?.skinUrl, profile?.avatarUrl, services]);
+    });
+    appearanceMigrationPending.current = migrate;
+    return () => { cancelled = true; };
+  }, [profile?.uid, profile?.skinUrl, profile?.avatarUrl, services, busy, wardrobeLoading, wardrobeReadyOwner]);
   useEffect(() => {
-    if (!profile || profile.avatarUrl || profile.skinUrl || !localSkinPath || !services) return;
+    if (!profile || profile.avatarUrl || profile.skinUrl || !localSkinPath || !services || busy || wardrobeLoading || wardrobeReadyOwner !== profile.uid) return;
     const migrationKey = `${profile.uid}:${localSkinPath}`;
     if (localAvatarMigrationRef.current === migrationKey) return;
     localAvatarMigrationRef.current = migrationKey;
-    void (async () => {
+    let cancelled = false;
+    const migrate = appearanceMigrationPending.current.then(async () => {
       try {
+        if (cancelled || !isCurrentSkinOwner(profile.uid)) return;
         const loaded = await invoke<AppearanceImage>("load_local_appearance", { userId: profile.uid, kind: "skin" });
         const blob = await (await fetch(loaded.dataBase64)).blob();
+        if (cancelled || !isCurrentSkinOwner(profile.uid)) return;
         const skinUrl = await uploadAppearanceImage("skin", new File([blob], "skin.png", { type: "image/png" }));
+        if (cancelled || !isCurrentSkinOwner(profile.uid)) return;
         const next = await saveAuroraAppearance(services, profile, {
           avatarUrl: skinUrl,
           skinUrl,
           capeUrl: profile.capeUrl,
-          skinModel: profile.skinModel,
+          skinModel: equippedSkin?.skinModel ?? profile.skinModel,
         });
-        setProfile(next);
+        if (!cancelled && isCurrentSkinOwner(profile.uid)) setProfile(next);
       } catch {
         // A skin continua equipada localmente; o usuário pode sincronizá-la novamente no guarda-roupa.
       }
-    })();
-  }, [profile?.uid, profile?.avatarUrl, profile?.skinUrl, localSkinPath, services]);
+    });
+    appearanceMigrationPending.current = migrate;
+    return () => { cancelled = true; };
+  }, [profile?.uid, profile?.avatarUrl, profile?.skinUrl, localSkinPath, services, busy, wardrobeLoading, wardrobeReadyOwner]);
   useEffect(() => {
-    if (!profile || !services) return;
+    ++libraryLoadGeneration.current;
+    skinOwnerRef.current = profile?.uid ?? "";
+    setWardrobeReadyOwner("");
+    setSelectedLocalSkinId("");
+    setLocalSkins([]);
+    setEquippedSkin(undefined);
+    setLocalSkinPath("");
+    setSkinUrl("");
+    setSkinModel(profile?.skinModel ?? "classic");
+    setCapeUrl(profile?.capeUrl ?? "");
+    setFavoriteName("");
+    setFavoriteSearch("");
+    setWardrobeView("library");
+    if (!profile) { setWardrobeLoading(false); return; }
+    const ownerId = profile.uid;
     let cancelled = false;
+    setWardrobeLoading(true);
     void (async () => {
-      const stored = await listLocalSkins(profile.uid);
+      let stored = await listLocalSkins(ownerId);
+      if (cancelled || !isCurrentSkinOwner(ownerId)) return;
       const knownUrls = new Set(stored.map((skin) => skin.sourceUrl).filter(Boolean));
       for (const favorite of profile.skinFavorites) {
         if (!knownUrls.has(favorite.skinUrl)) {
           await saveLocalSkin({
             id: favorite.id,
-            ownerId: profile.uid,
+            ownerId,
             name: favorite.name,
             skinModel: favorite.skinModel,
             sourceUrl: favorite.skinUrl,
@@ -1269,22 +1331,89 @@ function LauncherApp() {
           knownUrls.add(favorite.skinUrl);
         }
       }
-      if (profile.skinUrl && !knownUrls.has(profile.skinUrl)) {
-        await saveLocalSkin({ ownerId: profile.uid, name: "Skin equipada", skinModel: profile.skinModel, sourceUrl: profile.skinUrl });
+      stored = await listLocalSkins(ownerId);
+      if (cancelled || !isCurrentSkinOwner(ownerId)) return;
+      await refreshLocalSkinLibrary(ownerId);
+      const selection = parseEquippedSkinSelection(window.localStorage.getItem(`aurora.equippedSkin.${ownerId}`));
+      let path = window.localStorage.getItem(`aurora.localSkinPath.${ownerId}`) ?? "";
+      let equipped: LocalSkin | undefined;
+      let png = "";
+      if (path || selection) {
+        try {
+          const loaded = await invoke<AppearanceImage>("load_local_appearance", { userId: ownerId, kind: "skin" });
+          const image = await appearanceBlob(loaded.dataBase64);
+          if (cancelled || !isCurrentSkinOwner(ownerId)) return;
+          equipped = await findMatchingLocalSkin(stored, image, selection?.id);
+          if (!equipped) equipped = await saveLocalSkin({ ownerId, name: "Skin equipada recuperada", skinModel: selection?.skinModel ?? profile.skinModel, image });
+          png = loaded.dataBase64;
+        } catch {
+          // Repair a missing native copy from the explicitly equipped library ID.
+          path = "";
+          equipped = stored.find((skin) => skin.id === selection?.id && skin.image);
+          if (equipped?.image) png = await fileAsDataUrl(new File([equipped.image], "skin.png", { type: "image/png" }));
+        }
       }
-      if (profile.skinFavorites.length > 0) {
-        const next = await clearRemoteSkinLibrary(services, profile);
-        if (!cancelled) setProfile(next);
+      if (!equipped && profile.skinUrl) {
+        try {
+          const source = stored.find((skin) => skin.sourceUrl === profile.skinUrl);
+          if (source) equipped = await cacheSkin(source);
+          else {
+            const loaded = await invoke<AppearanceImage>("load_appearance_url", { url: profile.skinUrl, kind: "skin" });
+            const image = await appearanceBlob(loaded.dataBase64);
+            if (cancelled || !isCurrentSkinOwner(ownerId)) return;
+            const matching = await findMatchingLocalSkin(stored, image);
+            equipped = matching
+              ? await updateLocalSkinSource(ownerId, matching.id, loaded.url)
+              : await saveLocalSkin({ ownerId, name: "Skin equipada", skinModel: profile.skinModel, sourceUrl: loaded.url, image });
+          }
+          if (equipped?.image) png = await fileAsDataUrl(new File([equipped.image], "skin.png", { type: "image/png" }));
+        } catch { /* Keep the library usable offline; never replace a failed image with an empty PNG. */ }
       }
-      if (!cancelled) {
-        const views = await refreshLocalSkinLibrary(profile.uid);
-        const equipped = views.find((skin) => skin.sourceUrl === profile.skinUrl);
-        if (equipped) setSelectedLocalSkinId(equipped.id);
+      if (cancelled || !isCurrentSkinOwner(ownerId)) return;
+      if (equipped?.image && png) {
+        if (!path) path = await invoke<string>("save_local_appearance", { userId: ownerId, kind: "skin", dataBase64: png });
+        if (cancelled || !isCurrentSkinOwner(ownerId)) return;
+        const model = equipped.id === selection?.id ? selection.skinModel : selection ? equipped.skinModel : profile.skinModel;
+        rememberEquippedSkin(ownerId, equipped, model, png, path);
+        await refreshLocalSkinLibrary(ownerId, equipped.id);
+        if (!cancelled && isCurrentSkinOwner(ownerId)) {
+          setSkinUrl(png);
+          setSkinModel(model);
+          setFavoriteName(equipped.name);
+        }
       }
-    })().catch((error: unknown) => setNotice(`Não foi possível carregar a biblioteca local: ${String(error)}`));
-    return () => { cancelled = true; };
-  }, [profile?.uid, services]);
-  useEffect(() => () => localPreviewUrls.current.forEach((url) => URL.revokeObjectURL(url)), []);
+      if (!cancelled && isCurrentSkinOwner(ownerId)) {
+        setWardrobeReadyOwner(ownerId);
+        setWardrobeLoading(false);
+      }
+      if (profile.skinFavorites.length > 0 && !cancelled) {
+        await clearRemoteSkinLibrary(services, profile);
+        if (!cancelled && isCurrentSkinOwner(ownerId)) setProfileState((current) => current?.uid === ownerId ? { ...current, skinFavorites: [] } : current);
+      }
+      // Migrate URL-only entries in the background, with bounded concurrency.
+      const pending = (await listLocalSkins(ownerId)).filter((skin) => !skin.image && skin.sourceUrl);
+      await Promise.all([0, 1].map(async () => {
+        while (pending.length && !cancelled && isCurrentSkinOwner(ownerId)) {
+          const skin = pending.shift()!;
+          try {
+            if (await cacheSkin(skin)) await refreshLocalSkinLibrary(ownerId);
+          } catch { /* An unavailable legacy URL remains listed with a recovery message. */ }
+        }
+      }));
+    })().catch((error: unknown) => {
+      if (!cancelled && isCurrentSkinOwner(ownerId)) setNotice(`Não foi possível carregar a biblioteca local: ${String(error)}`);
+    }).finally(() => {
+      if (!cancelled && isCurrentSkinOwner(ownerId)) {
+        setWardrobeReadyOwner(ownerId);
+        setWardrobeLoading(false);
+      }
+    });
+    return () => { cancelled = true; ++libraryLoadGeneration.current; skinOwnerRef.current = ""; };
+  }, [profile?.uid, services, wardrobeRetry]);
+  // Revoke only after React has committed the replacement list and preview URL.
+  useEffect(() => () => localSkins.forEach((skin) => {
+    if (skin.image) URL.revokeObjectURL(skin.previewUrl);
+  }), [localSkins]);
   useEffect(() => {
     async function answerInGame(processId: number, event: Extract<IpcEvent, { kind: "AssistantRequest" }>) {
       if (!services) {
@@ -2819,6 +2948,10 @@ function LauncherApp() {
     }
   }
   async function launchMinecraft(instanceId = targetInstance) {
+    if (!profile || wardrobeLoading || wardrobeReadyOwner !== profile.uid || !isCurrentSkinOwner(profile.uid)) {
+      setNotice("Aguarde a recuperação da sua skin antes de iniciar Minecraft.");
+      return;
+    }
     if (!instanceId) {
       setNotice("Escolha uma instância que já tenha Minecraft instalado.");
       return;
@@ -2871,6 +3004,7 @@ function LauncherApp() {
         setJavaPath(executable);
         window.localStorage.setItem("aurora.javaExecutable", executable);
       }
+      if (!isCurrentSkinOwner(profile.uid)) return;
       const result = await invoke<LaunchSummary>("launch_instance", {
         id: instanceId,
         versionId,
@@ -2880,7 +3014,7 @@ function LauncherApp() {
         skinUrl: profile?.skinUrl ?? null,
         skinFile: localSkinPath || null,
         capeUrl: profile?.capeUrl ?? null,
-        skinModel: profile?.skinModel ?? null,
+        skinModel: localSkinPath ? equippedSkin?.skinModel ?? profile?.skinModel ?? null : profile?.skinModel ?? null,
       });
       setRunningInstances((current) => [
         ...current.filter((running) => running.instanceId !== instanceId),
@@ -2897,43 +3031,50 @@ function LauncherApp() {
   }
   async function saveAppearance(event: FormEvent) {
     event.preventDefault();
-    if (!profile || !services) return;
+    if (!profile || !services || wardrobeLoading) return;
+    const ownerId = profile.uid;
     setBusy(true);
     let equippedLocally = false;
     try {
-      const selected = localSkins.find((skin) => skin.id === selectedLocalSkinId);
-      let equippedSkinUrl = selected?.sourceUrl ?? skinUrl;
-      let equippedAvatarUrl = equippedSkinUrl || profile.avatarUrl || "";
-      let equippedLocalPath = "";
+      let selected: LocalSkin | undefined = localSkins.find((skin) => skin.id === selectedLocalSkinId);
+      if (selected) selected = await cacheSkin(selected);
+      else {
+        const loaded = await invoke<AppearanceImage>("load_appearance_url", { url: skinUrl, kind: "skin" });
+        const image = await appearanceBlob(loaded.dataBase64);
+        if (!isCurrentSkinOwner(ownerId)) return;
+        selected = await saveLocalSkin({ ownerId, name: favoriteName.trim() || "Minha skin", skinModel, sourceUrl: loaded.url, image });
+      }
+      if (!selected?.image) throw new Error("Esta skin não está mais na biblioteca. Selecione o PNG novamente.");
+      if (!isCurrentSkinOwner(ownerId)) return;
+      const file = new File([selected.image], "skin.png", { type: "image/png" });
+      await validateAppearanceFile("skin", file);
+      const png = await fileAsDataUrl(file);
+      const equippedLocalPath = await invoke<string>("save_local_appearance", { userId: ownerId, kind: "skin", dataBase64: png });
+      equippedLocally = true;
+      if (!isCurrentSkinOwner(ownerId)) return;
+      rememberEquippedSkin(ownerId, selected, skinModel, png, equippedLocalPath);
+      await refreshLocalSkinLibrary(ownerId, selected.id);
+      if (!isCurrentSkinOwner(ownerId)) return;
+      let equippedSkinUrl = profile.skinUrl ?? "";
+      let equippedAvatarUrl = profile.avatarUrl ?? "";
       let onlineWarning = "";
-      if (selected?.image) {
-        const file = new File([selected.image], `${selected.name || "skin"}.png`, { type: "image/png" });
-        equippedLocalPath = await invoke<string>("save_local_appearance", {
-          userId: profile.uid,
-          kind: "skin",
-          dataBase64: await fileAsDataUrl(file),
-        });
-        equippedLocally = true;
-        setLocalSkinPath(equippedLocalPath);
-        window.localStorage.setItem(`aurora.localSkinPath.${profile.uid}`, equippedLocalPath);
-        setSkinUrl(selected.previewUrl);
-        try {
-          const onlineSkinUrl = await uploadAppearanceImage("skin", file);
-          equippedSkinUrl = onlineSkinUrl;
-          equippedAvatarUrl = onlineSkinUrl;
-        } catch (error) {
-          equippedSkinUrl = profile.skinUrl ?? "";
-          equippedAvatarUrl = profile.avatarUrl ?? "";
-          onlineWarning = error instanceof Error ? error.message : String(error);
-        }
-      } else if (equippedSkinUrl) {
-        const loaded = await invoke<AppearanceImage>("load_appearance_url", { url: equippedSkinUrl, kind: "skin" });
-        equippedSkinUrl = loaded.url;
-        equippedAvatarUrl = loaded.url;
+      try {
+        // Let an already dispatched legacy migration finish before the explicit
+        // equip writes the new profile, so older metadata cannot win the race.
+        await appearanceMigrationPending.current;
+        if (!isCurrentSkinOwner(ownerId)) return;
+        const onlineSkinUrl = await uploadAppearanceImage("skin", file);
+        if (!isCurrentSkinOwner(ownerId)) return;
+        await updateLocalSkinSource(ownerId, selected.id, onlineSkinUrl);
+        equippedSkinUrl = onlineSkinUrl;
+        equippedAvatarUrl = onlineSkinUrl;
+      } catch (error) {
+        onlineWarning = error instanceof Error ? error.message : String(error);
       }
       const equippedCapeUrl = capeUrl
         ? await invoke<string>("validate_appearance_url", { url: capeUrl, kind: "cape" })
         : "";
+      if (!isCurrentSkinOwner(ownerId)) return;
       const next = await saveAuroraAppearance(services, profile, {
         avatarUrl: equippedAvatarUrl || null,
         skinUrl: equippedSkinUrl || null,
@@ -2941,19 +3082,15 @@ function LauncherApp() {
         skinModel,
       });
       setProfile(next);
-      if (equippedLocalPath) {
-        setSkinUrl(selected?.previewUrl ?? skinUrl);
+      if (isCurrentSkinOwner(ownerId)) {
+        await refreshLocalSkinLibrary(ownerId, selected.id);
+        if (!isCurrentSkinOwner(ownerId)) return;
         setNotice(onlineWarning
           ? `Skin equipada localmente, mas a sincronização online falhou: ${onlineWarning}`
-          : "Skin equipada localmente e sincronizada no Supabase.");
-      } else {
-        setLocalSkinPath("");
-        window.localStorage.removeItem(`aurora.localSkinPath.${profile.uid}`);
-        setSkinUrl(next.skinUrl ?? "");
-        setNotice("Skin por URL equipada no perfil Aurora.");
+          : "Skin equipada, guardada neste computador e sincronizada online.");
       }
     } catch (error) {
-      setNotice(equippedLocally
+      if (isCurrentSkinOwner(ownerId)) setNotice(equippedLocally
         ? `A skin foi equipada neste computador, mas o perfil online não pôde ser atualizado: ${String(error)}`
         : `Não foi possível equipar a skin: ${String(error)}`);
     } finally {
@@ -2986,19 +3123,20 @@ function LauncherApp() {
           skinModel,
           image: file,
         });
-        const views = await refreshLocalSkinLibrary(profile.uid);
-        const selected = views.find((skin) => skin.id === local.id);
-        setSelectedLocalSkinId(local.id);
-        setSkinUrl(selected?.previewUrl ?? "");
+        if (!isCurrentSkinOwner(profile.uid)) return;
+        await refreshLocalSkinLibrary(profile.uid, local.id);
+        if (!isCurrentSkinOwner(profile.uid)) return;
+        setWardrobeView("library");
         setFavoriteName("");
         setNotice("Skin adicionada à biblioteca local. Clique em Equipar no jogo para aplicá-la.");
       } else {
         const url = await uploadAppearanceImage(kind, file);
+        if (!isCurrentSkinOwner(profile.uid)) return;
         setCapeUrl(url);
         setNotice("Capa enviada. Clique em Equipar para aplicá-la.");
       }
     } catch (error) {
-      setNotice(`Não foi possível adicionar a imagem: ${String(error)}`);
+      if (isCurrentSkinOwner(profile.uid)) setNotice(`Não foi possível adicionar a imagem: ${String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -3011,44 +3149,69 @@ function LauncherApp() {
     }
     setBusy(true);
     try {
-      const validatedSkinUrl = await invoke<string>("validate_appearance_url", { url: skinUrl, kind: "skin" });
+      const loaded = await invoke<AppearanceImage>("load_appearance_url", { url: skinUrl, kind: "skin" });
+      const image = await appearanceBlob(loaded.dataBase64);
+      if (!isCurrentSkinOwner(profile.uid)) return;
       const local = await saveLocalSkin({
         ownerId: profile.uid,
         name: favoriteName.trim() || "Minha skin",
         skinModel,
-        sourceUrl: validatedSkinUrl,
+        sourceUrl: loaded.url,
+        image,
       });
-      await refreshLocalSkinLibrary(profile.uid);
-      setSelectedLocalSkinId(local.id);
+      await refreshLocalSkinLibrary(profile.uid, local.id);
+      if (!isCurrentSkinOwner(profile.uid)) return;
       setFavoriteName("");
       setNotice("Skin guardada somente neste computador.");
     } catch (error) {
-      setNotice(`Não foi possível guardar a skin: ${String(error)}`);
+      if (isCurrentSkinOwner(profile.uid)) setNotice(`Não foi possível guardar a skin: ${String(error)}`);
     } finally {
       setBusy(false);
     }
   }
-  function useFavoriteSkin(skin: LocalSkinView) {
+  async function useFavoriteSkin(skin: LocalSkinView) {
+    if (wardrobeLoading || busy) return;
     setSelectedLocalSkinId(skin.id);
     setSkinUrl(skin.previewUrl);
     setSkinModel(skin.skinModel);
     setFavoriteName(skin.name);
     setNotice(`Skin “${skin.name}” selecionada. Clique em Equipar no jogo para aplicá-la.`);
+    if (!skin.image) {
+      try {
+        if (await cacheSkin(skin)) await refreshLocalSkinLibrary(skin.ownerId);
+      } catch {
+        if (isCurrentSkinOwner(skin.ownerId) && selectedSkinIdRef.current === skin.id) setNotice("O link antigo desta skin não está disponível. Importe o PNG novamente; as outras skins foram preservadas.");
+      }
+    }
+  }
+  function showEquippedSkin() {
+    setWardrobeView("equipped");
+    if (!equippedSkin) return;
+    setSelectedLocalSkinId(equippedSkin.id);
+    setSkinUrl(equippedSkin.previewUrl);
+    setSkinModel(equippedSkin.skinModel);
+    setFavoriteName(equippedSkin.name);
   }
   async function removeFavoriteSkin(id: string) {
     if (!profile) return;
+    if (id === equippedSkin?.id) {
+      setNotice("Equipe outra skin antes de remover a que está em uso.");
+      return;
+    }
     setBusy(true);
     try {
       await deleteLocalSkin(profile.uid, id);
+      if (!isCurrentSkinOwner(profile.uid)) return;
       if (selectedLocalSkinId === id) {
-        setSelectedLocalSkinId("");
-        setSkinUrl(profile.skinUrl ?? "");
-        setSkinModel(profile.skinModel);
+        setSelectedLocalSkinId(equippedSkin?.id ?? "");
+        setSkinUrl(equippedSkin?.previewUrl ?? "");
+        setSkinModel(equippedSkin?.skinModel ?? profile.skinModel);
       }
       await refreshLocalSkinLibrary(profile.uid);
+      if (!isCurrentSkinOwner(profile.uid)) return;
       setNotice("Skin removida deste computador.");
     } catch (error) {
-      setNotice(`Não foi possível remover a skin: ${String(error)}`);
+      if (isCurrentSkinOwner(profile.uid)) setNotice(`Não foi possível remover a skin: ${String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -3334,7 +3497,8 @@ function LauncherApp() {
                   <div className="instance-actions">
                     <button
                       className="compact"
-                      disabled={busy || !instance.hasInstalledVersion || isRunning}
+                      disabled={busy || wardrobeLoading || wardrobeReadyOwner !== profile.uid || !instance.hasInstalledVersion || isRunning}
+                      title={wardrobeLoading || wardrobeReadyOwner !== profile.uid ? "Recuperando sua skin…" : undefined}
                       onClick={(event) => { event.stopPropagation(); void launchMinecraft(instance.id); }}
                       type="button"
                     >
@@ -3664,50 +3828,67 @@ function LauncherApp() {
             <div className="wardrobe-heading">
               <div><p className="eyebrow">GUARDA-ROUPA</p><h2>Skins <span>({localSkins.length} neste computador)</span></h2></div>
               <div className="wardrobe-actions">
-                <button className={skinAddMode === "file" ? "compact" : "secondary compact"} onClick={() => setSkinAddMode("file")} type="button">+ Adicionar skin</button>
-                <button className="secondary compact" disabled={busy || !skinUrl.trim()} onClick={() => void saveAppearance({ preventDefault() {} } as FormEvent)} type="button">Equipar no jogo</button>
+                <button className={skinAddMode === "file" ? "compact" : "secondary compact"} disabled={busy || wardrobeLoading} onClick={() => { setWardrobeView("library"); setSkinAddMode("file"); }} type="button">+ Adicionar skin</button>
+                <button className="secondary compact" disabled={busy || wardrobeLoading || !skinUrl.trim()} onClick={() => void saveAppearance({ preventDefault() {} } as FormEvent)} type="button">Equipar no jogo</button>
               </div>
             </div>
             <div className="wardrobe-layout">
               <aside className="wardrobe-nav" aria-label="Biblioteca de skins">
                 <strong>Biblioteca</strong>
-                <button className="wardrobe-nav-item active" onClick={() => setFavoriteSearch("")} type="button">Minhas skins <span>{localSkins.length}</span></button>
-                <button className="wardrobe-nav-item" type="button">Equipada <span>{profile.skinUrl || localSkinPath ? 1 : 0}</span></button>
+                <button className={`wardrobe-nav-item${wardrobeView === "library" ? " active" : ""}`} aria-pressed={wardrobeView === "library"} onClick={() => { setWardrobeView("library"); setFavoriteSearch(""); }} type="button">Minhas skins <span>{localSkins.length}</span></button>
+                <button className={`wardrobe-nav-item${wardrobeView === "equipped" ? " active" : ""}`} aria-pressed={wardrobeView === "equipped"} onClick={showEquippedSkin} type="button">Equipada <span>{equippedSkin || profile.skinUrl || localSkinPath ? 1 : 0}</span></button>
                 <small>Cosméticos e emotes chegarão depois.</small>
               </aside>
               <div className="wardrobe-controls">
+                {wardrobeView === "equipped" ? (
+                  <section className="equipped-skin-panel" aria-label="Skin equipada no jogo">
+                    <p className="eyebrow">EM USO NO JOGO</p>
+                    {equippedSkin ? <>
+                      <SkinThumbnail src={equippedSkin.previewUrl} name={equippedSkin.name} className="equipped-skin-thumbnail" />
+                      <h3>{equippedSkin.name}</h3>
+                      <p className="muted">Modelo {equippedSkin.skinModel === "slim" ? "Slim" : "Clássico"}. PNG salvo neste computador.</p>
+                      <p className="field-hint">Selecionar outra skin na biblioteca só altera a prévia. Ela muda no jogo quando você clica em Equipar no jogo.</p>
+                    </> : <>
+                      <p className="muted">{wardrobeLoading ? "Carregando a skin equipada…" : profile.skinUrl ? "Não foi possível recuperar o PNG da skin equipada. Tente novamente ou importe o arquivo salvo." : "Nenhuma skin equipada ainda. Selecione uma na biblioteca e clique em Equipar no jogo."}</p>
+                      {!wardrobeLoading && (profile.skinUrl || window.localStorage.getItem(`aurora.localSkinPath.${profile.uid}`)) && <button className="secondary compact" disabled={busy} onClick={() => setWardrobeRetry((value) => value + 1)} type="button">Tentar recuperar novamente</button>}
+                    </>}
+                  </section>
+                ) : <>
+                {wardrobeLoading && <p className="muted" role="status">Recuperando sua biblioteca e a skin equipada…</p>}
                 <div className="skin-import">
                   <div className="import-tabs">
                     <button className={skinAddMode === "file" ? "selected compact" : "secondary compact"} onClick={() => setSkinAddMode("file")} type="button">Arquivo</button>
                     <button className={skinAddMode === "url" ? "selected compact" : "secondary compact"} onClick={() => setSkinAddMode("url")} type="button">URL</button>
                     <button className={skinAddMode === "username" ? "selected compact" : "secondary compact"} onClick={() => setSkinAddMode("username")} type="button">Buscar online</button>
                   </div>
-                  {skinAddMode === "file" && <label className="file-input">Escolher PNG da skin<input accept="image/png" disabled={busy} onChange={(event) => void uploadAppearance("skin", event.target.files?.[0])} type="file" /></label>}
-                  {skinAddMode === "url" && <input value={skinUrl} onChange={(event) => { setSkinUrl(event.target.value); setSelectedLocalSkinId(""); }} placeholder="Cole a URL HTTPS da skin PNG" />}
+                  {skinAddMode === "file" && <label className="file-input">Escolher PNG da skin<input accept="image/png" disabled={busy || wardrobeLoading} onChange={(event) => void uploadAppearance("skin", event.target.files?.[0])} type="file" /></label>}
+                  {skinAddMode === "url" && <input value={skinUrl} disabled={busy || wardrobeLoading} onChange={(event) => { setSkinUrl(event.target.value); setSelectedLocalSkinId(""); }} placeholder="Cole a URL HTTPS da skin PNG" />}
                   {skinAddMode === "username" && <OnlineSkinSearch workerUrl={services.config.workerUrl || "https://aurora-api.aurora-edge-proxy.workers.dev"} onSelect={(skin) => {
+                    if (busy || wardrobeLoading) return;
                     setSkinUrl(skin.skinUrl); setSkinModel(skin.model); setFavoriteName(skin.name); setSelectedLocalSkinId("");
                     setNotice(`Skin ${skin.name} selecionada. Guarde localmente ou clique em Equipar no jogo.`);
                   }} />}
-                  <div className="model-row"><span>Modelo</span><select value={skinModel} onChange={(event) => setSkinModel(event.target.value as "classic" | "slim")}><option value="classic">Clássico</option><option value="slim">Slim</option></select></div>
+                  <div className="model-row"><span>Modelo</span><select value={skinModel} disabled={busy || wardrobeLoading} onChange={(event) => setSkinModel(event.target.value as "classic" | "slim")}><option value="classic">Clássico</option><option value="slim">Slim</option></select></div>
                 </div>
                 <div className="library-toolbar">
                   <input className="favorite-search" value={favoriteSearch} onChange={(event) => setFavoriteSearch(event.target.value)} placeholder="Pesquisar nas suas skins" />
-                  <div className="favorite-tools"><input value={favoriteName} onChange={(event) => setFavoriteName(event.target.value)} maxLength={32} placeholder="Nome desta skin" /><button disabled={busy || !skinUrl.trim() || Boolean(selectedLocalSkinId)} onClick={() => void favoriteCurrentSkin()} type="button">Guardar localmente</button></div>
+                  <div className="favorite-tools"><input value={favoriteName} onChange={(event) => setFavoriteName(event.target.value)} maxLength={32} placeholder="Nome desta skin" /><button disabled={busy || wardrobeLoading || !skinUrl.trim() || Boolean(selectedLocalSkinId)} onClick={() => void favoriteCurrentSkin()} type="button">Guardar localmente</button></div>
                 </div>
                 <div className="skin-library wardrobe-library">
                   {localSkins.filter((skin) => skin.name.toLocaleLowerCase().includes(favoriteSearch.trim().toLocaleLowerCase())).map((skin) => (
-                    <button className={selectedLocalSkinId === skin.id ? "skin-card active" : "skin-card"} key={skin.id} onClick={() => useFavoriteSkin(skin)} type="button">
-                      <img src={skin.previewUrl} alt={`Skin ${skin.name}`} /><strong>{skin.name}</strong><span>{skin.skinModel === "slim" ? "Slim" : "Clássico"}</span><em onClick={(event) => { event.stopPropagation(); void removeFavoriteSkin(skin.id); }}>Remover</em>
+                    <button className={selectedLocalSkinId === skin.id ? "skin-card active" : "skin-card"} key={skin.id} disabled={busy || wardrobeLoading} onClick={() => void useFavoriteSkin(skin)} type="button">
+                      <SkinThumbnail src={skin.previewUrl} name={skin.name} /><strong>{skin.name}</strong><span>{skin.skinModel === "slim" ? "Slim" : "Clássico"}{equippedSkin?.id === skin.id ? " · Equipada" : ""}</span><em onClick={(event) => { event.stopPropagation(); void removeFavoriteSkin(skin.id); }}>Remover</em>
                     </button>
                   ))}
-                  {localSkins.length === 0 && <p className="muted empty-library">Adicione um PNG, URL ou nick para montar sua biblioteca local.</p>}
+                  {localSkins.length === 0 && !wardrobeLoading && <p className="muted empty-library">Adicione um PNG, URL ou nick para montar sua biblioteca local.</p>}
                 </div>
+                </>}
               </div>
               <div className="skin-preview-stage">
                 <p className="eyebrow">PRÉVIA</p>
                 <SkinPreviewCanvas skinModel={skinModel} skinUrl={skinUrl} />
                 <strong>{favoriteName || profile.username}</strong>
-                <span>{localSkinPath ? "Equipada localmente pelo Aurora Companion." : "A biblioteca permanece guardada neste computador."}</span>
+                <span>{equippedSkin?.id === selectedLocalSkinId && skinModel === equippedSkin.skinModel ? "Skin equipada neste computador." : "Prévia da seleção — clique em Equipar no jogo para aplicar."}</span>
               </div>
             </div>
           </article>

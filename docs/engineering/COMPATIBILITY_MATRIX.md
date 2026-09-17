@@ -37,6 +37,13 @@ O release preflight recompila as 27 combinações e compara o conteúdo normaliz
 
 ## Compatibilidade do launcher
 
+- Guarda-roupa, correção de 17/09/2026: recuperação da skin local por PNG,
+  seleção equipada persistente e espera da recuperação antes de iniciar o jogo.
+  O launch prioriza o modelo Slim/Clássico equipado local, mesmo quando o perfil
+  remoto está desatualizado. **IMPLEMENTADO MAS NÃO HOMOLOGADO** no executável
+  empacotado; fixture visual e testes do IPC simulado não homologam gameplay.
+  Nenhum JAR ou instalador foi alterado. Ver `../task-wardrobe-recovery.md`.
+
 - Inicialização Windows sem console, incluindo probes Java/Forge/jogo:
   **IMPLEMENTADO MAS NÃO HOMOLOGADO** na fonte posterior à alpha.6. Testes de
   subprocesso confirmam console ausente e stdout/stderr preservados; executar

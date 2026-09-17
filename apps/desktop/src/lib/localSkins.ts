@@ -25,48 +25,147 @@ function openDatabase() {
         store.createIndex("ownerId", "ownerId", { unique: false });
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const database = request.result;
+      database.onversionchange = () => database.close();
+      resolve(database);
+    };
   });
 }
 
-function transactionRequest<T>(mode: IDBTransactionMode, operation: (store: IDBObjectStore) => IDBRequest<T>) {
+// A successful request can still be rolled back by a failed transaction. Only
+// publish a result once IndexedDB confirms the entire transaction committed.
+function transactionRequest<T>(
+  mode: IDBTransactionMode,
+  operation: (store: IDBObjectStore, result: (value: T) => void, fail: (error: unknown) => void) => void,
+) {
   return openDatabase().then((database) => new Promise<T>((resolve, reject) => {
-    const transaction = database.transaction(STORE_NAME, mode);
-    const request = operation(transaction.objectStore(STORE_NAME));
-    request.onerror = () => reject(request.error ?? new Error("A biblioteca local não respondeu."));
-    request.onsuccess = () => resolve(request.result);
-    transaction.oncomplete = () => database.close();
-    transaction.onerror = () => reject(transaction.error ?? new Error("Não foi possível atualizar a biblioteca local."));
+    let transaction: IDBTransaction | undefined;
+    let value: T;
+    let hasResult = false;
+    let settled = false;
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      try { transaction?.abort(); } catch { /* It may already have finished. */ }
+      database.close();
+      reject(error);
+    };
+    try {
+      transaction = database.transaction(STORE_NAME, mode);
+      transaction.onerror = () => fail(transaction?.error ?? new Error("Não foi possível atualizar a biblioteca local."));
+      transaction.onabort = () => fail(transaction?.error ?? new Error("A atualização da biblioteca local foi cancelada."));
+      transaction.oncomplete = () => {
+        database.close();
+        if (settled) return;
+        settled = true;
+        if (hasResult) resolve(value);
+        else reject(new Error("A biblioteca local não retornou um resultado."));
+      };
+      operation(transaction.objectStore(STORE_NAME), (result) => {
+        value = result;
+        hasResult = true;
+      }, fail);
+    } catch (error) {
+      fail(error);
+    }
   }));
 }
 
+function observeRequest<T>(request: IDBRequest<T>, success: (value: T) => void, fail: (error: unknown) => void) {
+  request.onerror = () => fail(request.error ?? new Error("A biblioteca local não respondeu."));
+  request.onsuccess = () => {
+    try { success(request.result); } catch (error) { fail(error); }
+  };
+}
+
+function persistentSourceUrl(sourceUrl?: string) {
+  if (!sourceUrl) return undefined;
+  try {
+    const url = new URL(sourceUrl);
+    return url.protocol === "https:" && !url.username && !url.password ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readLocalSkin(record: StoredLocalSkin): LocalSkin {
+  const { key: _key, sourceUrl, ...skin } = record;
+  // Legacy object/data URLs only lived for the old renderer session. Ignore
+  // them without deleting the record; callers can recover its PNG later.
+  const persistentUrl = persistentSourceUrl(sourceUrl);
+  return { ...skin, ...(persistentUrl ? { sourceUrl: persistentUrl } : {}) };
+}
+
 export async function listLocalSkins(ownerId: string) {
-  const database = await openDatabase();
-  return new Promise<LocalSkin[]>((resolve, reject) => {
-    const transaction = database.transaction(STORE_NAME, "readonly");
-    const request = transaction.objectStore(STORE_NAME).index("ownerId").getAll(ownerId);
-    request.onerror = () => reject(request.error ?? new Error("Não foi possível carregar as skins locais."));
-    request.onsuccess = () => {
-      const records = (request.result as StoredLocalSkin[])
-        .map(({ key: _key, ...skin }) => skin)
-        .sort((left, right) => right.createdAt - left.createdAt);
-      resolve(records);
-    };
-    transaction.oncomplete = () => database.close();
+  return transactionRequest<LocalSkin[]>("readonly", (store, result, fail) => {
+    observeRequest(store.index("ownerId").getAll(ownerId), (records: StoredLocalSkin[]) => {
+      result(records.map(readLocalSkin).sort((left, right) => right.createdAt - left.createdAt));
+    }, fail);
   });
 }
 
 export async function saveLocalSkin(input: Omit<LocalSkin, "id" | "createdAt"> & { id?: string }) {
-  const skin: LocalSkin = {
-    ...input,
-    id: input.id ?? crypto.randomUUID(),
-    createdAt: Date.now(),
-  };
-  const record: StoredLocalSkin = { ...skin, key: `${skin.ownerId}:${skin.id}` };
-  await transactionRequest("readwrite", (store) => store.put(record));
-  return skin;
+  const id = input.id ?? crypto.randomUUID();
+  const key = `${input.ownerId}:${id}`;
+  return transactionRequest<LocalSkin>("readwrite", (store, result, fail) => {
+    // Read and merge in the same transaction so an upload/recovery cannot
+    // overwrite another update with an older URL or remove an existing PNG.
+    observeRequest(store.get(key), (stored: StoredLocalSkin | undefined) => {
+      const existing = stored ? readLocalSkin(stored) : undefined;
+      const sourceUrl = persistentSourceUrl(input.sourceUrl) ?? existing?.sourceUrl;
+      const image = input.image?.size ? input.image : existing?.image;
+      const skin: LocalSkin = {
+        id,
+        ownerId: input.ownerId,
+        name: existing?.name || input.name,
+        skinModel: input.skinModel,
+        createdAt: existing?.createdAt ?? Date.now(),
+        ...(sourceUrl ? { sourceUrl } : {}),
+        ...(image ? { image } : {}),
+      };
+      observeRequest(store.put({ ...skin, key }), () => result(skin), fail);
+    }, fail);
+  });
+}
+
+export async function updateLocalSkinSource(ownerId: string, id: string, sourceUrl: string) {
+  const persistentUrl = persistentSourceUrl(sourceUrl);
+  if (!persistentUrl) throw new Error("O endereço permanente da skin deve usar HTTPS.");
+  const key = `${ownerId}:${id}`;
+  return transactionRequest<LocalSkin | undefined>("readwrite", (store, result, fail) => {
+    observeRequest(store.get(key), (stored: StoredLocalSkin | undefined) => {
+      if (!stored) {
+        result(undefined);
+        return;
+      }
+      const skin = { ...readLocalSkin(stored), sourceUrl: persistentUrl };
+      observeRequest(store.put({ ...skin, key }), () => result(skin), fail);
+    }, fail);
+  });
+}
+
+export async function cacheLocalSkinImage(ownerId: string, id: string, image: Blob, sourceUrl?: string) {
+  if (!(image instanceof Blob) || !image.size) throw new Error("Não foi possível guardar uma imagem de skin vazia.");
+  const key = `${ownerId}:${id}`;
+  return transactionRequest<LocalSkin | undefined>("readwrite", (store, result, fail) => {
+    observeRequest(store.get(key), (stored: StoredLocalSkin | undefined) => {
+      // A background fetch can finish after the user removed the skin. Repair
+      // only a still-existing record, never restore something they deleted.
+      if (!stored) {
+        result(undefined);
+        return;
+      }
+      const existing = readLocalSkin(stored);
+      const persistentUrl = persistentSourceUrl(sourceUrl) ?? existing.sourceUrl;
+      const skin = { ...existing, image, ...(persistentUrl ? { sourceUrl: persistentUrl } : {}) };
+      observeRequest(store.put({ ...skin, key }), () => result(skin), fail);
+    }, fail);
+  });
 }
 
 export async function deleteLocalSkin(ownerId: string, id: string) {
-  await transactionRequest("readwrite", (store) => store.delete(`${ownerId}:${id}`));
+  await transactionRequest<undefined>("readwrite", (store, result, fail) => {
+    observeRequest(store.delete(`${ownerId}:${id}`), () => result(undefined), fail);
+  });
 }

@@ -520,6 +520,15 @@ h2 { margin-bottom: .35rem; font-size: 1.18rem; letter-spacing: -.025em; }
 .skin-card { display: grid; gap: .3rem; min-width: 0; padding: .5rem; border: 1px solid #ffffff16; border-radius: 9px; background: #ffffff08; }
 .skin-card.active { border-color: #dbbaff; box-shadow: 0 0 0 1px #dbbaff63; }
 .skin-card img { width: 100%; aspect-ratio: 1; object-fit: contain; image-rendering: pixelated; border-radius: 6px; background: #090714; }
+.skin-thumbnail { position: relative; display: block; width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 6px; background: #090714; }
+.skin-thumbnail img { display: block; width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+.skin-thumbnail-fallback { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: .4rem; padding: .5rem; background: #151022; color: #c4b4d9; text-align: center; }
+.skin-thumbnail-fallback > span { font-size: 1.4rem; color: #c6a8ff; }
+.skin-thumbnail-fallback strong { white-space: normal; font-size: .7rem; line-height: 1.4; }
+.equipped-skin-panel { min-height: 300px; padding: 1.25rem; border: 1px solid #c6a8ff26; border-radius: 10px; background: #09071466; }
+.equipped-skin-panel h3 { margin: .9rem 0 .5rem; }
+.equipped-skin-panel .field-hint { max-width: 390px; line-height: 1.6; }
+.equipped-skin-thumbnail { max-width: 160px; margin-top: 1rem; border: 1px solid #c6a8ff26; }
 .skin-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .78rem; }
 .skin-card span { color: #aaa1b9; font-size: .72rem; }
 .skin-card > div { display: flex; align-items: center; gap: .4rem; }
