@@ -12,6 +12,7 @@ mod jre;
 mod launch;
 mod minecraft;
 mod modpacks;
+mod process;
 mod runtime_requirements;
 mod skins;
 mod tts;

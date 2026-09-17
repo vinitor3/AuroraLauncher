@@ -14,6 +14,7 @@ use zip::ZipArchive;
 use super::download::{
     download_many, download_one_with_progress, DownloadError, DownloadRequest, ExpectedHash,
 };
+use super::process::background_command;
 use super::{Instance, TransferProgress, DEFAULT_DOWNLOAD_CONCURRENCY};
 
 const VERSION_MANIFEST: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
@@ -466,7 +467,7 @@ impl MinecraftInstaller {
         }
 
         progress(stage_progress("Executando instalador do Forge", 95.0));
-        let mut command = Command::new(java);
+        let mut command = background_command(java);
         configure_forge_installer_command(&mut command, &installer, instance.root());
         command.current_dir(instance.root());
         let output = command.output()?;
@@ -632,7 +633,7 @@ pub fn required_java_major(minecraft_version: &str) -> u32 {
 
 fn find_java(required_major: u32) -> Option<PathBuf> {
     super::discover_java_executables().into_iter().find(|path| {
-        Command::new(path)
+        background_command(path)
             .arg("-version")
             .output()
             .ok()

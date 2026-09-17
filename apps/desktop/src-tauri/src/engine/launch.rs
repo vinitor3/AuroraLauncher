@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::Child;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use super::process::background_command;
 use super::{Instance, InstanceError, JavaRuntime};
 
 #[derive(Debug, Error)]
@@ -109,13 +110,66 @@ pub struct PreparedLaunch {
 
 impl PreparedLaunch {
     pub fn spawn(self) -> Result<Child, LaunchError> {
-        let mut command = Command::new(&self.command.executable);
+        let mut command = background_command(&self.command.executable);
         command
             .args(&self.command.args)
             .current_dir(&self.command.working_dir)
             .envs(&self.command.environment);
+        #[cfg(target_os = "windows")]
+        configure_windows_game_output(&mut command, &self.command.working_dir)?;
         Ok(command.spawn()?)
     }
+}
+
+#[cfg(target_os = "windows")]
+fn configure_windows_game_output(
+    command: &mut std::process::Command,
+    working_dir: &Path,
+) -> std::io::Result<()> {
+    use std::fs::{self, OpenOptions};
+    use std::io::{Error, ErrorKind};
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use std::process::Stdio;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+    let logs = working_dir.join("logs");
+    match fs::create_dir(&logs) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    let directory = fs::symlink_metadata(&logs)?;
+    if !directory.is_dir() || directory.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "pasta de logs inválida",
+        ));
+    }
+
+    // Keep diagnostics from JVM/bootstrap failures even without a console.
+    // Never write the command line (which can contain credentials) to this log.
+    // Open without following a file reparse point and validate before truncating.
+    let log = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(logs.join("aurora-java.log"))?;
+    let metadata = log.metadata()?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "arquivo de log inválido",
+        ));
+    }
+    log.set_len(0)?;
+    command
+        .stdin(Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log);
+    Ok(())
 }
 
 #[derive(Default)]
@@ -290,5 +344,49 @@ mod tests {
         spec.apply_offline_compatibility("1.20.1");
 
         assert!(spec.jvm_args.is_empty());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn hidden_game_process_keeps_stdout_and_stderr_in_log() {
+        const CHILD_MARKER: &str = "AURORA_GAME_OUTPUT_TEST_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_some() {
+            println!("aurora-game-stdout");
+            eprintln!("aurora-game-stderr");
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!("aurora-game-output-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("logs")).unwrap();
+        std::fs::write(root.join("logs/aurora-java.log"), "previous-run-output").unwrap();
+        let mut command = background_command(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "engine::launch::tests::hidden_game_process_keeps_stdout_and_stderr_in_log",
+                "--nocapture",
+            ])
+            .env(CHILD_MARKER, "1");
+        configure_windows_game_output(&mut command, &root).unwrap();
+        let status = command.spawn().unwrap().wait().unwrap();
+        let output = std::fs::read_to_string(root.join("logs/aurora-java.log")).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert!(status.success(), "child failed: {output}");
+        assert!(output.contains("aurora-game-stdout"));
+        assert!(output.contains("aurora-game-stderr"));
+        assert!(!output.contains("previous-run-output"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn rejects_a_regular_file_as_log_directory() {
+        let root = std::env::temp_dir().join(format!("aurora-invalid-logs-{}", Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("logs"), "preserve-me").unwrap();
+        let mut command = background_command("java");
+        assert!(configure_windows_game_output(&mut command, &root).is_err());
+        assert_eq!(std::fs::read(root.join("logs")).unwrap(), b"preserve-me");
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

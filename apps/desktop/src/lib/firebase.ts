@@ -113,8 +113,8 @@ export async function loadAuroraProfile(services: FirebaseServices, user: User):
   } as AuroraUserProfile;
 }
 
-export function observeAuroraSession(services: FirebaseServices, listener: (user: User | null) => void) {
-  return onAuthStateChanged(services.auth, listener);
+export function observeAuroraSession(services: FirebaseServices, listener: (user: User | null) => void, onError?: () => void) {
+  return onAuthStateChanged(services.auth, listener, onError);
 }
 
 export function logoutAuroraUser(services: FirebaseServices) { return signOut(services.auth); }

@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use reqwest::blocking::Client;
 use serde::Serialize;
@@ -11,6 +10,7 @@ use thiserror::Error;
 use zip::ZipArchive;
 
 use super::download::{download_one_with_progress, DownloadError, DownloadRequest, ExpectedHash};
+use super::process::background_command;
 use super::TransferProgress;
 
 #[derive(Debug, Error)]
@@ -254,7 +254,9 @@ impl JavaRuntime {
     }
 
     pub fn version(&self) -> Result<String, JavaRuntimeError> {
-        let output = Command::new(&self.executable).arg("-version").output()?;
+        let output = background_command(&self.executable)
+            .arg("-version")
+            .output()?;
         Ok(String::from_utf8_lossy(&output.stderr)
             .lines()
             .next()
@@ -263,7 +265,9 @@ impl JavaRuntime {
     }
 
     pub fn major_version(&self) -> Result<u32, JavaRuntimeError> {
-        let output = Command::new(&self.executable).arg("-version").output()?;
+        let output = background_command(&self.executable)
+            .arg("-version")
+            .output()?;
         parse_java_major(&format!(
             "{}\n{}",
             String::from_utf8_lossy(&output.stderr),

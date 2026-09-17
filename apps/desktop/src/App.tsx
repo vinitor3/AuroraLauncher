@@ -6,6 +6,8 @@ import DOMPurify from "dompurify";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { SkinPreviewCanvas } from "./features/skins/SkinPreviewCanvas";
+import { StartupScreen } from "./features/auth/StartupScreen";
+import { guardSessionProfile, startSessionStartup, type SessionStartupState } from "./lib/sessionStartup";
 import {
   bundledFirebaseConfig,
   createFirebaseServices,
@@ -762,11 +764,9 @@ function AssistantPanel({ services, username, onClose }: { services: FirebaseSer
 }
 
 function AuthScreen({
-  services,
-  onAuthenticated,
+  authenticate,
 }: {
-  services: FirebaseServices;
-  onAuthenticated: (profile: AuroraUserProfile) => void;
+  authenticate: (mode: AuthMode, nickname: string, password: string) => Promise<void>;
 }) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [nickname, setNickname] = useState("");
@@ -782,11 +782,7 @@ function AuthScreen({
     setBusy(true);
     setMessage("");
     try {
-      const credential =
-        mode === "login"
-          ? await loginAuroraUser(services, nickname, password)
-          : await registerAuroraUser(services, nickname, password);
-      onAuthenticated(await loadAuroraProfile(services, credential.user));
+      await authenticate(mode, nickname, password);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -876,7 +872,14 @@ function LauncherApp() {
   const [services, setServices] = useState<FirebaseServices>(() =>
     createFirebaseServices(bundledFirebaseConfig),
   );
-  const [profile, setProfile] = useState<AuroraUserProfile>();
+  const [profile, setProfileState] = useState<AuroraUserProfile>();
+  function setProfile(next: AuroraUserProfile | undefined) {
+    setProfileState((current) => guardSessionProfile(current, next, services.auth.currentUser?.uid));
+  }
+  const [configReady, setConfigReady] = useState(false);
+  const [sessionStartup, setSessionStartup] = useState<SessionStartupState<AuroraUserProfile>>({ phase: "loading" });
+  const [sessionRetry, setSessionRetry] = useState(0);
+  const sessionController = useRef<ReturnType<typeof startSessionStartup> | undefined>(undefined);
   const [status, setStatus] = useState<EngineStatus>();
   const [instances, setInstances] = useState<Instance[]>([]);
   const [instanceName, setInstanceName] = useState("");
@@ -1055,11 +1058,23 @@ function LauncherApp() {
     return views;
   }
   useEffect(() => {
+    let disposed = false;
+    // A stalled native config read must not keep startup locked forever. The
+    // bundled public configuration is also the existing fallback on IPC failure.
+    const timeout = window.setTimeout(() => {
+      disposed = true;
+      setConfigReady(true);
+    }, 5_000);
     invoke<FirebasePublicConfig | null>("load_firebase_config")
       .then((config) => {
-        if (config) setServices(createFirebaseServices(config));
+        if (!disposed && config) setServices(createFirebaseServices(config));
       })
-      .catch((error: unknown) => setNotice(String(error)));
+      .catch(() => undefined)
+      .finally(() => {
+        if (!disposed) setConfigReady(true);
+        window.clearTimeout(timeout);
+      });
+    return () => { disposed = true; window.clearTimeout(timeout); };
   }, []);
   useEffect(() => {
     const savedJava = window.localStorage.getItem("aurora.javaExecutable");
@@ -1161,17 +1176,22 @@ function LauncherApp() {
     }).catch(() => setNotice("Atalho AltGr + / indisponível neste computador."));
   }, []);
   useEffect(() => {
-    if (!services) return;
-    return observeAuroraSession(services, (user) => {
-      if (!user) {
-        setProfile(undefined);
-        return;
-      }
-      loadAuroraProfile(services, user)
-        .then(setProfile)
-        .catch((error: unknown) => setNotice(String(error)));
+    if (!configReady) return;
+    const controller = startSessionStartup({
+      observe: (next, error) => observeAuroraSession(services, next, error),
+      currentUser: () => services.auth.currentUser,
+      loadProfile: (user) => loadAuroraProfile(services, user),
+      onState: (state) => {
+        setSessionStartup(state);
+        setProfile(state.profile);
+      },
     });
-  }, [services]);
+    sessionController.current = controller;
+    return () => {
+      controller.dispose();
+      if (sessionController.current === controller) sessionController.current = undefined;
+    };
+  }, [services, configReady, sessionRetry]);
   useEffect(() => {
     if (!profile || !services) return;
     void syncAuroraPublicProfile(services, profile).catch(() => undefined);
@@ -3143,8 +3163,25 @@ function LauncherApp() {
       setBusy(false);
     }
   }
-  if (!profile)
-    return <AuthScreen services={services} onAuthenticated={setProfile} />;
+  if (!configReady || sessionStartup.phase === "loading") return <StartupScreen />;
+  if (sessionStartup.phase === "error") return <StartupScreen error={sessionStartup.error}
+    onRetry={() => { setSessionStartup({ phase: "loading" }); setSessionRetry((value) => value + 1); }}
+    onSignOut={() => { void logoutAuroraUser(services).then(() => {
+      setProfile(undefined);
+      setSessionStartup({ phase: "signed-out" });
+    }).catch(() => setSessionStartup({ phase: "error", error: "Não foi possível sair da sessão. Tente novamente." })); }}
+  />;
+  if (sessionStartup.phase === "ready" && (!profile
+    || profile.uid !== sessionStartup.profile.uid
+    || profile.uid !== services.auth.currentUser?.uid)) return <StartupScreen />;
+  if (sessionStartup.phase !== "ready" || !profile)
+    return <AuthScreen authenticate={async (mode, nickname, password) => {
+      const controller = sessionController.current;
+      if (!controller) throw new Error("A sessão ainda está sendo preparada. Tente novamente.");
+      await controller.authenticate(() => mode === "login"
+        ? loginAuroraUser(services, nickname, password)
+        : registerAuroraUser(services, nickname, password));
+    }} />;
   const filteredInstances = instances.filter((instance) =>
     `${instance.displayName ?? ""} ${instance.id}`.toLocaleLowerCase().includes(instanceFilter.trim().toLocaleLowerCase()),
   );

@@ -38,6 +38,10 @@
 
 ## Limites e confiança
 
+Complemento de 17/09/2026: restauração de sessão com animação e execução Java
+sem console Windows implementadas na fonte posterior à alpha.6. Consulte
+`startup-session.md` e `task-startup-session.md`; sem instalador novo.
+
 - Conteúdo e URLs vindos dos catálogos são tratados como não confiáveis.
 - Somente URLs HTTPS são persistidas como imagens e avatar público.
 - E-mail, função, estatísticas e demais dados da conta não entram no perfil público.

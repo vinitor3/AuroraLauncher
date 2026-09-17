@@ -37,6 +37,13 @@ O release preflight recompila as 27 combinações e compara o conteúdo normaliz
 
 ## Compatibilidade do launcher
 
+- Inicialização Windows sem console, incluindo probes Java/Forge/jogo:
+  **IMPLEMENTADO MAS NÃO HOMOLOGADO** na fonte posterior à alpha.6. Testes de
+  subprocesso confirmam console ausente e stdout/stderr preservados; executar
+  a próxima build empacotada e iniciar Minecraft ainda **PRECISA DE TESTE**.
+  Sessão restaurada usa tela animada sem antecipar o login; detalhes em
+  `../startup-session.md`.
+
 - Minecraft 1.16.5 em sessão offline: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. O
   launcher isola somente o endpoint de privilégios do `authlib 2.1.28`, fazendo
   o cliente usar o fallback `OfflineSocialInteractions` e preservar Multiplayer
