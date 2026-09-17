@@ -29,11 +29,15 @@ Este roadmap separa claramente o que já está implementado, o que ainda precisa
 - [ ] Finalizar entrada por voz, resposta, legendas e controle de áudio dentro do jogo.
 - [ ] Ampliar a sincronização de skins e capas com fallback local.
 
-## Depois — conteúdo e distribuição
+## Atualizações de conteúdo — implementado, aguardando homologação
 
-- [ ] Detectar mods desatualizados.
-- [ ] Atualizar mods preservando Minecraft, loader e dependências.
-- [ ] Detectar e atualizar versões de modpacks.
+- [x] Detectar mods, shaders e resource packs desatualizados por identidade verificável.
+- [x] Atualizar conteúdo preservando Minecraft, loader e dependências obrigatórias, com revisão e rollback.
+- [x] Detectar atualizações de modpacks Modrinth e CurseForge.
+- [x] Atualizar modpacks Modrinth por versão exata com snapshot transacional.
+- [ ] Homologar atualização e rollback em instâncias Minecraft reais; modpacks CurseForge permanecem em detecção/página oficial até o executor transacional específico.
+
+## Depois — distribuição
 - [ ] Adicionar cosméticos e emotes ao guarda-roupa.
 - [ ] Implementar atualização segura do próprio launcher.
 - [ ] Publicar builds assinadas em um canal estável.

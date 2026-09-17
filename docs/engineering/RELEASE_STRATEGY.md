@@ -8,15 +8,19 @@
 
 - SemVer: `MAJOR.MINOR.PATCH-prerelease.N`.
 - canais: `alpha` (quebra/validação), `beta` (feature complete da meta), `stable` (matriz/SLO/suporte).
-- próxima versão recomendada: `0.2.0-alpha.1`, sincronizada em root/package, desktop/package, Cargo, Tauri e Companion.
-- um script futuro verifica que todos os manifests concordam e que tag/asset não existem.
+- a linha de desenvolvimento atual é `0.1.1-alpha.6`, sincronizada em
+  root/package, desktop/package, Cargo e Tauri; os módulos in-game possuem
+  versões próprias e uma matriz assinada;
+- o preflight local verifica que os manifests do launcher concordam, que o
+  checkout está limpo/integrado e que o nome do artefato ainda não existe.
 
 ## Pipeline
 
 1. PR com checks obrigatórios e review.
 2. Merge limpo na `main` protegida.
-3. Tag anotada criada pelo workflow a partir de versão já revisada.
-4. Build em runner efêmero a partir do tag.
+3. Build oficial somente por `npm run desktop:build`, em branch de integração
+   limpa e depois do commit de produto.
+4. Tag anotada criada a partir do commit e preservada sem reescrita.
 5. Gerar instalador, JARs, `SHA256SUMS`, manifesto JSON, SBOM CycloneDX/SPDX e proveniência.
 6. Assinar updater/artefatos quando houver chave; verificar assinatura antes do upload.
 7. Publicar GitHub prerelease imutável e anexar changelog/limitações/matriz.
@@ -54,4 +58,3 @@ Adiado até:
 - [ ] nenhum secret/log/conta no artefato;
 - [ ] asset publicado corresponde exatamente ao hash anunciado;
 - [ ] release anterior permanece intacto.
-

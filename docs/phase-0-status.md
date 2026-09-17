@@ -1,6 +1,6 @@
 # Status da Fundação e da Fase 1
 
-Atualizado em 31 de agosto de 2026.
+Atualizado em 2 de setembro de 2026.
 
 ## Fase 0 — Fundação & Identidade
 
@@ -100,11 +100,22 @@ Ainda não implementado nesta fase:
 
 ## Fase 1.3 — Atualizações de conteúdo
 
-Ainda não implementada:
+**Implementada no código, ainda não homologada em instâncias Minecraft reais:**
 
-- identificar mods desatualizados;
-- trocar a versão de um mod preservando compatibilidade de Minecraft e loader;
-- detectar e atualizar a versão de um modpack.
+- identifica mods, shaders e resource packs por hash e separa atualização,
+  atualizado, não identificado, bloqueado e componente Aurora;
+- troca somente por release estável compatível com a mesma versão do Minecraft
+  e o loader correto, revalidando o plano antes de alterar o disco;
+- exige revisão, baixa para staging, valida tamanho/hash, mantém journal e
+  backup mínimo e oferece rollback da última transação;
+- detecta modpacks Modrinth e CurseForge; aplica automaticamente uma versão
+  exata de packs Modrinth e mantém packs CurseForge em detecção/página oficial
+  até o executor de manifesto específico estar pronto;
+- nunca oferece NeoForge, downgrade ou contorno de arquivo cuja distribuição
+  direta foi bloqueada pelo autor.
+
+O dossiê da implementação e seus limites está em
+[`task-content-updates.md`](task-content-updates.md).
 
 ## Evidências e pendências de validação
 

@@ -25,6 +25,9 @@ versionados. Uma chave já exposta deve ser revogada e substituída.
   pelo CurseForge;
 - referências de um modpack são resolvidas em lotes pelo Worker, sem expor a
   chave ao cliente e sem enviar arquivos do jogador ao serviço;
+- a ação autenticada `updates` identifica o arquivo instalado por SHA-1 ou
+  `fileId`, percorre a listagem compatível e só oferece uma release estável mais
+  nova para o mesmo Minecraft, classe e loader;
 - URLs de CDN nunca são entregues diretamente ao desktop. O Worker assina em um
   ticket HMAC de oito horas os IDs e a URL retornada pela API, revalida a
   assinatura/expiração/host e transmite somente URLs HTTPS em `forgecdn.net`,
@@ -47,12 +50,16 @@ versionados. Uma chave já exposta deve ser revogada e substituída.
   arquivos obrigatórios e a pasta `overrides`;
 - instalação automática das dependências obrigatórias de um mod, shader ou
   pacote de recursos adicionado pelo editor;
+- detecção e revisão de atualização para conteúdo instalado; o desktop pede
+  novamente o alvo ao Worker imediatamente antes de aplicar e rejeita qualquer
+  resposta diferente da que o usuário revisou;
 - downloads diretos em paralelo e verificados por SHA-1; arquivos sem hash são
   recusados;
 - somente Forge e Fabric são aceitos como loaders de modpack.
 
 O código do Worker precisa ser publicado antes de distribuir uma versão do
-launcher que use as ações em lote `resolveFiles` e `resolveProjects`.
+launcher que use as ações em lote `resolveFiles`, `resolveProjects` e
+`updates`.
 
 ## Verificação operacional
 
