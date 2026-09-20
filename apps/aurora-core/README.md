@@ -2,7 +2,7 @@
 
 Aurora Core é a fundação modular carregada dentro do Minecraft. Ele concentra APIs estáveis, sessão pública, eventos, configurações, menu Aurora e o único canal IPC com o Launcher. Recursos como Skins e Companion são módulos independentes e não fazem parte obrigatória do núcleo.
 
-O estado atual é **IMPLEMENTADO MAS NÃO HOMOLOGADO**: os nove artefatos compilam e passam por verificação de hash/assinatura, mas ainda precisam do roteiro runtime completo em instalações limpas antes de serem anunciados como suporte público.
+O estado do Core 1.1.4 é **PARCIAL**: nove artefatos compilados e verificados por hash/assinatura. A UI foi testada em quatro combinações no candidato 1.1.3; 1.1.4 corrige os metadados de versão legados e foi revalidado com Skins dentro de um mundo novo na 1.12.2. Ainda falta o roteiro completo de runtime/IPC nas nove combinações. Veja [evidências dos reparos](../../docs/task-skins-runtime-repair.md).
 
 ## Arquitetura
 
@@ -23,8 +23,8 @@ Launcher Rust
 - `runtime`: registro de módulos, event bus, sessão, IPC e configuração;
 - `minecraft/<versão>`: adaptadores Fabric/Forge e UI nativa;
 - `minecraft/legacy/forge-1.12.2`: adaptador legado isolado;
-- `compatibility-manifest-1.1.2.json`: matriz central e metadados assinados;
-- `releases/core/1.1.2`: artefatos imutáveis embarcados pelo Launcher.
+- `compatibility-manifest-1.1.4.json`: matriz central e metadados assinados;
+- `releases/core/1.1.4`: artefatos imutáveis referenciados pela fonte do Launcher.
 
 ## Contrato de módulo
 

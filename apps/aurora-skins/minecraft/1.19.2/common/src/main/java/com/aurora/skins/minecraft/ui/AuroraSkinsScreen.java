@@ -239,8 +239,7 @@ public final class AuroraSkinsScreen extends Screen {
 
     @Override public void render(PoseStack pose, int mouseX, int mouseY, float partialTick) {
         AuroraSkinsLayout current = layout == null ? AuroraSkinsLayout.calculate(width, height) : layout;
-        renderBackground(pose); fill(pose, current.panelLeft(), current.panelTop(), current.panelRight(), current.panelBottom(), PANEL);
-        fill(pose, current.panelLeft(), current.panelTop(), current.panelLeft() + 3, current.panelBottom(), ACCENT);
+        renderBackground(pose);
         drawCenteredString(pose, font, title, width / 2, 14, TEXT);
         if (view == View.EXPLORE && !current.compact()) drawString(pose, font, "Tema, #tag ou @jogador / @UUID", current.search().x(), current.search().y() - 10, MUTED);
         int previewX = current.previewX(), previewY = current.previewY(), scale = current.previewScale();

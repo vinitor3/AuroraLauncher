@@ -47,4 +47,12 @@ final class AuroraSkinsLayoutTest {
         assertTrue(AuroraSkinsLayout.calculate(320, 240).compact());
         assertFalse(AuroraSkinsLayout.calculate(854, 480).compact());
     }
+
+    @Test void previewDoesNotCoverSearchOrActionButtonsAtLargeGuiScale() {
+        for (int[] size : new int[][] {{320, 240}, {427, 240}, {560, 260}, {854, 480}}) {
+            AuroraSkinsLayout layout = AuroraSkinsLayout.calculate(size[0], size[1]);
+            assertTrue(layout.previewY() - 2 * layout.previewScale() >= layout.search().bottom() + 4);
+            assertTrue(layout.previewY() < Math.min(layout.previous().y(), layout.favorite().y()));
+        }
+    }
 }

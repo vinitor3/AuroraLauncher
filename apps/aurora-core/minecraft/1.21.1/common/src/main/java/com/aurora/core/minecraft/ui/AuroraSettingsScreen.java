@@ -66,11 +66,9 @@ public final class AuroraSettingsScreen extends Screen {
     }
 
     @Override public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        renderBackground(graphics, mouseX, mouseY, partialTick);
+        super.renderBackground(graphics, mouseX, mouseY, partialTick);
         AuroraSettingsLayout layout = AuroraSettingsLayout.calculate(width, height);
         int left = layout.panelLeft(), right = layout.panelRight();
-        graphics.fill(left, 40, right, height - 40, PANEL);
-        graphics.fill(left, 40, left + 3, height - 40, ACCENT);
         graphics.drawCenteredString(font, title, width / 2, 18, TEXT);
         graphics.drawString(font, Component.translatable("aurora_core.modules"), left + 18, 48, MUTED, false);
         int avatarX = layout.avatarX(), avatarY = layout.avatarY();
@@ -97,9 +95,11 @@ public final class AuroraSettingsScreen extends Screen {
         }
         if (avatarAvailable && Aurora.services().previews().render(graphics, x, y,
                 Math.min(58, Math.max(36, height / 5)), preview)) return;
-        graphics.fill(x - 28, y - 112, x + 28, y, 0x553F2C5E);
         graphics.drawCenteredString(font, Component.translatable("aurora_core.avatar_unavailable"), x, y - 58, MUTED);
     }
+
+    // Screen.render calls this again in 1.21; only the initial pass may blur.
+    @Override public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) { }
 
     private void renderStatus(GuiGraphics graphics, int x, int y, int maxWidth) {
         AuroraSession session = Aurora.services().sessions().current();

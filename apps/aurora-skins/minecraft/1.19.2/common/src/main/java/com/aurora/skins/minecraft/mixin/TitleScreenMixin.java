@@ -59,8 +59,6 @@ public abstract class TitleScreenMixin extends Screen {
         AuroraTitleLayout layout = auroraSkins$titleLayout == null
             ? AuroraTitleLayout.calculate(width, height) : auroraSkins$titleLayout;
         int x = layout.previewX(), y = layout.previewY(), scale = layout.previewScale();
-        fill(pose, layout.panelLeft(), layout.panelTop(), layout.panelRight(), layout.panelBottom(), 0x661A112B);
-        fill(pose, layout.panelLeft(), layout.panelTop(), layout.panelLeft() + 3, layout.panelBottom(), 0xFFB78CFF);
         auroraSkins$preview.aim(mouseX, mouseY, x, y - scale, 180.0F, 150.0F);
         long now = System.nanoTime();
         auroraSkins$preview.update((now - auroraSkins$lastFrame) / 1_000_000_000.0F);

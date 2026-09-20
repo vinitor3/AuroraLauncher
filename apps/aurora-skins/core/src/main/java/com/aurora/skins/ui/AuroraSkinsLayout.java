@@ -138,6 +138,10 @@ public final class AuroraSkinsLayout {
             Math.max(width / 2 + 82, width - 98));
         int upperControlsY = Math.min(previous.y(), favorite.y());
         int previewY = compact ? upperControlsY - 7 : height - 72;
+        // The full model is two scale units tall. Keep its head below the
+        // search/navigation rows even with Minecraft's large GUI scaling.
+        int previewTop = search.bottom() + 4;
+        previewScale = Math.max(12, Math.min(previewScale, (previewY - previewTop) / 2));
         int textWidth = Math.max(60, previewX - textX - 48);
 
         return new AuroraSkinsLayout(width, height, compact, navigation, importButton,

@@ -28,7 +28,7 @@ tasks.withType(AbstractArchiveTask).configureEach {
 dependencies {
     // A API é fornecida pelo Forge dentro do jogo; ela não entra no JAR final.
     compileOnly "net.minecraftforge:forge:1.12.2-14.23.5.2860:universal"
-    compileOnly files("../../../aurora-core/api/build/libs/aurora-core-api-1.1.2.jar")
+    compileOnly files("../../../aurora-core/api/build/libs/aurora-core-api-1.1.4.jar")
 }
 
 sourceSets.main.java.srcDir "../../shared-ui/src/main/java"
