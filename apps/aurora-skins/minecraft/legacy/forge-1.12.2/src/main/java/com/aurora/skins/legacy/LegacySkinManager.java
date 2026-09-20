@@ -19,6 +19,7 @@ import java.nio.file.Paths;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 final class LegacySkinManager {
     private static final long MAX_DOWNLOAD = 2L * 1024L * 1024L;
@@ -26,6 +27,8 @@ final class LegacySkinManager {
         Thread thread = new Thread(runnable, "Aurora-Skins-1.12-IO"); thread.setDaemon(true); return thread;
     });
     private static final AuroraSkinsRuntime.Listener LISTENER = LegacySkinManager::load;
+    private static final AtomicLong LOAD_REQUEST = new AtomicLong();
+    private static final LegacyPlayerSkinOverride PLAYER_SKIN = new LegacyPlayerSkinOverride();
     private static volatile AuroraSkinsRuntime runtime;
     private static volatile Object texture;
     private static volatile String model = "classic";
@@ -38,12 +41,17 @@ final class LegacySkinManager {
         String localProfile = System.getProperty("aurora.profile.skinFile", "").trim();
         if (localProfile.isEmpty() || !Files.isRegularFile(Paths.get(localProfile))) importRemoteProfileSkin();
     }
-    static void shutdown() { if (runtime != null) runtime.removeListener(LISTENER); runtime = null; texture = null; }
+    static void shutdown() {
+        if (runtime != null) runtime.removeListener(LISTENER);
+        runtime = null; LOAD_REQUEST.incrementAndGet();
+        LegacyMinecraft.execute(() -> { PLAYER_SKIN.clear(); deleteTexture(texture); texture = null; });
+    }
     static Object texture() { return texture; }
     static String model() { return model; }
 
     private static void load(final SkinEntry entry) {
         if (entry == null || entry.file() == null) return;
+        final long request = LOAD_REQUEST.incrementAndGet();
         IO.execute(new Runnable() { @Override public void run() {
             try {
                 BufferedImage source = ImageIO.read(entry.file().toFile());
@@ -52,6 +60,7 @@ final class LegacySkinManager {
                 }
                 final BufferedImage image = SkinImageNormalizer.normalize(source);
                 LegacyMinecraft.execute(new Runnable() { @Override public void run() {
+                    if (request != LOAD_REQUEST.get() || runtime == null) return;
                     try {
                         Class<?> dynamicType = Class.forName("net.minecraft.client.renderer.texture.DynamicTexture");
                         Constructor<?> constructor = dynamicType.getConstructor(BufferedImage.class);
@@ -62,7 +71,10 @@ final class LegacySkinManager {
                         Object location = LegacyMinecraft.invoke(manager,
                             new String[] {"getDynamicTextureLocation", "func_110578_a"}, "aurora_skins_active", dynamic);
                         if (location == null) throw new IllegalStateException("TextureManager indisponível");
+                        Object previous = texture;
                         texture = location; model = entry.model().id();
+                        applyToLocalPlayer();
+                        deleteTexture(previous);
                         System.out.println("[Aurora Skins] Textura 1.12.2 carregada: " + entry.name());
                     } catch (Throwable error) {
                         System.err.println("[Aurora Skins] Falha ao registrar textura 1.12.2: " + error.getClass().getSimpleName());
@@ -135,11 +147,21 @@ final class LegacySkinManager {
             Object player = LegacyMinecraft.field(minecraft, "player", "field_71439_g");
             Object connection = LegacyMinecraft.invoke(minecraft, new String[] {"getConnection", "func_147114_u"});
             Object uuid = LegacyMinecraft.invoke(player, new String[] {"getUniqueID", "func_110124_au"});
-            if (!(uuid instanceof UUID) || connection == null) return;
+            if (!(uuid instanceof UUID) || connection == null) { PLAYER_SKIN.clear(); return; }
             Object info = LegacyMinecraft.invoke(connection, new String[] {"getPlayerInfo", "func_175102_a"}, uuid);
-            LegacyMinecraft.setField(info, location, "locationSkin", "field_178865_e");
-            LegacyMinecraft.setField(info, model, "skinType", "field_178863_g");
+            if (info == null) { PLAYER_SKIN.clear(); return; }
+            // Start vanilla's texture request, preserving its cape and elytra callbacks.
+            LegacyMinecraft.invoke(info, new String[] {"getLocationSkin", "func_178837_g"});
+            Object skinKey = Class.forName("com.mojang.authlib.minecraft.MinecraftProfileTexture$Type")
+                .getField("SKIN").get(null);
+            PLAYER_SKIN.apply(info, skinKey, location, model);
         } catch (Throwable ignored) { }
+    }
+
+    private static void deleteTexture(Object location) {
+        if (location == null) return;
+        Object manager = LegacyMinecraft.invoke(LegacyMinecraft.minecraft(), new String[] {"getTextureManager", "func_110434_K"});
+        LegacyMinecraft.invoke(manager, new String[] {"deleteTexture", "func_147645_c"}, location);
     }
 
     static Object defaultTexture() {

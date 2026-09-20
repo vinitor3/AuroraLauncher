@@ -9,6 +9,7 @@ import com.aurora.core.api.ui.AuroraUiContext;
 import com.aurora.core.runtime.AuroraCoreRuntime;
 import net.minecraftforge.client.event.GuiScreenEvent;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+import net.minecraftforge.fml.common.gameevent.TickEvent;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -23,10 +24,13 @@ final class LegacyAuroraUi {
     private static final int CLOSE_BUTTON = 0xA013;
     private static final int PAGE_BUTTON_START = 0xA100;
     private final Map<Object, State> states = new IdentityHashMap<Object, State>();
+    private final java.util.Set<Object> delegatedHosts = java.util.Collections.newSetFromMap(new IdentityHashMap<Object, Boolean>());
 
     @SubscribeEvent public void onInit(GuiScreenEvent.InitGuiEvent.Post event) {
         Object screen = invoke(event, "getGui");
         if (screen == null || !screen.getClass().getName().equals("net.minecraft.client.gui.GuiOptions")) return;
+        if (delegatedHosts.contains(screen)) return;
+        if (states.containsKey(screen)) { open(screen); return; }
         List<Object> buttons = list(invoke(event, "getButtonList"));
         if (!states.containsKey(screen)) {
             List<AuroraButtonLayout.Rect> occupied = new ArrayList<AuroraButtonLayout.Rect>();
@@ -43,37 +47,58 @@ final class LegacyAuroraUi {
         }
     }
 
-    @SubscribeEvent public void onDrawBackground(GuiScreenEvent.BackgroundDrawnEvent event) {
-        Object screen = invoke(event, "getGui");
-        if (!states.containsKey(screen)) return;
-        AuroraSettingsLayout layout = AuroraSettingsLayout.calculate(width(screen), height(screen));
-        drawRect(layout.panelLeft(), 40, layout.panelRight(), height(screen) - 40, 0xD91A112B);
-        drawRect(layout.panelLeft(), 40, layout.panelLeft() + 3, height(screen) - 40, 0xFFB78CFF);
+    @SubscribeEvent public void onTick(TickEvent.ClientTickEvent event) {
+        if (event.phase != TickEvent.Phase.END) return;
+        Object current = LegacyMinecraftPlatform.field(LegacyMinecraftPlatform.minecraft(), "currentScreen", "field_71462_r");
+        states.keySet().retainAll(java.util.Collections.singleton(current));
+        delegatedHosts.retainAll(java.util.Collections.singleton(current));
     }
 
-    @SubscribeEvent public void onAction(GuiScreenEvent.ActionPerformedEvent.Post event) {
+    @SubscribeEvent public void onDrawPre(GuiScreenEvent.DrawScreenEvent.Pre event) {
+        if (states.containsKey(invoke(event, "getGui"))) event.setCanceled(true);
+    }
+
+    @SubscribeEvent public void onKeyboard(GuiScreenEvent.KeyboardInputEvent.Pre event) {
+        Object screen = invoke(event, "getGui");
+        if (!states.containsKey(screen)) return;
+        try {
+            Class<?> keyboard = Class.forName("org.lwjgl.input.Keyboard");
+            if (Boolean.TRUE.equals(keyboard.getMethod("getEventKeyState").invoke(null))
+                    && ((Integer)keyboard.getMethod("getEventKey").invoke(null)) == 1) {
+                event.setCanceled(true); closeToVanilla(screen);
+            }
+        } catch (ReflectiveOperationException ignored) { }
+    }
+
+    @SubscribeEvent public void onAction(GuiScreenEvent.ActionPerformedEvent.Pre event) {
         Object screen = invoke(event, "getGui");
         Object pressed = invoke(event, "getButton");
+        if (delegatedHosts.contains(screen)) return;
         int id = integer(field(pressed, "id", "field_146127_k"), -1);
-        if (id == OPEN_BUTTON) {
+        if (id == OPEN_BUTTON && screen != null && screen.getClass().getName().equals("net.minecraft.client.gui.GuiOptions")) {
+            event.setCanceled(true);
             open(screen);
             return;
         }
         State state = states.get(screen);
         if (state == null) return;
         if (id == CLOSE_BUTTON) {
-            states.remove(screen);
-            invokeAny(screen, "initGui", "func_73866_w_");
+            event.setCanceled(true);
+            closeToVanilla(screen);
             return;
         }
         AuroraSettingsPage page = state.pages.get(id);
-        if (page != null && !"aurora_general".equals(page.id())) openPage(screen, page);
+        if (page != null) {
+            event.setCanceled(true);
+            if (!"aurora_general".equals(page.id())) openPage(screen, page);
+        }
     }
 
     @SubscribeEvent public void onDraw(GuiScreenEvent.DrawScreenEvent.Post event) {
         Object screen = invoke(event, "getGui");
         State state = states.get(screen);
         if (state == null) return;
+        invokeAny(screen, "drawDefaultBackground", "func_146276_q_");
         int mouseX = integer(invoke(event, "getMouseX"), width(screen) / 2);
         int mouseY = integer(invoke(event, "getMouseY"), height(screen) / 2);
         AuroraSettingsLayout layout = AuroraSettingsLayout.calculate(width(screen), height(screen));
@@ -86,6 +111,15 @@ final class LegacyAuroraUi {
             + Aurora.services().modules().modules().size(), layout.contentWidth()),
             layout.contentX(), 76, 0xB9AACB);
         renderAvatar(state, screen, mouseX, mouseY);
+        Object partial = invoke(event, "getRenderPartialTicks");
+        float partialTicks = partial instanceof Number ? ((Number)partial).floatValue() : 0F;
+        for (Object button : list(field(screen, "buttonList", "field_146292_n"))) {
+            for (String name : new String[] {"drawButton", "func_191745_a"}) try {
+                button.getClass().getMethod(name, Class.forName("net.minecraft.client.Minecraft"), int.class, int.class, float.class)
+                    .invoke(button, LegacyMinecraftPlatform.minecraft(), mouseX, mouseY, partialTicks);
+                break;
+            } catch (ReflectiveOperationException ignored) { }
+        }
     }
 
     synchronized void open(Object screen) {
@@ -94,6 +128,7 @@ final class LegacyAuroraUi {
             screen = LegacyMinecraftPlatform.field(minecraft, "currentScreen", "field_71462_r");
         }
         if (screen == null) return;
+        delegatedHosts.remove(screen);
         List<Object> buttons = list(LegacyMinecraftPlatform.field(screen, "buttonList", "field_146292_n"));
         buttons.clear();
         State state = new State();
@@ -132,6 +167,9 @@ final class LegacyAuroraUi {
     }
 
     private void openPage(final Object screen, final AuroraSettingsPage page) {
+        State previous = states.remove(screen);
+        // Legacy modules reuse this native host: a resize must not inject Core controls into it.
+        delegatedHosts.add(screen);
         try {
             page.opener().open(new AuroraUiContext() {
                 @Override public void openAuroraHome() { open(screen); }
@@ -139,8 +177,21 @@ final class LegacyAuroraUi {
                 @Override public Object nativeParentScreen() { return screen; }
             });
         } catch (Throwable error) {
+            delegatedHosts.remove(screen);
+            if (previous != null) open(screen);
             AuroraCoreRuntime.instance().log().error("Settings page failed to open: " + page.id(), error);
         }
+    }
+
+    private void closeToVanilla(Object screen) {
+        states.remove(screen);
+        delegatedHosts.remove(screen);
+        Object minecraft = LegacyMinecraftPlatform.minecraft();
+        if (minecraft == null) return;
+        for (String name : new String[] {"displayGuiScreen", "func_147108_a"}) try {
+            minecraft.getClass().getMethod(name, Class.forName("net.minecraft.client.gui.GuiScreen")).invoke(minecraft, screen);
+            return;
+        } catch (ReflectiveOperationException ignored) { }
     }
 
     private void renderAvatar(State state, Object screen, int mouseX, int mouseY) {

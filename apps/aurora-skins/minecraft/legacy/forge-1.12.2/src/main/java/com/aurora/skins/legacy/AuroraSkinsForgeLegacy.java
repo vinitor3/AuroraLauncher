@@ -3,8 +3,8 @@ package com.aurora.skins.legacy;
 import com.aurora.core.api.Aurora;
 import net.minecraftforge.fml.common.Mod;
 
-@Mod(modid = "aurora_skins", name = "Aurora Skins", version = "0.2.3",
-    clientSideOnly = true, dependencies = "required-after:aurora_core@[1.1.2,)")
+@Mod(modid = "aurora_skins", name = "Aurora Skins", version = "0.2.4",
+    clientSideOnly = true, dependencies = "required-after:aurora_core@[1.1.3,)")
 public final class AuroraSkinsForgeLegacy {
     public AuroraSkinsForgeLegacy() {
         try {

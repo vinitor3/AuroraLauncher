@@ -28,6 +28,7 @@ final class LegacySkinPreviewRenderer implements AuroraPreviewRenderer {
     }
     private Object playerModel;
     private String builtForModel = "";
+    private boolean failureReported;
 
     @Override public boolean render(Object nativeContext, int x, int y, int scale, AuroraPlayerPreview pose) {
         try {
@@ -43,42 +44,47 @@ final class LegacySkinPreviewRenderer implements AuroraPreviewRenderer {
             }
             Object minecraft = LegacyMinecraft.minecraft();
             Object manager = LegacyMinecraft.invoke(minecraft, new String[] {"getTextureManager", "func_110434_K"});
+            try (LegacyPreviewGlState gl = new LegacyPreviewGlState()) {
+            gl.pushMatrix();
             LegacyMinecraft.invoke(manager, new String[] {"bindTexture", "func_110577_a"}, texture);
-
-            staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"pushMatrix", "func_179094_E"});
+            staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"enableTexture2D", "func_179098_w"});
             staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"enableDepth", "func_179126_j"});
+            staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"depthMask", "func_179132_a"}, true);
             staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"enableBlend", "func_179147_l"});
+            staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"tryBlendFuncSeparate", "func_179120_a"}, 770, 771, 1, 0);
+            // The negative Z scale reverses winding. Keep both skin and wear faces visible.
+            staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"disableCull", "func_179129_p"});
+            staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"enableRescaleNormal", "func_179091_B"});
             staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"color", "func_179131_c"}, 1F, 1F, 1F, 1F);
             staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"translate", "func_179109_b"},
                 (float)x, (float)(y - scale * 1.5F), 100F);
             staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"scale", "func_179152_a"}, (float)scale, (float)scale, (float)-scale);
-            staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"rotate", "func_179114_b"}, pose.bodyYaw(), 0F, 1F, 0F);
-            staticInvoke("net.minecraft.client.renderer.RenderHelper", new String[] {"enableGUIStandardItemLighting", "func_74519_b"});
+            staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"rotate", "func_179114_b"}, com.aurora.skins.ui.PreviewRotation.bodyYaw(pose.bodyYaw()), 0F, 1F, 0F);
+            staticInvoke("net.minecraft.client.renderer.RenderHelper", new String[] {"enableGUIStandardItemLighting", "func_74520_c"});
 
             Object head = field(playerModel, "bipedHead", "field_78116_c");
-            setFloat(head, radians(pose.headPitch()), "rotateAngleX", "field_78795_f");
-            setFloat(head, radians(pose.headYaw() - pose.bodyYaw()), "rotateAngleY", "field_78796_g");
-            Object headwear = field(playerModel, "bipedHeadwear", "field_78114_d");
+            setFloat(head, com.aurora.skins.ui.PreviewRotation.headPitch(pose.headPitch()), "rotateAngleX", "field_78795_f");
+            setFloat(head, com.aurora.skins.ui.PreviewRotation.headYaw(pose.headYaw(), pose.bodyYaw()), "rotateAngleY", "field_78796_g");
+            Object headwear = field(playerModel, "bipedHeadwear", "field_178720_f");
             copyAngles(head, headwear);
             for (String[] names : parts()) renderPart(field(playerModel, names));
 
-            staticInvoke("net.minecraft.client.renderer.RenderHelper", new String[] {"disableStandardItemLighting", "func_74518_a"});
-            staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"popMatrix", "func_179121_F"});
+            }
+            failureReported = false;
             return true;
         } catch (Throwable error) {
-            System.err.println("[Aurora Skins] Preview legado indisponível: " + error.getClass().getSimpleName());
-            try { staticInvoke("net.minecraft.client.renderer.GlStateManager", new String[] {"popMatrix", "func_179121_F"}); }
-            catch (Throwable ignored) { }
+            if (!failureReported) System.err.println("[Aurora Skins] Preview legado indisponível: " + error.getClass().getSimpleName());
+            failureReported = true;
             return false;
         }
     }
 
     private static String[][] parts() {
         return new String[][] {
-            {"bipedHead", "field_78116_c"}, {"bipedHeadwear", "field_78114_d"},
-            {"bipedBody", "field_78115_e"}, {"bipedRightArm", "field_78112_f"},
-            {"bipedLeftArm", "field_78113_g"}, {"bipedRightLeg", "field_78123_h"},
-            {"bipedLeftLeg", "field_78124_i"}, {"bipedBodyWear", "field_178730_v"},
+            {"bipedHead", "field_78116_c"}, {"bipedHeadwear", "field_178720_f"},
+            {"bipedBody", "field_78115_e"}, {"bipedRightArm", "field_178723_h"},
+            {"bipedLeftArm", "field_178724_i"}, {"bipedRightLeg", "field_178721_j"},
+            {"bipedLeftLeg", "field_178722_k"}, {"bipedBodyWear", "field_178730_v"},
             {"bipedRightArmwear", "field_178732_b"}, {"bipedLeftArmwear", "field_178734_a"},
             {"bipedRightLegwear", "field_178731_d"}, {"bipedLeftLegwear", "field_178733_c"}
         };
@@ -112,7 +118,7 @@ final class LegacySkinPreviewRenderer implements AuroraPreviewRenderer {
         }
     }
 
-    private static Object staticInvoke(String className, String[] names, Object... arguments) throws Exception {
+    static Object staticInvoke(String className, String[] names, Object... arguments) throws Exception {
         Class<?> type = Class.forName(className);
         for (String name : names) for (Method method : type.getMethods()) {
             if (!method.getName().equals(name) || method.getParameterTypes().length != arguments.length) continue;

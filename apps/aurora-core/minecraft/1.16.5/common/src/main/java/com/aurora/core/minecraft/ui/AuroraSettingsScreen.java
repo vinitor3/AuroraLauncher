@@ -74,8 +74,6 @@ public final class AuroraSettingsScreen extends Screen {
         renderBackground(pose);
         AuroraSettingsLayout layout = AuroraSettingsLayout.calculate(width, height);
         int left = layout.panelLeft(), right = layout.panelRight();
-        fill(pose, left, 40, right, height - 40, PANEL);
-        fill(pose, left, 40, left + 3, height - 40, ACCENT);
         drawCenteredString(pose, font, title, width / 2, 18, TEXT);
         drawString(pose, font, new TranslatableComponent("aurora_core.modules"), left + 18, 48, MUTED);
 
@@ -105,7 +103,6 @@ public final class AuroraSettingsScreen extends Screen {
         }
         if (avatarAvailable && Aurora.services().previews().render(pose, x, y,
                 Math.min(58, Math.max(36, height / 5)), preview)) return;
-        fill(pose, x - 28, y - 112, x + 28, y, 0x553F2C5E);
         drawCenteredString(pose, font, new TranslatableComponent("aurora_core.avatar_unavailable"), x, y - 58, MUTED);
     }
 

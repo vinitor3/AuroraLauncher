@@ -21,6 +21,7 @@ import net.minecraft.resources.ResourceLocation;
 import java.util.UUID;
 
 public final class MinecraftSkinPreviewRenderer implements AuroraPreviewRenderer {
+    private final String textureOwner = UUID.randomUUID().toString();
     private ResourceLocation previewTexture;
     private String previewModel = "classic";
     public void setSkin(com.aurora.skins.api.SkinEntry entry) throws java.io.IOException {
@@ -29,7 +30,7 @@ public final class MinecraftSkinPreviewRenderer implements AuroraPreviewRenderer
         try (java.io.InputStream input = java.nio.file.Files.newInputStream(entry.file())) {
             com.mojang.blaze3d.platform.NativeImage image = AuroraSkinManager.normalizeLegacySkin(
                 com.mojang.blaze3d.platform.NativeImage.read(input));
-            previewTexture = ResourceLocation.fromNamespaceAndPath("aurora_skins", "preview/" + entry.contentHash());
+            previewTexture = ResourceLocation.fromNamespaceAndPath("aurora_skins", "preview/" + textureOwner + "/" + entry.contentHash());
             Minecraft.getInstance().getTextureManager().register(previewTexture,
                 new net.minecraft.client.renderer.texture.DynamicTexture(image));
             previewModel = entry.model().id();
@@ -51,12 +52,21 @@ public final class MinecraftSkinPreviewRenderer implements AuroraPreviewRenderer
             PlayerModel<AbstractClientPlayer> model = "slim".equals(previewTexture == null ? AuroraSkinManager.model() : previewModel) ? slim : wide;
             ResourceLocation texture = previewTexture == null ? AuroraSkinManager.skin() : previewTexture;
             if (texture == null) texture = DefaultPlayerSkin.get(new UUID(0L, 0L)).texture();
-            graphics.flush(); PoseStack matrices = graphics.pose(); matrices.pushPose(); matrices.translate(x, y - scale * 1.5D, 120.0D);
-            matrices.scale(scale, scale, -scale); matrices.mulPose(Axis.YP.rotationDegrees(pose.bodyYaw()));
-            reset(model); model.head.yRot = radians(pose.headYaw() - pose.bodyYaw()); model.head.xRot = radians(pose.headPitch()); model.hat.copyFrom(model.head);
+            graphics.flush(); PoseStack matrices = graphics.pose(); matrices.pushPose();
+            try {
+            com.mojang.blaze3d.platform.Lighting.setupForFlatItems();
+            RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
+            matrices.translate(x, y - scale * 1.5D, 120.0D);
+            matrices.scale(scale, scale, -scale); matrices.mulPose(Axis.YP.rotationDegrees(com.aurora.skins.ui.PreviewRotation.bodyYaw(pose.bodyYaw())));
+            reset(model); model.head.yRot = com.aurora.skins.ui.PreviewRotation.headYaw(pose.headYaw(), pose.bodyYaw()); model.head.xRot = com.aurora.skins.ui.PreviewRotation.headPitch(pose.headPitch()); model.hat.copyFrom(model.head);
             RenderSystem.enableDepthTest(); MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
             VertexConsumer vertices = buffers.getBuffer(RenderType.entityTranslucent(texture));
-            model.renderToBuffer(matrices, vertices, 0xF000F0, OverlayTexture.NO_OVERLAY); buffers.endBatch(); matrices.popPose(); return true;
+            model.renderToBuffer(matrices, vertices, 0xF000F0, OverlayTexture.NO_OVERLAY); buffers.endBatch(); return true;
+            } finally {
+                matrices.popPose();
+                RenderSystem.disableDepthTest();
+                com.mojang.blaze3d.platform.Lighting.setupFor3DItems();
+            }
         } catch (Throwable error) { System.err.println("[Aurora Skins] Preview 3D indisponível: " + error.getClass().getSimpleName()); return false; }
     }
     private static void reset(PlayerModel<?> model) {

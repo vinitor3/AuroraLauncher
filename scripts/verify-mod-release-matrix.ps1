@@ -134,6 +134,6 @@ function Compare-AuroraMatrix {
     Write-Host "[Aurora release matrix] ${Name}: 9/9 artefatos correspondem ao código atual."
 }
 
-Compare-AuroraMatrix "Aurora Core" ".aurora\build-matrix\core\1.1.2" "releases\core\1.1.2" @("org/slf4j/", "net/minecraft/")
-Compare-AuroraMatrix "Aurora Skins" ".aurora\build-matrix\skins\0.2.3" "releases\skins\0.2.3"
+Compare-AuroraMatrix "Aurora Core" ".aurora\build-matrix\core\1.1.4" "releases\core\1.1.4" @("org/slf4j/", "net/minecraft/")
+Compare-AuroraMatrix "Aurora Skins" ".aurora\build-matrix\skins\0.2.4" "releases\skins\0.2.4"
 Compare-AuroraMatrix "Aurora Companion" ".aurora\build-matrix\companion\0.2.3" "releases\companion"

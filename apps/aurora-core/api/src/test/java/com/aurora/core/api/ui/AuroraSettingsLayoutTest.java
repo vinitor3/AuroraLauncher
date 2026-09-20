@@ -18,4 +18,10 @@ final class AuroraSettingsLayoutTest {
         assertEquals(500, layout.panelRight() - layout.panelLeft());
         assertEquals(390, layout.panelLeft());
     }
+
+    @Test void minimumGuiWidthDoesNotForceTextOverTheAvatar() {
+        AuroraSettingsLayout layout = AuroraSettingsLayout.calculate(320, 240);
+        assertTrue(layout.contentWidth() > 0);
+        assertTrue(layout.contentX() + layout.contentWidth() <= layout.avatarX() - 42);
+    }
 }

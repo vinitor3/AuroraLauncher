@@ -45,6 +45,7 @@ final class PlayerSkinIntegrationTest {
         AtomicInteger requests = new AtomicInteger();
         server.createContext("/", exchange -> {
             requests.incrementAndGet(); assertNull(exchange.getRequestHeaders().getFirst("X-API-Key"));
+            assertEquals("AuroraSkins/0.2.4", exchange.getRequestHeaders().getFirst("User-Agent"));
             String path = exchange.getRequestURI().getPath();
             byte[] body = path.equals("/skin.png") ? png : (path.equals("/v1/skins/players")
                 ? "AURORA_PLAYERS_V1\nNotch\t" + uuid + "\tmc-api\t" + b64("{\"current\":true}") + "\n" : profile).getBytes(StandardCharsets.UTF_8);
@@ -55,6 +56,12 @@ final class PlayerSkinIntegrationTest {
         try {
             AuroraSkinStore store = new AuroraSkinStore(temporary.resolve("skins"));
             AuroraCatalogProvider provider = new AuroraCatalogProvider(store, "http://127.0.0.1:" + server.getAddress().getPort() + "/v1/skins/catalog");
+            assertEquals(1, provider.search("", 0, 12).get(3, TimeUnit.SECONDS).entries().size());
+            assertTrue(provider.online());
+            int afterCatalog = requests.get();
+            provider.search("", 0, 12).get(3, TimeUnit.SECONDS);
+            assertEquals(afterCatalog, requests.get(), "Repeated catalog search must use memory cache");
+            requests.set(0);
             assertTrue(provider.searchPlayers("No").get(3, TimeUnit.SECONDS).isEmpty()); assertEquals(0, requests.get());
             List<PlayerSuggestion> players = provider.autocompleteSkinNames("Not").get(3, TimeUnit.SECONDS);
             assertEquals("Notch", players.get(0).name()); assertEquals(uuid, players.get(0).uuid());

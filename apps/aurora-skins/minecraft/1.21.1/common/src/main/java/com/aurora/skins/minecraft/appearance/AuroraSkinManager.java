@@ -18,6 +18,7 @@ public final class AuroraSkinManager {
         Thread thread = new Thread(runnable, "Aurora-Skins-IO"); thread.setDaemon(true); return thread;
     });
     private static final AuroraSkinsRuntime.Listener LISTENER = AuroraSkinManager::load;
+    private static final java.util.concurrent.atomic.AtomicLong LOAD_REQUEST = new java.util.concurrent.atomic.AtomicLong();
     private static volatile AuroraSkinsRuntime runtime;
     private static volatile ResourceLocation skin;
     private static volatile String model = "classic";
@@ -30,10 +31,14 @@ public final class AuroraSkinManager {
     public static ResourceLocation skin() { return skin; }
     public static String model() { return model; }
     public static synchronized void shutdown() {
-        if (runtime != null) runtime.removeListener(LISTENER); runtime = null; skin = null; model = "classic";
+        if (runtime != null) runtime.removeListener(LISTENER);
+        runtime = null; LOAD_REQUEST.incrementAndGet();
+        ResourceLocation previous = skin; skin = null; model = "classic";
+        if (previous != null) Minecraft.getInstance().execute(() -> Minecraft.getInstance().getTextureManager().release(previous));
     }
     private static void load(SkinEntry entry) {
         if (entry == null || entry.file() == null) return;
+        final long request = LOAD_REQUEST.incrementAndGet();
         IO.execute(() -> { try (InputStream input = new BufferedInputStream(new FileInputStream(entry.file().toFile()))) {
             NativeImage decoded = NativeImage.read(input);
             if (decoded.getWidth() != 64 || (decoded.getHeight() != 64 && decoded.getHeight() != 32)) {
@@ -41,9 +46,12 @@ public final class AuroraSkinManager {
             }
             NativeImage image = normalizeLegacySkin(decoded);
             Minecraft.getInstance().execute(() -> {
+                if (request != LOAD_REQUEST.get() || runtime == null) { image.close(); return; }
                 ResourceLocation location = ResourceLocation.fromNamespaceAndPath("aurora_skins", "active/" + entry.contentHash());
                 Minecraft.getInstance().getTextureManager().register(location, new DynamicTexture(image));
+                ResourceLocation previous = skin;
                 skin = location; model = entry.model().id();
+                if (previous != null && !previous.equals(location)) Minecraft.getInstance().getTextureManager().release(previous);
                 System.out.println("[Aurora Skins] Textura ativa carregada: " + entry.name());
             });
         } catch (Exception error) { System.err.println("[Aurora Skins] Não foi possível carregar a textura: " + error.getMessage()); } });

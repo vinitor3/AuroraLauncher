@@ -11,6 +11,6 @@ processResources {
 }
 
 dependencies {
-    compileOnly files(rootProject.file("../aurora-core/api/build/libs/aurora-core-api-1.1.2.jar"))
+    compileOnly files(rootProject.file("../aurora-core/api/build/libs/aurora-core-api-1.1.4.jar"))
     compileOnly "net.fabricmc:sponge-mixin:0.12.5+mixin.0.8.5"
 }

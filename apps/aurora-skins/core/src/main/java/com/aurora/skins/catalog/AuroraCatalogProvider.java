@@ -135,7 +135,10 @@ public final class AuroraCatalogProvider implements SkinProvider {
             String key = safeQuery + "\n" + current + "\n" + size;
             CacheEntry cached = cache.get(key);
             long now = System.currentTimeMillis();
-            if (cached != null && now - cached.createdAt < CACHE_MILLIS) return cached.page;
+            if (cached != null && now - cached.createdAt < CACHE_MILLIS) {
+                online = true;
+                return cached.page;
+            }
             if (now >= unavailableUntil) {
                 try {
                     SkinPage result = fetchPage(safeQuery, current, size);
@@ -147,7 +150,7 @@ public final class AuroraCatalogProvider implements SkinProvider {
                     online = false;
                     unavailableUntil = now + FAILURE_COOLDOWN_MILLIS;
                     System.err.println("[Aurora Skins] Catálogo online temporariamente indisponível: "
-                        + error.getClass().getSimpleName());
+                        + (error instanceof HttpStatusException ? error.getMessage() : error.getClass().getSimpleName()));
                 }
             }
             try {
@@ -203,7 +206,7 @@ public final class AuroraCatalogProvider implements SkinProvider {
         if (status != 200) {
             closeQuietly(connection.getErrorStream());
             connection.disconnect();
-            throw new IOException("HTTP " + status);
+            throw new HttpStatusException(status);
         }
         byte[] response;
         try (InputStream input = new BufferedInputStream(connection.getInputStream())) {
@@ -223,7 +226,7 @@ public final class AuroraCatalogProvider implements SkinProvider {
         if (status != 200) {
             closeQuietly(connection.getErrorStream());
             connection.disconnect();
-            throw new IOException("Download HTTP " + status);
+            throw new HttpStatusException(status);
         }
         Path directory = store.root().resolve("downloads");
         Files.createDirectories(directory);
@@ -280,6 +283,9 @@ public final class AuroraCatalogProvider implements SkinProvider {
         connection.setUseCaches(false);
         connection.setInstanceFollowRedirects(false);
         connection.setRequestMethod("GET");
+        // Some CDN edges reject the default Java/<version> agent with HTTP 403.
+        // Identify this client honestly, for catalog, profile and PNG requests alike.
+        connection.setRequestProperty("User-Agent", "AuroraSkins/0.2.4");
         return connection;
     }
 
@@ -373,5 +379,9 @@ public final class AuroraCatalogProvider implements SkinProvider {
         private final SkinPage page;
         private final long createdAt;
         private CacheEntry(SkinPage page, long createdAt) { this.page = page; this.createdAt = createdAt; }
+    }
+
+    private static final class HttpStatusException extends IOException {
+        private HttpStatusException(int status) { super("HTTP " + status); }
     }
 }

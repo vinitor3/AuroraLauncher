@@ -1,5 +1,33 @@
 # Compatibility Matrix
 
+## Reparos de runtime — 19/09/2026
+
+Fonte: Core **1.1.4**, Skins **0.2.4**, Companion **0.2.3**. Os 27 JARs
+recompilados correspondem aos artefatos versionados; nove pares Core/Skins
+passam pelos contratos de empacotamento, bytecode e dependências. Os novos
+artefatos ainda dependem da integração no instalador; alpha.7 é imutável.
+
+| Minecraft / loader testado | Java | Evidência desta entrega | Estado |
+| --- | ---: | --- | --- |
+| 1.12.2 / Forge 14.23.5.2860 | 8u504 | Menu, modelo completo, catálogo, aplicação e skin em mundo novo; Core → Skins → F11 → Escape; mundo repetido com Core 1.1.4 + Skins 0.2.4 finais | PARCIAL |
+| 1.16.5 / Fabric 0.18.4 | 8u504 | Catálogo online, textura visível, aplicação e retorno ao menu sem ficar branco | PARCIAL |
+| 1.19.2 / Fabric 0.14.19 | 17 | Inicialização sem erro de Mixin, menu, campo de busca e catálogo | PARCIAL |
+| 1.21.1 / Fabric 0.19.3 | 21 | Menu, Core e Skins sem blur sobre conteúdo; catálogo e aplicação | PARCIAL |
+| 1.16.5, 1.19.2, 1.20.1, 1.21.1 / Forge; 1.20.1 / Fabric | 8/17/21 | Build e inspeção dos JARs; sem nova execução gráfica | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+
+As quatro rodadas da tabela usaram Core 1.1.3; Core 1.1.4 mantém a UI e corrige
+somente a versão dos metadados legados, além do próprio versionamento. O
+candidato 1.1.3 foi preservado e não é selecionado pelo launcher. A rodada
+legada final com Core 1.1.4 repetiu catálogo, aplicação e skin dentro do mundo.
+
+Instâncias isoladas, sem contas, mundos ou servidores existentes; Companion
+e handshake IPC não fizeram parte destes lançamentos. Os hashes das rodadas
+anteriores e do mundo legado final estão em [task-skins-runtime-repair](../task-skins-runtime-repair.md).
+Não extrapolar os testes para multiplayer, capas, todos os modpacks ou todas
+as GUI scales. O histórico abaixo conserva os resultados das versões antigas.
+
+## Histórico anterior
+
 Atualizado em 2026-09-02. `BUILD` significa JAR compilado e inspecionado; `RUNTIME` exige o roteiro completo em uma instância real. Core 1.1.2, Skins 0.2.1 e Companion 0.2.3 formam a matriz embarcada no Launcher 0.1.1-alpha.6.
 
 | Minecraft | Loader | Java | Core build | Skins build | Companion build | Runtime do conjunto | Estado |

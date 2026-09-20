@@ -2,8 +2,10 @@ package com.aurora.skins.legacy;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 final class LegacyMinecraft {
+    private static final ConcurrentLinkedQueue<Runnable> CLIENT_TASKS = new ConcurrentLinkedQueue<Runnable>();
     private LegacyMinecraft() { }
 
     static Object minecraft() {
@@ -22,7 +24,7 @@ final class LegacyMinecraft {
         while (type != null) {
             for (String name : names) {
                 try { Field field = type.getDeclaredField(name); field.setAccessible(true); return field.get(target); }
-                catch (ReflectiveOperationException ignored) { }
+                catch (ReflectiveOperationException | IllegalArgumentException ignored) { }
             }
             type = type.getSuperclass();
         }
@@ -35,7 +37,7 @@ final class LegacyMinecraft {
         while (type != null) {
             for (String name : names) {
                 try { Field field = type.getDeclaredField(name); field.setAccessible(true); field.set(target, value); return true; }
-                catch (ReflectiveOperationException ignored) { }
+                catch (ReflectiveOperationException | IllegalArgumentException ignored) { }
             }
             type = type.getSuperclass();
         }
@@ -48,7 +50,8 @@ final class LegacyMinecraft {
             for (Method method : target.getClass().getMethods()) {
                 if (!method.getName().equals(name) || method.getParameterTypes().length != arguments.length) continue;
                 try { method.setAccessible(true); return method.invoke(target, arguments); }
-                catch (ReflectiveOperationException ignored) { }
+                catch (IllegalArgumentException ignored) { /* Try the next overload. */ }
+                catch (ReflectiveOperationException ignored) { return null; }
             }
         }
         return null;
@@ -65,6 +68,12 @@ final class LegacyMinecraft {
                 } catch (ReflectiveOperationException ignored) { }
             }
         }
-        runnable.run();
+        // A failed scheduler lookup must never run texture/GUI work on the I/O thread.
+        CLIENT_TASKS.add(runnable);
+    }
+
+    static void drainTasks() {
+        Runnable task;
+        while ((task = CLIENT_TASKS.poll()) != null) task.run();
     }
 }

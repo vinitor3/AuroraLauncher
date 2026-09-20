@@ -115,6 +115,40 @@ As rotas Aurora são `GET /v1/skins/players?query=Not`, `GET /v1/skins/profile/N
 
 ## Verificação
 
+### Reparos nos mods — Skins 0.2.4 / Core 1.1.4
+
+O cliente Java envia `User-Agent: AuroraSkins/0.2.4` em catálogo, busca,
+perfil e PNG. Foi reproduzido HTTP 403 com o identificador Java padrão e
+sucesso com o identificador do produto, sem relaxar TLS ou enviar secrets.
+Reutilizar uma página válida do cache também restaura o estado online.
+
+Prévia e skin ativa possuem ciclos de vida separados: fechar um seletor não
+libera a textura de outro; respostas antigas não substituem a seleção atual.
+Na 1.12.2, o slot SKIN real de `NetworkPlayerInfo` substitui campos antigos
+inexistentes, preserva capa/elytra e restaura textura/modelo como um par.
+O legado usa os nomes SRG corretos dos 12 componentes do modelo e restaura
+o estado OpenGL ao terminar, inclusive em falha. O Core cede a tela ao módulo
+durante resize, evitando renderizadores e botões duplicados.
+
+Removidos os painéis roxos atrás da prévia, preservando o botão do menu.
+O conteúdo da UI 1.21 não recebe uma segunda passagem de blur. A rotação
+converte a pose do mouse para os eixos do modelo antes de desenhar.
+
+Sondagem opcional da classe Java real (pasta nova de cache, nunca biblioteca pessoal):
+
+```powershell
+javac --release 8 -cp apps/aurora-skins/core/build/libs/aurora-skins-core-0.2.4.jar -d .aurora/catalog-smoke scripts/SkinCatalogSmoke.java
+java -cp '.aurora/catalog-smoke;apps/aurora-skins/core/build/libs/aurora-skins-core-0.2.4.jar' SkinCatalogSmoke .aurora/catalog-smoke-new-run
+```
+
+Em 19/09, Java 8 validou catálogo e PNG MCStat; a primeira consulta de perfil
+retornou 404, e a repetição controlada passou. A API pública respondeu 200 na
+checagem direta. Isso registra intermitência externa, não garantia de
+disponibilidade. Não houve alteração/deploy do Worker nesta entrega.
+
+**PARCIAL**: testes gráficos focados em quatro combinações e skin dentro de
+um mundo legado isolado. [Evidências e limites](task-skins-runtime-repair.md).
+
 `npm --prefix apps/edge-proxy test`, `npm --prefix apps/edge-proxy run check`, `npm --prefix apps/desktop run build` e `npm run skins:build`.
 Execute o script de matriz com **JDK 21** em JAVA_HOME (os projetos antigos selecionam toolchain 17 e bytecode Java 8). O exemplo visual do desktop em `examples/skins.html` usa as mesmas peças de busca e não salva conta/skin.
 

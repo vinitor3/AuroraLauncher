@@ -36,31 +36,39 @@ final class LegacySkinsUi {
 
     @SubscribeEvent public void onTick(TickEvent.ClientTickEvent event) {
         if (event.phase == TickEvent.Phase.END) {
+            LegacyMinecraft.drainTasks();
             LegacySkinManager.applyToLocalPlayer();
             Object current = LegacyMinecraft.field(LegacyMinecraft.minecraft(), "currentScreen", "field_71462_r");
             java.util.Iterator<State> iterator = states.values().iterator();
             while (iterator.hasNext()) {
                 State state = iterator.next();
-                if (state.screen != current) { state.request++; state.previewRequest++; state.renderer.close(); iterator.remove(); }
+                if (state.screen != current) { dispose(state); iterator.remove(); }
                 else if (state.search != null) invokeAny(state.search, "updateCursorCounter", "func_146178_a");
             }
+            titlePreviews.keySet().retainAll(Collections.singleton(current));
+            titleLayouts.keySet().retainAll(Collections.singleton(current));
         }
+    }
+
+    @SubscribeEvent public void onRenderTick(TickEvent.RenderTickEvent event) {
+        if (event.phase == TickEvent.Phase.START) LegacySkinManager.applyToLocalPlayer();
     }
 
     @SubscribeEvent public void onKeyboard(GuiScreenEvent.KeyboardInputEvent.Pre event) {
         State state = states.get(invoke(event, "getGui"));
-        if (state == null || state.search == null) return;
+        if (state == null) return;
         try {
             Class<?> keyboard = Class.forName("org.lwjgl.input.Keyboard");
             if (!Boolean.TRUE.equals(keyboard.getMethod("getEventKeyState").invoke(null))) return;
             char character = (Character)keyboard.getMethod("getEventCharacter").invoke(null);
             int key = (Integer)keyboard.getMethod("getEventKey").invoke(null);
-            if (key == 1) return;
+            if (key == 1) { event.setCanceled(true); close(state); return; }
+            if (state.search == null) return;
             Object handled = LegacyMinecraft.invoke(state.search, new String[] {"textboxKeyTyped", "func_146201_a"}, character, key);
             if (Boolean.TRUE.equals(handled)) {
                 event.setCanceled(true);
                 String query = String.valueOf(invokeAny(state.search, "getText", "func_146179_b"));
-                if (!query.equals(state.query)) { state.query = query; state.catalogPage = 0; state.selected = 0; refresh(state); }
+                if (!query.equals(state.query)) { state.query = query; state.catalogPage = 0; state.selected = 0; state.request++; refresh(state); rebuild(state.screen, state); }
             }
         } catch (ReflectiveOperationException ignored) { }
     }
@@ -83,7 +91,10 @@ final class LegacySkinsUi {
 
     @SubscribeEvent public void onInit(GuiScreenEvent.InitGuiEvent.Post event) {
         Object screen = invoke(event, "getGui");
-        if (screen == null || !isMainMenu(screen) || states.containsKey(screen)) return;
+        if (screen == null) return;
+        State state = states.get(screen);
+        if (state != null) { state.search = null; rebuild(screen, state); return; }
+        if (!isMainMenu(screen)) return;
         List<Object> buttons = list(invoke(event, "getButtonList"));
         List<AuroraTitleLayout.Rect> occupied = new ArrayList<AuroraTitleLayout.Rect>();
         for (Object existing : buttons) occupied.add(new AuroraTitleLayout.Rect(
@@ -97,19 +108,27 @@ final class LegacySkinsUi {
         if (open != null) buttons.add(open);
     }
 
-    @SubscribeEvent public void onAction(GuiScreenEvent.ActionPerformedEvent.Post event) {
+    @SubscribeEvent public void onAction(GuiScreenEvent.ActionPerformedEvent.Pre event) {
         final Object screen = invoke(event, "getGui");
         Object pressed = invoke(event, "getButton");
         int id = integer(LegacyMinecraft.field(pressed, "id", "field_146127_k"), -1);
-        if (id == OPEN) { open(screen, new Runnable() { @Override public void run() { closeToVanilla(screen); }}); return; }
+        if (id == OPEN && titleLayouts.containsKey(screen) && !states.containsKey(screen)) {
+            event.setCanceled(true);
+            open(screen, new Runnable() { @Override public void run() { closeToVanilla(screen); }}); return;
+        }
         State state = states.get(screen); if (state == null) return;
-        if (id == CLOSE) { state.request++; state.previewRequest++; state.renderer.close(); runtime.catalogProvider().cancelSearch(); states.remove(screen); state.close.run(); return; }
+        if (!ownsAction(id)) return;
+        // The host screen must never receive module IDs or replace the screen before Post.
+        event.setCanceled(true);
+        if (id == CLOSE) { close(state); return; }
         if (state.busy && (id == APPLY || id == FAVORITE || id == MODEL || id == IMPORT)) return;
         if (id == LIBRARY || id == FAVORITES || id == HISTORY || id == EXPLORE) {
             state.request++; state.view = id == FAVORITES ? 1 : id == HISTORY ? 2 : id == EXPLORE ? 3 : 0;
+            runtime.catalogProvider().cancelSearch();
             state.selected = 0; if (state.view == 3) state.catalogPage = 0; refresh(state); rebuild(screen, state); return;
         }
         if (id == PREVIOUS || id == NEXT) {
+            if (state.busy) return;
             if (!state.entries.isEmpty()) {
                 int amount = id == NEXT ? 1 : -1;
                 if (state.view == 3 && amount > 0 && state.selected == state.entries.size() - 1 && state.catalogHasMore) {
@@ -128,10 +147,8 @@ final class LegacySkinsUi {
         rebuild(screen, state);
     }
 
-    @SubscribeEvent public void onBackground(GuiScreenEvent.BackgroundDrawnEvent event) {
-        Object screen = invoke(event, "getGui"); if (!states.containsKey(screen)) return;
+    private void ensureSearch(Object screen, State state) {
         AuroraSkinsLayout layout = AuroraSkinsLayout.calculate(width(screen), height(screen));
-        State state = states.get(screen);
         if (state.search == null || state.screenWidth != width(screen) || state.screenHeight != height(screen)) {
             try {
                 Object font = LegacyMinecraft.field(screen, "fontRenderer", "field_146289_q");
@@ -144,9 +161,10 @@ final class LegacySkinsUi {
                 state.screenWidth = width(screen); state.screenHeight = height(screen);
             } catch (ReflectiveOperationException ignored) { }
         }
-        if (!state.busy) refreshPreview(state);
-        drawRect(layout.panelLeft(), layout.panelTop(), layout.panelRight(), layout.panelBottom(), 0xE61A112B);
-        drawRect(layout.panelLeft(), layout.panelTop(), layout.panelLeft() + 3, layout.panelBottom(), 0xFFB78CFF);
+    }
+
+    @SubscribeEvent public void onDrawPre(GuiScreenEvent.DrawScreenEvent.Pre event) {
+        if (states.containsKey(invoke(event, "getGui"))) event.setCanceled(true);
     }
 
     @SubscribeEvent public void onDraw(GuiScreenEvent.DrawScreenEvent.Post event) {
@@ -154,21 +172,36 @@ final class LegacySkinsUi {
         int mouseX = integer(invoke(event, "getMouseX"), width(screen) / 2);
         int mouseY = integer(invoke(event, "getMouseY"), height(screen) / 2);
         State state = states.get(screen);
-        if (state != null) drawPage(screen, state, mouseX, mouseY);
+        if (state != null) {
+            ensureSearch(screen, state);
+            invokeAny(screen, "drawDefaultBackground", "func_146276_q_");
+            drawPage(screen, state, mouseX, mouseY);
+            Object partial = invoke(event, "getRenderPartialTicks");
+            float partialTicks = partial instanceof Number ? ((Number)partial).floatValue() : 0F;
+            for (Object button : list(LegacyMinecraft.field(screen, "buttonList", "field_146292_n"))) {
+                LegacyMinecraft.invoke(button, new String[] {"drawButton", "func_191745_a"},
+                    LegacyMinecraft.minecraft(), mouseX, mouseY, partialTicks);
+            }
+        }
         else if (isMainMenu(screen)) drawTitlePreview(screen, mouseX, mouseY);
     }
 
     void open(final AuroraUiContext context) {
         final Object screen = context.nativeParentScreen();
+        if (screen == null) return;
+        // Release the Core overlay through its public contract before taking over this host.
+        context.close();
         open(screen, new Runnable() { @Override public void run() { context.openAuroraHome(); }});
     }
 
     private void open(Object screen, Runnable close) {
         if (screen == null) return;
+        State previous = states.remove(screen); if (previous != null) dispose(previous);
         State state = new State(screen, close); states.put(screen, state); refresh(state); rebuild(screen, state);
     }
 
     private void rebuild(Object screen, State state) {
+        ensureSearch(screen, state);
         List<Object> buttons = list(LegacyMinecraft.field(screen, "buttonList", "field_146292_n")); buttons.clear();
         AuroraSkinsLayout layout = AuroraSkinsLayout.calculate(width(screen), height(screen));
         AuroraSkinsLayout.Slot slot = layout.navigation(0);
@@ -196,6 +229,12 @@ final class LegacySkinsUi {
         add(buttons, button(MODEL, slot.x(), slot.y(), slot.width(), slot.height(), layout.compact() ? modelLabel : "Modelo: " + modelLabel));
         slot = layout.done();
         add(buttons, button(CLOSE, slot.x(), slot.y(), slot.width(), slot.height(), "Concluído"));
+        for (Object button : buttons) {
+            int id = integer(LegacyMinecraft.field(button, "id", "field_146127_k"), -1);
+            boolean enabled = !state.busy || id == CLOSE || id == LIBRARY || id == FAVORITES || id == HISTORY || id == EXPLORE;
+            if ((id == APPLY || id == FAVORITE) && entry == null) enabled = false;
+            LegacyMinecraft.setField(button, enabled, "enabled", "field_146124_l");
+        }
     }
 
     private void refresh(State state) {
@@ -220,7 +259,7 @@ final class LegacySkinsUi {
         state.busy = true; state.status = "Buscando no catálogo Aurora...";
         runtime.catalogProvider().searchDebounced(state.query, state.catalogPage, 12).whenComplete((page, error) ->
             LegacyMinecraft.execute(new Runnable() { @Override public void run() {
-                if (request != state.request || state.view != 3) return;
+                if (request != state.request || state.view != 3 || states.get(state.screen) != state) return;
                 state.busy = false;
                 if (error != null || page == null) {
                     state.entries = Collections.emptyList(); state.catalogHasMore = false;
@@ -236,7 +275,7 @@ final class LegacySkinsUi {
             }}));
     }
 
-    private SkinEntry selected(State state) { return state.entries.isEmpty() ? null : state.entries.get(state.selected); }
+    private SkinEntry selected(State state) { return state.selected < 0 || state.selected >= state.entries.size() ? null : state.entries.get(state.selected); }
     private void refreshPreview(final State state) {
         SkinEntry entry = selected(state);
         String key = entry == null ? "" : entry.id() + ":" + entry.contentHash() + ":" + entry.model().id();
@@ -244,7 +283,7 @@ final class LegacySkinsUi {
         state.previewKey = key; final int request = ++state.previewRequest; state.renderer.close();
         if (entry == null) return;
         runtime.catalogProvider().preview(entry).whenComplete((installed, error) -> LegacyMinecraft.execute(() -> {
-            if (request != state.previewRequest || !states.containsKey(state.screen)) return;
+            if (request != state.previewRequest || states.get(state.screen) != state) return;
             if (error != null || installed == null) { state.status = "Prévia indisponível."; return; }
             try { state.renderer.setSkin(installed); } catch (Exception failure) { state.status = "Prévia indisponível."; }
         }));
@@ -281,7 +320,7 @@ final class LegacySkinsUi {
         state.busy = true; state.status = "Preparando e verificando esta skin...";
         runtime.materialize(entry).whenComplete((installed, error) -> LegacyMinecraft.execute(new Runnable() {
             @Override public void run() {
-                if (request != state.request || !states.containsKey(state.screen)) return;
+                if (request != state.request || states.get(state.screen) != state) return;
                 try {
                     if (error != null || installed == null) throw new IllegalStateException();
                     action.run(installed);
@@ -298,12 +337,21 @@ final class LegacySkinsUi {
     }
 
     private void chooseFile(final Object screen, final State state) {
-        state.status = "Abrindo o seletor de arquivo...";
+        final int request = ++state.request;
+        state.busy = true; state.status = "Abrindo o seletor de arquivo...";
         Thread thread = new Thread(new Runnable() { @Override public void run() { try {
             JFileChooser chooser = new JFileChooser(); chooser.setFileFilter(new FileNameExtensionFilter("PNG 64x64 / 64x32", "png"));
-            if (chooser.showOpenDialog(null) != JFileChooser.APPROVE_OPTION) return; final Path path = chooser.getSelectedFile().toPath();
-            LegacyMinecraft.execute(new Runnable() { @Override public void run() { importFile(screen, state, path); }});
-        } catch (Throwable error) { state.status = "Não foi possível abrir o seletor de arquivo."; } }}, "Aurora-Skins-FileChooser");
+            final Path path = chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION ? chooser.getSelectedFile().toPath() : null;
+            LegacyMinecraft.execute(() -> {
+                if (request != state.request || states.get(screen) != state) return;
+                state.busy = false; state.status = "";
+                if (path != null) importFile(screen, state, path);
+                rebuild(screen, state);
+            });
+        } catch (Throwable error) { LegacyMinecraft.execute(() -> {
+            if (request != state.request || states.get(screen) != state) return;
+            state.busy = false; state.status = "Não foi possível abrir o seletor de arquivo."; rebuild(screen, state);
+        }); } }}, "Aurora-Skins-FileChooser");
         thread.setDaemon(true); thread.start();
     }
     private void importFile(Object screen, State state, Path file) { try {
@@ -335,8 +383,6 @@ final class LegacySkinsUi {
         AuroraTitleLayout layout = titleLayouts.get(screen);
         if (layout == null) layout = AuroraTitleLayout.calculate(width(screen), height(screen));
         int x = layout.previewX(), y = layout.previewY(), scale = layout.previewScale();
-        drawRect(layout.panelLeft(), layout.panelTop(), layout.panelRight(), layout.panelBottom(), 0x661A112B);
-        drawRect(layout.panelLeft(), layout.panelTop(), layout.panelLeft() + 3, layout.panelBottom(), 0xFFB78CFF);
         renderPreview(screen, state.preview, mouseX, mouseY, x, y, scale, state);
     }
 
@@ -346,7 +392,15 @@ final class LegacySkinsUi {
         else Aurora.services().previews().render(screen, x, y, scale, preview);
     }
 
-    private void closeToVanilla(Object screen) { states.remove(screen); invokeAny(screen, "initGui", "func_73866_w_"); }
+    private void dispose(State state) { state.request++; state.previewRequest++; state.renderer.close(); runtime.catalogProvider().cancelSearch(); }
+    private void close(State state) { states.remove(state.screen); dispose(state); state.close.run(); }
+    void shutdown() { for (State state : states.values()) dispose(state); states.clear(); titlePreviews.clear(); titleLayouts.clear(); }
+    private static boolean ownsAction(int id) { return id == CLOSE || id == IMPORT || id == PREVIOUS || id == NEXT
+        || id == APPLY || id == FAVORITE || id == MODEL || id == LIBRARY || id == FAVORITES || id == HISTORY || id == EXPLORE; }
+    private void closeToVanilla(Object screen) {
+        // displayGuiScreen runs setWorldAndResolution and Forge InitGui events, restoring all mod buttons.
+        LegacyMinecraft.invoke(LegacyMinecraft.minecraft(), new String[] {"displayGuiScreen", "func_147108_a"}, screen);
+    }
     private static boolean isMainMenu(Object screen) { return screen.getClass().getName().equals("net.minecraft.client.gui.GuiMainMenu"); }
     private static Object button(int id, int x, int y, int width, int height, String label) { try {
         Class<?> type = Class.forName("net.minecraft.client.gui.GuiButton"); Constructor<?> constructor = type.getConstructor(int.class,int.class,int.class,int.class,int.class,String.class);

@@ -35,7 +35,7 @@ public final class AuroraSettingsLayout {
         int avatarX = panelRight - Math.max(54, Math.min(72, panelWidth / 7));
         int contentX = navigationX + navigationWidth + 20;
         int contentRight = avatarX - 42;
-        int contentWidth = Math.max(72, contentRight - contentX);
+        int contentWidth = Math.max(1, contentRight - contentX);
         int avatarY = safeHeight - 88;
         return new AuroraSettingsLayout(panelLeft, panelRight, navigationX, navigationWidth,
             contentX, contentWidth, avatarX, avatarY);

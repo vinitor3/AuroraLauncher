@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-20T02:19:23.271Z",
+  "signaturePublicKeys": {
+    "aurora-core-1.1.3-release": "ZJ2bmL8ntHjoS/cRZHjgwltCaYfolUmdFuyU5bzS8DA="
+  },
+  "builds": [
+    {
+      "minecraft": "1.12.2",
+      "loader": "forge",
+      "loaderVersion": "14.23.5.2860",
+      "loaderVersionRange": "[14.23.5,15)",
+      "javaRuntime": 8,
+      "buildJdk": 17,
+      "auroraCoreVersion": "1.1.3",
+      "auroraCoreBuild": "aurora-core-forge-1.12.2-1.1.3.jar",
+      "download": "releases/core/1.1.3/1.12.2/forge/aurora-core-forge-1.12.2-1.1.3.jar",
+      "size": 574810,
+      "sha256": "e41ad9d9034b1ac69a9d8550067d80de4640424da49ae22ac7c2370cd7e64e06",
+      "signature": {
+        "algorithm": "Ed25519",
+        "keyId": "aurora-core-1.1.3-release",
+        "value": "TMNciE0gxXJvn5ayAcMBJimYvD5O9GILy6TSJ1KD5iZDRzVg8/tPMQTutI3D9cRovqcCliSd0MHeaK60gF6YBw=="
+      }
+    },
+    {
+      "minecraft": "1.16.5",
+      "loader": "fabric",
+      "loaderVersion": "0.13.3",
+      "loaderVersionRange": ">=0.13.3",
+      "javaRuntime": 8,
+      "buildJdk": 17,
+      "auroraCoreVersion": "1.1.3",
+      "auroraCoreBuild": "aurora-core-fabric-1.16.5-1.1.3.jar",
+      "download": "releases/core/1.1.3/1.16.5/fabric/aurora-core-fabric-1.16.5-1.1.3.jar",
+      "size": 600037,
+      "sha256": "43b865d1e055666f9747753d8fff2c0bd00c516300a68de95dbb95f8e7d451d5",
+      "signature": {
+        "algorithm": "Ed25519",
+        "keyId": "aurora-core-1.1.3-release",
+        "value": "EYv7gNEiDyECLf46kTo/a/7GeOzuKTb3+jXltAWM2xXjLOTBq+d7fV+5Vfq8k1SdOuraeL52cAyy7XkSrhtAAA=="
+      }
+    },
+    {
+      "minecraft": "1.16.5",
+      "loader": "forge",
+      "loaderVersion": "36.2.42",
+      "loaderVersionRange": "[36,)",
+      "javaRuntime": 8,
+      "buildJdk": 17,
+      "auroraCoreVersion": "1.1.3",
+      "auroraCoreBuild": "aurora-core-forge-1.16.5-1.1.3.jar",
+      "download": "releases/core/1.1.3/1.16.5/forge/aurora-core-forge-1.16.5-1.1.3.jar",
+      "size": 600187,
+      "sha256": "04e3f79d6134a70a33f3ff6d17ae6609dd5a2169d5546caf8239939e906080f4",
+      "signature": {
+        "algorithm": "Ed25519",
+        "keyId": "aurora-core-1.1.3-release",
+        "value": "0/WaoNwXInKQgCy/cYWM6MN/PT7MEH3nT4W9U2Ja/7yq0hVN79Ionxdf92NeTIpKdIv5ZtZUxnS01nZqMkbtDQ=="
+      }
+    },
+    {
+      "minecraft": "1.19.2",
+      "loader": "fabric",
+      "loaderVersion": "0.16.14",
+      "loaderVersionRange": ">=0.14.0",
+      "javaRuntime": 17,
+      "buildJdk": 17,
+      "auroraCoreVersion": "1.1.3",
+      "auroraCoreBuild": "aurora-core-fabric-1.19.2-1.1.3.jar",
+      "download": "releases/core/1.1.3/1.19.2/fabric/aurora-core-fabric-1.19.2-1.1.3.jar",
+      "size": 600399,
+      "sha256": "b4bd10953d5c1aea4acdf31d41f5c9815857391ee1004eea8540f4f5ed7aa49a",
+      "signature": {
+        "algorithm": "Ed25519",
+        "keyId": "aurora-core-1.1.3-release",
+        "value": "7K9sj+Xc+FU7HSvzJP5vQo4uNsC8XcXmamP4a5fzQ4uArVJT5Tb2scYt8YP12UqZ0e69lkOm4qoGn7yoUUZODQ=="
+      }
+    },
+    {
+      "minecraft": "1.19.2",
+      "loader": "forge",
+      "loaderVersion": "43.4.16",
+      "loaderVersionRange": "[43,)",
+      "javaRuntime": 17,
+      "buildJdk": 17,
+      "auroraCoreVersion": "1.1.3",
+      "auroraCoreBuild": "aurora-core-forge-1.19.2-1.1.3.jar",
+      "download": "releases/core/1.1.3/1.19.2/forge/aurora-core-forge-1.19.2-1.1.3.jar",
+      "size": 600458,
+      "sha256": "db6422541aca1f1fd1dd856e0692ad134576690c7042241832b15d2fd9b969c1",
+      "signature": {
+        "algorithm": "Ed25519",
+        "keyId": "aurora-core-1.1.3-release",
+        "value": "5OvcMTMlY/e5hagir4pn+GmcTXjQSsc/i4g5FD3KCey+nqR7a1rW6jC5Oum+H/mqsdtjcAfIRdJy9QP+Cj6PBA=="
+      }
+    },
+    {
+      "minecraft": "1.20.1",
+      "loader": "fabric",
+      "loaderVersion": "0.16.14",
+      "loaderVersionRange": ">=0.14.0",
+      "javaRuntime": 17,
+      "buildJdk": 17,
+      "auroraCoreVersion": "1.1.3",
+      "auroraCoreBuild": "aurora-core-fabric-1.20.1-1.1.3.jar",
+      "download": "releases/core/1.1.3/1.20.1/fabric/aurora-core-fabric-1.20.1-1.1.3.jar",
+      "size": 600602,
+      "sha256": "26bdb10a102a2a16adb1aefe876bade0743abd53f3caf866f1ecd6b392c33abe",
+      "signature": {
+        "algorithm": "Ed25519",
+        "keyId": "aurora-core-1.1.3-release",
+        "value": "w+pzCQl09G4dw+PMatzZHJ2tZ62kIiiPF0jonQ3fd97mkzrVhcY17n9qoVEgahaaS+hku/px3F1NCttrObK/Cg=="
+      }
+    },
+    {
+      "minecraft": "1.20.1",
+      "loader": "forge",
+      "loaderVersion": "47.4.23",
+      "loaderVersionRange": "[47,)",
+      "javaRuntime": 17,
+      "buildJdk": 17,
+      "auroraCoreVersion": "1.1.3",
+      "auroraCoreBuild": "aurora-core-forge-1.20.1-1.1.3.jar",
+      "download": "releases/core/1.1.3/1.20.1/forge/aurora-core-forge-1.20.1-1.1.3.jar",
+      "size": 600682,
+      "sha256": "2d451c23bcf2dedb1af719176dd17c6aa0544722c67f12c98da9e376784a9847",
+      "signature": {
+        "algorithm": "Ed25519",
+        "keyId": "aurora-core-1.1.3-release",
+        "value": "qWGN+LsklCP+MHuoY358k6SQ1i01105vWwRs9P42woMkAR9o0QpxS0G3DpM7No53JLMmZ9W54KHK7+eQOgQQCw=="
+      }
+    },
+    {
+      "minecraft": "1.21.1",
+      "loader": "fabric",
+      "loaderVersion": "0.16.14",
+      "loaderVersionRange": ">=0.16.10",
+      "javaRuntime": 21,
+      "buildJdk": 21,
+      "auroraCoreVersion": "1.1.3",
+      "auroraCoreBuild": "aurora-core-fabric-1.21.1-1.1.3.jar",
+      "download": "releases/core/1.1.3/1.21.1/fabric/aurora-core-fabric-1.21.1-1.1.3.jar",
+      "size": 196142,
+      "sha256": "165df8226871924b40c19ff9ebd24cc85bb441a8937ebd5014558bf4e9c20bd8",
+      "signature": {
+        "algorithm": "Ed25519",
+        "keyId": "aurora-core-1.1.3-release",
+        "value": "ZNGDoy00NxuhCb+53NZPDF0/R1sXmW0W9yCI6xfqlauGtn6ZvWDrfFMvYvdkPcdV+H7STUVHEwD3XqHMEzIaCA=="
+      }
+    },
+    {
+      "minecraft": "1.21.1",
+      "loader": "forge",
+      "loaderVersion": "52.1.12",
+      "loaderVersionRange": "[52,)",
+      "javaRuntime": 21,
+      "buildJdk": 21,
+      "auroraCoreVersion": "1.1.3",
+      "auroraCoreBuild": "aurora-core-forge-1.21.1-1.1.3.jar",
+      "download": "releases/core/1.1.3/1.21.1/forge/aurora-core-forge-1.21.1-1.1.3.jar",
+      "size": 196380,
+      "sha256": "74e5509ba5ed5d2b1c56edd8cf47b4d2f96451e174e0272a8a7fe268137152bd",
+      "signature": {
+        "algorithm": "Ed25519",
+        "keyId": "aurora-core-1.1.3-release",
+        "value": "TWxO3VqrGAi1uZU1dzQS0UwwfHbajO4JxqwiFHjnPSsciiork9k/QEbKTRzjcGUiJu6wFiU9SNe2/FYq/8dCDg=="
+      }
+    }
+  ]
+}

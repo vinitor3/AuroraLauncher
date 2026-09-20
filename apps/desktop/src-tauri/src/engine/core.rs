@@ -12,10 +12,10 @@ use thiserror::Error;
 use super::{Instance, InstanceError};
 
 const MANIFEST_JSON: &str =
-    include_str!("../../../../../apps/aurora-core/compatibility-manifest-1.1.2.json");
-const TRUSTED_KEY_ID: &str = "aurora-core-1.1.2-release";
+    include_str!("../../../../../apps/aurora-core/compatibility-manifest-1.1.4.json");
+const TRUSTED_KEY_ID: &str = "aurora-core-1.1.4-release";
 const TRUSTED_PUBLIC_KEY: &str =
-    include_str!("../../../../../apps/aurora-core/trusted-public-key-1.1.2.txt");
+    include_str!("../../../../../apps/aurora-core/trusted-public-key-1.1.4.txt");
 
 #[derive(Debug, Error)]
 pub enum AuroraCoreError {
@@ -155,31 +155,31 @@ fn verify_artifact(
 fn embedded_artifact(minecraft: &str, loader: &str) -> Option<&'static [u8]> {
     Some(match (minecraft, loader) {
         ("1.12.2", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.2/1.12.2/forge/aurora-core-forge-1.12.2-1.1.2.jar"
+            "../../../../../releases/core/1.1.4/1.12.2/forge/aurora-core-forge-1.12.2-1.1.4.jar"
         ),
         ("1.16.5", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.2/1.16.5/fabric/aurora-core-fabric-1.16.5-1.1.2.jar"
+            "../../../../../releases/core/1.1.4/1.16.5/fabric/aurora-core-fabric-1.16.5-1.1.4.jar"
         ),
         ("1.16.5", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.2/1.16.5/forge/aurora-core-forge-1.16.5-1.1.2.jar"
+            "../../../../../releases/core/1.1.4/1.16.5/forge/aurora-core-forge-1.16.5-1.1.4.jar"
         ),
         ("1.19.2", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.2/1.19.2/fabric/aurora-core-fabric-1.19.2-1.1.2.jar"
+            "../../../../../releases/core/1.1.4/1.19.2/fabric/aurora-core-fabric-1.19.2-1.1.4.jar"
         ),
         ("1.19.2", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.2/1.19.2/forge/aurora-core-forge-1.19.2-1.1.2.jar"
+            "../../../../../releases/core/1.1.4/1.19.2/forge/aurora-core-forge-1.19.2-1.1.4.jar"
         ),
         ("1.20.1", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.2/1.20.1/fabric/aurora-core-fabric-1.20.1-1.1.2.jar"
+            "../../../../../releases/core/1.1.4/1.20.1/fabric/aurora-core-fabric-1.20.1-1.1.4.jar"
         ),
         ("1.20.1", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.2/1.20.1/forge/aurora-core-forge-1.20.1-1.1.2.jar"
+            "../../../../../releases/core/1.1.4/1.20.1/forge/aurora-core-forge-1.20.1-1.1.4.jar"
         ),
         ("1.21.1", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.2/1.21.1/fabric/aurora-core-fabric-1.21.1-1.1.2.jar"
+            "../../../../../releases/core/1.1.4/1.21.1/fabric/aurora-core-fabric-1.21.1-1.1.4.jar"
         ),
         ("1.21.1", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.2/1.21.1/forge/aurora-core-forge-1.21.1-1.1.2.jar"
+            "../../../../../releases/core/1.1.4/1.21.1/forge/aurora-core-forge-1.21.1-1.1.4.jar"
         ),
         _ => return None,
     })
@@ -260,6 +260,34 @@ mod tests {
             }
         }
         fs::remove_dir_all(test_root).expect("limpeza do teste");
+    }
+
+    #[test]
+    fn legacy_mcmod_version_matches_selected_manifest_build() {
+        let manifest = aurora_core_manifest().expect("manifesto válido");
+        let build = manifest
+            .builds
+            .iter()
+            .find(|build| build.minecraft == "1.12.2" && build.loader == "forge")
+            .expect("Core legado deve constar no manifesto");
+        let bytes =
+            embedded_artifact(&build.minecraft, &build.loader).expect("artefato legado embutido");
+        let mut archive = ZipArchive::new(std::io::Cursor::new(bytes)).expect("JAR válido");
+        let metadata: serde_json::Value =
+            serde_json::from_reader(archive.by_name("mcmod.info").expect("mcmod.info presente"))
+                .expect("mcmod.info deve ser JSON válido");
+        let core = metadata
+            .as_array()
+            .expect("mcmod.info deve conter uma lista de mods")
+            .iter()
+            .find(|entry| entry["modid"] == "aurora_core")
+            .expect("metadados do aurora_core presentes");
+        assert_eq!(
+            core["version"].as_str(),
+            Some(build.aurora_core_version.as_str()),
+            "mcmod.info diverge da versão selecionada no manifesto: {}",
+            build.aurora_core_build
+        );
     }
 
     #[test]
