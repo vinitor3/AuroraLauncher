@@ -5,11 +5,11 @@ deve ser sobrescrito nem removido.
 
 ## Fluxo obrigatório do instalador desktop
 
-Release mais recente: **0.1.1-alpha.7**, compilada em 17/09/2026. Inclui alpha.6
-mais downloads externos automáticos autorizados, restauração animada de sessão,
-processos sem console visível e recuperação persistente da skin equipada.
+Release mais recente: **0.1.1-alpha.8**, compilada em 19/09/2026. Inclui alpha.7,
+reforço visual da animação de carregamento e reparos de runtime com Core 1.1.4,
+Skins 0.2.4 e Companion 0.2.3.
 Artefato, SHA-256 e manifesto estão nesta pasta; evidências em
-[`task-release-alpha7.md`](../docs/task-release-alpha7.md).
+[`task-release-alpha8.md`](../docs/task-release-alpha8.md).
 Build e matriz 27/27 aprovados; gameplay permanece **IMPLEMENTADO MAS NÃO
 HOMOLOGADO**. O instalador não possui assinatura Authenticode.
 
