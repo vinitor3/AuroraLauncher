@@ -629,25 +629,19 @@ async function askGemini(request: Request, env: Env): Promise<Response> {
   const body = await readBody(request);
   const message = boundedText(body.message, 2_000, "Mensagem");
   const mode = optionalBoundedText(body.mode, 20, "Modo");
-  const screenshot = optionalBoundedText(body.screenshotBase64, 2_500_000, "Captura de tela");
-  const complexQuestion = Boolean(screenshot)
-    || message.length > 320
+  if ((mode && mode !== "launcher") || "screenshotBase64" in body) {
+    return error("A integração do Assistente com o jogo foi retirada. Use o Assistente do Aurora Launcher.");
+  }
+  const complexQuestion = message.length > 320
     || /\b(crash|erro|exception|stacktrace|log|config|conflito|incompat|kubejs|script|código|diagn[oó]stico)\b/i.test(message);
   const modelCandidates = complexQuestion
     ? ["gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"]
-    : mode === "inGame"
-      ? ["gemini-3.5-flash-lite", "gemini-2.0-flash-lite"]
-      : ["gemini-3.5-flash-lite", "gemini-3.7-flash", "gemini-2.5-flash"];
+    : ["gemini-3.5-flash-lite", "gemini-3.7-flash", "gemini-2.5-flash"];
   const parts: Array<Record<string, unknown>> = [{ text: message }];
-  if (screenshot) {
-    const match = screenshot.match(/^data:(image\/(?:png|jpeg));base64,(.+)$/s);
-    if (!match) return error("A captura de tela não é uma imagem PNG ou JPEG válida.");
-    parts.unshift({ inlineData: { mimeType: match[1], data: match[2] } });
-  }
   const requestBody = JSON.stringify({
     systemInstruction: {
       parts: [{
-        text: "Você é o Assistente Aurora dentro do Minecraft. Responda em português, de forma curta, segura e útil. Não peça senhas, tokens ou dados privados.",
+        text: "Você é o Assistente do Aurora Launcher. Ajude com Minecraft, mods, desempenho e erros de instâncias. Responda em português, de forma curta, segura e útil. Não peça senhas, tokens ou dados privados.",
       }],
     },
     contents: [{ role: "user", parts }],
