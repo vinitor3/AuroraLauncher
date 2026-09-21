@@ -202,7 +202,6 @@ type LaunchSummary = {
   versionId: string;
   coreInstalled: boolean;
   skinsInstalled: boolean;
-  companionInstalled: boolean;
 };
 type DownloadProgress = {
   label: string;
@@ -222,10 +221,6 @@ type SpeechBoundary = { offsetMs: number; durationMs: number; text: string };
 type SpeechResult = { audioBase64: string; mimeType: string; boundaries: SpeechBoundary[] };
 type IpcEvent =
   | { kind: "Connected"; loader: string; minecraftVersion: string }
-  | { kind: "OverlayRequested" }
-  | { kind: "AssistantRequest"; requestId: string; message: string; screenshotBase64?: string }
-  | { kind: "AssistantListenRequested"; requestId: string }
-  | { kind: "Telemetry"; fps: number; mspt: number; usedMemoryMb: number; dimension?: string }
   | { kind: "Disconnected" };
 type IpcSessionEvent = { processId: number; event: IpcEvent };
 type AuthMode = "login" | "register";
@@ -246,7 +241,7 @@ type SpeechWindow = Window & {
   SpeechRecognition?: new () => SpeechRecognitionLike;
   webkitSpeechRecognition?: new () => SpeechRecognitionLike;
 };
-const COMPANION_SUPPORTED = new Set(["1.12.2", "1.16.5", "1.19.2", "1.20.1", "1.21.1"]);
+const AURORA_MODS_SUPPORTED = new Set(["1.12.2", "1.16.5", "1.19.2", "1.20.1", "1.21.1"]);
 const DEFAULT_FORGE_VERSION: Record<string, string> = {
   "1.12.2": "14.23.5.2860",
   "1.16.5": "36.2.42",
@@ -564,10 +559,7 @@ function curseForgeProjectContentType(project: CurseForgeProject | undefined, fa
   return fallback;
 }
 
-async function playAuroraSpeech(
-  text: string,
-  onCaption?: (caption: string) => void,
-) {
+async function playAuroraSpeech(text: string) {
   const speech = await invoke<SpeechResult>("synthesize_speech", { text });
   if (speech.mimeType !== "audio/mpeg" || !speech.audioBase64) {
     throw new Error("O Edge TTS retornou um áudio incompatível.");
@@ -596,15 +588,6 @@ async function playAuroraSpeech(
   audio.addEventListener("ended", release, { once: true });
   audio.addEventListener("error", release, { once: true });
   audio.addEventListener("pause", release, { once: true });
-  if (onCaption) {
-    audio.addEventListener("timeupdate", () => {
-      const elapsed = audio.currentTime * 1_000;
-      const boundary = speech.boundaries.find(({ offsetMs, durationMs }) =>
-        elapsed >= offsetMs && elapsed <= offsetMs + Math.max(durationMs, 800));
-      onCaption(boundary?.text ?? "");
-    });
-    audio.addEventListener("ended", () => onCaption(""));
-  }
   await new Promise<void>((resolve, reject) => {
     const ready = () => {
       cleanup();
@@ -943,7 +926,7 @@ function LauncherApp() {
   const [notice, setNotice] = useState("Preparando o núcleo Aurora…");
   const [noticeHovered, setNoticeHovered] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>();
-  const [telemetry, setTelemetry] = useState<IpcEvent>();
+  const [coreConnection, setCoreConnection] = useState<IpcEvent>();
   const [skinUrl, setSkinUrl] = useState("");
   const [capeUrl, setCapeUrl] = useState("");
   const [skinModel, setSkinModel] = useState<"classic" | "slim">("classic");
@@ -1210,13 +1193,9 @@ function LauncherApp() {
   useEffect(() => {
     register("Ctrl+Alt+/", (event) => {
       if (event.state === "Pressed") {
-        void invoke<boolean>("toggle_ipc_assistant")
-          .then((deliveredToGame) => {
-            if (!deliveredToGame) setAssistantOpen((current) => !current);
-          })
-          .catch(() => setAssistantOpen((current) => !current));
+        setAssistantOpen((current) => !current);
       }
-    }).catch(() => setNotice("Atalho AltGr + / indisponível neste computador."));
+    }).catch(() => setNotice("Atalho Ctrl+Alt+/ indisponível neste computador."));
   }, []);
   useEffect(() => {
     if (!configReady) return;
@@ -1415,70 +1394,6 @@ function LauncherApp() {
     if (skin.image) URL.revokeObjectURL(skin.previewUrl);
   }), [localSkins]);
   useEffect(() => {
-    async function answerInGame(processId: number, event: Extract<IpcEvent, { kind: "AssistantRequest" }>) {
-      if (!services) {
-        await invoke("send_ipc_assistant_response", {
-          processId,
-          requestId: event.requestId,
-          text: null,
-          error: "Entre na sua conta Aurora no launcher para usar o Assistente.",
-        }).catch(() => undefined);
-        return;
-      }
-      try {
-        const answer = await askAuroraAssistant(services, event.message, {
-          mode: "inGame",
-          screenshotBase64: event.screenshotBase64,
-        });
-        await invoke("send_ipc_assistant_response", {
-          processId,
-          requestId: event.requestId,
-          text: answer,
-          error: null,
-        });
-        let lastCaption = "";
-        void playAuroraSpeech(answer, (caption) => {
-          if (caption === lastCaption) return;
-          lastCaption = caption;
-          void invoke("send_ipc_caption", { processId, requestId: event.requestId, caption }).catch(() => undefined);
-        }).catch(() => undefined);
-      } catch (error) {
-        await invoke("send_ipc_assistant_response", {
-          processId,
-          requestId: event.requestId,
-          text: null,
-          error: error instanceof Error ? error.message : "O Assistente Aurora não respondeu.",
-        }).catch(() => undefined);
-      }
-    }
-    function listenInGame(processId: number, event: Extract<IpcEvent, { kind: "AssistantListenRequested" }>) {
-      const SpeechRecognition = (window as SpeechWindow).SpeechRecognition ?? (window as SpeechWindow).webkitSpeechRecognition;
-      if (!SpeechRecognition) {
-        void invoke("send_ipc_transcript", {
-          processId,
-          requestId: event.requestId,
-          text: null,
-          error: "O reconhecimento de voz não está disponível neste computador.",
-        });
-        return;
-      }
-      const recognition = new SpeechRecognition();
-      let completed = false;
-      const respond = (text: string | null, error: string | null) => {
-        if (completed) return;
-        completed = true;
-        void invoke("send_ipc_transcript", { processId, requestId: event.requestId, text, error }).catch(() => undefined);
-      };
-      recognition.lang = "pt-BR";
-      recognition.interimResults = false;
-      recognition.onresult = (result) => {
-        const transcript = result.results[0]?.[0]?.transcript?.trim() ?? "";
-        respond(transcript || null, transcript ? null : "Não consegui compreender o áudio.");
-      };
-      recognition.onerror = () => respond(null, "Não consegui acessar ou compreender o microfone.");
-      recognition.onend = () => respond(null, "Nenhuma fala foi detectada.");
-      recognition.start();
-    }
     const refreshRunningInstances = () => {
       invoke<RunningInstance[]>("list_running_instances")
         .then(setRunningInstances)
@@ -1489,17 +1404,16 @@ function LauncherApp() {
       refreshRunningInstances();
       invoke<IpcSessionEvent[]>("poll_ipc_events")
         .then((sessionEvents) => {
-          for (const { processId, event } of sessionEvents) {
-            if (event.kind === "AssistantRequest") void answerInGame(processId, event);
-            if (event.kind === "AssistantListenRequested") listenInGame(processId, event);
+          for (const { event } of sessionEvents) {
+            if (event.kind === "Connected" || event.kind === "Disconnected") {
+              setCoreConnection(event);
+            }
           }
-          const last = sessionEvents.at(-1)?.event;
-          if (last) setTelemetry(last);
         })
         .catch(() => undefined);
     }, 1_000);
     return () => window.clearInterval(timer);
-  }, [services]);
+  }, []);
   async function downloadCurseForgeContentAutomatically(options: {
     id: string;
     pageUrl: string;
@@ -3021,7 +2935,7 @@ function LauncherApp() {
         { instanceId, processId: result.processId },
       ]);
       setNotice(
-        `“${instanceId}” está rodando (processo ${result.processId}) com o perfil ${result.versionId}${result.coreInstalled ? " e Aurora Core" : ""}${result.skinsInstalled ? " + Skins" : ""}${result.companionInstalled ? " + Companion" : ""}.`,
+        `“${instanceId}” está rodando (processo ${result.processId}) com o perfil ${result.versionId}${result.coreInstalled ? " e Aurora Core" : ""}${result.skinsInstalled ? " + Skins" : ""}.`,
       );
     } catch (error) {
       setNotice(`Não foi possível iniciar Minecraft: ${String(error)}`);
@@ -3555,8 +3469,8 @@ function LauncherApp() {
               Instalar {loaderChoice === "fabric" ? "Fabric" : "Forge"}
             </button>
           </form>
-          {!COMPANION_SUPPORTED.has(minecraftVersion) && (
-            <p className="muted">Companion Aurora ainda está em desenvolvimento para esta versão.</p>
+          {!AURORA_MODS_SUPPORTED.has(minecraftVersion) && (
+            <p className="muted">Aurora Core e Skins ainda não oferecem suporte a esta versão.</p>
           )}
           <p className="muted version-note">Esta versão mostra apenas releases estáveis. Snapshots, betas e NeoForge serão liberados quando a engine oferecer instalação verificável.</p>
             </section>
@@ -3892,20 +3806,10 @@ function LauncherApp() {
               </div>
             </div>
           </article>
-          {telemetry && (
+          {coreConnection && (
             <article className="panel status">
-              <p className="eyebrow">COMPANION</p>
-              {telemetry.kind === "Telemetry" ? (
-                <p>
-                  <strong>{telemetry.fps.toFixed(0)} FPS</strong> · {telemetry.mspt.toFixed(1)} MSPT
-                  <br />
-                  {telemetry.usedMemoryMb} MB · {telemetry.dimension ?? "Mundo carregando"}
-                </p>
-              ) : telemetry.kind === "OverlayRequested" ? (
-                <p>Overlay aberto pelo Companion.</p>
-              ) : (
-                <p>{telemetry.kind === "Connected" ? `Conectado: ${telemetry.loader} ${telemetry.minecraftVersion}` : "Companion desconectado."}</p>
-              )}
+              <p className="eyebrow">AURORA CORE</p>
+              <p>{coreConnection.kind === "Connected" ? `Conectado: ${coreConnection.loader} ${coreConnection.minecraftVersion}` : "Aurora Core desconectado."}</p>
             </article>
           )}
         </aside>

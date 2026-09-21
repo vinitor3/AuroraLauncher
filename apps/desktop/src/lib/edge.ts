@@ -41,7 +41,6 @@ async function request<T>(
 export async function askAuroraAssistant(
   services: FirebaseServices,
   message: string,
-  options?: { mode?: "launcher" | "inGame"; screenshotBase64?: string },
 ) {
   const trimmed = message.trim();
   if (!trimmed || trimmed.length > 2_000) throw new Error("A mensagem deve ter entre 1 e 2.000 caracteres.");
@@ -50,8 +49,7 @@ export async function askAuroraAssistant(
     "/v1/assistant",
     {
       message: trimmed,
-      mode: options?.mode ?? "launcher",
-      ...(options?.screenshotBase64 ? { screenshotBase64: options.screenshotBase64 } : {}),
+      mode: "launcher",
     },
     70_000,
   )).text;
