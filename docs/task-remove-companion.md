@@ -82,7 +82,7 @@ Resultados executados em 21/09/2026, na worktree desta tarefa:
 | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-mod-release-matrix.ps1 -SkipBuild`, após os dois rebuilds | 18/18 PASS | comparador estrito de todas as entradas; 9 hashes/tamanhos/assinaturas Ed25519 Core PASS; Skins histórico intacto |
 | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-mod-release-matrix.test.ps1` | 4/4 PASS | rejeita classe Companion, conteúdo divergente, alvo faltante e JAR extra sem tocar em releases reais |
 | `node --check` dos smokes desktop/aparência/Core-Skins | PASS | sintaxe; scripts nativos dependem de WebView QA e não foram executados |
-| Links Markdown relativos + `git diff --check` | PASS | 85 documentos verificados, zero links quebrados; Companion IPC renomeado e índices atualizados |
+| Links Markdown relativos + `git diff --check` | PASS | 84 documentos verificados, zero links quebrados; Companion IPC renomeado e índices atualizados |
 
 Os nove testes focados da migração passaram, incluindo todos os **47 JARs históricos** do catálogo com hash/metadata reais, nomes estáveis/versionados/desativados, repetição, identidade incerta, terceiros, trava de processo/guard incorreto, journal antes/depois da movimentação, traversal e junction Windows. Fixtures separadas validam comparação exata de `--gameDir` (aspas, barras/case, prefixo semelhante e classpath) e o teste de IPC usa o wire serializado real `connected`/`minecraft_version`.
 
