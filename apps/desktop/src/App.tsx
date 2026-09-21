@@ -219,9 +219,10 @@ type DownloadProgress = {
 };
 type SpeechBoundary = { offsetMs: number; durationMs: number; text: string };
 type SpeechResult = { audioBase64: string; mimeType: string; boundaries: SpeechBoundary[] };
-type IpcEvent =
-  | { kind: "Connected"; loader: string; minecraftVersion: string }
-  | { kind: "Disconnected" };
+type CoreConnection =
+  | { kind: "connected"; loader: string; minecraft_version: string }
+  | { kind: "disconnected" };
+type IpcEvent = CoreConnection | { kind: "moduleEvent"; name: string; payload: unknown };
 type IpcSessionEvent = { processId: number; event: IpcEvent };
 type AuthMode = "login" | "register";
 type SkinAddMode = "file" | "url" | "username";
@@ -926,7 +927,7 @@ function LauncherApp() {
   const [notice, setNotice] = useState("Preparando o núcleo Aurora…");
   const [noticeHovered, setNoticeHovered] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>();
-  const [coreConnection, setCoreConnection] = useState<IpcEvent>();
+  const [coreConnection, setCoreConnection] = useState<CoreConnection>();
   const [skinUrl, setSkinUrl] = useState("");
   const [capeUrl, setCapeUrl] = useState("");
   const [skinModel, setSkinModel] = useState<"classic" | "slim">("classic");
@@ -1405,7 +1406,7 @@ function LauncherApp() {
       invoke<IpcSessionEvent[]>("poll_ipc_events")
         .then((sessionEvents) => {
           for (const { event } of sessionEvents) {
-            if (event.kind === "Connected" || event.kind === "Disconnected") {
+            if (event.kind === "connected" || event.kind === "disconnected") {
               setCoreConnection(event);
             }
           }
@@ -3809,7 +3810,7 @@ function LauncherApp() {
           {coreConnection && (
             <article className="panel status">
               <p className="eyebrow">AURORA CORE</p>
-              <p>{coreConnection.kind === "Connected" ? `Conectado: ${coreConnection.loader} ${coreConnection.minecraftVersion}` : "Aurora Core desconectado."}</p>
+              <p>{coreConnection.kind === "connected" ? `Conectado: ${coreConnection.loader} ${coreConnection.minecraft_version}` : "Aurora Core desconectado."}</p>
             </article>
           )}
         </aside>

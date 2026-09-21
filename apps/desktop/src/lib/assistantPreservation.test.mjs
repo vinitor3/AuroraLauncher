@@ -56,6 +56,59 @@ test("Ctrl+Alt+/ alterna o painel em Pressed, ignora Released e dispensa qualque
   assert.match(notices.at(-1), /Ctrl\+Alt\+\/ indisponível/);
 });
 
+test("polling preserva processos e renderiza o contrato serializado do Core sem tratar pedidos legados", async () => {
+  let effect;
+  let card;
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === "useEffect"
+      && node.arguments[0]?.getText(source).includes('"poll_ipc_events"')) effect = node.arguments[0];
+    if (ts.isJsxExpression(node) && node.expression?.getText(source).startsWith("coreConnection &&")) card = node.expression;
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  assert.ok(effect);
+  assert.ok(card);
+  const events = [
+    [{ processId: 123, event: { kind: "connected", loader: "fabric", minecraft_version: "1.20.1" } }],
+    [{ processId: 123, event: { kind: "moduleEvent", name: "skins.ready", payload: {} } },
+      { processId: 123, event: { kind: "assistantRequest", requestId: "retired", message: "Ignore me" } }],
+    [{ processId: 123, event: { kind: "disconnected" } }],
+  ];
+  const connections = [];
+  const processes = [];
+  let tick;
+  let cleared = false;
+  const run = compile(effect.getText(source), {
+    invoke: async (command) => {
+      if (command === "list_running_instances") return [{ instanceId: "qa", processId: 123 }];
+      if (command === "poll_ipc_events") return events.shift();
+      assert.fail(`Comando inesperado: ${command}`);
+    },
+    window: {
+      setInterval: (callback, interval) => { assert.equal(interval, 1_000); tick = callback; return 7; },
+      clearInterval: (id) => { assert.equal(id, 7); cleared = true; },
+    },
+    setRunningInstances: (value) => processes.push(value),
+    setCoreConnection: (value) => connections.push(value),
+  });
+  const render = compile(`(coreConnection) => (${card.getText(source)})`, {
+    createElement: (type, props, ...children) => ({ type, props, children }),
+  });
+  const stop = run();
+  tick();
+  await new Promise(setImmediate);
+  assert.match(JSON.stringify(render(connections.at(-1))), /Conectado: fabric 1\.20\.1/);
+  tick();
+  await new Promise(setImmediate);
+  assert.equal(connections.length, 1, "evento de módulo ou ponte retirada não substitui o diagnóstico");
+  tick();
+  await new Promise(setImmediate);
+  assert.equal(processes.length, 4, "processos são atualizados inicialmente e em cada tick");
+  assert.match(JSON.stringify(render(connections.at(-1))), /Aurora Core desconectado/);
+  stop();
+  assert.equal(cleared, true);
+});
+
 function speechHarness({ mimeType = "audio/mpeg", audioBase64 = btoa("a".repeat(128)), loadError = false, playError = false } = {}) {
   const revoked = [];
   let audio;
