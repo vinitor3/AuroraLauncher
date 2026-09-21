@@ -1,0 +1,194 @@
+{
+  "schemaVersion": 1,
+  "identity": "aurora_companion",
+  "artifacts": [
+    {
+      "sha256": "01f23b336ad1f6648768759284ba10f3b3a0c8af98bf0dd6cfb4b53ab5a3c339",
+      "source": "releases/companion/1.12.2/forge/aurora-companion-forge-1.12.2-0.1.0.jar"
+    },
+    {
+      "sha256": "fcfa89aef332bce031cb36063a1f50786197aec3b990c6bc7e4ece344037073e",
+      "source": "releases/companion/1.12.2/forge/aurora-companion-forge-1.12.2-0.2.0.jar"
+    },
+    {
+      "sha256": "7b87aa26db7931299979a5c857ad54b20bd3be17952c5edc0f374d7c07ec38c0",
+      "source": "releases/companion/1.12.2/forge/aurora-companion-forge-1.12.2-0.2.1.jar"
+    },
+    {
+      "sha256": "6714e57312c91bd5ddbc6008e5bfd6bd14c30e88f9dda24b4aff4e76575ccced",
+      "source": "releases/companion/1.12.2/forge/aurora-companion-forge-1.12.2-0.2.2.jar"
+    },
+    {
+      "sha256": "560ccce43b42e6834641a0c153db5906238832a2088bd47aa9879f0d404c19f4",
+      "source": "releases/companion/1.12.2/forge/aurora-companion-forge-1.12.2-0.2.3.jar"
+    },
+    {
+      "sha256": "df1ebe11e2ca731d7fae44453bc81726458a9c8300e60aeb99fdca13903ba643",
+      "source": "releases/companion/1.16.5/fabric/aurora-companion-fabric-1.16.5-0.1.0.jar"
+    },
+    {
+      "sha256": "461eaaea2ff580766409ba6be74c923f64e9e4dc3dd4d0af887a17b98e5f0800",
+      "source": "releases/companion/1.16.5/fabric/aurora-companion-fabric-1.16.5-0.2.0.jar"
+    },
+    {
+      "sha256": "f41d915278b92ea546d926b4c48bf7a7369c1d234189c4f2bd0631c8e565a0d3",
+      "source": "releases/companion/1.16.5/fabric/aurora-companion-fabric-1.16.5-0.2.1.jar"
+    },
+    {
+      "sha256": "41b5b6af43bc9385468306596391a6c065cff37b87f29f26ab05f0d719c05f84",
+      "source": "releases/companion/1.16.5/fabric/aurora-companion-fabric-1.16.5-0.2.2.jar"
+    },
+    {
+      "sha256": "d2b503f30fc9fbeaacbf46e962ab3d01f9ff9213deecf9c449097bfc784fce49",
+      "source": "releases/companion/1.16.5/fabric/aurora-companion-fabric-1.16.5-0.2.3.jar"
+    },
+    {
+      "sha256": "c372b20669822e8c495b6f2b915cf2fac6a21d3d4b2313ac805d4a9272c8ffb8",
+      "source": "releases/companion/1.16.5/forge/aurora-companion-forge-1.16.5-0.1.0.jar"
+    },
+    {
+      "sha256": "e68f9f2bb76bf13716858f19ceefa3188461fc4686098422eec08b9260f14fb2",
+      "source": "releases/companion/1.16.5/forge/aurora-companion-forge-1.16.5-0.2.0.jar"
+    },
+    {
+      "sha256": "281dcd4c11b7bc299059cfd90a1441e90e5db04ff9fa06bddc46de8a0ad8a47e",
+      "source": "releases/companion/1.16.5/forge/aurora-companion-forge-1.16.5-0.2.1.jar"
+    },
+    {
+      "sha256": "b29edb9900bcd511f71ab52322248f209ac435c3ccde127ebba5bbd351b21ea5",
+      "source": "releases/companion/1.16.5/forge/aurora-companion-forge-1.16.5-0.2.2.jar"
+    },
+    {
+      "sha256": "b81662c124fae9395f7afaa3031ae725e54ed56bd6b88a492527ebd88a6d7154",
+      "source": "releases/companion/1.16.5/forge/aurora-companion-forge-1.16.5-0.2.3.jar"
+    },
+    {
+      "sha256": "c09c62f15b65b75f3369b04c8a336bf60c799faefb4de624b2c0d9fc2e2b0959",
+      "source": "releases/companion/1.19.2/fabric/aurora-companion-fabric-1.19.2-0.1.0.jar"
+    },
+    {
+      "sha256": "b8b0d9d187da7dda7dde8b1b1d7ef21ab0764d07455ff06dfe5bc9545a978102",
+      "source": "releases/companion/1.19.2/fabric/aurora-companion-fabric-1.19.2-0.2.0.jar"
+    },
+    {
+      "sha256": "5e354216327b78ceebc94772485ed06dbab9592449645e0c6b23070b5c48fc46",
+      "source": "releases/companion/1.19.2/fabric/aurora-companion-fabric-1.19.2-0.2.1.jar"
+    },
+    {
+      "sha256": "8f439c2d2b5ee45ff260c6ec1a1627f6f267934651c78a43a132d8b22a474305",
+      "source": "releases/companion/1.19.2/fabric/aurora-companion-fabric-1.19.2-0.2.2.jar"
+    },
+    {
+      "sha256": "6015596d64fa035ae427434935b1e7e9a376b23357d935c6d925f67d1641eef8",
+      "source": "releases/companion/1.19.2/fabric/aurora-companion-fabric-1.19.2-0.2.3.jar"
+    },
+    {
+      "sha256": "561c47e36685293ebcb57bada8c34e127c790173bb80d523d7404bea7df86349",
+      "source": "releases/companion/1.19.2/forge/aurora-companion-forge-1.19.2-0.1.0.jar"
+    },
+    {
+      "sha256": "4b27c29f7d27770d5e3ef36a13c208d46bc1dc2296d5c802be9821289d3c2c66",
+      "source": "releases/companion/1.19.2/forge/aurora-companion-forge-1.19.2-0.2.0.jar"
+    },
+    {
+      "sha256": "cade7b4eed003a1defadd5b4828ee6db2abba616032426ff2bba2e2ba2a05c3d",
+      "source": "releases/companion/1.19.2/forge/aurora-companion-forge-1.19.2-0.2.1.jar"
+    },
+    {
+      "sha256": "cb56278bf8f9fd616cf78dc4ad03d1236746c0df063bd71a2501bce97fa981f7",
+      "source": "releases/companion/1.19.2/forge/aurora-companion-forge-1.19.2-0.2.2.jar"
+    },
+    {
+      "sha256": "317c3119eba7cc98473ca6bedd7cc640381d9b7e373c40a233766a69e55c3157",
+      "source": "releases/companion/1.19.2/forge/aurora-companion-forge-1.19.2-0.2.3.jar"
+    },
+    {
+      "sha256": "bf4e721fd9afb603e85cd953c62903f0636109dc9dfedc082c447649fb3346a5",
+      "source": "releases/companion/1.20.1/fabric/aurora-companion-fabric-1.20.1-0.1.0.jar"
+    },
+    {
+      "sha256": "b2f15823b4ce1fa1d8a327285470dc421755c0bd5604731a86b97c71e6ffc505",
+      "source": "releases/companion/1.20.1/fabric/aurora-companion-fabric-1.20.1-0.2.0.jar"
+    },
+    {
+      "sha256": "2ba81c6adf353fd44633d1a776e6d7daf237aae406b1f9a8d7d342171ed7fbc7",
+      "source": "releases/companion/1.20.1/fabric/aurora-companion-fabric-1.20.1-0.2.1.jar"
+    },
+    {
+      "sha256": "af1cedb8b7de009509b36d4268d7ad09b8870d8f9353b70f178981ad3cb727af",
+      "source": "releases/companion/1.20.1/fabric/aurora-companion-fabric-1.20.1-0.2.2.jar"
+    },
+    {
+      "sha256": "710c384304f2ae8bfa4b55c71c83c3e00d27953fc1b73a08441dac61fe9228d1",
+      "source": "releases/companion/1.20.1/fabric/aurora-companion-fabric-1.20.1-0.2.3.jar"
+    },
+    {
+      "sha256": "6c9a3f3051be2fbab86de5cced65f5168ecac42b1283dbfdf7106a822563c45d",
+      "source": "releases/companion/1.20.1/forge/aurora-companion-forge-1.20.1-0.1.0.jar"
+    },
+    {
+      "sha256": "723f7cc17db7ced220a4b4aeba44f6dbd1e1532ab226263e18fff09cc8c93f05",
+      "source": "releases/companion/1.20.1/forge/aurora-companion-forge-1.20.1-0.2.0.jar"
+    },
+    {
+      "sha256": "6af178fcdde3b208ecdeb25cdad9164c3951fb8dd3c53e024ce11bd72ac72f03",
+      "source": "releases/companion/1.20.1/forge/aurora-companion-forge-1.20.1-0.2.1.jar"
+    },
+    {
+      "sha256": "f894b3751479bd4c44e9a77489544d3a8821d5859b0ac65417907fe45e610d95",
+      "source": "releases/companion/1.20.1/forge/aurora-companion-forge-1.20.1-0.2.2.jar"
+    },
+    {
+      "sha256": "22cd7a0d91a08b5395c0dd4e71d03de26a99b274b47a80c750ffee3fc06bd97f",
+      "source": "releases/companion/1.20.1/forge/aurora-companion-forge-1.20.1-0.2.3.jar"
+    },
+    {
+      "sha256": "133b21e012f44785fde6a3d1ef25fe76121ff78c905ee24d163a421506b88fec",
+      "source": "releases/companion/1.21.1/fabric/aurora-companion-fabric-1.21.1-0.1.0.jar"
+    },
+    {
+      "sha256": "9c8eaf8653e79e9c1f7f42e95daf1492050f5876586a85376c6e4b95ffce6547",
+      "source": "releases/companion/1.21.1/fabric/aurora-companion-fabric-1.21.1-0.2.0.jar"
+    },
+    {
+      "sha256": "a545f3032267667a9ba5494644f296d2409f7e0f5fc2d2455a4859536a39e6c4",
+      "source": "releases/companion/1.21.1/fabric/aurora-companion-fabric-1.21.1-0.2.1.jar"
+    },
+    {
+      "sha256": "41a3c38f9b6909178bd76685e5933ee3b8c78757202d29a8a1aeebb8a7d3cef2",
+      "source": "releases/companion/1.21.1/fabric/aurora-companion-fabric-1.21.1-0.2.2.jar"
+    },
+    {
+      "sha256": "fce9562586a202d3ea0168faefbbf97f1054d6d908151261acdf4565520c4284",
+      "source": "releases/companion/1.21.1/fabric/aurora-companion-fabric-1.21.1-0.2.3.jar"
+    },
+    {
+      "sha256": "e4c00901fbfe44f55148380c0d4fbff547e22f7bdaed840a7b5c5bf2a013b27c",
+      "source": "releases/companion/1.21.1/forge/aurora-companion-forge-1.21.1-0.1.0.jar"
+    },
+    {
+      "sha256": "3c0661b0a672766cd20ae4b9493fc3307ff2cf5c59c946cab5343f316978dfa1",
+      "source": "releases/companion/1.21.1/forge/aurora-companion-forge-1.21.1-0.2.0.jar"
+    },
+    {
+      "sha256": "8f94e990f888db528182ffdaa8b6872358002a2bb81c0d17fb407f5b6b29be36",
+      "source": "releases/companion/1.21.1/forge/aurora-companion-forge-1.21.1-0.2.1.jar"
+    },
+    {
+      "sha256": "33fcd0f2469b3abe2ab45860576f4dfc73db83ba62498385b5c759fc8fa22628",
+      "source": "releases/companion/1.21.1/forge/aurora-companion-forge-1.21.1-0.2.2.jar"
+    },
+    {
+      "sha256": "31ed6e90e88f46ceec8677296f38d5ffb42d0b9091be84955c9ff4faa4115fb5",
+      "source": "releases/companion/1.21.1/forge/aurora-companion-forge-1.21.1-0.2.3.jar"
+    },
+    {
+      "sha256": "0b902777942832d75869d1f045512bb5502aa29b9972683919dcdf7fdb6a6670",
+      "source": "releases/companion/fabric/aurora-companion-fabric-0.1.0.jar"
+    },
+    {
+      "sha256": "cb7b2978393db7ddc3a5d14aecda62f92ede81df55649d852c8ff92f144897a6",
+      "source": "releases/companion/forge/aurora-companion-forge-0.1.0.jar"
+    }
+  ]
+}

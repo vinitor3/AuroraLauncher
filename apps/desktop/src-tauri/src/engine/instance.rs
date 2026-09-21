@@ -102,28 +102,6 @@ impl Instance {
         Ok(())
     }
 
-    /// Copia o Companion para a instância sem tocar em outros mods.
-    pub fn install_companion(&self, companion_jar: &Path) -> Result<PathBuf, InstanceError> {
-        self.ensure_layout()?;
-        let filename = companion_jar
-            .file_name()
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| InstanceError::InvalidId(companion_jar.display().to_string()))?;
-        let destination = self.mods_dir().join(filename);
-        fs::copy(companion_jar, &destination)?;
-        Ok(destination)
-    }
-
-    /// Instala um artefato Companion que já foi validado e empacotado pelo
-    /// Aurora. A troca atômica evita deixar um JAR parcialmente gravado.
-    pub fn install_companion_bytes(
-        &self,
-        filename: &str,
-        contents: &[u8],
-    ) -> Result<PathBuf, InstanceError> {
-        self.install_aurora_artifact_bytes(filename, contents)
-    }
-
     /// Instala um JAR oficial Aurora com troca atômica e rollback local.
     pub fn install_aurora_artifact_bytes(
         &self,

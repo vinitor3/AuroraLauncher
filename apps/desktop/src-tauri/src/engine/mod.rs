@@ -1,6 +1,6 @@
 //! Serviços de instância, Java e inicialização da JVM.
 
-mod companion;
+mod companion_migration;
 mod content_updates;
 mod core;
 mod curseforge;
@@ -18,7 +18,7 @@ mod skins;
 mod tts;
 mod version;
 
-pub use companion::{install_embedded_companion, CompanionError};
+pub use companion_migration::{companion_migration_required, migrate_managed_companion};
 pub use content_updates::{
     acquire_instance_mutation_lock, apply_content_updates,
     apply_modrinth_modpack_update_with_progress, apply_remote_content_updates,

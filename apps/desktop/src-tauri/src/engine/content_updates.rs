@@ -309,6 +309,7 @@ struct TransactionFile {
 
 pub struct InstanceMutationGuard {
     _file: File,
+    pub(super) root: PathBuf,
 }
 
 pub fn scan_content_updates(
@@ -2296,7 +2297,10 @@ fn is_protected_pack_path(relative: &str) -> bool {
         })
 }
 
-fn ensure_no_symlink_components(root: &Path, relative: &str) -> Result<(), ContentUpdateError> {
+pub(super) fn ensure_no_symlink_components(
+    root: &Path,
+    relative: &str,
+) -> Result<(), ContentUpdateError> {
     let mut current = root.to_path_buf();
     for component in Path::new(relative).components() {
         let Component::Normal(name) = component else {
@@ -2323,7 +2327,7 @@ fn secure_instance_path(
     checked_join(instance.root(), relative)
 }
 
-fn ensure_instance_root_secure(instance: &Instance) -> Result<(), ContentUpdateError> {
+pub(super) fn ensure_instance_root_secure(instance: &Instance) -> Result<(), ContentUpdateError> {
     let metadata = fs::symlink_metadata(instance.root())
         .map_err(|source| io_error(instance.root(), source))?;
     if !metadata.is_dir() || metadata_is_link(&metadata) {
@@ -2334,7 +2338,7 @@ fn ensure_instance_root_secure(instance: &Instance) -> Result<(), ContentUpdateE
     Ok(())
 }
 
-fn metadata_is_link(metadata: &fs::Metadata) -> bool {
+pub(super) fn metadata_is_link(metadata: &fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
     }
@@ -2519,6 +2523,7 @@ pub fn acquire_instance_mutation_lock(
     ensure_no_symlink_components(instance.root(), ".aurora/content-updates")?;
     fs::create_dir_all(&directory).map_err(|source| io_error(&directory, source))?;
     ensure_no_symlink_components(instance.root(), ".aurora/content-updates")?;
+    ensure_no_symlink_components(instance.root(), ".aurora/content-updates/mutation.lock")?;
     let path = directory.join("mutation.lock");
     let file = OpenOptions::new()
         .read(true)
@@ -2531,7 +2536,13 @@ pub fn acquire_instance_mutation_lock(
         fs::TryLockError::WouldBlock => ContentUpdateError::Busy,
         fs::TryLockError::Error(source) => io_error(&path, source),
     })?;
-    Ok(InstanceMutationGuard { _file: file })
+    Ok(InstanceMutationGuard {
+        _file: file,
+        root: instance
+            .root()
+            .canonicalize()
+            .map_err(|source| io_error(instance.root(), source))?,
+    })
 }
 
 fn transaction_root(instance: &Instance) -> PathBuf {

@@ -58,7 +58,7 @@ pub struct VersionLaunchSpec {
     pub asset_index: String,
     pub jvm_args: Vec<String>,
     pub game_args: Vec<String>,
-    /// Porta loopback do Companion. O token de sessão nunca é colocado aqui.
+    /// Porta loopback do Aurora Core. O token de sessão nunca é colocado aqui.
     pub aurora_ipc_port: Option<u16>,
     /// Nonce efêmero do IPC. Não é uma credencial Firebase e só vale nesta execução.
     pub aurora_session_nonce: Option<String>,
@@ -176,16 +176,10 @@ fn configure_windows_game_output(
 pub struct LauncherEngine;
 
 impl LauncherEngine {
-    /// Cria a estrutura da instância e, quando fornecido, instala o Companion.
-    pub fn prepare_instance(
-        &self,
-        instance: &Instance,
-        companion_jar: Option<&Path>,
-    ) -> Result<Option<PathBuf>, LaunchError> {
+    /// Cria a estrutura da instância gerenciada.
+    pub fn prepare_instance(&self, instance: &Instance) -> Result<(), LaunchError> {
         instance.ensure_layout()?;
-        companion_jar
-            .map(|jar| instance.install_companion(jar).map_err(LaunchError::from))
-            .transpose()
+        Ok(())
     }
 
     pub fn prepare_launch(

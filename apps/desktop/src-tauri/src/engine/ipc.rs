@@ -1,4 +1,4 @@
-//! Canal IPC local entre o Launcher e o Aurora Companion.
+//! Canal IPC local entre o Launcher e o Aurora Core.
 //!
 //! O servidor só escuta em `127.0.0.1` e cada execução recebe um nonce novo.
 //! Esse nonce identifica o processo iniciado pelo Aurora; não é uma credencial
@@ -62,22 +62,6 @@ pub enum IpcEvent {
     Connected {
         loader: String,
         minecraft_version: String,
-    },
-    /// Pedido emitido pelo Companion quando o atalho é pressionado no jogo.
-    OverlayRequested,
-    AssistantRequest {
-        request_id: String,
-        message: String,
-        screenshot_base64: Option<String>,
-    },
-    AssistantListenRequested {
-        request_id: String,
-    },
-    Telemetry {
-        fps: f32,
-        mspt: f32,
-        used_memory_mb: u32,
-        dimension: Option<String>,
     },
     /// Evento extensível de um módulo. Campos com aparência de credencial são
     /// recusados antes de o evento alcançar a interface do Launcher.
@@ -294,39 +278,10 @@ fn handle_connection(
             continue;
         }
 
-        if parsed.kind == "overlay" {
-            let _ = sender.try_send(IpcEvent::OverlayRequested);
-        } else if parsed.kind == "assistantListen" {
-            let Some(request_id) = valid_request_id(parsed.request_id) else {
-                continue;
-            };
-            let _ = sender.try_send(IpcEvent::AssistantListenRequested { request_id });
-        } else if parsed.kind == "assistantRequest" {
-            let Some(request_id) = valid_request_id(parsed.request_id) else {
-                continue;
-            };
-            let Some(message) = parsed
-                .message
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty() && value.chars().count() <= 2_000)
-            else {
-                continue;
-            };
-            let screenshot_base64 = parsed
-                .screenshot_base64
-                .filter(|value| value.len() <= 2_500_000);
-            let _ = sender.try_send(IpcEvent::AssistantRequest {
-                request_id,
-                message,
-                screenshot_base64,
-            });
-        } else if parsed.kind == "telemetry" {
-            let _ = sender.try_send(IpcEvent::Telemetry {
-                fps: parsed.fps.unwrap_or_default().clamp(0.0, 10_000.0),
-                mspt: parsed.mspt.unwrap_or_default().clamp(0.0, 10_000.0),
-                used_memory_mb: parsed.used_memory_mb.unwrap_or_default(),
-                dimension: parsed.dimension,
-            });
+        if retired_companion_message(&parsed.kind) {
+            // Legacy clients cannot reactivate the removed in-game bridge, even
+            // through the generic module-event extension point.
+            continue;
         } else if valid_event_name(&parsed.kind)
             && serde_json::to_vec(&parsed.payload).is_ok_and(|value| value.len() <= 65_536)
             && !contains_sensitive_key(&parsed.payload)
@@ -391,14 +346,18 @@ fn is_sensitive_key(key: &str) -> bool {
     )
 }
 
-fn valid_request_id(value: Option<String>) -> Option<String> {
-    value.filter(|value| {
-        !value.is_empty()
-            && value.len() <= 64
-            && value
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || character == '-')
-    })
+fn retired_companion_message(kind: &str) -> bool {
+    matches!(
+        kind,
+        "overlay"
+            | "toggleAssistant"
+            | "assistantRequest"
+            | "assistantListen"
+            | "assistantResponse"
+            | "assistantCaption"
+            | "assistantTranscript"
+            | "telemetry"
+    )
 }
 
 #[derive(Deserialize)]
@@ -410,13 +369,6 @@ struct WireMessage {
     minecraft_version: Option<String>,
     core_version: Option<String>,
     protocol: Option<u32>,
-    fps: Option<f32>,
-    mspt: Option<f32>,
-    used_memory_mb: Option<u32>,
-    dimension: Option<String>,
-    request_id: Option<String>,
-    message: Option<String>,
-    screenshot_base64: Option<String>,
     #[serde(flatten)]
     payload: BTreeMap<String, serde_json::Value>,
 }
@@ -435,83 +387,94 @@ mod tests {
     }
 
     #[test]
-    fn authenticates_and_exchanges_assistant_messages_both_ways() {
-        let server = IpcServer::start().expect("IPC deve iniciar");
+    fn preserves_core_event_wire_contract() {
+        assert_eq!(
+            serde_json::to_value(IpcEvent::Connected {
+                loader: "fabric".into(),
+                minecraft_version: "1.20.1".into()
+            })
+            .unwrap(),
+            serde_json::json!({
+                "kind": "connected", "loader": "fabric", "minecraft_version": "1.20.1"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(IpcEvent::Disconnected).unwrap(),
+            serde_json::json!({"kind":"disconnected"})
+        );
+    }
+
+    #[test]
+    fn core_events_survive_and_retired_companion_messages_are_ignored() {
+        let server = IpcServer::start().unwrap();
         let endpoint = server.endpoint().clone();
-        let (mut client, _) = connect(format!("ws://127.0.0.1:{}/aurora", endpoint.port))
-            .expect("Companion deve concluir o handshake");
+        let (mut client, _) = connect(format!("ws://127.0.0.1:{}/aurora", endpoint.port)).unwrap();
         client
             .send(Message::Text(
                 serde_json::json!({
-                    "kind": "hello",
-                    "nonce": endpoint.nonce,
-                    "loader": "fabric",
-                    "minecraftVersion": "1.20.1",
-                    "coreVersion": "1.0.0",
-                    "protocol": 1,
+                    "kind": "hello", "nonce": endpoint.nonce, "loader": "fabric",
+                    "minecraftVersion": "1.20.1", "coreVersion": "1.1.5", "protocol": 1
                 })
                 .to_string(),
             ))
-            .expect("hello deve ser enviado");
-        assert_eq!(
-            client
-                .read()
-                .expect("accepted deve chegar")
-                .to_text()
-                .unwrap(),
-            r#"{"kind":"accepted"}"#
-        );
-
-        client
-            .send(Message::Text(
-                r#"{"kind":"assistantRequest","requestId":"test-1","message":"Olá"}"#.into(),
-            ))
             .unwrap();
-        let started = Instant::now();
-        let event = loop {
-            if let Ok(event) = server.try_recv() {
-                if matches!(event, IpcEvent::AssistantRequest { .. }) {
-                    break event;
-                }
-            }
-            assert!(started.elapsed() < Duration::from_secs(2));
-            thread::sleep(Duration::from_millis(10));
-        };
-        assert!(matches!(
-            event,
-            IpcEvent::AssistantRequest { request_id, message, .. }
-                if request_id == "test-1" && message == "Olá"
-        ));
+        assert!(client
+            .read()
+            .unwrap()
+            .to_text()
+            .unwrap()
+            .contains("accepted"));
+        for kind in [
+            "overlay",
+            "assistantRequest",
+            "assistantListen",
+            "telemetry",
+            "assistantResponse",
+            "assistantCaption",
+            "assistantTranscript",
+            "toggleAssistant",
+        ] {
+            client
+                .send(Message::Text(
+                    serde_json::json!({
+                        "kind": kind, "requestId": "legacy-1", "message": "must be ignored"
+                    })
+                    .to_string(),
+                ))
+                .unwrap();
+        }
         client
             .send(Message::Text(
-                r#"{"kind":"assistantListen","requestId":"voice-1"}"#.into(),
+                serde_json::json!({
+                    "kind": "skinChanged", "profile": "test"
+                })
+                .to_string(),
             ))
             .unwrap();
         let started = Instant::now();
         loop {
-            if matches!(
-                server.try_recv(),
-                Ok(IpcEvent::AssistantListenRequested { request_id }) if request_id == "voice-1"
-            ) {
-                break;
+            match server.try_recv() {
+                Ok(IpcEvent::Connected { .. }) => {}
+                Ok(IpcEvent::ModuleEvent { name, payload }) => {
+                    assert_eq!(name, "skinChanged");
+                    assert_eq!(payload["profile"], "test");
+                    break;
+                }
+                Ok(event) => panic!("unexpected event: {event:?}"),
+                Err(_) => thread::sleep(Duration::from_millis(10)),
             }
             assert!(started.elapsed() < Duration::from_secs(2));
-            thread::sleep(Duration::from_millis(10));
         }
         assert!(server.is_connected());
         server
-            .send_json(&serde_json::json!({
-                "kind": "assistantTranscript",
-                "requestId": "voice-1",
-                "text": "Como faço uma espada?"
-            }))
+            .send_json(&serde_json::json!({"kind": "profileUpdated"}))
             .unwrap();
         assert!(client
             .read()
-            .expect("transcrição deve chegar")
+            .unwrap()
             .to_text()
             .unwrap()
-            .contains("assistantTranscript"));
+            .contains("profileUpdated"));
     }
 
     #[test]

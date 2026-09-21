@@ -12,13 +12,13 @@ use aurora_launcher_core::{
         acquire_instance_mutation_lock, apply_content_updates as apply_verified_content_updates,
         apply_modrinth_modpack_update_with_progress as apply_verified_modpack_update,
         apply_remote_content_updates as apply_verified_remote_content_updates,
-        available_java_releases, discover_java_executables, discover_managed_java_executables,
-        ensure_managed_java_with_progress, install_curseforge_modpack_with_progress,
-        install_embedded_companion, install_embedded_core, install_embedded_skins,
+        available_java_releases, companion_migration_required, discover_java_executables,
+        discover_managed_java_executables, ensure_managed_java_with_progress,
+        install_curseforge_modpack_with_progress, install_embedded_core, install_embedded_skins,
         install_modrinth_content_with_progress as install_modrinth_project,
         install_modrinth_modpack_with_progress as install_modrinth_archive,
         install_remote_content_with_progress as install_remote_project,
-        list_modrinth_categories as list_modrinth_catalog_categories,
+        list_modrinth_categories as list_modrinth_catalog_categories, migrate_managed_companion,
         prepare_curseforge_modpack_with_progress, read_cached_curseforge_manifest,
         required_java_major, required_java_major_for_instance, resolve_launch_spec,
         resolve_modrinth_content_artwork,
@@ -109,7 +109,6 @@ pub struct LaunchSummary {
     version_id: String,
     core_installed: bool,
     skins_installed: bool,
-    companion_installed: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -1661,6 +1660,78 @@ pub fn read_instance_launch_profile(
     })
 }
 
+// A JVM can outlive the launcher. Detect it before migration even when this
+// process has no RunningInstances entry. Only a boolean is returned by the
+// child process: command lines (which can contain credentials) never enter logs.
+#[cfg(windows)]
+fn ensure_no_external_instance_game(root: &Path) -> Result<(), String> {
+    run_instance_game_probe(INSTANCE_GAME_PROBE, root, None)
+}
+
+#[cfg(windows)]
+const INSTANCE_GAME_PROBE: &str = r#"$ErrorActionPreference = 'Stop'
+$instancePath = [IO.Path]::GetFullPath($env:AURORA_MIGRATION_INSTANCE).TrimEnd([char[]]'\/')
+$games = Get-CimInstance Win32_Process -Filter "Name='java.exe' OR Name='javaw.exe'"
+foreach ($game in $games) {
+  if ([string]::IsNullOrEmpty($game.CommandLine)) { Write-Output 'UNKNOWN'; exit 0 }
+  $match = [regex]::Match($game.CommandLine, '(?i)(?:^|\s)--gameDir(?:\s+|=)(?:"([^"]*)"|(\S+))')
+  if (!$match.Success) { continue }
+  $gamePath = if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
+  if (![IO.Path]::IsPathRooted($gamePath)) { Write-Output 'UNKNOWN'; exit 0 }
+  $gamePath = [IO.Path]::GetFullPath($gamePath).TrimEnd([char[]]'\/')
+  if ($gamePath -ieq $instancePath) { Write-Output 'RUNNING'; exit 0 }
+}
+Write-Output 'STOPPED'
+"#;
+
+#[cfg(windows)]
+fn run_instance_game_probe(script: &str, root: &Path, fixture: Option<&str>) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let mut command = Command::new("powershell.exe");
+    command.creation_flags(0x08000000);
+    command
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .env("AURORA_MIGRATION_INSTANCE", root)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    if let Some(fixture) = fixture {
+        command.env("AURORA_QA_GAMES", fixture);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|_| "não foi possível verificar se o Minecraft está encerrado".to_owned())?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        if child
+            .try_wait()
+            .map_err(|_| "falha ao verificar processos Minecraft".to_owned())?
+            .is_some()
+        {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(
+                "tempo esgotado ao verificar se o Minecraft está encerrado; tente novamente".into(),
+            );
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|_| "falha ao verificar processos Minecraft".to_owned())?;
+    if output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "STOPPED" {
+        return Ok(());
+    }
+    Err("encerre os processos Minecraft/Java desta instância antes da migração Companion".into())
+}
+
+#[cfg(not(windows))]
+fn ensure_no_external_instance_game(_root: &Path) -> Result<(), String> {
+    Err("a retirada automática do Companion requer verificação de processos disponível no Windows; arquivos preservados".into())
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn launch_instance(
@@ -1687,6 +1758,11 @@ pub fn launch_instance(
     let instance = layout(&app)?.open(id);
     let mutation_lock =
         acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
+    if companion_migration_required(&instance).map_err(|error| error.to_string())? {
+        ensure_no_external_instance_game(instance.root())?;
+        migrate_managed_companion(&instance, &mutation_lock, false)
+            .map_err(|error| error.to_string())?;
+    }
     let java = JavaRuntime::from_executable(java_executable).map_err(|error| error.to_string())?;
     let uuid = offline_uuid_for_nickname(&nickname).map_err(|error| error.to_string())?;
     let mut spec =
@@ -1696,7 +1772,6 @@ pub fn launch_instance(
     let mut ipc_server = None;
     let mut core_installed = false;
     let mut skins_installed = false;
-    let mut companion_installed = false;
     if let Some(loader) = loader {
         install_embedded_core(&instance, &minecraft_version, loader)
             .map_err(|error| error.to_string())?;
@@ -1704,8 +1779,6 @@ pub fn launch_instance(
         install_embedded_skins(&instance, &minecraft_version, loader)
             .map_err(|error| error.to_string())?;
         skins_installed = true;
-        install_embedded_companion(&instance, &minecraft_version, loader)
-            .map_err(|error| error.to_string())?;
         let required_java = required_java_major_for_instance(&instance, &minecraft_version);
         let selected_java = java.major_version().map_err(|error| error.to_string())?;
         let baseline_java = required_java_major(&minecraft_version);
@@ -1750,7 +1823,6 @@ pub fn launch_instance(
                 .push(format!("-Daurora.profile.skinModel={model}"));
         }
         ipc_server = Some(server);
-        companion_installed = true;
     }
     let identity = LaunchIdentity::offline(nickname, uuid);
     let prepared = LauncherEngine
@@ -1796,7 +1868,6 @@ pub fn launch_instance(
         version_id,
         core_installed,
         skins_installed,
-        companion_installed,
     })
 }
 
@@ -1842,103 +1913,6 @@ pub fn poll_ipc_events(sessions: tauri::State<IpcSessions>) -> Vec<IpcSessionEve
             })
         })
         .collect()
-}
-
-#[tauri::command]
-pub fn toggle_ipc_assistant(sessions: tauri::State<IpcSessions>) -> Result<bool, String> {
-    let sessions = sessions
-        .0
-        .lock()
-        .map_err(|_| "não foi possível acessar a sessão do jogo".to_owned())?;
-    let mut delivered = false;
-    for server in sessions.values().filter(|server| server.is_connected()) {
-        server
-            .send_json(&serde_json::json!({ "kind": "toggleAssistant" }))
-            .map_err(|error| error.to_string())?;
-        delivered = true;
-    }
-    Ok(delivered)
-}
-
-#[tauri::command]
-pub fn send_ipc_assistant_response(
-    sessions: tauri::State<IpcSessions>,
-    process_id: u32,
-    request_id: String,
-    text: Option<String>,
-    error: Option<String>,
-) -> Result<(), String> {
-    if request_id.is_empty() || request_id.len() > 64 {
-        return Err("identificador de resposta inválido".to_owned());
-    }
-    let text = text.map(|value| value.chars().take(8_000).collect::<String>());
-    let error = error.map(|value| value.chars().take(500).collect::<String>());
-    let sessions = sessions
-        .0
-        .lock()
-        .map_err(|_| "não foi possível acessar a sessão do jogo".to_owned())?;
-    let server = sessions
-        .get(&process_id)
-        .ok_or_else(|| "a sessão do jogo não está mais conectada".to_owned())?;
-    server
-        .send_json(&serde_json::json!({
-            "kind": "assistantResponse",
-            "requestId": request_id,
-            "text": text,
-            "error": error,
-        }))
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub fn send_ipc_caption(
-    sessions: tauri::State<IpcSessions>,
-    process_id: u32,
-    request_id: String,
-    caption: String,
-) -> Result<(), String> {
-    let sessions = sessions
-        .0
-        .lock()
-        .map_err(|_| "não foi possível acessar a sessão do jogo".to_owned())?;
-    let server = sessions
-        .get(&process_id)
-        .ok_or_else(|| "a sessão do jogo não está mais conectada".to_owned())?;
-    server
-        .send_json(&serde_json::json!({
-            "kind": "assistantCaption",
-            "requestId": request_id,
-            "caption": caption.chars().take(500).collect::<String>(),
-        }))
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub fn send_ipc_transcript(
-    sessions: tauri::State<IpcSessions>,
-    process_id: u32,
-    request_id: String,
-    text: Option<String>,
-    error: Option<String>,
-) -> Result<(), String> {
-    if request_id.is_empty() || request_id.len() > 64 {
-        return Err("identificador de transcrição inválido".to_owned());
-    }
-    let sessions = sessions
-        .0
-        .lock()
-        .map_err(|_| "não foi possível acessar a sessão do jogo".to_owned())?;
-    let server = sessions
-        .get(&process_id)
-        .ok_or_else(|| "a sessão do jogo não está mais conectada".to_owned())?;
-    server
-        .send_json(&serde_json::json!({
-            "kind": "assistantTranscript",
-            "requestId": request_id,
-            "text": text.map(|value| value.chars().take(2_000).collect::<String>()),
-            "error": error.map(|value| value.chars().take(300).collect::<String>()),
-        }))
-        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2315,6 +2289,31 @@ pub fn save_firebase_config(app: AppHandle, config: FirebasePublicConfig) -> Res
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn migration_process_probe_compares_exact_game_directory() {
+        let script = super::INSTANCE_GAME_PROBE.replace(
+            "Get-CimInstance Win32_Process -Filter \"Name='java.exe' OR Name='javaw.exe'\"",
+            "ConvertFrom-Json $env:AURORA_QA_GAMES",
+        );
+        let root = std::path::Path::new(r"C:\Aurora QA\instances\foo");
+        for (line, stopped) in [
+            (
+                r#"java -cp "C:\Aurora QA\instances\foo\library.jar" --gameDir "C:\Aurora QA\instances\foo-copy""#,
+                true,
+            ),
+            (r#"java --gameDir "C:\Aurora QA\instances\foo""#, false),
+            (r#"java --gameDir "c:/aurora qa/instances/foo/""#, false),
+            (r#"java --gameDir C:\other\instance"#, true),
+        ] {
+            let fixture = serde_json::json!([{"CommandLine": line}]).to_string();
+            assert_eq!(
+                super::run_instance_game_probe(&script, root, Some(&fixture)).is_ok(),
+                stopped
+            );
+        }
+    }
+
     use std::fs;
 
     use super::{

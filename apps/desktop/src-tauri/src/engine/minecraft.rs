@@ -774,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn upgrades_fabric_loaders_below_the_companion_minimum() {
+    fn upgrades_fabric_loaders_below_the_aurora_modules_minimum() {
         assert!(!fabric_loader_meets_minimum("1.16.5", "0.13.3"));
         assert!(fabric_loader_meets_minimum("1.16.5", "0.14.0"));
         assert!(!fabric_loader_meets_minimum("1.21.1", "0.16.9"));
