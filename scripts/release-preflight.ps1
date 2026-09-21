@@ -62,9 +62,19 @@ try {
         }
     }
 
+    $activeMatrixPath = "scripts/active-mod-matrix.json"
+    if (-not (Test-Path -LiteralPath $activeMatrixPath -PathType Leaf)) {
+        Stop-Preflight "arquivo obrigatório ausente: $activeMatrixPath"
+    }
+    $activeMatrix = Get-Content -Raw -LiteralPath $activeMatrixPath | ConvertFrom-Json
+    $coreModules = @($activeMatrix.modules | Where-Object name -eq "core")
+    if ($coreModules.Count -ne 1 -or $coreModules[0].version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
+        Stop-Preflight "a matriz ativa deve selecionar exatamente uma versão válida do Aurora Core"
+    }
+    $activeCoreVersion = $coreModules[0].version
     $requiredFiles = @(
-        "apps/aurora-core/compatibility-manifest-1.1.2.json",
-        "apps/aurora-core/trusted-public-key-1.1.2.txt",
+        "apps/aurora-core/compatibility-manifest-$activeCoreVersion.json",
+        "apps/aurora-core/trusted-public-key-$activeCoreVersion.txt",
         "apps/desktop/src-tauri/src/engine/core.rs",
         "apps/desktop/src-tauri/src/engine/skins.rs",
         "apps/desktop/src/App.tsx",
