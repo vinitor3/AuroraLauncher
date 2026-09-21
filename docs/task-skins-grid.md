@@ -78,6 +78,10 @@ de uma instalação existente, sem copiar contas ou mundos.
 
 ## Entrega
 
+Commit de implementação, testes e nove artefatos:
+`1d4f8c83f8b25e8a602e8b258e6763e1e188112e`, na branch `codex/aur-skins-grid`.
+O commit seguinte registra essa identificação sem alterar fontes ou JARs.
+
 Skins 0.2.5 e Core 1.1.5. Candidatos primeiro em
 `.aurora/build-matrix/skins/0.2.5`; releases anteriores são imutáveis.
 Nenhum instalador ou serviço é publicado por esta tarefa.
