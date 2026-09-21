@@ -21,9 +21,9 @@ body:
         - Launcher desktop
         - Instalação ou download
         - Modrinth / CurseForge
-        - Companion in-game
+        - Aurora Core / Skins no Minecraft
         - Skins e capas
-        - Assistente
+        - Assistente do launcher
         - Outro
     validations:
       required: true
@@ -44,4 +44,3 @@ body:
     attributes:
       label: Evidências
       description: Logs ou capturas sem dados sensíveis.
-

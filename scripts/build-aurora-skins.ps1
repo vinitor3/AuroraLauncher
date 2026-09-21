@@ -1,15 +1,17 @@
 [CmdletBinding()]
 param(
-    [string]$StageDirectory = ".aurora\build-matrix\skins\0.2.4"
+    [string]$StageDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot 'gradle-java.ps1')
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 $SkinsRoot = Join-Path $RepositoryRoot "apps\aurora-skins"
-$SharedGradle = Join-Path $RepositoryRoot "apps\companion-mod\gradlew.bat"
+$SharedGradle = Join-Path $RepositoryRoot "tools\gradle\8.4\gradlew.bat"
 $ModernGradle = Join-Path $RepositoryRoot "apps\aurora-core\minecraft\1.21.1\gradlew.bat"
-$Version = "0.2.4"
+$Matrix = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot "active-mod-matrix.json") | ConvertFrom-Json
+$Version = ($Matrix.modules | Where-Object name -eq "skins").version
+if ([string]::IsNullOrWhiteSpace($StageDirectory)) { $StageDirectory = ".aurora\build-matrix\skins\$Version" }
 $StageRoot = if ([IO.Path]::IsPathRooted($StageDirectory)) {
     [IO.Path]::GetFullPath($StageDirectory)
 } else {
@@ -25,7 +27,7 @@ function Invoke-AuroraGradle {
     )
 
     Write-Host "[Aurora Skins] $ProjectDirectory -> $($Tasks -join ' ')"
-    Invoke-AuroraGradleWithJava -JavaVersion $JavaVersion -Executable $Executable -Arguments (@('-p', $ProjectDirectory) + $Tasks + @('--no-daemon'))
+    Invoke-AuroraGradleWithJava -JavaVersion $JavaVersion -Executable $Executable -Arguments (@('-p', $ProjectDirectory) + $Tasks + @('--no-daemon', '--no-parallel', '--max-workers=1'))
     if ($LASTEXITCODE -ne 0) {
         throw "Gradle falhou em $ProjectDirectory com código $LASTEXITCODE."
     }

@@ -7,7 +7,6 @@
 **/dist/
 **/build/
 functions/lib/
-apps/companion-mod/.aurora-telemetry-classes/
 apps/edge-proxy/.wrangler/
 .firebase/
 .aurora/

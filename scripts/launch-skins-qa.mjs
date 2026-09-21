@@ -17,8 +17,13 @@ const child = JSON.parse(readFileSync(join(base, 'versions', version, `${version
 const mc = child.inheritsFrom || child.id;
 const parent = child.inheritsFrom ? JSON.parse(readFileSync(join(base, 'versions', mc, `${mc}.json`), 'utf8')) : child;
 const loader = child.mainClass?.includes('fabric') ? 'fabric' : 'forge';
-const core = join(repository, '.aurora', 'build-matrix', 'core', '1.1.4', mc, loader, `aurora-core-${loader}-${mc}-1.1.4.jar`);
-const skins = join(repository, '.aurora', 'build-matrix', 'skins', '0.2.4', mc, loader, `aurora-skins-${loader}-${mc}-0.2.4.jar`);
+const matrix = JSON.parse(readFileSync(join(repository, 'scripts', 'active-mod-matrix.json'), 'utf8'));
+const modPath = (name) => {
+  const { version: modVersion } = matrix.modules.find(module => module.name === name);
+  return join(repository, '.aurora', 'build-matrix', name, modVersion, mc, loader, `aurora-${name}-${loader}-${mc}-${modVersion}.jar`);
+};
+const core = modPath('core');
+const skins = modPath('skins');
 for (const file of [java, core, skins]) if (!existsSync(file)) throw new Error(`Required QA input missing: ${file}`);
 
 function allowed(rules) {

@@ -99,13 +99,16 @@ try {
         "apps/desktop",
         "apps/aurora-core",
         "apps/aurora-skins",
-        "apps/companion-mod",
+        "tools/gradle",
         "apps/edge-proxy",
         "firebase",
         "functions",
         "scripts",
         "package.json"
     )
+    # Protect uncommitted historical work in sibling checkouts of the retired
+    # module; this path is not selected for compilation or distribution.
+    $sourcePaths += "apps/companion-mod"
     $currentRoot = (Resolve-Path -LiteralPath $repoRoot).Path.TrimEnd('\')
     $worktreeLines = Invoke-GitText -Arguments @("worktree", "list", "--porcelain")
     $worktreePaths = @($worktreeLines |

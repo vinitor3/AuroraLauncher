@@ -132,7 +132,6 @@ public final class AuroraSettingsScreen extends Screen {
 
     private static String icon(String value) {
         if ("skin".equals(value)) return "◇";
-        if ("assistant".equals(value)) return "✦";
         if ("audio".equals(value)) return "♪";
         return "•";
     }

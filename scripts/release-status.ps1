@@ -17,8 +17,11 @@ $currentBranch = (Read-Git @('branch', '--show-current') | Select-Object -First 
 $worktreePaths = @(Read-Git @('-c', 'core.quotepath=false', 'worktree', 'list', '--porcelain') |
     Where-Object { $_ -like 'worktree *' } |
     ForEach-Object { $_.Substring(9) })
-$sourcePaths = @('apps/desktop', 'apps/aurora-core', 'apps/aurora-skins', 'apps/companion-mod',
+$sourcePaths = @('apps/desktop', 'apps/aurora-core', 'apps/aurora-skins', 'tools/gradle',
     'apps/edge-proxy', 'firebase', 'functions', 'scripts', 'package.json')
+# Historical sibling worktrees may still contain the retired module. Keep their
+# pending work visible without making that module part of the active build.
+$sourcePaths += 'apps/companion-mod'
 
 Write-Host "Aurora release status | $currentBranch | $($currentHead.Substring(0, 12))"
 $pending = 0

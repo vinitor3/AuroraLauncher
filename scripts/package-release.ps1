@@ -4,6 +4,8 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+$activeMatrix = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'active-mod-matrix.json') | ConvertFrom-Json
+$expectedModArtifacts = @($activeMatrix.modules).Count * @($activeMatrix.targets).Count
 $runId = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
 $runDirectory = Join-Path $repositoryRoot ".aurora\release-runs\$runId"
 New-Item -ItemType Directory -Path $runDirectory | Out-Null
@@ -53,7 +55,7 @@ function Get-AuroraFileSha256 {
 
 Push-Location -LiteralPath $repositoryRoot
 try {
-    # Fail before the official build recompiles the full 27-JAR matrix.
+    # Fail before the official build recompiles the active Core/Skins matrix.
     Invoke-Logged 'Preflight inicial' 'npm.cmd' @('run', 'release:preflight')
     $config = Get-Content -Raw -LiteralPath 'apps/desktop/src-tauri/tauri.conf.json' | ConvertFrom-Json
     $version = [string]$config.version
@@ -86,7 +88,7 @@ try {
     } finally { Pop-Location }
 
     $buildStartedUtc = [DateTime]::UtcNow
-    Invoke-Logged 'Build oficial (27 mods e instalador; log em arquivo)' 'npm.cmd' @('run', 'desktop:build')
+    Invoke-Logged "Build oficial ($expectedModArtifacts mods e instalador; log em arquivo)" 'npm.cmd' @('run', 'desktop:build')
     Invoke-Logged 'Preflight final' 'npm.cmd' @('run', 'release:preflight')
     $currentCommit = (Read-Git @('rev-parse', 'HEAD') | Select-Object -First 1).Trim()
     $currentBranch = (Read-Git @('branch', '--show-current') | Select-Object -First 1).Trim()
@@ -113,21 +115,13 @@ try {
 
     $modVersions = [ordered]@{}
     $modArtifacts = @()
-    foreach ($mod in @(
-        @{ Name = 'core'; Script = 'build-aurora-core.ps1'; VersionedRelease = $true },
-        @{ Name = 'skins'; Script = 'build-aurora-skins.ps1'; VersionedRelease = $true },
-        @{ Name = 'companion'; Script = 'build-companion-matrix.ps1'; VersionedRelease = $false }
-    )) {
-        $scriptText = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot $mod.Script)
-        $match = [regex]::Match($scriptText, '(?m)^\$Version\s*=\s*"([0-9A-Za-z.+-]+)"\s*$')
-        if (-not $match.Success) { throw "Versao do mod nao encontrada: $($mod.Name)" }
-        $modVersion = $match.Groups[1].Value
+    foreach ($mod in $activeMatrix.modules) {
+        $modVersion = $mod.version
         $modVersions[$mod.Name] = $modVersion
         $stageRoot = Join-Path $repositoryRoot ".aurora/build-matrix/$($mod.Name)/$modVersion"
         $jars = @(Get-ChildItem -LiteralPath $stageRoot -Recurse -File -Filter '*.jar')
-        if ($jars.Count -ne 9) { throw "Matriz de $($mod.Name) incompleta para o manifesto." }
-        $modReleaseRoot = Join-Path $releaseDirectory $mod.Name
-        if ($mod.VersionedRelease) { $modReleaseRoot = Join-Path $modReleaseRoot $modVersion }
+        if ($jars.Count -ne @($activeMatrix.targets).Count) { throw "Matriz de $($mod.Name) incompleta para o manifesto." }
+        $modReleaseRoot = Join-Path (Join-Path $releaseDirectory $mod.Name) $modVersion
         foreach ($jar in $jars | Sort-Object FullName) {
             $relative = $jar.FullName.Substring($stageRoot.Length).TrimStart('\', '/')
             $publishedJar = Join-Path $modReleaseRoot $relative
@@ -153,7 +147,7 @@ try {
         createdAtUtc = [DateTime]::UtcNow.ToString('o')
         source = [ordered]@{ commit = $commit; branch = $branch; clean = $true }
         buildCommand = 'npm run desktop:build'
-        validation = [ordered]@{ releasePreflight = 'passed'; modSourceMatrix = '27/27'; runtime = 'NAO VERIFICADO'; codeSigning = 'NAO VERIFICADO' }
+        validation = [ordered]@{ releasePreflight = 'passed'; modSourceMatrix = "$($modArtifacts.Count)/$expectedModArtifacts"; runtime = 'NAO VERIFICADO'; codeSigning = 'NAO VERIFICADO' }
         modVersions = $modVersions
         modArtifacts = $modArtifacts
     }

@@ -11,7 +11,7 @@ tasks.withType(AbstractArchiveTask).configureEach { preserveFileTimestamps = fal
 sourceSets.main.java.srcDir "../../../core/src/main/java"
 dependencies {
     compileOnly "net.minecraftforge:forge:1.12.2-14.23.5.2860:universal"
-    compileOnly files("../../../../aurora-core/api/build/libs/aurora-core-api-1.1.4.jar")
+    compileOnly files("../../../../aurora-core/api/build/libs/aurora-core-api-1.1.5.jar")
 }
 jar { archiveClassifier = "thin" }
 shadowJar {

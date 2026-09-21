@@ -5,6 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
+$Matrix = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot "active-mod-matrix.json") | ConvertFrom-Json
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 function Get-AuroraSha256Bytes {
     param([Parameter(Mandatory = $true)][byte[]]$Bytes)
@@ -74,12 +75,11 @@ function Get-AuroraJarContentDigest {
 }
 
 if (-not $SkipBuild) {
-    & (Join-Path $PSScriptRoot "build-aurora-core.ps1")
-    if ($LASTEXITCODE -ne 0) { throw "A matriz do Aurora Core falhou." }
-    & (Join-Path $PSScriptRoot "build-aurora-skins.ps1")
-    if ($LASTEXITCODE -ne 0) { throw "A matriz do Aurora Skins falhou." }
-    & (Join-Path $PSScriptRoot "build-companion-matrix.ps1")
-    if ($LASTEXITCODE -ne 0) { throw "A matriz do Aurora Companion falhou." }
+    # Serial builds share the Loom cache and must never run concurrently.
+    foreach ($module in $Matrix.modules) {
+        & (Join-Path $PSScriptRoot $module.buildScript)
+        if ($LASTEXITCODE -ne 0) { throw "A matriz de $($module.name) falhou." }
+    }
 }
 
 function Compare-AuroraMatrix {
@@ -87,13 +87,21 @@ function Compare-AuroraMatrix {
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][string]$StageDirectory,
         [Parameter(Mandatory = $true)][string]$ReleaseDirectory,
+        [Parameter(Mandatory = $true)][string]$Module,
+        [Parameter(Mandatory = $true)][string]$Version,
         [string[]]$ForbiddenEntryPrefixes = @()
     )
 
     $stageRoot = [IO.Path]::GetFullPath((Join-Path $RepositoryRoot $StageDirectory)).TrimEnd('\')
     $releaseRoot = [IO.Path]::GetFullPath((Join-Path $RepositoryRoot $ReleaseDirectory)).TrimEnd('\')
     $staged = @(Get-ChildItem -LiteralPath $stageRoot -Recurse -File -Filter *.jar)
-    if ($staged.Count -ne 9) { throw "$Name possui $($staged.Count) builds em staging; esperado: 9." }
+    $expectedCount = @($Matrix.targets).Count
+    if ($staged.Count -ne $expectedCount) { throw "$Name possui $($staged.Count) builds em staging; esperado: $expectedCount." }
+
+    foreach ($target in $Matrix.targets) {
+        $expected = Join-Path $stageRoot "$($target.minecraft)/$($target.loader)/aurora-$Module-$($target.loader)-$($target.minecraft)-$Version.jar"
+        if (-not (Test-Path -LiteralPath $expected -PathType Leaf)) { throw "Alvo ativo ausente: $expected" }
+    }
 
     foreach ($artifact in $staged) {
         $relative = $artifact.FullName.Substring($stageRoot.Length).TrimStart('\')
@@ -131,9 +139,16 @@ function Compare-AuroraMatrix {
             $archive.Dispose()
         }
     }
-    Write-Host "[Aurora release matrix] ${Name}: 9/9 artefatos correspondem ao código atual."
+    Write-Host "[Aurora release matrix] ${Name}: $expectedCount/$expectedCount artefatos correspondem ao código atual."
 }
 
-Compare-AuroraMatrix "Aurora Core" ".aurora\build-matrix\core\1.1.4" "releases\core\1.1.4" @("org/slf4j/", "net/minecraft/")
-Compare-AuroraMatrix "Aurora Skins" ".aurora\build-matrix\skins\0.2.4" "releases\skins\0.2.4"
-Compare-AuroraMatrix "Aurora Companion" ".aurora\build-matrix\companion\0.2.3" "releases\companion"
+foreach ($module in $Matrix.modules) {
+    Compare-AuroraMatrix -Name "Aurora $($module.name)" -Module $module.name -Version $module.version `
+        -StageDirectory ".aurora/build-matrix/$($module.name)/$($module.version)" `
+        -ReleaseDirectory "releases/$($module.name)/$($module.version)" `
+        -ForbiddenEntryPrefixes $module.forbiddenEntryPrefixes
+}
+& node (Join-Path $PSScriptRoot "verify-core-release-signatures.mjs")
+if ($LASTEXITCODE -ne 0) { throw "As assinaturas do Aurora Core falharam." }
+$total = @($Matrix.modules).Count * @($Matrix.targets).Count
+Write-Host "[Aurora release matrix] Matriz ativa: $total/$total JARs."

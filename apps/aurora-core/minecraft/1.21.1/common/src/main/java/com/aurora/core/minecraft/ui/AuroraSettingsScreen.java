@@ -128,7 +128,7 @@ public final class AuroraSettingsScreen extends Screen {
     }
 
     private static String icon(String value) {
-        if ("skin".equals(value)) return "◇"; if ("assistant".equals(value)) return "✦"; if ("audio".equals(value)) return "♪"; return "•";
+        if ("skin".equals(value)) return "◇"; if ("audio".equals(value)) return "♪"; return "•";
     }
     @Override public void onClose() { minecraft.setScreen(parent); }
     @Override public boolean isPauseScreen() { return false; }
