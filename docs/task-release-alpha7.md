@@ -1,5 +1,7 @@
 # AUR-RELEASE — 0.1.1-alpha.7
 
+> REGISTRO HISTÓRICO: o conteúdo abaixo conserva evidências e decisões da entrega datada; referências a Companion, 27 JARs ou HUD não são instruções atuais. O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados. Escopo vigente: [retirada do mod](task-remove-companion.md).
+
 Data: 2026-09-17. Branch: `codex/aur-release-alpha7`, base `20f9b46`.
 
 ## Escopo

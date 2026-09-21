@@ -8,11 +8,11 @@
 | integração local | filesystem, ZIP, HTTP fake, SQLite, Worker/Firestore emulador | mutação/rede/auth |
 | componente UI | loading/error/empty, teclado, cancelamento | feature React |
 | E2E desktop | login fake/emulado, instância, catálogo, guarda-roupa | release alpha |
-| smoke runtime | Minecraft/loader/Java + Companion | qualquer claim de compatibilidade |
+| smoke runtime | Minecraft/loader/Java + Core/Skins | qualquer claim de compatibilidade |
 | segurança | traversal, SSRF, auth, rules, prompt injection, updater | capacidade afetada |
 | restore/failure | queda de rede/processo/disco, rollback bit a bit | updater/CAS/Tools |
 
-## Baseline atual (2026-08-30)
+## Baseline histórico (2026-08-30; não é validação desta mudança)
 
 - frontend build: verde, sem testes de componente/E2E;
 - Rust: 26 aprovados; um TTS online ignorado;
@@ -46,9 +46,13 @@
 - arquivo `UNKNOWN` nunca removido automaticamente;
 - config/mundo preservados em update e restore.
 
-### Companion runtime
+### Core/Skins runtime e Assistente desktop
 
-Para cada linha: OS/build, Java, Minecraft, loader, hash JAR, launch, handshake, keybind, abrir/fechar, mundo não pausado, foco/mouse, texto, voz, legenda/TTS, screenshot confirmada, skin classic/slim/64x32, capa e shutdown. Evidência é log redigido + screenshot/vídeo + resultado estruturado.
+Para cada um dos nove pares: OS/build, Java, Minecraft, loader, hashes Core/Skins, launch, handshake/sessão pública, menu, abrir/fechar, foco/mouse, skin classic/slim/64x32, capa onde implementada e shutdown. Não exigir Companion ou HUD/voz no jogo. Evidência é log redigido + screenshot/vídeo + resultado estruturado.
+
+Separadamente, com Minecraft fechado e nenhum Companion instalado: abrir o Assistente pelo botão e `Ctrl+Alt+/`, enviar/receber texto, preservar histórico/estado existentes, mute, microfone/transcrição, áudio/TTS, timeouts e falhas de rede. `assistant-smoke.mjs` mantém o caminho desktop; `supabase-appearance-smoke.mjs` continua usando o painel/API como preparação. Mocks não comprovam serviços online, microfone real ou áudio audível.
+
+A migração usa fixtures: JAR conhecido, nome semelhante de terceiro, identidade incerta, nome estável/versionado/desativado, repetição, jogo em execução, link/traversal e recuperação após falha. Preservar Core/Skins, terceiros, mundos e dados do Assistente desktop.
 
 ### IA
 
@@ -65,7 +69,7 @@ Fixtures maliciosas em log, nome de mod, manifesto e HTML. Verificar que frases 
 ## Matriz CI proposta
 
 - PR rápido: frontend build/test, Rust fmt/clippy/test, Worker tests/dry-run, rules Emulator.
-- Companion: build moderno 1.20.1 + inspeção dos nove artefatos; demais builds em workflow agendado/manual até tooling reprodutível.
+- Core/Skins: build dos nove pares (18 JARs), wrapper neutro, contratos de metadata/bytecode/recursos/assinatura e comparação fontes/artefatos sem enfraquecimento. Builds Loom devem rodar sequencialmente para evitar colisão de cache.
 - nightly/manual: runtime smoke em máquina Windows preparada; nunca fingir que runner GitHub tem Minecraft homologado.
 - release: todos os anteriores, NSIS install/uninstall, manifest/SHA/SBOM e teste updater em canal de staging.
 

@@ -7,7 +7,7 @@ P0 bloqueia segurança, rastreabilidade ou promessa principal. P1 entrega valor 
 | Fase | Prioridade | Objetivo | Saída verificável |
 | --- | --- | --- | --- |
 | R0 | P0 | baseline, CI, licença, release | checks obrigatórios, versão única, hashes e documentos coerentes |
-| R1 | P0 | fechar desktop/Companion | UI modular, HTTP cancelável, 9/9 runtimes e HUD nativa |
+| R1 | P0 | fechar desktop/Core/Skins | UI modular, HTTP cancelável, Assistente desktop e 9/9 runtimes Core/Skins |
 | R1.5 | P1 | atualizar conteúdo | plano compatível, snapshot mínimo e rollback de mod |
 | R2 | P1 | diagnóstico/recuperação | fixtures, parser, Doctor, CAS e restore bit a bit |
 | R2.5 | P1 | Tools seguras | níveis 0–2, schemas, capabilities, diff e auditoria |
@@ -33,17 +33,18 @@ P0 bloqueia segurança, rastreabilidade ou promessa principal. P1 entrega valor 
 | AUR-R1-003 primeira decomposição React | alto | alto | médio | restrito, `App.tsx` exclusivo |
 | AUR-R1-004 substituição transacional de arquivos | crítico | médio | alto | sim após delimitar `download.rs` |
 
-## Wave 2 — Companion moderno
+## Wave 2 — Assistente desktop e Core/Skins
 
-- AUR-R1-010: view-model/protocolo de UI sem Minecraft.
-- AUR-R1-011: `Screen` + legend HUD Fabric 1.20.1.
-- AUR-R1-012: adaptador Forge 1.20.1.
-- AUR-R1-013: QA runtime/visual independente.
-- AUR-R1-014: atualizar Loom/Gradle em mudança isolada.
+A wave antiga de Companion/HUD foi substituída pela [ADR-018](ADR/ADR-018-remove-companion-keep-desktop-assistant.md). O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados.
+
+- Verificar painel, conversa, botão/atalho e voz desktop sem jogo instalado/em execução.
+- Homologar IPC público, menu e aparência Core/Skins nos nove pares preservados.
+- Verificar migração recuperável de JARs gerenciados antigos, sem afetar terceiros.
+- Qualquer atualização geral de Loom/Gradle fica em mudança isolada.
 
 ## Wave 3 — matriz e updater mínimo
 
-- Portar HUD para 1.19.2, 1.16.5 e 1.21.1; legado 1.12.2 por último — pendente.
+- Preservar os nove pares Core/Skins atuais; expansão multiversão é tarefa posterior.
 - Inventário normalizado e resolução compatível de conteúdo — implementado, aguardando homologação runtime.
 - Atualização Modrinth com staging, snapshot mínimo e rollback — implementada, aguardando homologação runtime.
 - CurseForge somente onde a API/autor permite download; ação manual oficial nos demais casos — implementado para conteúdo individual. Modpack permanece detectável, sem aplicação automática.
@@ -70,7 +71,7 @@ P0 bloqueia segurança, rastreabilidade ou promessa principal. P1 entrega valor 
 ## Gates de fase
 
 - R0: regras negativas/positivas verdes, perfis existentes auditados, todos os checks em PR, licença decidida, release checklist e nenhum artefato mutável novo.
-- R1: 9/9 evidências runtime, HUD sem pausa/foco preso, bundle dividido e erros de rede recuperáveis.
+- R1: 9/9 evidências runtime Core/Skins, Assistente desktop funcional, bundle dividido e erros de rede recuperáveis.
 - R1.5: atualização reversível sem perder configs.
 - R2: restore bit a bit e GC sem apagar referência viva.
 - R2.5: nenhum texto não confiável aciona mutação diretamente.

@@ -6,7 +6,7 @@ Fato histórico que deve ser preservado: `releases/Aurora Smart Launcher_0.1.0_x
 
 Ownership: `scripts/release/**`, fontes de versão/manifests, README fora da seção legal, `docs/module-a.md` e docs/changelog de release. Não toque LICENSE/notices, lógica funcional, regras Firebase ou artefatos históricos. Root `package.json` pertence a você nesta wave; coordene aliases de CI via Integration Agent.
 
-Implemente checker read-only de consistência SemVer entre root/package, desktop/package, Cargo/Tauri e Companion; detecção de tag/versão já usada; manifesto JSON e `SHA256SUMS` reproduzíveis com path, size, SHA-256, plataforma e versão. Fixture com versão/hash divergente deve falhar; caminhos com espaço devem funcionar.
+Implemente checker read-only de consistência SemVer entre root/package, desktop/package, Cargo/Tauri, com versões próprias dos módulos Core/Skins; detecção de tag/versão já usada; manifesto JSON e `SHA256SUMS` reproduzíveis com path, size, SHA-256, plataforma e versão. Fixture com versão/hash divergente deve falhar; caminhos com espaço devem funcionar.
 
 Reconcile README/module-a/status com fatos: alpha é de desenvolvimento privado, Swing ainda é janela externa, só 2 runtimes têm evidência, Microsoft entitlement/updater/multiplayer ainda não estão prontos e o produto não é oficial Minecraft/Mojang. Documente release imutável, SBOM, artifact attestation, assinatura Tauri, publisher Windows não assinado e SignPath como candidatura sem garantia.
 

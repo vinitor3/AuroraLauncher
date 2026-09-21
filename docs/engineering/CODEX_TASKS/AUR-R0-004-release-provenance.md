@@ -10,7 +10,7 @@
 
 - **Pode/deve tocar:** checker em `scripts/release/**`, manifests de versão, `README.md` fora da seção legal, `docs/module-a.md`, docs de release/changelog.
 - **Não tocar:** `releases/Aurora Smart Launcher_0.1.0_x64-setup.exe`, tag/release/assets existentes, LICENSE/notices, código funcional.
-- **Interfaces:** root/package, desktop/package, Cargo/Tauri e Companion version metadata.
+- **Interfaces:** root/package, desktop/package, Cargo/Tauri e metadata versionada de Core/Skins.
 
 ## Passos
 
@@ -48,4 +48,3 @@ Bump prematuro pode criar outra identidade pública inconsistente. Checker come�
 - Commit: `chore(release): enforce immutable provenance [AUR-R0-004]`.
 - PR depende de: integração final após R0-001/002/003.
 - Execução paralela: **sim**, `package.json` raiz exclusivo nesta wave.
-

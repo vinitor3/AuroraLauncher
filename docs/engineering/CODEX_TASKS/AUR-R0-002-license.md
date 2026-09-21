@@ -23,7 +23,7 @@
 ## Testes/comandos
 
 ```powershell
-rg -n 'license|GPL|SPDX' Cargo.toml package.json apps companion LICENSE* THIRD_PARTY_NOTICES.md
+rg -n 'license|GPL|SPDX' Cargo.toml package.json apps tools LICENSE* THIRD_PARTY_NOTICES.md
 git diff --check
 ```
 
@@ -46,4 +46,3 @@ Risco de atribuir direitos inexistentes ou tornar contribuição incompatível. 
 - Commit: `docs(legal): define repository licensing [AUR-R0-002]`.
 - PR depende de: D-001 antes do merge.
 - Execução paralela: **sim**, arquivos legais exclusivos.
-

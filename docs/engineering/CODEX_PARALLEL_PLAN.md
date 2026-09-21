@@ -25,7 +25,7 @@ Este plano é executável por worktrees locais. A branch atual `docs/aur-r0-engi
 - `package.json` raiz pertence a Release/docs durante a wave; CI chama scripts existentes ou adiciona script em arquivo próprio. Se CI precisar mudar o root manifest, entrega patch separado ao Integration Agent.
 - `LICENSE.md` e `THIRD_PARTY_NOTICES.md` pertencem exclusivamente a Licensing.
 - `SECURITY.md` pertence à baseline desta revisão; implementadores só propõem adendo em patch separado.
-- Nenhum agente da Wave 0 toca `App.tsx`, `commands.rs`, Worker ou Companion.
+- Nenhum agente da Wave 0 toca `App.tsx`, `commands.rs`, Worker ou módulos Java.
 
 ## Integração da Wave 0
 
@@ -54,12 +54,12 @@ R1-001 e R1-004 podem tocar módulos Rust próximos; Integration Agent deve sepa
 Exemplo conceitual (ajustar caminho e baseline, sem copiar cegamente):
 
 ```text
-main checkout:       C:\Users\vinic\Desktop\AuroraLauncher
-security worktree:   C:\Users\vinic\Desktop\AuroraLauncher-wt-r0-001
-license worktree:    C:\Users\vinic\Desktop\AuroraLauncher-wt-r0-002
-ci worktree:         C:\Users\vinic\Desktop\AuroraLauncher-wt-r0-003
-release worktree:    C:\Users\vinic\Desktop\AuroraLauncher-wt-r0-004
-integration:         C:\Users\vinic\Desktop\AuroraLauncher-wt-integration
+main checkout:       C:\Users\usuario\Desktop\AuroraLauncher
+security worktree:   C:\Users\usuario\Desktop\AuroraLauncher-wt-r0-001
+license worktree:    C:\Users\usuario\Desktop\AuroraLauncher-wt-r0-002
+ci worktree:         C:\Users\usuario\Desktop\AuroraLauncher-wt-r0-003
+release worktree:    C:\Users\usuario\Desktop\AuroraLauncher-wt-r0-004
+integration:         C:\Users\usuario\Desktop\AuroraLauncher-wt-integration
 ```
 
 Não criar worktree dentro de outro worktree. Não remover worktree com alterações. A criação/remoção real permanece responsabilidade de quem inicia a wave.
@@ -83,7 +83,6 @@ Rollback:
 
 - Firestore: suíte positiva/negativa no Emulator, perfis existentes auditados e deployment registrado.
 - Licença: escopo aprovado, texto integral, SPDX e avisos coerentes.
-- CI: checks determinísticos cobrindo frontend, Rust, Worker, Functions, Companion e regras.
+- CI: checks determinísticos cobrindo frontend, Rust, Worker, Functions, Core/Skins e regras.
 - Release: versão única, release histórica congelada, manifesto/hash reproduzível e docs sem alegação falsa.
 - QA final sem P0/P1 aberto para o escopo de distribuição.
-

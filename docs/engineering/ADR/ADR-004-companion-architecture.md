@@ -1,5 +1,7 @@
 # ADR-004 — Companion com core compartilhado e adaptadores
 
+> SUBSTITUÍDA pela [ADR-018](ADR-018-remove-companion-keep-desktop-assistant.md), em 21/09/2026. Preservada como histórico; não implementar Companion/HUD. O Assistente desktop permanece.
+
 ## Contexto
 
 Nove combinações atravessam Java 8/17/21, LWJGL2/3, mappings e APIs Fabric/Forge incompatíveis. O compartilhamento atual usa reflexão e módulos isolados.

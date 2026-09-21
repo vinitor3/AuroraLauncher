@@ -2,7 +2,7 @@
 
 ```mermaid
 flowchart TD
-  R0[R0 Governança e baseline] --> R1[R1 Launcher + Companion]
+  R0[R0 Governança e baseline] --> R1[R1 Desktop + Core/Skins]
   R0 --> OBS[Observabilidade local e fixtures]
   R1 --> U[R1.5 Inventário e updater]
   OBS --> D[R2 Crash parser + Doctor]

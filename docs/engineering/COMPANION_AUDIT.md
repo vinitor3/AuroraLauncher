@@ -1,5 +1,7 @@
 # Dossiê técnico do Aurora Companion
 
+> REGISTRO HISTÓRICO: o conteúdo abaixo conserva evidências e decisões da entrega datada; referências a Companion, 27 JARs ou HUD não são instruções atuais. O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados. Escopo vigente: [retirada do mod](../task-remove-companion.md).
+
 Atualizado em 31 de agosto de 2026. Este documento separa intenção histórica,
 artefato publicado, fonte atual e evidência runtime. Código/teste/log observado
 tem precedência sobre documentação antiga.
@@ -244,9 +246,9 @@ As classes dos JARs 0.2.0 usam bytecode Java 8 (major 52) nas linhas 1.12.2 e
 
 ### Fontes centrais
 
-- [`apps/companion-mod/README.md`](../../apps/companion-mod/README.md): build,
+- `apps/companion-mod/README.md` (caminho histórico `../../apps/companion-mod/README.md`, disponível no Git anterior à retirada): build,
   arquitetura, aparência e status do módulo.
-- [`docs/companion-ipc.md`](../companion-ipc.md): protocolo, mensagens, limites,
+- [`docs/core-ipc.md`](../core-ipc.md) (contrato atual; ponte histórica removida): protocolo, mensagens, limites,
   atalho e screenshot.
 - [`COMPATIBILITY_MATRIX.md`](COMPATIBILITY_MATRIX.md): estado por alvo e roteiro runtime.
 - [`ADR-004`](ADR/ADR-004-companion-architecture.md): core compartilhado e adaptadores.
@@ -288,11 +290,11 @@ As classes dos JARs 0.2.0 usam bytecode Java 8 (major 52) nas linhas 1.12.2 e
 - [`CODEX_PROMPTS/AUR-R0-003-ci.md`](CODEX_PROMPTS/AUR-R0-003-ci.md) e
   [`CODEX_PROMPTS/AUR-R0-004-release-provenance.md`](CODEX_PROMPTS/AUR-R0-004-release-provenance.md).
 - [`package.json`](../../package.json) e os metadados
-  [`Fabric comum`](../../apps/companion-mod/fabric/src/main/resources/fabric.mod.json),
-  [`Forge comum`](../../apps/companion-mod/forge/src/main/resources/META-INF/mods.toml),
-  [`Forge 1.12.2`](../../apps/companion-mod/legacy/forge-1.12.2/src/main/resources/mcmod.info),
-  [`Fabric 1.21.1`](../../apps/companion-mod/modern/1.21.1/src/fabric/resources/fabric.mod.json)
-  e [`Forge 1.21.1`](../../apps/companion-mod/modern/1.21.1/src/forge/resources/META-INF/mods.toml),
+  `Fabric comum` (caminho histórico `../../apps/companion-mod/fabric/src/main/resources/fabric.mod.json`, disponível no Git anterior à retirada),
+  `Forge comum` (caminho histórico `../../apps/companion-mod/forge/src/main/resources/META-INF/mods.toml`, disponível no Git anterior à retirada),
+  `Forge 1.12.2` (caminho histórico `../../apps/companion-mod/legacy/forge-1.12.2/src/main/resources/mcmod.info`, disponível no Git anterior à retirada),
+  `Fabric 1.21.1` (caminho histórico `../../apps/companion-mod/modern/1.21.1/src/fabric/resources/fabric.mod.json`, disponível no Git anterior à retirada)
+  e `Forge 1.21.1` (caminho histórico `../../apps/companion-mod/modern/1.21.1/src/forge/resources/META-INF/mods.toml`, disponível no Git anterior à retirada),
   que definem comandos, versão, dependências e lado cliente.
 
 Documentos auxiliares podem ser históricos ou instruções de tarefa; este dossiê

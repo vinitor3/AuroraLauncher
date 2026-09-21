@@ -18,10 +18,12 @@ fazer uploads. `SUPABASE_API_KEY` permanece somente como fallback de migração.
 O launcher tenta Supabase primeiro e preserva uma cópia local da skin para que
 uma indisponibilidade temporária não impeça o jogo de iniciar.
 
-## Estado verificado em 28 de agosto de 2026
+O armazenamento e seus consumidores desktop/Aurora Skins são preservados; a retirada do mod não altera chaves, autorização ou deploy.
+
+## Estado histórico verificado em 28 de agosto de 2026
 
 O endpoint `/health/storage` confirmou o bucket público `aurora-appearance` e o
 secret `SUPABASE_API_KEY_SERVICE_ROLE`. O Worker publicado prioriza essa chave
 para operações privilegiadas. A skin selecionada é salva localmente e enviada
 ao Supabase; se a sincronização falhar, a cópia local continua utilizável no
-Companion 1.20.1.
+Companion 1.20.1 naquele teste histórico. Atualmente a aparência no jogo pertence ao Aurora Skins; Companion foi retirado.

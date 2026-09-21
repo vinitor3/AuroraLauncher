@@ -8,7 +8,9 @@ flowchart LR
   TAURI --> ENGINE[Engine Rust]
   ENGINE --> GAME[Minecraft + Fabric/Forge]
   ENGINE <-->|WebSocket loopback + nonce| CORE[Aurora Core in-game]
-  COMP[Companion module] -->|API/event bus| CORE
+  SKINS[Aurora Skins] -->|API/event bus| CORE
+  ASSISTANT[Assistente desktop] --> EDGE
+  ASSISTANT -->|TTS| ENGINE
   UI --> FIREBASE[Firebase Auth + Firestore]
   UI --> EDGE[Cloudflare Worker]
   EDGE --> GEMINI[Gemini]
@@ -17,13 +19,7 @@ flowchart LR
   CORE --> MODRINTH[Modrinth API/CDN]
 ```
 
-O desenho é adequado para o alpha: secrets permanecem fora do cliente, o jogo
-não recebe JWT e a engine local controla caminhos/processos. Desde o Companion
-0.2.0, o Core deve ser o único dono do WebSocket; o Companion é módulo. Os JARs
-Fabric publicados, porém, mostraram uma corrida de ordem de inicialização que
-impediu o registro do módulo. A fonte agora faz anexação tardia, ainda sem
-homologação runtime. As demais fragilidades não exigem reescrita: exigem limites
-mais nítidos, módulos menores e transações antes de automação.
+Secrets permanecem fora do cliente, o jogo não recebe JWT e a engine local controla caminhos/processos. O Core é o único dono do WebSocket do jogo. O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados. O painel chama o Worker autenticado e reproduz a resposta pelo TTS desktop sem depender do IPC ou de Minecraft.
 
 ## Fronteiras a corrigir
 
@@ -32,7 +28,6 @@ mais nítidos, módulos menores e transações antes de automação.
 | `App.tsx` (2.293 linhas) | alto acoplamento | extrair features/serviços por comportamento; lazy-load de Discover/Wardrobe/Assistant |
 | `commands.rs` (1.582 linhas) | domínio misturado | preservar nomes Tauri e mover implementação para módulos `commands/*` |
 | Worker `index.ts` (456 linhas) | rotas e infraestrutura juntas | router fino + `auth`, `rate_limit`, `assistant`, `curseforge`, `appearance` |
-| Companion Swing | protótipo externo | `assistant-core` independente + adaptadores de tela/render/input |
 | metadados de conteúdo | provider-specific | inventário normalizado e plano de atualização puro antes de IO |
 | mutações locais | sem transação geral | journal/snapshot mínimo; depois CAS SHA-256 + SQLite |
 
@@ -47,33 +42,16 @@ flowchart TD
   TX --> CAS[Local SHA-256 CAS]
   DOM --> DL[Download manager]
 
-  COMP_CORE[Assistant protocol/state core] --> F120[Fabric 1.20.1 adapter]
-  COMP_CORE --> G120[Forge 1.20.1 adapter]
-  COMP_CORE --> MODERN[1.16.5 / 1.19.2 / 1.21.1 adapters]
-  COMP_CORE --> LEGACY[Forge 1.12.2 isolated]
-
   TOOLS[Gemini tool broker] -->|proposes typed plan| DOM
   TOOLS --> POLICY[Capability + confirmation + audit]
   POLICY --> TX
 ```
 
-### Companion/HUD
+### Assistente desktop e IPC do Core
 
-Não haverá uma UI Java “universal” compilada cegamente para nove alvos. Compartilhar:
+O fluxo mantido é `AssistantPanel → askAuroraAssistant → /v1/assistant → askGemini → painel / playAuroraSpeech → synthesize_speech`. Microfone, reconhecimento de fala, mute, transporte autenticado e `edge-tts-rust` permanecem.
 
-- DTOs IPC, máquina de estados, histórico, fila de legenda, limites e sanitização;
-- view-model independente de classes Minecraft;
-- testes de protocolo e estado.
-
-Adaptar:
-
-- registro de keybind e tick;
-- `Screen`/render/HUD e captura de input;
-- nomes/mappings das classes;
-- registro de textura/skin/capa;
-- ciclo de vida por loader.
-
-O MVP Fabric 1.20.1 deve usar uma `Screen` cliente que sobrescreva `isPauseScreen()` para não pausar, com camada HUD separada para legendas. Forge 1.20.1 recebe adaptador equivalente. 1.12.2 permanece módulo isolado Java 8/LWJGL 2.
+O fluxo `Companion → IPC → Gemini/voz → jogo` foi retirado. Não há registro `aurora_companion`, página `aurora_assistant`, comandos de retorno de voz/captura nem telemetria exclusiva desse produtor. O IPC preserva protocolo, handshake, sessão pública, limites e eventos genéricos para Core/Skins. As decisões e a migração estão na [ADR-018](ADR/ADR-018-remove-companion-keep-desktop-assistant.md).
 
 ### Updater e CAS
 

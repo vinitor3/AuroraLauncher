@@ -1,7 +1,7 @@
 # AUR-R1-001 — Limites de rede e autenticação IPC
 
 - **Fase/prioridade:** R1 / P0.
-- **Objetivo:** impedir espera infinita, consumo ilimitado e conexão loopback que monopolize o Companion.
+- **Objetivo:** impedir espera infinita, consumo ilimitado e conexão loopback que monopolize o IPC do Core.
 - **Contexto/problema:** downloads/HTTP precisam de timeout/cancelamento/teto de bytes; IPC pode esperar autenticação indefinidamente e nonce em linha de comando não protege contra processos do mesmo usuário.
 - **Resultado esperado:** políticas tipadas de timeout/tamanho/conexões, cancelamento e erros recuperáveis, sem quebrar comandos Tauri existentes.
 - **Dependências:** R0 verde; coordenar ownership Rust com AUR-R1-004.
@@ -10,7 +10,7 @@
 
 - **Pode/deve tocar:** módulos Rust de HTTP e IPC, testes/fixtures correspondentes.
 - **Não tocar:** substituição final de arquivo de R1-004, UI React, Worker, protocolo remoto/social.
-- **Interfaces:** nomes/payloads de comandos Tauri e protocolo Companion permanecem compatíveis; novo erro deve ser serializável.
+- **Interfaces:** nomes/payloads de comandos Tauri e protocolo público do Core permanecem compatíveis; novo erro deve ser serializável.
 
 ## Passos
 
@@ -38,4 +38,3 @@ Timeout agressivo prejudica rede lenta. Usar classes/configuração limitada, n�
 - Commit: `fix(network): bound http and ipc sessions [AUR-R1-001]`.
 - PR depende de R0; integrar antes de R1-004 se interface compartilhada.
 - Execução paralela: **sim**, somente com ownership Rust por arquivo acordado.
-

@@ -1,5 +1,39 @@
 # Compatibility Matrix
 
+## Matriz ativa após retirada do mod — 21/09/2026
+
+**O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados.** Os módulos ativos são Core e Skins: 2 módulos × 9 pares = **18 JARs**. A seleção/contagem vem de `scripts/active-mod-matrix.json`; o painel desktop e suas dependências não são JARs da matriz.
+
+Core **1.1.5** é o candidato versionado desta alteração de UI. Skins **0.2.4** mantém sua fonte e só pode ser reutilizado se passar no comparador estrito. Consulte o [registro da retirada](../task-remove-companion.md) para os resultados realmente executados; a existência de candidato ou build não prova runtime.
+
+| Minecraft | Loader | Java runtime | Core | Skins | Runtime completo após retirada |
+| --- | --- | ---: | --- | --- | --- |
+| 1.12.2 | Forge | 8 | 1.1.5 candidato | 0.2.4 | PRECISA DE TESTE |
+| 1.16.5 | Fabric | 8 | 1.1.5 candidato | 0.2.4 | PRECISA DE TESTE |
+| 1.16.5 | Forge | 8 | 1.1.5 candidato | 0.2.4 | PRECISA DE TESTE |
+| 1.19.2 | Fabric | 17 | 1.1.5 candidato | 0.2.4 | PRECISA DE TESTE |
+| 1.19.2 | Forge | 17 | 1.1.5 candidato | 0.2.4 | PRECISA DE TESTE |
+| 1.20.1 | Fabric | 17 | 1.1.5 candidato | 0.2.4 | PRECISA DE TESTE |
+| 1.20.1 | Forge | 17 | 1.1.5 candidato | 0.2.4 | PRECISA DE TESTE |
+| 1.21.1 | Fabric | 21 | 1.1.5 candidato | 0.2.4 | PRECISA DE TESTE |
+| 1.21.1 | Forge | 21 | 1.1.5 candidato | 0.2.4 | PRECISA DE TESTE |
+
+Os scripts preservam Gradle 8.4 em `tools/gradle/8.4` com JVM de build 17, e o wrapper 9.7.1/JVM 21 de Core 1.21.1 utilizado também por Skins. Rodar builds sequencialmente para evitar colisões Loom. Versões mínimas/exatas de loader e assinaturas seguem os manifestos de compatibilidade ativos.
+
+### Gates vigentes
+
+1. Recompilar Core e Skins nos nove pares fora da pasta Companion; validar metadata, bytecode, dependências, recursos, hashes e assinatura Core.
+2. Comparar todas as entradas normalizadas dos 18 JARs contra as fontes; divergência bloqueia release. A normalização limitada existente não autoriza ignorar classes/recursos diferentes.
+3. Em QA isolada, migrar Companion conhecido de `mods` para backup/journal fora da pasta carregada; repetir, simular falha, recusar link e preservar identidade incerta/terceiros/dados desktop.
+4. Iniciar Core → Skins sem Companion, com uma única conexão IPC, handshake/nonce/protocolo 1, sessão pública e desconexão.
+5. Verificar menu, preview 3D, catálogo, aplicação/persistência de skin e capa onde implementada, foco e encerramento sem impedir Minecraft.
+6. Com Minecraft fechado, validar separadamente botão/atalho, conversa Gemini, microfone/transcrição, mute/TTS e erros/timeouts do Assistente desktop. Sem ponte de pedido antigo do mod.
+7. Preparar a próxima release sem modificar artefatos históricos; gerar instalador somente mediante tarefa explícita e pelo fluxo oficial. Alteração do Worker não significa deploy.
+
+## Evidências históricas anteriores à retirada
+
+> As seções abaixo conservam resultados das versões/release indicadas. Companion, 27 JARs e procedimentos de instalação abaixo são históricos e foram substituídos pelos gates acima; não são requisitos atuais. Evidências gráficas antigas Core/Skins continuam úteis somente para os hashes/cenários realmente testados.
+
 ## Reparos de runtime — 19/09/2026
 
 Fonte: Core **1.1.4**, Skins **0.2.4**, Companion **0.2.3**. Os 27 JARs

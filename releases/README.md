@@ -3,9 +3,13 @@
 Os artefatos desta pasta são imutáveis. Um nome de versão já publicado nunca
 deve ser sobrescrito nem removido.
 
+## Estado histórico e próxima saída
+
+O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados das fontes atuais. A próxima saída contém somente nove Core e nove Skins (18 JARs), além do Assistente desktop e suas dependências no aplicativo. A retirada não modifica os instaladores/JARs abaixo nem publica um novo instalador. Artefatos Companion antigos servem apenas como histórico/evidência de migração.
+
 ## Fluxo obrigatório do instalador desktop
 
-Release mais recente: **0.1.1-alpha.8**, compilada em 19/09/2026. Inclui alpha.7,
+Release histórica mais recente já gerada: **0.1.1-alpha.8**, compilada em 19/09/2026. Inclui alpha.7,
 reforço visual da animação de carregamento e reparos de runtime com Core 1.1.4,
 Skins 0.2.4 e Companion 0.2.3.
 Artefato, SHA-256 e manifesto estão nesta pasta; evidências em

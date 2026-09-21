@@ -17,9 +17,11 @@ npm run release:package
 
 Antes de empacotar, conclua a integração, sincronize a versão em `package.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json` e `apps/desktop/src-tauri/Cargo.toml`, incluindo os lockfiles afetados, e faça commit. Use uma versão ainda não publicada. O preflight existente exige branch própria, checkout limpo e worktrees sem entregas de produto pendentes; nenhuma dessas verificações é desativada pelo wrapper.
 
-`release:package` roda o preflight antes do trabalho caro. Em seguida executa o único build oficial, `npm run desktop:build`, com a validação da matriz dos 27 mods e o empacotamento Tauri. Também verifica o estado Git novamente ao final. O Cargo informa o diretório de saída, respeitando `CARGO_TARGET_DIR` e sua configuração; o wrapper aceita somente um instalador novo com nome, produto e versão esperados.
+`release:package` roda o preflight antes do trabalho caro. Em seguida executa o único build oficial, `npm run desktop:build`, com a validação da matriz dos 18 JARs Core/Skins e o empacotamento Tauri. Também verifica o estado Git novamente ao final. O Cargo informa o diretório de saída, respeitando `CARGO_TARGET_DIR` e sua configuração; o wrapper aceita somente um instalador novo com nome, produto e versão esperados.
 
-Instale os JDKs 17 e 21 antes do build. Os scripts selecionam a JVM por etapa: JDK 17 para Gradle 8.4 e toda a matriz Companion; JDK 21 para Core/Skins 1.21.1 com Gradle 9.7.1 e Loom. A versão do compilador declarada nas toolchains permanece independente. A seleção procura `JAVA_HOME`, `JAVA_HOME_17_X64` ou `JAVA_HOME_21_X64`, registros de JDK/Adoptium e instalações Java/Adoptium em Program Files; valida a versão no arquivo `release` e a presença de `java.exe` e `javac.exe`. Cada chamada restaura `JAVA_HOME` ao terminar, inclusive quando falha, sem mudar o `PATH` ou a configuração global. Se faltar algum JDK, o build informa a variável a configurar e não baixa Java automaticamente.
+Instale os JDKs 17 e 21 antes do build. Os scripts selecionam a JVM por etapa: JDK 17 para o wrapper compartilhado Gradle 8.4; JDK 21 para Core/Skins 1.21.1 com Gradle 9.7.1 e Loom. A versão do compilador declarada nas toolchains permanece independente. A seleção procura `JAVA_HOME`, `JAVA_HOME_17_X64` ou `JAVA_HOME_21_X64`, registros de JDK/Adoptium e instalações Java/Adoptium em Program Files; valida a versão no arquivo `release` e a presença de `java.exe` e `javac.exe`. Cada chamada restaura `JAVA_HOME` ao terminar, inclusive quando falha, sem mudar o `PATH` ou a configuração global. Se faltar algum JDK, o build informa a variável a configurar e não baixa Java automaticamente.
+
+O Assistente desktop, sua API/Gemini e voz continuam no aplicativo e fora da contagem de JARs. Companion não é selecionado ou embarcado em novas saídas; seus artefatos antigos permanecem evidência histórica/migração. A retirada do mod prepara fontes e candidatos, sem executar empacotamento ou deploy automaticamente.
 
 O resultado fica em `releases/`:
 
@@ -30,3 +32,6 @@ O resultado fica em `releases/`:
 Os arquivos são criados sem sobrescrever releases anteriores. Uma falha durante a cópia final pode deixar uma publicação parcial; preserve esses arquivos e o diretório da execução para diagnóstico antes de qualquer recuperação. O manifesto é copiado por último. Ele não declara homologação em Minecraft nem assinatura digital: o estado de runtime permanece `NÃO VERIFICADO` até testes reais.
 
 Para reduzir tokens, o build guarda sua saída em `.aurora/release-runs/<execução>/build.log`, ignorada pelo Git. A conversa recebe apenas as etapas e o resultado, ou as últimas 45 linhas quando um comando de build falha. Consulte o trecho necessário do log ao investigar uma falha; não cole o arquivo inteiro nem credenciais. A economia vem de coordenar uma única integração e um único build, mantendo as verificações obrigatórias.
+
+
+O wrapper Gradle 8.4 compartilhado fica em `tools/gradle/8.4`; a geração 1.21.1 preserva o wrapper 9.7.1 próprio do Core, usado também pelo Skins. Execute builds sequencialmente para evitar concorrência no cache Loom.

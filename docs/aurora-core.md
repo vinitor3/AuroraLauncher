@@ -1,6 +1,8 @@
 # Desenvolvimento do Aurora Core
 
-O Aurora Core 1.1.2 é o mod-base obrigatório para as instâncias Fabric/Forge suportadas pelo Aurora. O Launcher escolhe o artefato pela matriz central, valida assinatura e hash, instala Core → Skins → Companion e só então inicia o IPC.
+O Aurora Core é o mod-base obrigatório para as instâncias Fabric/Forge suportadas pelo Aurora. O Launcher escolhe o artefato pela matriz central, valida assinatura e hash, instala Core → Skins e só então inicia o IPC.
+
+O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados. O Core não oferece página de Assistente nem substitui a ponte removida. Veja [IPC do Core](core-ipc.md).
 
 ## APIs públicas
 
@@ -20,8 +22,8 @@ O botão de Skins aparece apenas quando `aurora_skins` estiver registrado. Assim
 ## Inicialização
 
 1. O Launcher resolve Minecraft, loader e Java.
-2. Seleciona Core, Skins e Companion pela versão exata.
-3. Verifica o Core assinado e instala os três por troca atômica.
+2. Seleciona Core e Skins pela versão exata e migra Companion gerenciado antigo, com backup/journal e sem tocar em mods incertos.
+3. Verifica o Core assinado e instala Core e Skins por troca atômica.
 4. Abre um WebSocket loopback com nonce efêmero.
 5. Passa somente porta, nonce e loader como propriedades JVM.
 6. O Core autentica o `hello`, recebe a projeção pública da sessão e publica eventos aos módulos.
@@ -30,4 +32,4 @@ O perfil atual do Launcher ainda usa identidade Minecraft offline; por isso a se
 
 ## Estado de validação
 
-Todos os nove alvos compilam e os artefatos 1.1.2 têm tamanho, SHA-256 e assinatura verificados por testes Rust. Cada JAR inclui `pack.mcmeta` compatível com sua versão do Minecraft. O SLF4J interno é relocacionado para o namespace privado do Core nas versões que o empacotam; testes Rust e o gate de release rejeitam `org/slf4j/**` sem relocação e classes `net/minecraft/**` dentro dos JARs. Os testes Java cobrem compatibilidade SemVer, layout sem colisão, direção/suavização do avatar, isolamento de listeners, rollback de módulo e migração de configuração. Isso não substitui homologação runtime: cada linha permanece **IMPLEMENTADO MAS NÃO HOMOLOGADO** até executar o roteiro da matriz em uma instância limpa.
+A matriz ativa contém nove alvos Core e nove Skins. Tamanho, SHA-256 e assinatura do Core são verificados por testes Rust; os resultados de rebuild e comparação desta mudança ficam em [task-remove-companion](task-remove-companion.md). Cada JAR inclui `pack.mcmeta` compatível com sua versão do Minecraft. O SLF4J interno é relocacionado para o namespace privado do Core nas versões que o empacotam; testes Rust e o gate de release rejeitam `org/slf4j/**` sem relocação e classes `net/minecraft/**` dentro dos JARs. Os testes Java cobrem compatibilidade SemVer, layout sem colisão, direção/suavização do avatar, isolamento de listeners, rollback de módulo e migração de configuração. Isso não substitui homologação runtime: cada linha permanece **IMPLEMENTADO MAS NÃO HOMOLOGADO** até executar o roteiro da matriz em uma instância limpa.

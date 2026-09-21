@@ -1,6 +1,6 @@
 # Aurora Skins
 
-Aurora Skins 0.2.4 é o módulo oficial, independente e client-side para aparência dentro do Minecraft. A fonte do Launcher instala a build correta automaticamente depois do Aurora Core 1.1.4 (API mínima 1.1.3) e antes do Companion 0.2.3. A distribuição ao usuário depende da próxima integração/compilação do instalador.
+Aurora Skins 0.2.4 é o módulo oficial, independente e client-side para aparência dentro do Minecraft. A fonte do Launcher instala a build correta automaticamente depois do Aurora Core selecionado (candidato 1.1.5; API mínima 1.1.3) sem instalar Companion. O Assistente desktop permanece no Launcher. A distribuição ao usuário depende da próxima integração/compilação do instalador.
 
 ## Estado
 
@@ -53,4 +53,7 @@ Para compilar e testar toda a matriz sem alterar releases:
 npm run skins:build
 ```
 
-O comando também gera cópias de conferência ignoradas pelo Git em `.aurora/build-matrix/skins`. Antes do instalador, `npm run release:verify-mods` recompila Core, Skins e Companion e exige correspondência SHA-256 com todos os 27 JARs publicados.
+O comando também gera cópias de conferência ignoradas pelo Git em `.aurora/build-matrix/skins`. Antes do instalador, `npm run release:verify-mods` recompila Core e Skins e exige correspondência normalizada com os 18 JARs selecionados, além de tamanho/hash, metadata e assinatura aplicáveis. Releases históricas não são sobrescritas.
+
+
+O wrapper Gradle 8.4 compartilhado fica em `tools/gradle/8.4`; a geração 1.21.1 preserva o wrapper 9.7.1 próprio do Core, usado também pelo Skins. Execute builds sequencialmente para evitar concorrência no cache Loom.

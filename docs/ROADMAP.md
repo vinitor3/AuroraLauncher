@@ -13,7 +13,7 @@ Este roadmap separa claramente o que já está implementado, o que ainda precisa
 - [x] Biblioteca local de skins e prévia 3D.
 - [x] Aurora Skins independente, auto-instalado nas nove combinações Fabric/Forge suportadas.
 - [x] Aplicação local, favoritos, histórico, importação 64x64/64x32 e personagem 3D na tela principal.
-- [x] IPC local autenticado entre launcher e Aurora Core, compartilhado pelo Companion.
+- [x] IPC local autenticado entre launcher e Aurora Core, consumido pelos módulos preservados.
 - [ ] Homologar todas as combinações Minecraft/loader em execução real.
 - [ ] Concluir a inspeção visual de skin e capa nas versões suportadas.
 - [ ] Cobrir fluxos críticos com testes de interface reproduzíveis.
@@ -21,12 +21,13 @@ Este roadmap separa claramente o que já está implementado, o que ainda precisa
 - [ ] Sincronizar skin ativa, biblioteca e favoritos entre Launcher, jogo e API Aurora.
 - [ ] Propagar skins Aurora entre jogadores sem exigir mod no servidor.
 
-## Próximo — Companion nativo
+## Assistente desktop e módulos mantidos
 
-- [ ] Substituir a janela Swing externa por uma tela/HUD nativos do Minecraft.
-- [ ] Manter o mundo jogável enquanto o painel estiver aberto.
-- [ ] Adaptar a interface para Forge 1.12.2 e Fabric/Forge 1.16.5–1.21.1.
-- [ ] Finalizar entrada por voz, resposta, legendas e controle de áudio dentro do jogo.
+O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados. A antiga expansão para HUD/Swing no jogo foi cancelada pela [ADR-018](engineering/ADR/ADR-018-remove-companion-keep-desktop-assistant.md).
+
+- [x] Preservar painel, botão, conversa, Gemini, voz, TTS e atalho desktop `Ctrl+Alt+/`.
+- [ ] Repetir homologação desktop com Minecraft fechado, incluindo microfone, fala e falhas dos serviços externos.
+- [ ] Homologar Core/Skins nas nove combinações atuais sem Companion.
 - [ ] Ampliar a sincronização de skins e capas com fallback local.
 
 ## Atualizações de conteúdo — implementado, aguardando homologação
@@ -45,6 +46,7 @@ Este roadmap separa claramente o que já está implementado, o que ainda precisa
 
 ## Fora do escopo atual
 
+- Novo Assistente in-game ou port de novas versões nesta retirada.
 - NeoForge.
 - Distribuição de conteúdo que viole termos ou licenças de terceiros.
 - Captura silenciosa de tela ou envio de dados sem ação explícita do usuário.

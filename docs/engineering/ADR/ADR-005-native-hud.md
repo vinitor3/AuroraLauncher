@@ -1,5 +1,7 @@
 # ADR-005 — Screen interativa + HUD de legendas nativos
 
+> SUBSTITUÍDA pela [ADR-018](ADR-018-remove-companion-keep-desktop-assistant.md), em 21/09/2026. Preservada como histórico; não implementar Companion/HUD. O Assistente desktop permanece.
+
 ## Contexto
 
 Swing externa disputa foco e não é UI in-game. O painel precisa texto/input; legendas precisam aparecer sem capturar mouse.
@@ -29,4 +31,3 @@ Dois renderers pequenos sobre o mesmo view-model. Evidência manual/automatizada
 ## Reversibilidade
 
 Alta enquanto o IPC/view-model permanecer independente.
-

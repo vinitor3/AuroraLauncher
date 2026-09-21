@@ -19,7 +19,7 @@ npm --prefix apps/edge-proxy run check
 npm --prefix functions run lint
 ```
 
-Mudanças no Companion devem indicar exatamente quais versões e loaders foram compilados e quais foram testados dentro do Minecraft. Compilação não equivale a homologação em jogo.
+Mudanças em Core/Skins devem indicar exatamente quais versões e loaders foram compilados e quais foram testados dentro do Minecraft. O Assistente desktop é validado também sem jogo aberto; Companion permanece retirado. Compilação não equivale a homologação em jogo.
 
 ## Commits
 
@@ -27,9 +27,8 @@ Prefira mensagens diretas, por exemplo:
 
 - `feat: adiciona filtro de loaders no catálogo`
 - `fix: preserva hash ao retomar download`
-- `docs: atualiza matriz do companion`
+- `docs: atualiza matriz de Core e Skins`
 
 ## Pull requests
 
 Inclua objetivo, evidências redigidas, comandos de teste, versões afetadas e pendências conhecidas.
-

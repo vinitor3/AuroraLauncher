@@ -1,5 +1,7 @@
 # ADR-015 — Aurora Core como fundação modular in-game
 
+> ATUALIZAÇÃO DE ESCOPO: a [ADR-018](ADR-018-remove-companion-keep-desktop-assistant.md) retira somente o mod Companion. As decisões independentes de Core, Skins, IPC público e trilho legado continuam válidas; o texto original abaixo é histórico quando mencionar Companion.
+
 ## Contexto
 
 Sessão, IPC, configuração e telas estavam distribuídos entre Launcher e Companion. Novos recursos tenderiam a criar conexões paralelas, dependências rígidas e implementações repetidas nas nove combinações Minecraft/loader.

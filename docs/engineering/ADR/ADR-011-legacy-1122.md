@@ -1,5 +1,7 @@
 # ADR-011 — Minecraft 1.12.2 como tier legado
 
+> ATUALIZAÇÃO DE ESCOPO: a [ADR-018](ADR-018-remove-companion-keep-desktop-assistant.md) retira somente o mod Companion. As decisões independentes de Core, Skins, IPC público e trilho legado continuam válidas; o texto original abaixo é histórico quando mencionar Companion.
+
 ## Contexto
 
 Forge 1.12.2 exige Java 8, LWJGL2, ASM/classloader antigos e adaptação própria. Já há runtime comprovado, mas HUD/P2P modernos não portam diretamente.
@@ -29,4 +31,3 @@ Matriz e UI mostram nível de suporte por capacidade, não um “suporta” bin�
 ## Reversibilidade
 
 Média; remoção futura exige aviso/migração, mas módulo permanece desacoplado.
-

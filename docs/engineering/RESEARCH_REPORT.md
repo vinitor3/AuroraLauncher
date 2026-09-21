@@ -1,5 +1,7 @@
 # Relatório de pesquisa externa
 
+> REGISTRO HISTÓRICO: o conteúdo abaixo conserva evidências e decisões da entrega datada; referências a Companion, 27 JARs ou HUD não são instruções atuais. O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados. Escopo vigente: [retirada do mod](../task-remove-companion.md).
+
 Pesquisa encerrada em 2026-08-30. Foram priorizadas documentação oficial, repositórios dos autores, RFCs e termos dos provedores. “Referência” abaixo significa estudar contratos e comportamento; não autoriza copiar código, marca ou ativo.
 
 ## Conclusões executivas

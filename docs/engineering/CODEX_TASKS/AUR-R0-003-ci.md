@@ -2,7 +2,7 @@
 
 - **Fase/prioridade:** R0 / P0.
 - **Objetivo:** fazer cada regressão relevante bloquear merge.
-- **Contexto/problema:** CI atual cobre build frontend/Rust test/Worker/Functions, mas não `fmt`, `clippy`, Companion, regras Firestore, versão/proveniência; referências e toolchains ainda são flutuantes.
+- **Contexto/problema:** CI atual cobre build frontend/Rust test/Worker/Functions, mas não `fmt`, `clippy`, Core/Skins, regras Firestore, versão/proveniência; referências e toolchains ainda são flutuantes.
 - **Resultado esperado:** workflow com permissões mínimas, concorrência/cancelamento, caches seguros e checks separados/legíveis.
 - **Dependências:** comandos de AUR-R0-001/R0-004 podem chegar depois; usar integração coordenada, não duplicar scripts.
 
@@ -15,9 +15,9 @@
 
 ## Passos
 
-1. Separar jobs frontend, Rust, Worker/Functions, Companion e security/governance.
+1. Separar jobs frontend, Rust, Worker/Functions, Core/Skins e security/governance.
 2. Adicionar `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
-3. Build Companion atual e validar artefato esperado; registrar que não é runtime 9/9.
+3. Build Core/Skins e validar 18 JARs; registrar que não é runtime 9/9. Preservar cobertura do Assistente desktop sem jogo.
 4. Ligar suíte Firestore e checker de versão quando integrados.
 5. Fixar versões/toolchains e Actions conforme política de supply chain; `permissions: contents: read` por padrão.
 6. Configurar `concurrency` por PR/ref e caches derivados de lockfiles, sem cache de secrets/output publicado.
@@ -31,7 +31,7 @@ Executar localmente todos os comandos do [`../CODEX_INTEGRATION_PLAN.md`](../COD
 - Todos os checks obrigatórios aparecem isoladamente e ficam verdes na baseline.
 - Uma falha de format/clippy/test/build/rule/versão resulta em job vermelho.
 - Nenhuma Action mutável não justificada, permissão de escrita ou secret exposto a PR não confiável.
-- Tempo/caches documentados; Companion moderno não é rotulado como matriz runtime completa.
+- Tempo/caches documentados; build Core/Skins não é rotulado como matriz runtime completa.
 
 ## Riscos e rollback
 
@@ -43,4 +43,3 @@ Pins podem quebrar compatibilidade e Firebase/Gradle podem elevar tempo. Preferi
 - Commit: `ci: enforce full baseline gates [AUR-R0-003]`.
 - PR depende de: interfaces finais de R0-001/R0-004 na integração.
 - Execução paralela: **sim**, workflows exclusivos.
-

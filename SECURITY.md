@@ -35,7 +35,7 @@ Ativos protegidos: contas, tokens, mundos/instâncias, filesystem fora da instâ
 - Updater futuro exige manifesto assinado, hash, canal explícito e rejeição fail-closed.
 - Nenhuma mutação irreversível de IA sem snapshot, diff e confirmação.
 
-### Companion e IPC
+### Aurora Core e IPC
 
 - JWT/senha/chave nunca entram na JVM.
 - Socket apenas em `127.0.0.1`, porta efêmera, nonce novo e handshake antes de mensagens.
@@ -65,4 +65,4 @@ Ativos protegidos: contas, tokens, mundos/instâncias, filesystem fora da instâ
 
 ## Versões suportadas
 
-Durante a alpha, correções chegam à `main`; builds anteriores podem ficar sem correção. Confirme tag, SHA-256 e canal. Compilação do Companion não equivale a suporte runtime; consulte `docs/engineering/COMPATIBILITY_MATRIX.md`.
+Durante a alpha, correções chegam à `main`; builds anteriores podem ficar sem correção. Confirme tag, SHA-256 e canal. Compilação de Core/Skins não equivale a suporte runtime; consulte `docs/engineering/COMPATIBILITY_MATRIX.md`.

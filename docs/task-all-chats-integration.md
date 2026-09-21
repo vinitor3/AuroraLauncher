@@ -1,5 +1,7 @@
 # Tarefa — integração das modificações do Aurora
 
+> REGISTRO HISTÓRICO: o conteúdo abaixo conserva evidências e decisões da entrega datada; referências a Companion, 27 JARs ou HUD não são instruções atuais. O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados. Escopo vigente: [retirada do mod](task-remove-companion.md).
+
 ## Integração atual de 17/09/2026
 
 As entregas locais foram reunidas em `codex/aur-release-20260917`, versão

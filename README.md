@@ -19,13 +19,13 @@
 </p>
 
 > [!IMPORTANT]
-> O Aurora está em **alpha experimental de desenvolvimento privado**. O launcher já instala e executa instâncias, mas ainda não possui autenticação Microsoft/Minecraft de produção, updater assinado nem homologação completa do Companion. Não use a build atual como substituta de um launcher oficial nem distribua uma versão pública sem entitlement válido. Consulte o [status técnico](docs/phase-0-status.md) e a [auditoria de engenharia](docs/engineering/README.md).
+> O Aurora está em **alpha experimental de desenvolvimento privado**. O launcher já instala e executa instâncias, mas ainda não possui autenticação Microsoft/Minecraft de produção, updater assinado nem homologação completa da matriz Core/Skins. Não use a build atual como substituta de um launcher oficial nem distribua uma versão pública sem entitlement válido. Consulte o [status técnico](docs/phase-0-status.md) e a [auditoria de engenharia](docs/engineering/README.md).
 
 ## ✦ O que é o Aurora?
 
 O **Aurora Smart Launcher** é um launcher independente para Minecraft Java Edition. Ele reúne instâncias isoladas, descoberta de modpacks, gerenciamento de conteúdo, skins, runtimes Java e um assistente integrado em uma experiência desktop única.
 
-O projeto combina uma interface em **React**, um aplicativo **Tauri v2**, um núcleo de lançamento em **Rust**, serviços protegidos na edge, o **Aurora Core** modular dentro do Minecraft e um **Companion** para o assistente.
+O projeto combina uma interface em **React**, um aplicativo **Tauri v2**, um núcleo de lançamento em **Rust**, serviços protegidos na edge, o **Aurora Core** modular dentro do Minecraft e o **Aurora Skins** para aparência. **O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados.**
 
 ## Uma experiência completa
 
@@ -50,11 +50,9 @@ O projeto combina uma interface em **React**, um aplicativo **Tauri v2**, um nú
 - **Conteúdo por instância:** mods, shaders e resource packs com seleção múltipla, ativação, desativação e remoção.
 - **Atualizações de conteúdo:** detecção compatível, revisão antes da troca, integridade, snapshot e rollback para mods, shaders e resource packs; atualização transacional de modpacks Modrinth e detecção segura de modpacks CurseForge.
 - **Guarda-roupa:** skins locais, favoritos, busca por nick, modelo Classic/Slim, capa e visualização 3D.
-- **Aurora Companion:** JARs 0.2.3 para Forge 1.12.2 e Fabric/Forge 1.16.5,
-  1.19.2, 1.20.1 e 1.21.1; os nove artefatos passam no gate de build, mas a
-  matriz completa ainda precisa de homologação em execução real.
+- **Aurora Skins:** módulo independente para Forge 1.12.2 e Fabric/Forge 1.16.5, 1.19.2, 1.20.1 e 1.21.1, com biblioteca, catálogo e aplicação de aparência. A matriz completa ainda precisa de homologação em execução real.
 - **Aurora Core:** menu modular no jogo, avatar 3D, sessão pública, eventos, configuração versionada e instalação assinada nos mesmos nove alvos.
-- **Assistente integrado:** conversa autenticada com Gemini, entrada por texto/voz, Edge TTS e legendas.
+- **Assistente desktop:** painel/chat, conversa autenticada com Gemini, entrada por texto/voz, controles de microfone e reprodução por Edge TTS. O botão e `Ctrl+Alt+/` abrem o painel, sem exigir Minecraft ou mods instalados.
 - **IPC seguro:** comunicação local via WebSocket em `127.0.0.1`, porta efêmera e nonce renovado a cada execução.
 
 ## Roadmap
@@ -63,11 +61,10 @@ O projeto combina uma interface em **React**, um aplicativo **Tauri v2**, um nú
 | --- | :---: | --- |
 | Fundação e identidade | ✅ | Tauri + React, núcleo Rust, autenticação, instâncias e instalador Windows |
 | Launcher 1.1 | 🟣 | Downloads concorrentes, seleção múltipla, fluxo CurseForge e estabilização |
-| Companion 1.2 | 🟡 | IPC, assistente, TTS e aparência implementados; homologação visual em andamento |
+| Assistente desktop | 🟡 | Painel, Gemini, microfone e TTS preservados; serviços online e runtime desktop exigem validação própria |
 | Aurora Core 1.0 | 🟡 | Fundação modular e menu nativo compilados em 9/9; homologação runtime pendente |
-| Interface nativa do Assistente | ⏳ | Substituir a janela externa do Companion por tela/HUD nativos nas combinações suportadas |
 | Atualizações de conteúdo | 🟡 | Fluxo compatível e reversível implementado; homologação em instâncias reais pendente |
-| Cosméticos e emotes | 🔭 | Expandir o guarda-roupa e a integração com o Companion |
+| Cosméticos e emotes | 🔭 | Expandir o guarda-roupa e o módulo Aurora Skins |
 | Distribuição estável | 🔭 | Atualizador do launcher, releases assinadas e canal público estável |
 
 O detalhamento e as evidências de validação ficam em [`docs/phase-0-status.md`](docs/phase-0-status.md), [`docs/ROADMAP.md`](docs/ROADMAP.md) e no [plano de engenharia auditado](docs/engineering/README.md).
@@ -80,7 +77,9 @@ flowchart LR
     CORE --> GAME[Minecraft + Loader]
     GAME --> AURORA[Aurora Core in-game]
     CORE <-->|IPC local autenticado único| AURORA
-    COMP[Aurora Companion module] --> AURORA
+    SKINS[Aurora Skins] --> AURORA
+    ASSISTANT[Assistente desktop] --> EDGE
+    ASSISTANT -->|síntese de fala| CORE
     UI --> FIREBASE[Firebase Auth / Firestore]
     UI --> EDGE[Cloudflare Worker]
     EDGE --> MODS[Modrinth / CurseForge]
@@ -92,7 +91,7 @@ AuroraLauncher/
 ├── apps/
 │   ├── desktop/        # React + Tauri + núcleo Rust
 │   ├── aurora-core/    # APIs, runtime e adaptadores in-game
-│   ├── companion-mod/  # Companion Fabric e Forge
+│   ├── aurora-skins/   # Aparência Fabric e Forge
 │   └── edge-proxy/     # API protegida na Cloudflare
 ├── firebase/           # Regras de Firestore e Storage
 ├── functions/          # Funções Firebase
@@ -109,7 +108,7 @@ AuroraLauncher/
 - Node.js 22+ e npm para o desktop/Edge (Functions mantém runtime Node 20);
 - Rust estável com Cargo;
 - WebView2;
-- JDK 8, 17 e 21 para trabalhar com toda a matriz do Companion.
+- JDKs 17 e 21 para executar os builds Core/Skins; toolchains e runtime Java 8/17/21 permanecem específicos de cada geração.
 
 ### Launcher desktop
 
@@ -141,10 +140,9 @@ Para gerar e verificar as matrizes versionadas dos módulos:
 ```powershell
 npm run core:build
 npm run skins:build
-npm run companion:build
 ```
 
-O instalador oficial executa o comparador das 27 combinações antes do bundle:
+O instalador oficial executa o comparador dos 18 JARs Core/Skins antes do bundle. Execute somente quando uma nova release for solicitada; a retirada do mod não gera instalador automaticamente:
 
 ```powershell
 npm run desktop:build
@@ -152,15 +150,14 @@ npm run desktop:build
 
 Não copie manualmente um resultado sobre JAR versionado em `releases`; o
 preflight usa staging e bloqueia divergências. Consulte o
-[dossiê técnico do Companion](docs/engineering/COMPANION_AUDIT.md).
+[fluxo de release](docs/release-workflow.md).
 
 ## Segurança e privacidade
 
 - Tokens Firebase e nonces de sessão nunca são registrados pelo núcleo.
 - Segredos de serviços permanecem no Worker/Functions, nunca no bundle desktop.
-- O Aurora Core mantém o único socket, somente no loopback local; o Companion
-  usa a API do Core.
-- A análise de tela é opcional e exige confirmação explícita a cada captura.
+- O Aurora Core mantém o único socket do jogo, somente no loopback local, com sessão pública sem credenciais.
+- Dados do Assistente desktop e preferências de voz são preservados na migração. A antiga captura in-game foi retirada com o mod.
 - Vulnerabilidades devem seguir o processo descrito em [`SECURITY.md`](SECURITY.md).
 
 ## Documentação
@@ -169,8 +166,9 @@ preflight usa staging e bloqueia divergências. Consulte o
 - [Auditoria, arquitetura e execução Codex](docs/engineering/README.md)
 - [Roadmap do produto](docs/ROADMAP.md)
 - [Launcher Core](docs/module-a.md)
-- [IPC do Companion](docs/companion-ipc.md)
-- [Dossiê e auditoria do Companion](docs/engineering/COMPANION_AUDIT.md)
+- [IPC compartilhado do Core](docs/core-ipc.md)
+- [Retirada do mod e preservação do Assistente desktop](docs/task-remove-companion.md)
+- [Dossiê histórico do Companion](docs/engineering/COMPANION_AUDIT.md)
 - [Aurora Core](docs/aurora-core.md)
 - [Backend CurseForge](docs/curseforge-backend.md)
 - [Fase 1.3 — atualizações de conteúdo](docs/task-content-updates.md)

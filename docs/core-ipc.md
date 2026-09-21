@@ -1,0 +1,29 @@
+# Canal IPC do Aurora Core
+
+O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados. O IPC continua sendo a conexão local do Aurora Core e de seus módulos, independente da API/Gemini e da voz do painel desktop.
+
+## Endpoint e handshake preservados
+
+O Launcher abre o WebSocket exclusivamente em `127.0.0.1`, em porta efêmera, e passa à JVM somente `-Daurora.ipc.port=<porta>` e `-Daurora.session.nonce=<nonce-efêmero>`, além das propriedades públicas necessárias ao launch. O nonce muda por execução, não é persistido e não é senha/JWT/token Firebase. O jogo não recebe credenciais Firebase ou chaves Gemini, CurseForge e Cloudflare.
+
+O Core inicia com `hello`, incluindo nonce, loader, versão Minecraft, versão Core e `protocol: 1`. O Launcher encerra nonce/protocolo inválidos e só responde `accepted` após autenticação. A mensagem `session` transmite apenas id Aurora, UUID Minecraft, username, estado e scopes. A sessão offline existente permanece compatível; não houve mudança de versão do protocolo público para retirar mensagens de um módulo.
+
+## Contratos ativos
+
+| Direção | Mensagem/evento | Consumidor |
+| --- | --- | --- |
+| Core → Launcher | `hello` | autenticação do canal |
+| Launcher → Core | `accepted`, `session` | runtime Core, sessão pública e módulos |
+| Core/módulos → Launcher | `kind` genérico com nome/payload limitado | eventos genéricos; não dispara consultas ao Assistente |
+| Launcher → Core/módulos | envelope genérico autorizado | API IPC pública do Core |
+| Local no launcher | conexão e desconexão | acompanhamento da instância/processo |
+
+As filas do servidor permanecem limitadas a 64 elementos. Nomes de eventos são limitados a 64 caracteres; payloads são validados e campos com aparência de credencial recusados. O Core limita mensagens a 1 MiB. Handshake, limites, protocolo, shutdown e desconexão não foram substituídos por uma nova ponte de Assistente.
+
+Mensagens antigas `overlay`, `assistantRequest`, `assistantListen` e `telemetry` do Companion não ativam Gemini, microfone, captura ou painel in-game. Os retornos `toggleAssistant`, `assistantResponse`, `assistantCaption` e `assistantTranscript` e seus comandos Tauri exclusivos foram retirados. A coleta de FPS/MSPT/memória/dimensão produzida pelo mod também foi retirada; diagnósticos reais do launcher/Core permanecem, sem promessa de métricas cujo produtor foi removido.
+
+## Assistente desktop preservado
+
+O botão **Assistente** e `Ctrl+Alt+/` abrem/fecham diretamente o painel desktop, mesmo com Minecraft fechado. Não há encaminhamento prioritário ao jogo. O fluxo é `AssistantPanel → askAuroraAssistant → Worker /v1/assistant → askGemini → resposta no painel`; a fala usa `playAuroraSpeech → synthesize_speech → edge-tts-rust`. Reconhecimento de fala, microfone, mute, histórico/estado e tratamento de erro continuam pertencendo ao desktop.
+
+A captura/voz/legenda exclusiva do Companion foi retirada. Esta mudança não cria captura desktop ou nova HUD para substituir o mod. Serviços compartilhados, plugin/permissões do atalho e TTS desktop permanecem. Para a matriz, migração e validação, veja [retirada do mod](task-remove-companion.md) e [ADR-018](engineering/ADR/ADR-018-remove-companion-keep-desktop-assistant.md).

@@ -1,18 +1,16 @@
-# AUR-R1-002 — Harness de evidência Companion
+# AUR-R1-002 — Harness de evidência Core/Skins e Assistente desktop
 
 - **Fase/prioridade:** R1 / P0.
 - **Objetivo:** substituir “JAR existe” por evidência reproduzível da matriz 9/9.
-- **Contexto/problema:** Forge 1.12.2 e Fabric 1.20.1 têm evidência histórica do
-  Companion 0.1.0. A arquitetura Core + Companion 0.2.0 tem 0/9 roteiros
-  completos e já apresentou falhas de metadata/ordem de inicialização.
+- **Contexto/problema:** as evidências de versões antigas do Companion são históricas. A matriz Core/Skins exige nove roteiros próprios; chat/voz do launcher exigem runtime desktop sem jogo.
 - **Resultado esperado:** schema/runner/checklist de evidência, fixtures redigidas e estados `UNBUILT`, `BUILT`, `LAUNCHED`, `IPC`, `UI`, `VERIFIED_RUNTIME`.
 - **Dependências:** R0 verde; matriz atual é autoridade inicial.
 
 ## Escopo e ownership
 
-- **Pode/deve tocar:** `companion/test-harness/**`, fixtures/scripts e docs/matriz de evidência.
+- **Pode/deve tocar:** fixtures/scripts de QA Core/Skins e desktop, fixtures/scripts e docs/matriz de evidência.
 - **Não tocar:** implementação UI/HUD/adapters, JARs versionados, launcher `App.tsx`.
-- **Interfaces:** coleta versão/loader/JAR/hash/Java/OS, launch, conexão IPC, F10, chat, legenda, fechamento e logs redigidos.
+- **Interfaces:** coleta versão/loader/JAR/hash/Java/OS, launch, conexão/sessão IPC, menu/preview/Skins e fechamento; separadamente botão/atalho desktop, chat, microfone/TTS e logs redigidos.
 
 ## Passos
 
@@ -24,7 +22,7 @@
 
 ## Testes/comandos
 
-Build Gradle atual; validar schema/fixtures; executar dry-run sem Minecraft; fixture adulterada/hash divergente deve falhar. Não marcar runtime por build.
+Build Core/Skins via wrappers preservados; validar schema/fixtures; executar dry-run sem Minecraft; fixture adulterada/hash divergente deve falhar. Não marcar runtime por build.
 
 ## Aceitação/DoD
 
@@ -37,6 +35,6 @@ Automação visual pode ser frágil. Separar prova automática e atestado manual
 ## Git/PR
 
 - Branch/worktree: `codex/aur-r1-002-runtime-harness` / `AuroraLauncher-wt-r1-002`.
-- Commit: `test(companion): add runtime evidence harness [AUR-R1-002]`.
-- PR depende de R0; precede HUD.
+- Commit: `test(core-skins): add runtime evidence harness [AUR-R1-002]`.
+- PR depende de R0; não autoriza um novo Assistente in-game.
 - Execução paralela: **sim**.

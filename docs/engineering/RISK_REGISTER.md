@@ -5,10 +5,7 @@
 | R-001 | P0 | criação de perfil escolhia `role` | CONFIRMADO; correção local força `PLAYER` e passou 7 testes Emulator, ainda sem auditoria/deploy | revisar usuários existentes, deploy controlado e smoke; Master bloqueado |
 | R-019 | P0 | troca de arquivo pode apagar destino válido | fluxo remove destino antes de rename; falha intermediária perde a versão anterior | AUR-R1-004: staging no mesmo volume, backup/journal e rollback bit a bit |
 | R-002 | P0 | artefato `0.1.0-alpha` sem proveniência única | Git: 5.029.160 B / `95C270…`; GitHub: 5.028.702 B / `582E5B…` | preservar ambos como histórico, publicar próxima versão com manifest/SHA/SBOM |
-| R-003 | P0 | matriz Companion 0.2.0 sem runtime completo | JAR válido e evidência histórica 0.1.0 não provam Core/launch/mixin/UI atuais | harness + evidência 9/9; não anunciar suporte completo |
-| R-020 | P0 | Companion 0.2.0 não se anexa ao Core nas linhas Fabric observadas | logs 1.16.5/1.19.2/1.20.1/1.21.1 mostram entrypoint antes do Core; módulo/IPC ficam ausentes | anexação tardia corrigida na fonte; publicar versão inédita e testar 4 linhas |
-| R-021 | P0 | JARs Forge 1.16.5/1.19.2 exigem Forge 47 | `mods.toml` dos artefatos imutáveis usa `[47,)` em vez de 36/43 | template corrigido na fonte; não sobrescrever 0.2.0, reconstruir sob nova versão |
-| R-022 | P1 | pedido do Assistente pode travar após falha/oversize do IPC | retorno booleano era ignorado, não havia timeout e JPEG não tinha teto alinhado ao Core | fonte limita captura, trata recusa e aplica timeouts; falta runtime e release |
+| R-003 | P0 | matriz Core/Skins sem runtime completo | JAR válido e histórico Companion não provam Core/launch/mixin/UI atuais | harness + evidência 9/9; não anunciar suporte completo |
 | R-004 | P0 | modo offline pode contornar entitlement | launcher cria identidade offline sem Microsoft | decisão do responsável e revisão jurídica; distribuição pública bloqueada |
 | R-005 | P0 | licença do monorepo ambígua/incompleta | `LICENSE.md` fala apenas no manifesto Rust e aponta para texto externo | escolher licença de todo código, incluir texto integral e notices/SBOM |
 | R-006 | P1 | branch `main` sem proteção | CONFIRMADO via configuração pública do GitHub | required checks, PR, bloquear force-push/delete |
@@ -25,6 +22,16 @@
 | R-017 | P2 | CAS GC apaga blob vivo | subsistema ainda ausente | raízes explícitas, GC dry-run, transação SQLite e fixtures de crash |
 | R-018 | P2 | conteúdo CurseForge sem autorização | alguns arquivos não têm URL direta e o CDN passou a exigir `x-api-key` | página oficial/manual quando bloqueado; tickets HMAC e gateway restrito a `forgecdn.net` quando autorizado |
 | R-023 | P0 mitigado | CONCLUÍDO: credencial CurseForge renovada | `/health/curseforge` HTTP 200, 1 resultado e 52 categorias em 17/09/2026 após deploy `d9669ec0` | manter chave somente no Worker e verificar health antes de release; instalações reais ainda precisam de homologação |
+
+## Riscos históricos do mod retirado
+
+As linhas abaixo conservam a auditoria anterior. A [ADR-018](ADR/ADR-018-remove-companion-keep-desktop-assistant.md) cancela sua evolução como produto; não são instruções para reinstalar ou publicar Companion. O risco atual é regressão do Assistente desktop/IPC compartilhado ou remoção indevida na migração, cobertos por testes de consumidores e recuperação.
+
+| ID | Prioridade histórica | Risco histórico | Evidência histórica | Mitigação antiga, substituída pela retirada |
+| --- | --- | --- | --- | --- |
+| R-020 | P0 | Companion 0.2.0 não se anexa ao Core nas linhas Fabric observadas | logs 1.16.5/1.19.2/1.20.1/1.21.1 mostram entrypoint antes do Core; módulo/IPC ficam ausentes | anexação tardia corrigida na fonte; publicar versão inédita e testar 4 linhas |
+| R-021 | P0 | JARs Forge 1.16.5/1.19.2 exigem Forge 47 | `mods.toml` dos artefatos imutáveis usa `[47,)` em vez de 36/43 | template corrigido na fonte; não sobrescrever 0.2.0, reconstruir sob nova versão |
+| R-022 | P1 | pedido do Assistente pode travar após falha/oversize do IPC | retorno booleano era ignorado, não havia timeout e JPEG não tinha teto alinhado ao Core | fonte limita captura, trata recusa e aplica timeouts; falta runtime e release |
 
 ## Política
 

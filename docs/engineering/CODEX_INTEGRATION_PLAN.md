@@ -26,26 +26,25 @@ Se AUR-R0-003 e AUR-R0-004 conflitarem no `package.json`, o Integration Agent pr
 Executar em Windows e, quando o workflow existir, confirmar equivalente Ubuntu:
 
 ```powershell
-Set-Location apps/desktop
-npm ci
-npm run build
-Set-Location src-tauri
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-Set-Location ../../../edge-proxy
-npm ci
-npm run check
-Set-Location ../firebase/functions
-npm ci
-npm run lint
-Set-Location ../../companion
-./gradlew.bat build --no-daemon
-Set-Location ../firebase
-npx --yes firebase-tools@latest emulators:exec --only firestore --project demo-aurora '<comando da suíte de regras>'
+npm --prefix apps/desktop ci
+npm --prefix apps/desktop run build
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+npm --prefix apps/edge-proxy ci
+npm --prefix apps/edge-proxy run check
+npm --prefix functions ci
+npm --prefix functions run lint
+npm run core:build
+npm run skins:build
+npm run release:verify-mods
+# Execute também a suíte Firestore definida na tarefa AUR-R0-001.
 ```
 
 Além disso:
+
+- Assistente desktop sem Minecraft/Companion, preservando botão/atalho, chat, Gemini e voz;
+- migração em fixtures com idempotência, proveniência incerta, terceiros e recuperação;
 
 - checker de versão/proveniência da tarefa R0-004;
 - `git diff --check`;
@@ -75,7 +74,7 @@ Release/licença:
 
 CI:
 
-- falha de `fmt`, `clippy`, regra, Companion ou versão deve deixar o check vermelho;
+- falha de `fmt`, `clippy`, regra, Core/Skins ou versão deve deixar o check vermelho;
 - caches não mascaram saída;
 - permissões do workflow são mínimas e Actions críticas estão fixadas conforme política.
 
@@ -100,4 +99,3 @@ Diferenças de ambiente:
 Findings abertos:
 Decisão recomendada para QA:
 ```
-

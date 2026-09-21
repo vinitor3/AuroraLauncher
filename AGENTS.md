@@ -4,16 +4,15 @@ Este arquivo é a referência operacional para agentes que trabalham neste repos
 
 ## Produto e estado
 
-Aurora é um launcher independente para Minecraft Java Edition, gratuito e open source. O desktop usa React 19/TypeScript sobre Tauri v2; o núcleo nativo é Rust; o Worker Cloudflare protege Gemini, CurseForge e Supabase; o Companion integra Fabric/Forge ao launcher por WebSocket local autenticado.
+Aurora é um launcher independente para Minecraft Java Edition, gratuito e open source. O desktop usa React 19/TypeScript sobre Tauri v2; o núcleo nativo é Rust; o Worker Cloudflare protege Gemini, CurseForge e Supabase; o Aurora Core integra Fabric/Forge ao launcher por WebSocket local autenticado. O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados.
 
-Estado em 2026-08-30:
+Estado de escopo em 2026-09-21 (resultados executados em `docs/task-remove-companion.md`):
 
 - launcher desktop e núcleo Rust: implementados, build/testes locais verdes;
-- Companion: nove JARs 0.2.0 presentes; as evidências Forge 1.12.2 e Fabric
-  1.20.1 pertencem ao 0.1.0. A matriz 0.2.0 tem 0/9 runtimes completos, dois
-  metadados Forge incorretos e uma corrida de inicialização Fabric corrigida
-  apenas na fonte posterior aos artefatos;
-- HUD nativa, updater de conteúdo, CAS, diagnóstico e Tools: não concluídos; Master e Social: IMPLEMENTAR FUTURAMENTE;
+- Assistente desktop: preservar painel, conversa, Gemini, microfone, reconhecimento de fala, TTS e atalho `Ctrl+Alt+/`, inclusive com Minecraft fechado;
+- módulos distribuídos: nove Core e nove Skins (18 JARs); não reinstalar Companion nem criar Assistente no jogo;
+- migração de Companion antigo: somente identidade/proveniência confirmadas, jogo encerrado, bloqueio de mutação, caminhos confinados, backup e journal recuperável;
+- homologação runtime completa, CAS, diagnóstico e Tools: pendentes; Master e Social: IMPLEMENTAR FUTURAMENTE;
 - release `v0.1.0-alpha`: histórico; não reutilizar nem sobrescrever.
 
 Use exatamente: `CONCLUÍDO`, `PARCIAL`, `PROTÓTIPO`, `IMPLEMENTADO MAS NÃO HOMOLOGADO`, `NÃO IMPLEMENTADO`, `LEGADO`, `RISCO`, `HIPÓTESE`, `NÃO VERIFICADO` e `PRECISA DE TESTE`.
@@ -23,7 +22,8 @@ Use exatamente: `CONCLUÍDO`, `PARCIAL`, `PROTÓTIPO`, `IMPLEMENTADO MAS NÃO HO
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.
-- `apps/companion-mod`: Companion Fabric/Forge e protótipo Swing.
+- `apps/aurora-core` e `apps/aurora-skins`: únicos módulos Java ativos, com API, IPC e aparência preservados.
+- `docs/core-ipc.md`: protocolo compartilhado; `docs/engineering/ADR/ADR-018-remove-companion-keep-desktop-assistant.md`: fronteira da retirada do mod.
 - `firebase`: regras de Auth/Firestore/Storage.
 - `functions`: backend legado; não ampliar sem ADR explícito.
 - `scripts`: smoke tests reproduzíveis.
@@ -50,11 +50,12 @@ cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- 
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 npm --prefix apps/edge-proxy run check
 npm --prefix functions run lint
-cd apps/companion-mod
-.\gradlew.bat build --no-daemon
+npm run core:build
+npm run skins:build
+npm run release:verify-mods
 ```
 
-Build de JAR não é homologação. Mudança no Companion deve registrar Minecraft, loader, Java, hash do JAR e resultado de launch, handshake, keybind, UI, encerramento, skin e capa.
+Build de JAR não é homologação. Mudanças em Core/Skins devem registrar Minecraft, loader, Java, hash do JAR e resultado de launch, handshake, UI, encerramento, skin e capa. Testar Assistente desktop separadamente, sem jogo/mod instalado; mocks não comprovam Gemini/TTS online ou acesso real ao microfone.
 
 ## Definition of Done
 
