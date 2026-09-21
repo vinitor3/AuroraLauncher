@@ -32,15 +32,6 @@ const result = await call("Runtime.evaluate", {
   returnByValue: true,
   expression: `
     (async () => {
-      const originalFetch = window.fetch.bind(window);
-      let capturedAuthorization = "";
-      window.fetch = (input, init) => {
-        const url = typeof input === "string" ? input : input.url;
-        if (url.includes("/v1/assistant")) {
-          capturedAuthorization = new Headers(init?.headers).get("Authorization") ?? "";
-        }
-        return originalFetch(input, init);
-      };
       const waitStartedAt = Date.now();
       let assistantButton;
       while (!assistantButton && Date.now() - waitStartedAt < 15000) {
@@ -57,38 +48,29 @@ const result = await call("Runtime.evaluate", {
       setter.call(input, "Responda exatamente com: Aurora online");
       input.dispatchEvent(new Event("input", { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 50));
+      const repliesBefore = document.querySelectorAll('.assistant-message.assistant p').length;
       input.form.requestSubmit();
       const startedAt = Date.now();
-      let panelText = "";
-      while (Date.now() - startedAt < 45000) {
+      while (Date.now() - startedAt < 75000) {
         await new Promise((resolve) => setTimeout(resolve, 250));
         const panel = document.querySelector('[aria-label="Assistente Aurora"]');
-        const text = panel?.innerText ?? "";
-        if (!text.includes("Pensando") && (
-          text.includes("Aurora online")
-          || text.includes("não está disponível")
-          || text.includes("não autorizou")
-          || text.includes("limite temporário")
-        )) {
-          panelText = text;
-          break;
+        const replies = panel?.querySelectorAll('.assistant-message.assistant p');
+        if (replies && replies.length > repliesBefore) {
+          const answer = replies[replies.length - 1].textContent?.trim();
+          if (answer !== "Aurora online") throw new Error("Resposta desktop inesperada: " + answer);
+          return {
+            answer,
+            microphone: Boolean(panel.querySelector('[title="Microfone"]')),
+            audioControl: Boolean(panel.querySelector('[aria-label="Mutar áudio"], [aria-label="Ativar áudio"]')),
+            notice: panel.querySelector('.assistant-footer')?.innerText ?? "",
+          };
+        }
+        const footer = panel?.querySelector('.assistant-footer')?.innerText ?? "";
+        if (footer && !footer.includes("Pensando") && /indisponível|não|limite|demorou|conectar|expirou/i.test(footer)) {
+          throw new Error("O Assistente desktop não respondeu: " + footer);
         }
       }
-      window.fetch = originalFetch;
-      if (!panelText) throw new Error("O Assistente não concluiu em 45 segundos");
-      if (!panelText.includes("Aurora online") || !capturedAuthorization) {
-        return { panelText, inGame: null };
-      }
-      const inGameResponse = await originalFetch(
-        "https://aurora-api.aurora-edge-proxy.workers.dev/v1/assistant",
-        {
-          method: "POST",
-          headers: { Authorization: capturedAuthorization, "Content-Type": "application/json" },
-          body: JSON.stringify({ message: "Responda exatamente com: Companion online", mode: "inGame" }),
-        },
-      );
-      const inGame = await inGameResponse.json();
-      return { panelText, inGame: { status: inGameResponse.status, ...inGame } };
+      throw new Error("O Assistente desktop não concluiu em 75 segundos");
     })()
   `,
 });
