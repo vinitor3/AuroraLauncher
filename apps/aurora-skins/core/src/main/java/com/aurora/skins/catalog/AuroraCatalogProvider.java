@@ -25,6 +25,7 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -53,6 +54,9 @@ public final class AuroraCatalogProvider implements SkinProvider {
     private final BuiltinSkinCatalog fallback;
     private final URI endpoint;
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<String, CacheEntry>();
+    private final Map<String, CompletableFuture<SkinEntry>> previews = new LinkedHashMap<String, CompletableFuture<SkinEntry>>();
+    private final Map<String, CompletableFuture<SkinEntry>> downloads = new LinkedHashMap<String, CompletableFuture<SkinEntry>>();
+    private final Map<String, PreviewCacheEntry> previewCache = new LinkedHashMap<String, PreviewCacheEntry>(96, .75F, true);
     private final SearchDebouncer debouncer = new SearchDebouncer();
     private volatile long unavailableUntil;
     private volatile boolean online;
@@ -162,26 +166,87 @@ public final class AuroraCatalogProvider implements SkinProvider {
     }
 
     public CompletableFuture<SkinEntry> materialize(final SkinEntry entry) {
-        return prepare(entry, true);
+        return preview(entry).thenApplyAsync(prepared -> {
+            try { return store.importCatalogSkin(prepared.file(), prepared); }
+            catch (IOException | SkinValidationException error) { throw new CompletionException(error); }
+        }, EXECUTOR);
     }
 
-    public CompletableFuture<SkinEntry> preview(final SkinEntry entry) { return prepare(entry, false); }
+    public CompletableFuture<SkinEntry> preview(final SkinEntry entry) {
+        if (entry == null) return failedPreview();
+        final String key = entry.providerId() + "\n" + entry.id() + "\n" + entry.source() + "\n"
+            + entry.contentHash() + "\n" + entry.model().id() + "\n" + entry.file();
+        synchronized (previews) {
+            PreviewCacheEntry cached = previewCache.get(key);
+            if (cached != null && System.currentTimeMillis() - cached.createdAt < CACHE_MILLIS) {
+                return CompletableFuture.completedFuture(cached.entry);
+            }
+            CompletableFuture<SkinEntry> pending = previews.get(key);
+            if (pending != null) return pending.thenApply(value -> value);
+            // Bound abandoned pages too; the shared executor remains at two workers.
+            if (previews.size() >= 96) return failedPreview();
+            final CompletableFuture<SkinEntry> result = new CompletableFuture<SkinEntry>();
+            previews.put(key, result);
+            preparePreview(entry).whenComplete((prepared, error) -> {
+                synchronized (previews) {
+                    previews.remove(key);
+                    if (error == null) {
+                        previewCache.put(key, new PreviewCacheEntry(prepared));
+                        while (previewCache.size() > 96) previewCache.remove(previewCache.keySet().iterator().next());
+                    }
+                }
+                if (error == null) result.complete(prepared); else result.completeExceptionally(error);
+            });
+            // A screen cancelling its delivery must not cancel another screen's shared work.
+            return result.thenApply(value -> value);
+        }
+    }
 
-    private CompletableFuture<SkinEntry> prepare(final SkinEntry entry, final boolean importToLibrary) {
+    private CompletableFuture<SkinEntry> preparePreview(final SkinEntry entry) {
         if (entry != null && "aurora-player".equals(entry.providerId()))
-            return getPlayerProfile(entry.source()).thenCompose(profile -> prepare(profile, importToLibrary));
+            return getPlayerProfile(entry.source()).thenCompose(this::preview);
+        if (entry.file() == null && "aurora-online".equals(entry.providerId())) {
+            final String imageKey = entry.source() + "\n" + entry.contentHash();
+            synchronized (downloads) {
+                CompletableFuture<SkinEntry> pending = downloads.get(imageKey);
+                if (pending == null) {
+                    pending = loadPreview(entry);
+                    downloads.put(imageKey, pending);
+                    pending.whenComplete((value, error) -> { synchronized (downloads) { downloads.remove(imageKey); } });
+                }
+                // A PNG may be shared by entries with different Slim/Classic models and names.
+                return pending.thenApply(loaded -> new SkinEntry(entry.id(), entry.name(), entry.author(),
+                    entry.model(), entry.providerId(), entry.source(), entry.contentHash(), loaded.file(), entry.tags()));
+            }
+        }
+        return loadPreview(entry);
+    }
+
+    private static CompletableFuture<SkinEntry> failedPreview() {
+        CompletableFuture<SkinEntry> failed = new CompletableFuture<SkinEntry>();
+        failed.completeExceptionally(new IOException("Prévia indisponível. Tente novamente."));
+        return failed;
+    }
+
+    private CompletableFuture<SkinEntry> loadPreview(final SkinEntry entry) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 if (entry == null) throw new IOException("Skin inválida.");
                 if (entry.file() != null && Files.isRegularFile(entry.file())) {
-                    return importToLibrary ? store.importCatalogSkin(entry.file(), entry) : entry;
+                    return entry;
                 }
                 if (!"aurora-online".equals(entry.providerId())) {
                     throw new IOException("A origem desta skin não está disponível.");
                 }
+                try {
+                    SkinEntry cached = store.cachedCatalogSkin(entry);
+                    if (cached != null) return cached;
+                } catch (SkinValidationException corruptCache) {
+                    // Invalid cached data cannot be displayed; a validated download can repair it.
+                }
                 Path downloaded = download(entry);
                 try {
-                    return importToLibrary ? store.importCatalogSkin(downloaded, entry) : store.cacheCatalogSkin(downloaded, entry);
+                    return store.cacheCatalogSkin(downloaded, entry);
                 } finally {
                     Files.deleteIfExists(downloaded);
                 }
@@ -285,7 +350,7 @@ public final class AuroraCatalogProvider implements SkinProvider {
         connection.setRequestMethod("GET");
         // Some CDN edges reject the default Java/<version> agent with HTTP 403.
         // Identify this client honestly, for catalog, profile and PNG requests alike.
-        connection.setRequestProperty("User-Agent", "AuroraSkins/0.2.4");
+        connection.setRequestProperty("User-Agent", "AuroraSkins/0.2.5");
         return connection;
     }
 
@@ -379,6 +444,12 @@ public final class AuroraCatalogProvider implements SkinProvider {
         private final SkinPage page;
         private final long createdAt;
         private CacheEntry(SkinPage page, long createdAt) { this.page = page; this.createdAt = createdAt; }
+    }
+
+    private static final class PreviewCacheEntry {
+        private final SkinEntry entry;
+        private final long createdAt = System.currentTimeMillis();
+        private PreviewCacheEntry(SkinEntry entry) { this.entry = entry; }
     }
 
     private static final class HttpStatusException extends IOException {

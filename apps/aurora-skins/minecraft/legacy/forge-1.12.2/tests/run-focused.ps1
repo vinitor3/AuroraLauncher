@@ -28,4 +28,6 @@ $testClasspath = (Join-Path $testRoot 'tests') + ';' + $dependencies
 if ($LASTEXITCODE -ne 0) { throw 'Legacy regression checks failed.' }
 & $Java '-Djava.awt.headless=true' -cp $testClasspath com.aurora.skins.legacy.LegacyCoreOwnershipTest (Join-Path $testRoot 'ownership-store')
 if ($LASTEXITCODE -ne 0) { throw 'Core/Skins ownership regression checks failed.' }
+& $Java '-Djava.awt.headless=true' -cp $testClasspath com.aurora.skins.legacy.LegacyCatalogGridTest (Join-Path $testRoot 'catalog-fixtures')
+if ($LASTEXITCODE -ne 0) { throw 'Legacy catalog grid checks failed.' }
 Write-Output "Focused classes and evidence: $testRoot (no Gradle, no release JAR)."

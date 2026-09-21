@@ -23,15 +23,15 @@ pub fn install_embedded_skins(
     loader: &str,
 ) -> Result<PathBuf, SkinsError> {
     let contents = match (minecraft_version, loader) {
-        ("1.12.2", "forge") => include_bytes!("../../../../../releases/skins/0.2.4/1.12.2/forge/aurora-skins-forge-1.12.2-0.2.4.jar").as_slice(),
-        ("1.16.5", "fabric") => include_bytes!("../../../../../releases/skins/0.2.4/1.16.5/fabric/aurora-skins-fabric-1.16.5-0.2.4.jar").as_slice(),
-        ("1.16.5", "forge") => include_bytes!("../../../../../releases/skins/0.2.4/1.16.5/forge/aurora-skins-forge-1.16.5-0.2.4.jar").as_slice(),
-        ("1.19.2", "fabric") => include_bytes!("../../../../../releases/skins/0.2.4/1.19.2/fabric/aurora-skins-fabric-1.19.2-0.2.4.jar").as_slice(),
-        ("1.19.2", "forge") => include_bytes!("../../../../../releases/skins/0.2.4/1.19.2/forge/aurora-skins-forge-1.19.2-0.2.4.jar").as_slice(),
-        ("1.20.1", "fabric") => include_bytes!("../../../../../releases/skins/0.2.4/1.20.1/fabric/aurora-skins-fabric-1.20.1-0.2.4.jar").as_slice(),
-        ("1.20.1", "forge") => include_bytes!("../../../../../releases/skins/0.2.4/1.20.1/forge/aurora-skins-forge-1.20.1-0.2.4.jar").as_slice(),
-        ("1.21.1", "fabric") => include_bytes!("../../../../../releases/skins/0.2.4/1.21.1/fabric/aurora-skins-fabric-1.21.1-0.2.4.jar").as_slice(),
-        ("1.21.1", "forge") => include_bytes!("../../../../../releases/skins/0.2.4/1.21.1/forge/aurora-skins-forge-1.21.1-0.2.4.jar").as_slice(),
+        ("1.12.2", "forge") => include_bytes!("../../../../../releases/skins/0.2.5/1.12.2/forge/aurora-skins-forge-1.12.2-0.2.5.jar").as_slice(),
+        ("1.16.5", "fabric") => include_bytes!("../../../../../releases/skins/0.2.5/1.16.5/fabric/aurora-skins-fabric-1.16.5-0.2.5.jar").as_slice(),
+        ("1.16.5", "forge") => include_bytes!("../../../../../releases/skins/0.2.5/1.16.5/forge/aurora-skins-forge-1.16.5-0.2.5.jar").as_slice(),
+        ("1.19.2", "fabric") => include_bytes!("../../../../../releases/skins/0.2.5/1.19.2/fabric/aurora-skins-fabric-1.19.2-0.2.5.jar").as_slice(),
+        ("1.19.2", "forge") => include_bytes!("../../../../../releases/skins/0.2.5/1.19.2/forge/aurora-skins-forge-1.19.2-0.2.5.jar").as_slice(),
+        ("1.20.1", "fabric") => include_bytes!("../../../../../releases/skins/0.2.5/1.20.1/fabric/aurora-skins-fabric-1.20.1-0.2.5.jar").as_slice(),
+        ("1.20.1", "forge") => include_bytes!("../../../../../releases/skins/0.2.5/1.20.1/forge/aurora-skins-forge-1.20.1-0.2.5.jar").as_slice(),
+        ("1.21.1", "fabric") => include_bytes!("../../../../../releases/skins/0.2.5/1.21.1/fabric/aurora-skins-fabric-1.21.1-0.2.5.jar").as_slice(),
+        ("1.21.1", "forge") => include_bytes!("../../../../../releases/skins/0.2.5/1.21.1/forge/aurora-skins-forge-1.21.1-0.2.5.jar").as_slice(),
         _ => {
             return Err(SkinsError::Unsupported {
                 minecraft_version: minecraft_version.to_owned(),
@@ -334,8 +334,11 @@ mod tests {
                     "1.21.1" => 65,
                     _ => 61,
                 };
-                let result = payload(&fs::read(path).unwrap(), loader, major)
-                    .and_then(|jars| validate(&jars, minecraft, loader));
+                let result = payload(&fs::read(path).unwrap(), loader, major).and_then(|jars| {
+                    validate(&jars, minecraft, loader)?;
+                    class(&jars, "com.aurora.skins.ui.CatalogGridState")?;
+                    class(&jars, "com.aurora.skins.ui.CatalogGridLayout")
+                });
                 if let Err(error) = result {
                     failures.push(format!("{minecraft}/{loader}: {error}"));
                 }

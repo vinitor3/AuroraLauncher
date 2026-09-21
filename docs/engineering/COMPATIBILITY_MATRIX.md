@@ -1,6 +1,22 @@
 # Compatibility Matrix
 
-## Matriz ativa após retirada do mod — 21/09/2026
+## Grade Explorar — Skins 0.2.5 / Core 1.1.5
+
+A grade de 12 slots está integrada nos nove pares abaixo, com lógica comum Java 8, seleção por identidade e paginação pelo provider. Estado: **PARCIAL**: builds e contratos aprovados nos nove pares, verificação gráfica focada em três e runtime pendente nos outros seis. Resultados desta entrega, hashes e limites no [registro da grade](../task-skins-grid.md). A fonte do launcher seleciona os novos candidatos; o histórico abaixo mantém as versões realmente testadas.
+
+| Minecraft | Loader | Java runtime | Skins | Evidência da grade |
+| --- | --- | ---: | --- | --- |
+| 1.12.2 | Forge 14.23.5.2860 | 8 | 0.2.5 | PARCIAL: execução gráfica focada |
+| 1.16.5 | Fabric | 8 | 0.2.5 | Build/contratos; runtime PRECISA DE TESTE |
+| 1.16.5 | Forge 36.2.42 | 8 | 0.2.5 | Build/contratos; runtime PRECISA DE TESTE |
+| 1.19.2 | Fabric | 17 | 0.2.5 | Build/contratos; runtime PRECISA DE TESTE |
+| 1.19.2 | Forge 43.4.16 | 17 | 0.2.5 | Build/contratos; runtime PRECISA DE TESTE |
+| 1.20.1 | Fabric 0.14.23 | 17 | 0.2.5 | PARCIAL: execução gráfica focada e 320×240 |
+| 1.20.1 | Forge 47.4.23 | 17 | 0.2.5 | Build/contratos; runtime PRECISA DE TESTE |
+| 1.21.1 | Fabric 0.19.3 | 21 | 0.2.5 | PARCIAL: execução gráfica focada e 427×240/fullscreen |
+| 1.21.1 | Forge 52.1.12 | 21 | 0.2.5 | Build/contratos; runtime PRECISA DE TESTE |
+
+## Histórico: matriz após retirada do mod, anterior à grade — 21/09/2026
 
 **O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados.** Os módulos ativos são Core e Skins: 2 módulos × 9 pares = **18 JARs**. A seleção/contagem vem de `scripts/active-mod-matrix.json`; o painel desktop e suas dependências não são JARs da matriz.
 

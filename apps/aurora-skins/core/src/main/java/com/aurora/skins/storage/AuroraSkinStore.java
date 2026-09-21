@@ -74,7 +74,7 @@ public final class AuroraSkinStore {
             throw new SkinValidationException("A skin baixada não corresponde ao catálogo Aurora.");
         }
         Path target = cache.resolve(hash + ".png");
-        if (!Files.isRegularFile(target)) {
+        if (!Files.isRegularFile(target) || !hash.equals(sha256(target))) {
             Path temporary = cache.resolve(hash + ".png.tmp");
             Files.copy(source, temporary, StandardCopyOption.REPLACE_EXISTING);
             move(temporary, target);
@@ -84,6 +84,14 @@ public final class AuroraSkinStore {
             catalogEntry.tags());
         // A preview owns only its returned entry and PNG cache, never saved library metadata.
         return entry;
+    }
+
+    /** Reuses validated disk content without creating library metadata. */
+    public synchronized SkinEntry cachedCatalogSkin(SkinEntry entry)
+            throws IOException, SkinValidationException {
+        if (entry == null || !entry.contentHash().matches("[0-9a-f]{64}")) return null;
+        Path candidate = cache.resolve(entry.contentHash() + ".png");
+        return Files.isRegularFile(candidate) ? cacheCatalogSkin(candidate, entry) : null;
     }
 
     public synchronized List<SkinEntry> list() throws IOException {

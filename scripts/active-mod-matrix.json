@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "modules": [
     { "name": "core", "version": "1.1.5", "buildScript": "build-aurora-core.ps1", "forbiddenEntryPrefixes": ["org/slf4j/", "net/minecraft/", "com/aurora/mod/"] },
-    { "name": "skins", "version": "0.2.4", "buildScript": "build-aurora-skins.ps1", "forbiddenEntryPrefixes": ["com/aurora/mod/"] }
+    { "name": "skins", "version": "0.2.5", "buildScript": "build-aurora-skins.ps1", "forbiddenEntryPrefixes": ["com/aurora/mod/"] }
   ],
   "targets": [
     { "minecraft": "1.12.2", "loader": "forge", "loaderVersion": "14.23.5.2860", "loaderVersionRange": "[14.23.5,15)", "javaRuntime": 8, "buildJdk": 17 },

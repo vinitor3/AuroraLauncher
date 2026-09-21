@@ -17,7 +17,12 @@ final class LegacySkinPreviewRenderer implements AuroraPreviewRenderer {
             .getConstructor(java.awt.image.BufferedImage.class).newInstance(image);
         Object manager = LegacyMinecraft.invoke(LegacyMinecraft.minecraft(), new String[] {"getTextureManager", "func_110434_K"});
         previewTexture = LegacyMinecraft.invoke(manager, new String[] {"getDynamicTextureLocation", "func_110578_a"}, "aurora_skins_preview", dynamic);
+        if (previewTexture == null) throw new IllegalStateException("Preview texture registration failed");
         previewModel = entry.model().id();
+    }
+    // Catalog cards must never fall back to the equipped/default skin.
+    boolean renderCard(Object nativeContext, int x, int y, int scale, AuroraPlayerPreview pose) {
+        return previewTexture != null && render(nativeContext, x, y, scale, pose);
     }
     void close() {
         if (previewTexture != null) {

@@ -21,6 +21,37 @@ import net.minecraft.resources.ResourceLocation;
 import java.util.UUID;
 
 public final class MinecraftSkinPreviewRenderer implements AuroraPreviewRenderer {
+    private static final AuroraPlayerPreview CARD_POSE = new AuroraPlayerPreview();
+
+    /** Catalog cards must never fall back to the equipped/default skin. */
+    public boolean isReady() { return previewTexture != null; }
+
+    /** Fixed frontal pose, independently owned texture and clipping for one card. */
+    public boolean renderCard(Object nativeContext, int x, int y, int scale,
+                              int left, int top, int right, int bottom) {
+        if (!isReady() || !(nativeContext instanceof GuiGraphics)) return false;
+        GuiGraphics graphics = (GuiGraphics) nativeContext;
+        boolean depth = org.lwjgl.opengl.GL11.glIsEnabled(org.lwjgl.opengl.GL11.GL_DEPTH_TEST);
+        boolean blend = org.lwjgl.opengl.GL11.glIsEnabled(org.lwjgl.opengl.GL11.GL_BLEND);
+        boolean cull = org.lwjgl.opengl.GL11.glIsEnabled(org.lwjgl.opengl.GL11.GL_CULL_FACE);
+        boolean depthMask = org.lwjgl.opengl.GL11.glGetBoolean(org.lwjgl.opengl.GL11.GL_DEPTH_WRITEMASK);
+        int sourceRgb = org.lwjgl.opengl.GL11.glGetInteger(org.lwjgl.opengl.GL14.GL_BLEND_SRC_RGB);
+        int destRgb = org.lwjgl.opengl.GL11.glGetInteger(org.lwjgl.opengl.GL14.GL_BLEND_DST_RGB);
+        int sourceAlpha = org.lwjgl.opengl.GL11.glGetInteger(org.lwjgl.opengl.GL14.GL_BLEND_SRC_ALPHA);
+        int destAlpha = org.lwjgl.opengl.GL11.glGetInteger(org.lwjgl.opengl.GL14.GL_BLEND_DST_ALPHA);
+        float[] color = RenderSystem.getShaderColor().clone();
+        graphics.enableScissor(left, top, right, bottom);
+        try { return render(graphics, x, y, scale, CARD_POSE); }
+        finally {
+            graphics.disableScissor();
+            if (depth) RenderSystem.enableDepthTest(); else RenderSystem.disableDepthTest();
+            if (blend) RenderSystem.enableBlend(); else RenderSystem.disableBlend();
+            if (cull) RenderSystem.enableCull(); else RenderSystem.disableCull();
+            RenderSystem.depthMask(depthMask);
+            RenderSystem.blendFuncSeparate(sourceRgb, destRgb, sourceAlpha, destAlpha);
+            RenderSystem.setShaderColor(color[0], color[1], color[2], color[3]);
+        }
+    }
     private final String textureOwner = UUID.randomUUID().toString();
     private ResourceLocation previewTexture;
     private String previewModel = "classic";
