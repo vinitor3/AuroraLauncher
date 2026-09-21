@@ -12,10 +12,10 @@ use thiserror::Error;
 use super::{Instance, InstanceError};
 
 const MANIFEST_JSON: &str =
-    include_str!("../../../../../apps/aurora-core/compatibility-manifest-1.1.4.json");
-const TRUSTED_KEY_ID: &str = "aurora-core-1.1.4-release";
+    include_str!("../../../../../apps/aurora-core/compatibility-manifest-1.1.5.json");
+const TRUSTED_KEY_ID: &str = "aurora-core-1.1.5-release";
 const TRUSTED_PUBLIC_KEY: &str =
-    include_str!("../../../../../apps/aurora-core/trusted-public-key-1.1.4.txt");
+    include_str!("../../../../../apps/aurora-core/trusted-public-key-1.1.5.txt");
 
 #[derive(Debug, Error)]
 pub enum AuroraCoreError {
@@ -155,31 +155,31 @@ fn verify_artifact(
 fn embedded_artifact(minecraft: &str, loader: &str) -> Option<&'static [u8]> {
     Some(match (minecraft, loader) {
         ("1.12.2", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.4/1.12.2/forge/aurora-core-forge-1.12.2-1.1.4.jar"
+            "../../../../../releases/core/1.1.5/1.12.2/forge/aurora-core-forge-1.12.2-1.1.5.jar"
         ),
         ("1.16.5", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.4/1.16.5/fabric/aurora-core-fabric-1.16.5-1.1.4.jar"
+            "../../../../../releases/core/1.1.5/1.16.5/fabric/aurora-core-fabric-1.16.5-1.1.5.jar"
         ),
         ("1.16.5", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.4/1.16.5/forge/aurora-core-forge-1.16.5-1.1.4.jar"
+            "../../../../../releases/core/1.1.5/1.16.5/forge/aurora-core-forge-1.16.5-1.1.5.jar"
         ),
         ("1.19.2", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.4/1.19.2/fabric/aurora-core-fabric-1.19.2-1.1.4.jar"
+            "../../../../../releases/core/1.1.5/1.19.2/fabric/aurora-core-fabric-1.19.2-1.1.5.jar"
         ),
         ("1.19.2", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.4/1.19.2/forge/aurora-core-forge-1.19.2-1.1.4.jar"
+            "../../../../../releases/core/1.1.5/1.19.2/forge/aurora-core-forge-1.19.2-1.1.5.jar"
         ),
         ("1.20.1", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.4/1.20.1/fabric/aurora-core-fabric-1.20.1-1.1.4.jar"
+            "../../../../../releases/core/1.1.5/1.20.1/fabric/aurora-core-fabric-1.20.1-1.1.5.jar"
         ),
         ("1.20.1", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.4/1.20.1/forge/aurora-core-forge-1.20.1-1.1.4.jar"
+            "../../../../../releases/core/1.1.5/1.20.1/forge/aurora-core-forge-1.20.1-1.1.5.jar"
         ),
         ("1.21.1", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.4/1.21.1/fabric/aurora-core-fabric-1.21.1-1.1.4.jar"
+            "../../../../../releases/core/1.1.5/1.21.1/fabric/aurora-core-fabric-1.21.1-1.1.5.jar"
         ),
         ("1.21.1", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.4/1.21.1/forge/aurora-core-forge-1.21.1-1.1.4.jar"
+            "../../../../../releases/core/1.1.5/1.21.1/forge/aurora-core-forge-1.21.1-1.1.5.jar"
         ),
         _ => return None,
     })
