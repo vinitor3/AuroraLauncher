@@ -4,7 +4,7 @@
 
 **O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados.** Os módulos ativos são Core e Skins: 2 módulos × 9 pares = **18 JARs**. A seleção/contagem vem de `scripts/active-mod-matrix.json`; o painel desktop e suas dependências não são JARs da matriz.
 
-Core **1.1.5** é o candidato versionado desta alteração de UI. Skins **0.2.4** mantém sua fonte e só pode ser reutilizado se passar no comparador estrito. Consulte o [registro da retirada](../task-remove-companion.md) para os resultados realmente executados; a existência de candidato ou build não prova runtime.
+Core **1.1.5** é o candidato versionado desta alteração de UI. Skins **0.2.4** mantém sua fonte e foi reutilizado após rebuild e aprovação no comparador estrito. Os **18/18 JARs** passaram na comparação de fontes/conteúdo; os nove Core passaram em tamanho/hash/assinatura Ed25519 e as suítes Java Core (9) e Skins (16) passaram. Consulte o [registro da retirada](../task-remove-companion.md) para os resultados realmente executados; a existência de candidato ou build não prova runtime.
 
 | Minecraft | Loader | Java runtime | Core | Skins | Runtime completo após retirada |
 | --- | --- | ---: | --- | --- | --- |

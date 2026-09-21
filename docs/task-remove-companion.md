@@ -31,8 +31,8 @@ Ownership: integração/Rust/Worker e migração; desktop/smokes; Java/build/mat
 | `engine/companion_migration.rs`, `known-companion-artifacts.json` | identificação e retirada recuperável do JAR antigo | migração/histórico | instâncias Aurora antes do launch | adicionar com hash + metadata, lock, backup/journal | fixtures repetição, terceiro, incerto, link, jogo ativo, falha |
 | `scripts/build-aurora-*.ps1`, verifier, package/CI | builds e gates | compartilhado | release e desenvolvimento | remover Companion; derivar 18 JARs de 2 módulos × 9 alvos | rebuild serial, metadata/bytecode/recursos/assinatura e comparador |
 | `assistant-smoke.mjs`, `supabase-appearance-smoke.mjs` | chat desktop e preparação de aparência | desktop/compartilhado | QA | manter; retirar só chamada `inGame` | smokes; mocks não comprovam serviço online |
-| antigo `toggle-ingame-smoke.mjs` | toggle do mod | mod com atalho desktop compartilhado | QA | adaptar cobertura para painel desktop | botão/atalho sem jogo |
-| matriz smoke dos mods | checks de Core, Skins e antiga ponte | compartilhado | QA | preservar contratos Core/Skins e remover bridge | nove pares; sem reativar mod |
+| `toggle-assistant-smoke.mjs` (antes `toggle-ingame-smoke.mjs`) | toggle do mod | mod com atalho desktop compartilhado | QA | adaptar cobertura para painel desktop | botão/atalho sem jogo |
+| `core-skins-matrix-smoke.mjs` (antes `companion-matrix-smoke.mjs`) | checks de Core, Skins e antiga ponte | compartilhado | QA | preservar contratos Core/Skins e remover bridge | nove pares; sem reativar mod |
 | `functions/`, Firebase, CurseForge, Supabase, catálogo | backend legado e serviços independentes | compartilhado/fora do escopo | launcher e aparência | manter | checks pertinentes; sem deploy |
 | `releases/companion/**`, manifestos/checksums passados, auditorias datadas | prova de versões antigas | migração/histórico | catálogo de hashes e histórico Git | preservar bytes; excluir de seleção ativa | inventário/hashes; referências classificadas |
 
@@ -57,15 +57,42 @@ O antigo fluxo `Companion → IPC → launcher → Gemini/voz → resposta ao jo
 
 A migração ocorre em instâncias gerenciadas antes do launch e sob a exclusão mútua de mutações, mantida pelo processo em execução. JARs de nome estável, versionado ou desativado são examinados por identidade exata e hashes conhecidos; nomes por substring não autorizam remoção. Companion de procedência incerta fica no lugar e o launch informa o bloqueio. Mods de terceiros semelhantes são preservados.
 
-Backup identificado e journal ficam em `.aurora/removed-companion/<transação>/`, fora de `mods`. O journal permite completar uma operação interrompida sem apagar a cópia original/backup; repetição não acumula remoções. Links/reparse points e traversal são recusados. A tarefa usa apenas fixtures/QA e não limpa instâncias reais para demonstrar resultado.
+Backup identificado e journal ficam em `.aurora/removed-companion/<transação>/`, fora de `mods`. O journal permite completar uma operação interrompida sem apagar a cópia original/backup; repetição não acumula remoções. Links/reparse points e traversal são recusados. No Windows, a verificação adicional identifica JVM que sobreviveu ao launcher comparando exatamente `--gameDir`. O probe só roda quando há candidato/journal pendente; instâncias comuns não dependem dele. Em outros sistemas, essa migração automática falha de forma segura e preserva os arquivos até existir verificação de processos equivalente; o launch sem candidato permanece disponível. A tarefa usa apenas fixtures/QA e não limpa instâncias reais para demonstrar resultado.
 
 Core, Skins, terceiros, mundos, contas, bibliotecas, aparência e configurações permanecem. Conversa/estado e preferências de voz do Assistente desktop não são alvos da migração. Configurações antigas exclusivas do mod podem ficar inertes; instalações/reparos/atualizações não selecionam Companion novamente.
 
 ## Matriz, testes e pendências
 
-Matriz ativa: Forge 1.12.2 e Fabric/Forge 1.16.5, 1.19.2, 1.20.1 e 1.21.1: nove Core + nove Skins = 18 JARs. Core 1.1.5 é candidato versionado; Skins 0.2.4 é reutilizável somente se passar na comparação estrita. Os wrappers Gradle/JDK preservam as gerações existentes; Loom roda sequencialmente. Não se enfraquece o comparador para aceitar divergências.
+Matriz ativa: Forge 1.12.2 e Fabric/Forge 1.16.5, 1.19.2, 1.20.1 e 1.21.1: nove Core + nove Skins = 18 JARs. Core 1.1.5 é candidato versionado assinado; Skins 0.2.4 foi recompilado e passou na comparação estrita com os artefatos existentes. Os wrappers Gradle/JDK preservam as gerações existentes; Loom roda sequencialmente. Não se enfraquece o comparador para aceitar divergências.
 
-Resultados executados serão registrados na integração desta tarefa, diferenciando compilação, fixtures, serviços online e runtime. Até existir evidência nova, o teste gráfico completo Core/Skins nas nove combinações, o desktop empacotado, Gemini/TTS online e o microfone real permanecem **PRECISA DE TESTE**. Evidências antigas estão identificadas como históricas na [matriz](engineering/COMPATIBILITY_MATRIX.md), sem extrapolação para esta alteração.
+Resultados executados em 21/09/2026, na worktree desta tarefa:
+
+| Comando/verificação | Resultado real | Alcance e limite |
+| --- | --- | --- |
+| `npm --prefix apps/desktop run build` | PASS | TypeScript/Vite; aviso de chunk grande existente; não executa WebView |
+| `node --test apps/desktop/tests/*.test.mjs apps/desktop/src/lib/*.test.mjs` | 66/66 PASS | painel/fala/atalho/transportes com adaptadores simulados, polling Core, wardrobe/skins, sessão, startup e downloads; não comprova hardware ou API online |
+| `npm --prefix apps/edge-proxy test` | 63/63 PASS | sete novos testes da rota Assistente, autenticação JWT de fixture, launcher, fallback/timeout/quota e recusa de `inGame`/captura sem consultar Gemini |
+| `npm --prefix apps/edge-proxy run check` | PASS | Wrangler dry-run; nenhum deploy |
+| `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check` | PASS | formato Rust |
+| `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings` | PASS | checks Rust, incluindo registros Tauri/tts |
+| `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` | 85 testes lib + 15 binário PASS; 3 online ignorados na execução padrão | migração, processo, IPC/sessão/eventos, artefatos e engine; doc tests 0 |
+| `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib engine::tts::tests::synthesizes_portuguese_audio_with_sentence_boundaries -- --ignored` | 1/1 PASS, serviço online real | Edge TTS gerou áudio e limites de sentença; não comprova reprodução audível ou microfone |
+| Wrapper neutro: Core `clean check` e Skins `clean build`, antes de excluir a pasta Companion | PASS | desacoplamento comprovado; Gradle 8.4 e wrapper 9.7.1 preservados |
+| `npm run core:build` + `npm run skins:build`, sequenciais | 9/9 Core + 9/9 Skins PASS | builds fora de Companion; 9 testes Java Core e 16 Skins PASS; não é gameplay |
+| `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-mod-release-matrix.ps1 -SkipBuild`, após os dois rebuilds | 18/18 PASS | comparador estrito de todas as entradas; 9 hashes/tamanhos/assinaturas Ed25519 Core PASS; Skins histórico intacto |
+| `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-mod-release-matrix.test.ps1` | 4/4 PASS | rejeita classe Companion, conteúdo divergente, alvo faltante e JAR extra sem tocar em releases reais |
+| `node --check` dos smokes desktop/aparência/Core-Skins | PASS | sintaxe; scripts nativos dependem de WebView QA e não foram executados |
+| Links Markdown relativos + `git diff --check` | PASS | 85 documentos verificados, zero links quebrados; Companion IPC renomeado e índices atualizados |
+
+Os nove testes focados da migração passaram, incluindo todos os **47 JARs históricos** do catálogo com hash/metadata reais, nomes estáveis/versionados/desativados, repetição, identidade incerta, terceiros, trava de processo/guard incorreto, journal antes/depois da movimentação, traversal e junction Windows. Fixtures separadas validam comparação exata de `--gameDir` (aspas, barras/case, prefixo semelhante e classpath) e o teste de IPC usa o wire serializado real `connected`/`minecraft_version`.
+
+A revisão independente confirmou que `AssistantPanel` permanece idêntico à base (somente normalização de fim de linha), assim como `tts.rs`, dependências Rust, capabilities e `supabase-appearance-smoke.mjs`. Scripts/properties do wrapper preservam o conteúdo e o wrapper JAR preserva bytes. Nenhum binário/manifesto/checksum histórico mudou. A inspeção ZIP dos 18 JARs ativos não encontrou classes `com/aurora/mod/`. Foram corrigidos durante QA o casing do evento Core no frontend e falsos positivos da detecção de processo por prefixo de diretório.
+
+A primeira tentativa Core Forge 1.20.1 encontrou limite de heap em remap paralelo; os scripts agora passam `--no-parallel --max-workers=1`, e o rebuild completo sequencial passou. Não houve atualização geral Gradle/JDK ou relaxamento do comparador.
+
+Evidências locais ignoradas pelo Git: `.aurora/rust-tests.log`, `.aurora/rust-clippy.log`, `.aurora/migration-tests.log`, `.aurora/tts-online-test.log`, `.aurora/desktop-full-tests.log`, `.aurora/desktop-companion-removal-validation.md` e `.aurora/companion-removal/{matrix-core.log,matrix-skins.log,matrix-verify.log,matrix-negative-tests.log,java-test-results.json}`.
+
+O teste gráfico completo Core/Skins nas nove combinações, o desktop nativo/empacotado, o atalho físico do sistema operacional, Gemini autenticado online, reprodução audível e microfone real permanecem **PRECISA DE TESTE**. A consulta de capacidade encontrou nenhum processo Aurora/endpoint WebView QA ativo; nenhum smoke foi aplicado a uma sessão real de usuário. Evidências antigas estão identificadas como históricas na [matriz](engineering/COMPATIBILITY_MATRIX.md), sem extrapolação para esta alteração.
 
 Mudanças do Worker são somente de fonte: exigem implantação posterior autorizada. Nenhum instalador novo, deploy ou revogação de chave faz parte desta tarefa.
 
@@ -73,5 +100,18 @@ Mudanças do Worker são somente de fonte: exigem implantação posterior autori
 
 - **Desktop preservado:** `AssistantPanel`, `askAuroraAssistant`, Gemini, TTS, microfone, controles/estilos e atalho.
 - **Serviço compartilhado:** autenticação/transporte, Core/Skins, IPC/sessão/eventos e infraestrutura Gradle.
-- **Migração/histórico:** identidade `aurora_companion`, hashes de releases antigas, backups/journal, testes negativos e documentos datados.
+- **Migração/histórico:** identidade `aurora_companion`, hashes de releases antigas, backups/journal, testes negativos e documentos datados. A proteção antiga no updater impede atualizar/restaurar Companion por provedores; os paths históricos nos gates de worktrees impedem ignorar trabalho alheio pendente, sem selecionar o mod para build/distribuição.
 - **Resíduo ativo do mod:** qualquer seleção/instalação de JAR, página `aurora_assistant`, comando/callback de ponte ou dependência de build ainda apontando à pasta removida é falha a corrigir, não exceção documental.
+
+
+## Commits da entrega
+
+- `0595277`: painel desktop preservado, remoção da ponte in-game e suporte Core/Skins na UI.
+- `7a82ea3`: Worker mantém Gemini desktop e rejeita payloads exclusivos do mod.
+- `a56a2db`: smokes desktop/atalho adaptados.
+- `8f04aae`: mapa/ADR/guias/matriz e classificação histórica.
+- `ff94490`: diagnóstico Core consome o contrato IPC existente corretamente.
+- `0137590`: mod Java retirado, wrappers desacoplados, matriz/build/gates Core/Skins.
+- `786ab46`: candidatos Core 1.1.5 assinados, sem UI de Assistente no jogo.
+- `7309a81`: migração recuperável, remoção de comandos/instalação e preservação IPC.
+- `1b82f41`: launcher seleciona candidatos Core 1.1.5 e não embarca Companion.
