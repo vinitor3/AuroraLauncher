@@ -43,3 +43,19 @@ O instalador é produzido por `npm run release:package`, que chama o build ofici
 anteriores permanecem imutáveis. Hash, tamanho e commit de origem devem ser lidos
 no manifesto adjacente ao instalador alpha.10. Assinatura Authenticode e
 homologação completa em Minecraft: **NÃO VERIFICADO**.
+
+## Artefato final
+
+Empacotamento: **CONCLUÍDO**, preflights inicial/final aprovados, 21 worktrees
+conferidas e matriz de módulos **18/18**.
+
+- Arquivo: `releases/Aurora Smart Launcher_0.1.1-alpha.10_x64-setup.exe`.
+- Fonte: `f5a3c7d38c7fd81a926144d3c2e7f80634a0c623`.
+- Tamanho: **6.897.760 bytes**.
+- SHA-256: `4f9ed16c517bc08794f50220447e6a7e137ca9404c9d18271e754020de9235cf`.
+- Hash, tamanho e versão PE conferidos independentemente contra o manifesto.
+- Comando: `npm run release:package`; log local ignorado em
+  `.aurora/release-runs/20260922-120005-57a16478/build.log`.
+
+Não foi publicado release no GitHub nem enviado commit remoto. O instalador
+e a tag são locais; o deploy do Worker de tradução foi concluído separadamente.

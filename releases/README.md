@@ -3,7 +3,13 @@
 Os artefatos desta pasta são imutáveis. Um nome de versão já publicado nunca
 deve ser sobrescrito nem removido.
 
-## Release atual — 0.1.1-alpha.9
+## Release atual — 0.1.1-alpha.10
+
+[Instalador Windows alpha.10](<Aurora Smart Launcher_0.1.1-alpha.10_x64-setup.exe>), gerado em 22/09/2026. Corrige a tradução de páginas com idiomas misturados, progresso/retomada, configuração antiga e carregamento de projetos; integra o Aurora Doctor local. Core 1.1.5 e Skins 0.2.5 mantidos, 18/18 JARs conferidos.
+
+SHA-256: `4f9ed16c517bc08794f50220447e6a7e137ca9404c9d18271e754020de9235cf`. Manifesto ao lado do instalador e [evidências da entrega](../docs/task-release-alpha10.md). 135 testes Rust, 140 frontend, 90 Worker e 13 verificações DOM Doctor aprovados. Tradução autenticada da nova versão no Gemini e homologação completa de Minecraft: **NÃO VERIFICADO**. Sem assinatura Authenticode.
+
+## Release anterior — 0.1.1-alpha.9
 
 [Instalador Windows alpha.9](<Aurora Smart Launcher_0.1.1-alpha.9_x64-setup.exe>), gerado em 22/09/2026. Inclui Core 1.1.5 e Skins 0.2.5 (18/18 JARs conferidos), grade de 12 skins, tradução de páginas, recuperação de jogadores/skins, face local, controles de janela e bandeja. O Assistente desktop permanece; o mod Companion foi retirado. Artefatos históricos foram preservados.
 
