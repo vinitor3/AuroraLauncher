@@ -1,9 +1,11 @@
 # Tarefa — tradução das páginas de projetos
 
-Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. A implementação e os testes locais
-foram concluídos em 22 de setembro de 2026. A tradução online depende da publicação
-do Worker integrado e de uma sessão Aurora; tradução real pelo Gemini ainda
-**PRECISA DE TESTE**.
+Estado: **CONCLUÍDO** para o fluxo validado em 22 de setembro de 2026. Worker
+publicado e tradução real autenticada pelo Gemini aprovados. O componente real
+foi montado no WebView2 com uma página de teste: texto em português, mesma estrutura
+DOM, mesmo peso da fonte, código intacto, link externo preservado e restauração do
+original. A página de teste não altera projetos ou dados da conta. Conteúdo arbitrário
+de terceiros e qualidade linguística continuam sujeitos aos limites abaixo.
 
 - Um botão circular com ícone de tradução aparece na descrição de mods, modpacks,
   shaders e pacotes de recursos do Modrinth e CurseForge. Ele traduz para português,

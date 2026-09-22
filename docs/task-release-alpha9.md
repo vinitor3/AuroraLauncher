@@ -14,13 +14,19 @@ Branch `codex/aur-release-alpha9`, worktree própria. A consulta dos chats e de 
 
 ## Validação
 
-**CONCLUÍDO**: 100 testes Rust (85 biblioteca + 15 binário, 3 testes online ignorados), Cargo fmt/clippy e build desktop. Testes específicos cobrem seleção online, troca de conta, falha de download, instalação concluída/falha e atualização de listagem. O relatório final de empacotamento registra a contagem consolidada e a comparação dos 18 JARs.
+**CONCLUÍDO**: 107 testes Rust (85 biblioteca + 22 binário, 4 testes online ignorados na execução padrão), Cargo fmt/clippy, build desktop, 90 testes frontend e 82 testes Worker. A consulta pública real foi executada separadamente e aprovada para Notch, jeb_ e Dinnerbone. Testes específicos cobrem seleção online, troca de conta, falha de download, instalação concluída/falha e atualização de listagem. O relatório final de empacotamento registra a contagem consolidada e a comparação dos 18 JARs.
 
 **CONCLUÍDO**: teste em WebView2 nativo, com perfil de navegação isolado: botões de maximizar/restaurar e minimizar alteram o estado Windows; X deixa a janela invisível, mantendo IPC e processo ativos. O teste interage com os handlers reais via protocolo de depuração local, sem screenshot, login ou alterações de mundos/instâncias do usuário.
 
 **CONCLUÍDO**: revisão independente encontrou e corrigiu a seleção antiga de skin em corrida com atualização da biblioteca e a perda de abertura externa dos links traduzidos.
 
+**CONCLUÍDO**: tradução autenticada real pelo Gemini e teste do componente real em WebView2, preservando estrutura, negrito, código, link externo e restauração do original. Busca real de Notch por nome/UUID com PNG e SHA-256 conferidos; download, gravação e recarga nativos do PNG em identidade local exclusiva de QA.
+
+O smoke ampliado encontrou falhas por nome em outros jogadores: timeout no índice e HTTP 403 das APIs oficiais quando acessadas pelo Cloudflare. A integração acrescenta resolução por nome atual → UUID no índice e consulta oficial nativa no desktop, usando a conexão do usuário quando o Worker retorna indisponibilidade/404. Não fabrica skins para contas desconhecidas e não contorna limites HTTP 429.
+
 **PRECISA DE TESTE**: clique físico no menu da bandeja, instalação em outro computador e seis pares da grade Skins ainda sem homologação gráfica. Esta release não declara todos os runtimes Minecraft homologados. Skins online exigem conexão; a aparência local já aplicada permanece utilizável se a sincronização falhar.
+
+**CONCLUÍDO**: Worker publicado na versão `14c1ce81-9bc0-45a8-abf3-30c25bf7a516`; buscas reais jeb_/Dinnerbone retornam HTTP 200. Smoke real no desktop forçando Worker 503: ambos carregam pela origem `mojang-local` com hash válido, enquanto um nome inexistente retorna “Jogador não encontrado”. Não houve mudança de aparência da conta do usuário.
 
 ## Distribuição
 

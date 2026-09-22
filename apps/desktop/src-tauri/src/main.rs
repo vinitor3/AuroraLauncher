@@ -6,6 +6,7 @@
 
 mod commands;
 mod manual_downloads;
+mod player_profiles;
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -91,6 +92,7 @@ fn main() {
         .manage(commands::RunningInstances::default())
         .manage(manual_downloads::ManualDownloads::default())
         .invoke_handler(tauri::generate_handler![
+            player_profiles::lookup_player_skin,
             commands::engine_status,
             commands::list_instances,
             commands::create_instance,
