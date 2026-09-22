@@ -8,12 +8,14 @@ export class MojangClient {
   private readonly profiles: JsonHttpClient;
 
   constructor(rate: number, fetcher: typeof fetch, now: () => number) {
-    this.names = new JsonHttpClient("https://api.mojang.com", "", rate, 2000, fetcher, now);
+    // Mojang recommends this endpoint for WEB-8043 instead of the legacy
+    // api.mojang.com name route affected by intermittent HTTP 403 responses.
+    this.names = new JsonHttpClient("https://api.minecraftservices.com", "", rate, 2000, fetcher, now);
     this.profiles = new JsonHttpClient("https://sessionserver.mojang.com", "", rate, 2000, fetcher, now);
   }
 
   async findPlayer(name: string, deadline?: AbortSignal): Promise<PlayerSuggestion> {
-    const { data } = await this.names.get<unknown>(`/users/profiles/minecraft/${encodeURIComponent(name)}`, deadline);
+    const { data } = await this.names.get<unknown>(`/minecraft/profile/lookup/name/${encodeURIComponent(name)}`, deadline);
     const row = object(data);
     const uuid = normalizeUuid(row.id);
     if (!uuid || !validPlayerName(row.name) || row.name.toLowerCase() !== name.toLowerCase()) {

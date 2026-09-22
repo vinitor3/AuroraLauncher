@@ -63,6 +63,7 @@ export class JsonHttpClient {
         signal: deadline ? AbortSignal.any([deadline, AbortSignal.timeout(this.timeoutMs)]) : AbortSignal.timeout(this.timeoutMs), redirect: "manual",
       });
       if (!response.ok) {
+        console.warn("[Skins] upstream HTTP failure", { provider: new URL(this.base).hostname, status: response.status });
         const seconds = Number(response.headers.get("Retry-After"));
         const date = Date.parse(response.headers.get("Retry-After") ?? "");
         const retryAfter = Number.isFinite(seconds) && seconds > 0 ? seconds : Number.isFinite(date) ? (date - now) / 1000 : 60;
@@ -79,6 +80,8 @@ export class JsonHttpClient {
       return response;
     } catch (error) {
       if (error instanceof SkinApiError) throw error;
+      console.warn("[Skins] upstream network failure", { provider: new URL(this.base).hostname,
+        reason: error instanceof Error && error.name === "TimeoutError" ? "timeout" : deadline?.aborted ? "cancelled" : "network" });
       throw new SkinApiError(503, "Não foi possível consultar a fonte de skins agora.");
     }
   }
@@ -87,6 +90,7 @@ export class JsonHttpClient {
     try {
       const response = await this.response(path, "application/json", deadline);
       if (!(response.headers.get("Content-Type") ?? "").includes("application/json")) {
+        console.warn("[Skins] upstream content invalid", { provider: new URL(this.base).hostname, status: response.status });
         await response.body?.cancel();
         throw new SkinApiError(502, "Resposta inválida da fonte de skins.");
       }

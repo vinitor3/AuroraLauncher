@@ -20,7 +20,7 @@ test("known Java name resolves through Mojang when both third-party sources retu
     if (url.hostname === "mc-api.bisai.dev" || url.hostname === "mcstat.org") return new Response(null, { status: 404 });
     assert.equal(new Headers(init?.headers).has("X-API-Key"), false);
     assert.ok(init?.signal);
-    if (url.hostname === "api.mojang.com") return Response.json({ id: uuid, name: "Notch" });
+    if (url.hostname === "api.minecraftservices.com") return Response.json({ id: uuid, name: "Notch" });
     assert.equal(url.href, `https://sessionserver.mojang.com/session/minecraft/profile/${uuid}`);
     return Response.json(session());
   });
@@ -62,7 +62,7 @@ test("official exact-name autocomplete works without API keys when the index is 
   const service = new SkinService({}, Date.now, async (input) => {
     const url = new URL(String(input));
     if (url.hostname === "mc-api.bisai.dev") return new Response(null, { status: 503 });
-    assert.equal(url.hostname, "api.mojang.com");
+    assert.equal(url.hostname, "api.minecraftservices.com");
     return url.pathname.endsWith("/Notch") ? Response.json({ id: uuid, name: "Notch" }) : new Response(null, { status: 404 });
   });
   assert.deepEqual((await service.searchPlayers("Notch")).map((row) => row.name), ["Notch"]);
@@ -115,7 +115,7 @@ test("provider authorization cooldown does not block the next player's official 
     if (url.hostname === "mc-api.bisai.dev") { primaryCalls++; return new Response(null, { status: 403 }); }
     const isNotch = url.pathname.endsWith("/Notch") || url.pathname.endsWith(`/${uuid}`);
     const id = isNotch ? uuid : otherUuid, name = isNotch ? "Notch" : "jeb_";
-    if (url.hostname === "api.mojang.com") { nameCalls++; return Response.json({ id, name }); }
+    if (url.hostname === "api.minecraftservices.com") { nameCalls++; return Response.json({ id, name }); }
     return Response.json({ id, name, properties: [{ name: "textures", value: btoa(JSON.stringify({
       profileId: id, textures: { SKIN: { url: texture } },
     })) }] });

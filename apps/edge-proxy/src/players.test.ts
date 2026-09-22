@@ -57,7 +57,7 @@ test("fallback MCStat resolve perfil quando mc-api falha", async () => {
   const service = new SkinService({ mcstat_API_KEY: "test-mcstat" }, Date.now, async (input, init) => {
     const url = new URL(String(input));
     if (url.hostname === "mc-api.bisai.dev") return new Response(null, { status: 502 });
-    if (url.hostname === "api.mojang.com") return new Response(null, { status: 503 });
+    if (url.hostname === "api.minecraftservices.com") return new Response(null, { status: 503 });
     assert.equal(url.pathname, "/api/v1/players/Notch");
     assert.equal(new Headers(init?.headers).get("X-API-Key"), "test-mcstat");
     return json({ success: true, data: { player: { mainNickname: "Notch", minecraftUuid: uuid, skinUrl: texture, skinModel: "slim" } } });
@@ -163,7 +163,7 @@ test("rotas QA: jogador fora dos índices usa Mojang e entrega PNG verificado ao
   const h = await routeHarness(t, ({ url, init }) => {
     if (url.hostname === "mc-api.bisai.dev" || url.hostname === "mcstat.org") return new Response(null, { status: 404 });
     assert.equal(new Headers(init?.headers).has("X-API-Key"), false);
-    if (url.hostname === "api.mojang.com") return json({ name: "Notch", id: uuid });
+    if (url.hostname === "api.minecraftservices.com") return json({ name: "Notch", id: uuid });
     if (url.hostname === "sessionserver.mojang.com") return json({ name: "Notch", id: uuid, properties: [{
       name: "textures", value: btoa(JSON.stringify({ profileId: uuid, textures: { SKIN: { url: texture } } })),
     }] });

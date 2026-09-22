@@ -56,7 +56,7 @@ A implementação principal é **TypeScript/fetch no Worker**. Os mods Fabric/Fo
 - `McApiClient.ts`: API oficial `https://mc-api.bisai.dev`; `searchPlayers`, `getPlayerProfile`, `autocompleteSkinNames`, `getSkinImageUrlFromProfile`.
 - `dtos.ts` e `models.ts`: DTOs não confiáveis, validação, `SkinResult`, `PlayerSuggestion`.
 - `SkinService.ts`: caches em memória, coalescência de chamadas simultâneas, fallback MCStat/Mojang e último perfil em cache em caso de falha.
-- `MojangClient.ts`: consulta oficial de nome exato em `api.mojang.com` e textura pública em `sessionserver.mojang.com`, sem chave. Valida UUID do perfil e da propriedade `textures`, nome, modelo e origem `textures.minecraft.net`.
+- `MojangClient.ts`: consulta oficial de nome exato em `api.minecraftservices.com/minecraft/profile/lookup/name/` e textura pública em `sessionserver.mojang.com`, sem chave. Valida UUID do perfil e da propriedade `textures`, nome, modelo e origem `textures.minecraft.net`. O endpoint atual evita a rota legada afetada pelo [WEB-8043](https://bugs.mojang.com/browse/WEB-8043).
 - Desktop: `PlayerSkinsClient` e `OnlineSkinSearch`. Debounce de 250 ms e cancelamento de resultados antigos.
 - Mod: `AuroraCatalogProvider`, `PlayerSuggestion`, `SearchDebouncer`; transporte HTTPS limitado e protocolo TSV V1 preservado. Busca/download não bloqueiam a thread de render.
 

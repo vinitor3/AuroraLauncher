@@ -34,6 +34,15 @@ pertencem à tarefa de release alpha.9; esta entrega não publica isoladamente.
 
 Decisão: [ADR-020](engineering/ADR/ADR-020-mojang-player-fallback.md).
 
+Smoke da integração detectou que o primeiro deploy do fallback ainda devolvia
+503 ao buscar Notch por nome. A consulta por UUID no mesmo Worker respondeu
+200, assim como as sugestões de nomes. O resolver passou para o endpoint
+oficial atual `api.minecraftservices.com/minecraft/profile/lookup/name/`,
+recomendado no WEB-8043 para substituir o endpoint legado com 403 intermitente.
+Diagnósticos agora registram somente host do provedor e status/categoria de
+falha, sem nomes de jogador, caminhos, corpos ou credenciais. As 25 regressões
+focadas passaram após a troca; a integração repetirá o smoke real após deploy.
+
 ## Histórico da entrega original
 
 Data: 2026-09-16. Branch: `codex/mcstat-skins-catalog`, base `b13df76`.

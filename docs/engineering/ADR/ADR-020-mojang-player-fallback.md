@@ -16,7 +16,10 @@ Preservar mc-api como primeira consulta e histórico opcional. Em HTTP 404 ou
 indisponibilidade, consultar a API oficial Mojang em paralelo ao fallback MCStat
 quando este estiver configurado. Nome exato resolve em `api.mojang.com`; UUID e
 textura resolvem em `sessionserver.mojang.com`. A primeira resposta válida vence
-e cancela a requisição alternativa. Mojang nunca recebe os headers de chave dos
+e cancela a requisição alternativa. Para nomes, usar a rota atual
+`api.minecraftservices.com/minecraft/profile/lookup/name/`, recomendada no
+[WEB-8043](https://bugs.mojang.com/browse/WEB-8043), em vez da rota legada
+`api.mojang.com/users/profiles/minecraft/`. Mojang nunca recebe os headers de chave dos
 outros fornecedores. Limite por endpoint, timeout de 2 s e orçamento total de
 7,5 s limitam a operação; não repetir imediatamente respostas 429.
 
