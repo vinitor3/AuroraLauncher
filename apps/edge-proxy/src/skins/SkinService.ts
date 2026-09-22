@@ -24,14 +24,15 @@ export class SkinService {
   }
 
   private async fallback<T>(cause: unknown, deadline: AbortSignal,
-    official: (signal: AbortSignal) => Promise<T>, secondary?: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    official: (signal: AbortSignal) => Promise<T>, secondary?: (signal: AbortSignal) => Promise<T>,
+    indexed?: (signal: AbortSignal) => Promise<T>): Promise<T> {
     // Rate limiting and invalid provider data remain failures. A missing entry in
     // a third-party index is not evidence that a Minecraft account does not exist.
     if (!(cause instanceof SkinApiError) || ![404, 503].includes(cause.status) || deadline.aborted) throw cause;
     const controller = new AbortController();
     const signal = AbortSignal.any([deadline, controller.signal]);
     try {
-      return await Promise.any([official(signal), ...(secondary ? [secondary(signal)] : [])]);
+      return await Promise.any([official(signal), ...(secondary ? [secondary(signal)] : []), ...(indexed ? [indexed(signal)] : [])]);
     } catch (error) {
       const failures: unknown[] = error instanceof AggregateError ? error.errors : [error];
       const authoritative = failures[0];
@@ -111,11 +112,23 @@ export class SkinService {
             const row = object(object(object(data).data).player);
             const uuid = normalizeUuid(row.minecraftUuid);
             const textureUrl = skinImageUrl(row.linkedSkinPngPath) ?? skinImageUrl(row.skinUrl);
-            if (!uuid || !validPlayerName(row.mainNickname) || !textureUrl || (normalizeUuid(id) && normalizeUuid(id) !== uuid)) {
+            if (!uuid || !validPlayerName(row.mainNickname) || !textureUrl || (normalizeUuid(id) && normalizeUuid(id) !== uuid)
+              || (!normalizeUuid(id) && row.mainNickname.toLowerCase() !== id.toLowerCase())) {
               throw new SkinApiError(502, "Perfil de jogador inválido.");
             }
             return { uuid, name: row.mainNickname, textureUrl, skinUrl: textureUrl,
               model: row.skinModel === "slim" ? "slim" : "classic", source: "mcstat", stale: false };
+          } : undefined, !normalizeUuid(id) ? async (signal) => {
+            // The provider's name-to-profile route may time out while its name
+            // index and UUID route work. Only an exact CURRENT name can establish
+            // this identity; previous-name matches must never select another skin.
+            const players = await this.client.searchPlayers(id, signal);
+            const current = players.find((player) => player.uuid && player.name.toLowerCase() === id.toLowerCase()
+              && player.metadata.current === true);
+            if (!current?.uuid) throw new SkinApiError(404, "Nome atual ausente no índice de jogadores.");
+            const result = await this.client.getPlayerProfile(current.uuid, includeHistory, signal);
+            if (result.name.toLowerCase() !== id.toLowerCase()) throw new SkinApiError(404, "O jogador mudou de nome. Confira o nome atual.");
+            return result;
           } : undefined);
       }
     });

@@ -43,6 +43,16 @@ Diagnósticos agora registram somente host do provedor e status/categoria de
 falha, sem nomes de jogador, caminhos, corpos ou credenciais. As 25 regressões
 focadas passaram após a troca; a integração repetirá o smoke real após deploy.
 
+O tail sanitizado confirmou o limite do ambiente: o perfil mc-api por nome
+atinge timeout de 3 s, Minecraft Services responde HTTP 403 no edge, e MCStat
+responde 404, embora índice e perfis mc-api por UUID respondam. Por isso há duas
+recuperações adicionais: índice com nome exato/atual → perfil UUID no Worker;
+e comando nativo oficial após Worker 404/503/rede, sem contornar quota 429.
+As 27 regressões Worker e sete testes frontend (incluindo quatro da recuperação
+nativa) passaram. A integração valida o novo comando Rust e repete o smoke com
+Notch, jeb_, Dinnerbone e nome inexistente. Não se usa textura aleatória/default
+para simular sucesso da busca.
+
 ## Histórico da entrega original
 
 Data: 2026-09-16. Branch: `codex/mcstat-skins-catalog`, base `b13df76`.

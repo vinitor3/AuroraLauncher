@@ -32,9 +32,26 @@ um prefixo ausente apenas produz lista vazia.
 
 ## Consequências
 
+### Evidência adicional no edge e recuperação desktop
+
+O tail real confirmou timeout do perfil mc-api por nome, HTTP 403 do endpoint
+oficial Minecraft Services no Cloudflare e HTTP 404 do índice MCStat. O Worker
+passa também a tentar nome exato **atual** do índice mc-api → perfil por UUID;
+confere novamente o nome na resposta e compartilha cota/deadline com mc-api.
+
+Como os endpoints oficiais funcionam pela conexão local, o desktop pode usar
+o comando Tauri estreito `lookup_player_skin` após Worker 404/503/rede. Esse
+comando aceita apenas identificador, valida perfil/textura/PNG/hash e retorna
+URL pública oficial sem qualquer credencial. O frontend aceita origem
+`mojang-local` apenas nesse caminho nativo, exige identidade correspondente e
+URL HTTPS exata `textures.minecraft.net/texture/<hash>`, e descarta respostas
+após cancelamento. Respostas normais do Worker continuam limitadas à origem
+Aurora; erros 429 ou payloads inválidos não disparam recuperação nativa.
+
 Clientes continuam usando JSON/TSV V1 e URLs Aurora; `mojang` é apenas mais um
 valor de origem textual. Não há novos segredos ou dependências nos JARs. Há no
-máximo duas fontes de fallback simultâneas, cada uma com sua cota. Mojang não
+máximo três fontes de fallback simultâneas, cada uma com sua cota; a tentativa
+pelo índice reutiliza a cota mc-api. Mojang não
 fornece autocomplete por prefixo nem catálogo de temas; mc-api/MCStat/Aurora
 mantêm essas funções. Operações reais após deploy e aplicação da skin no jogo
 continuam **PRECISA DE TESTE** até registro pela integração.

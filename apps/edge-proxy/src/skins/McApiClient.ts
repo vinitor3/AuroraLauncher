@@ -30,7 +30,8 @@ export class McApiClient {
     object(data);
     const uuid = normalizeUuid(data.uuid);
     const textureUrl = skinImageUrl(data.skin_url) ?? skinImageUrl(data.renders?.skin_png);
-    if (!uuid || !validPlayerName(data.username) || !textureUrl || (normalizeUuid(id) && normalizeUuid(id) !== uuid)) {
+    if (!uuid || !validPlayerName(data.username) || !textureUrl || (normalizeUuid(id) && normalizeUuid(id) !== uuid)
+      || (!normalizeUuid(id) && data.username.toLowerCase() !== id.toLowerCase())) {
       throw new SkinApiError(502, "Perfil de jogador inválido.");
     }
     const result: SkinResult = {

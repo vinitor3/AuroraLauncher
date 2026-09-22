@@ -50,7 +50,7 @@ test("cache unifica buscas concorrentes e mantém perfil vencido durante falha",
   assert.equal(calls, 1);
   clock += 300001;
   assert.equal((await service.getPlayerProfile("Notch")).stale, true);
-  assert.equal(calls, 3, "Failed refresh tries the independent official source before retaining the cached skin");
+  assert.equal(calls, 4, "Failed refresh tries the official source and exact-name index before retaining the cached skin");
 });
 
 test("fallback MCStat resolve perfil quando mc-api falha", async () => {
@@ -81,6 +81,7 @@ test("429 respeita Retry-After sem repetir a requisição", async () => {
 test("rejeita UUID trocado, JSON inválido e URLs externas; remove chave de render", async () => {
   const client = new McApiClient(new JsonHttpClient("https://mc-api.bisai.dev", "", 30, 3000, async () => json(profile)));
   await assert.rejects(client.getPlayerProfile("b".repeat(32)), /inválido/);
+  await assert.rejects(client.getPlayerProfile("SomeoneElse"), /inválido/);
   const bad = new JsonHttpClient("https://mc-api.bisai.dev", "", 30, 3000, async () => new Response("oops", { headers: { "Content-Type": "application/json" } }));
   await assert.rejects(bad.get("/v1/profile/Notch"), /consultar/);
   assert.equal(skinImageUrl("https://evil.invalid/skin.png"), undefined);

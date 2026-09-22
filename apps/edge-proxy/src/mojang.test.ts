@@ -30,9 +30,9 @@ test("known Java name resolves through Mojang when both third-party sources retu
   assert.equal(result.model, "slim");
   assert.equal(result.skinUrl, texture);
   assert.equal(result.uuid, uuid);
-  assert.equal(calls.length, 4, "Concurrent duplicate names share one provider lookup chain");
+  assert.equal(calls.length, 5, "Concurrent duplicate names share one provider lookup chain");
   await service.getPlayerProfile("NOTCH");
-  assert.equal(calls.length, 4, "The recovered profile is cached normally");
+  assert.equal(calls.length, 5, "The recovered profile is cached normally");
 });
 
 test("direct UUID fallback skips the name request and validates the textures owner", async () => {
@@ -77,13 +77,13 @@ test("temporary official outage is not mislabeled as a missing player and 429 do
   });
   await assert.rejects(service.getPlayerProfile("Notch"), (error) => error instanceof SkinApiError
     && error.status === 503 && !error.message.includes("não encontrado"));
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
   const limited = new SkinService({}, Date.now, async () => {
     calls++;
     return new Response(null, { status: 429, headers: { "Retry-After": "50" } });
   });
   await assert.rejects(limited.getPlayerProfile("Notch"), (error) => error instanceof SkinApiError && error.status === 429);
-  assert.equal(calls, 3);
+  assert.equal(calls, 4);
 });
 
 test("only an official missing profile confirms Jogador não encontrado", async () => {
@@ -139,4 +139,48 @@ test("an empty secondary autocomplete cannot cancel a slower valid official name
   assert.equal(result.length, 1);
   assert.equal(result[0].name, "Notch");
   assert.equal(result[0].source, "mojang");
+});
+
+test("name profile timeout and Cloudflare official 403 recover through the exact current index UUID", async () => {
+  const service = new SkinService({}, Date.now, async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "api.minecraftservices.com") return new Response(null, { status: 403 });
+    if (url.pathname === "/v1/profile/Notch") return new Response(null, { status: 504 });
+    if (url.pathname === "/v1/players/search") return Response.json({ players: [
+      { name: "Notch", uuid: "b".repeat(32), current: false },
+      { name: "Notch", uuid, current: true },
+    ] });
+    assert.equal(url.pathname, `/v1/profile/${uuid}`);
+    return Response.json({ uuid, username: "Notch", skin_url: texture, is_slim: false });
+  });
+  const result = await service.getPlayerProfile("Notch");
+  assert.equal(result.uuid, uuid);
+  assert.equal(result.source, "mc-api");
+});
+
+test("name recovery never uses previous-name matches or a renamed profile", async () => {
+  for (const current of [false, true]) {
+    let profileCalls = 0;
+    const service = new SkinService({}, Date.now, async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === "api.minecraftservices.com") return new Response(null, { status: 403 });
+      if (url.pathname === "/v1/profile/Notch") return new Response(null, { status: 504 });
+      if (url.pathname === "/v1/players/search") return Response.json({ players: [{ name: "Notch", uuid, current }] });
+      profileCalls++;
+      return Response.json({ uuid, username: "RenamedPlayer", skin_url: texture });
+    });
+    await assert.rejects(service.getPlayerProfile("Notch"), (error) => error instanceof SkinApiError && error.status === 503);
+    assert.equal(profileCalls, current ? 1 : 0);
+  }
+});
+
+test("a mismatching MCStat name cannot win the official identity fallback race", async () => {
+  const service = new SkinService({ MCSTAT_API_KEY: "private-mcstat" }, Date.now, async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === "mcstat.org") return Response.json({ data: { player: {
+      mainNickname: "SomeoneElse", minecraftUuid: uuid, skinUrl: texture,
+    } } });
+    return new Response(null, { status: url.hostname === "api.minecraftservices.com" ? 403 : 504 });
+  });
+  await assert.rejects(service.getPlayerProfile("Notch"), (error) => error instanceof SkinApiError && error.status === 503);
 });

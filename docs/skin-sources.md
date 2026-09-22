@@ -56,8 +56,10 @@ A implementação principal é **TypeScript/fetch no Worker**. Os mods Fabric/Fo
 - `McApiClient.ts`: API oficial `https://mc-api.bisai.dev`; `searchPlayers`, `getPlayerProfile`, `autocompleteSkinNames`, `getSkinImageUrlFromProfile`.
 - `dtos.ts` e `models.ts`: DTOs não confiáveis, validação, `SkinResult`, `PlayerSuggestion`.
 - `SkinService.ts`: caches em memória, coalescência de chamadas simultâneas, fallback MCStat/Mojang e último perfil em cache em caso de falha.
+- Se o perfil por nome falhar, o Worker também tenta a correspondência exata e atual no índice mc-api e consulta o perfil pelo UUID validado. Nomes anteriores não permitem selecionar a skin de outra pessoa.
 - `MojangClient.ts`: consulta oficial de nome exato em `api.minecraftservices.com/minecraft/profile/lookup/name/` e textura pública em `sessionserver.mojang.com`, sem chave. Valida UUID do perfil e da propriedade `textures`, nome, modelo e origem `textures.minecraft.net`. O endpoint atual evita a rota legada afetada pelo [WEB-8043](https://bugs.mojang.com/browse/WEB-8043).
 - Desktop: `PlayerSkinsClient` e `OnlineSkinSearch`. Debounce de 250 ms e cancelamento de resultados antigos.
+- Desktop nativo: somente após erro Worker 404/503 ou de rede, `lookup_player_skin` consulta os endpoints públicos oficiais pela conexão local e valida identidade, PNG e SHA-256. A resposta `mojang-local` tem validação própria de URL oficial; a allowlist estrita do proxy continua aplicada às respostas do Worker. 429 e resposta inválida não acionam essa alternativa, e respostas nativas atrasadas são descartadas após cancelar.
 - Mod: `AuroraCatalogProvider`, `PlayerSuggestion`, `SearchDebouncer`; transporte HTTPS limitado e protocolo TSV V1 preservado. Busca/download não bloqueiam a thread de render.
 
 No Worker, `MC_API_KEY` é opcional. Sem ela, o mc-api é consultado anonimamente. A chave existente `mcstat_API_KEY` pertence ao MCStat e **não é reutilizada no mc-api**. `MCSTAT_API_KEY` também é aceita como alias. Chaves não são enviadas ao launcher, Minecraft, logs ou URLs de imagem.
@@ -109,6 +111,7 @@ As rotas Aurora são `GET /v1/skins/players?query=Not`, `GET /v1/skins/profile/N
 
 - HTTP mc-api: 3 s; MCStat: 2,5 s; Mojang: 2 s por chamada; busca/perfil: orçamento total de 7,5 s; catálogo/PNG da rota: orçamento de 9 s; leitor desktop/mod: 12 s.
 - Se mc-api responder 404 ou estiver indisponível, Mojang e MCStat (quando configurado) são consultados em paralelo; a primeira resposta válida vence e cancela a outra. O fallback oficial resolve nomes exatos/UUID; não oferece busca por prefixo. Um prefixo ausente retorna sugestões vazias, sem afirmar que a conta não existe. Falha de rede oficial é apresentada como indisponibilidade, e não como jogador inexistente.
+- A rota de perfil pode usar até três alternativas limitadas (Mojang, MCStat e índice mc-api → UUID) dentro do mesmo orçamento. A cota do mc-api continua compartilhada entre nome, índice e UUID; o fallback não repete uma fonte que respondeu 429.
 - Cache em memória: busca 60 s, perfil 5 min, último perfil em falha até 1 h; máximo 256 registros. Catálogo MCStat 5 min e 256 páginas, imagens 1 h e 64 entradas. Cache é por processo/isolate, não persistente/global.
 - `SKIN_API_REQUESTS_PER_MINUTE` (Worker var) ajusta o orçamento das consultas de jogador, padrão 30/min, máximo 120. No código, o catálogo MCStat tem orçamento separado de 30/min em `fetchMcstatPage`; rotas de jogador têm proteção por IP de 60/min. Respeite também as cotas do seu plano externo.
 - HTTP 429 respeita `Retry-After`; não há repetição imediata em autocomplete. 401/403 entram em espera, JSON/URLs inválidas são rejeitados. Logs contêm operação/status/cache hit/miss, nunca credencial.
