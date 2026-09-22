@@ -61,7 +61,10 @@ export class PlayerSkinsClient {
       // and never receives or returns an upstream credential.
       let result: SkinResult;
       try { result = await invoke<SkinResult>("lookup_player_skin", { identifier: id }); }
-      catch (cause) { throw new Error(typeof cause === "string" ? cause : "Não foi possível consultar o perfil oficial agora."); }
+      catch (cause) {
+        signal?.throwIfAborted();
+        throw new Error(typeof cause === "string" ? cause : "Não foi possível consultar o perfil oficial agora.");
+      }
       signal?.throwIfAborted();
       this.validateProfile(result);
       const uuid = id.replace(/-/g, "").toLowerCase();

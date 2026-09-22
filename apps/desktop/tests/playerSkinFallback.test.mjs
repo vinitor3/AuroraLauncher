@@ -70,3 +70,14 @@ test("cancelled selection ignores a late native lookup result", async (t) => {
   controller.abort(); resolve(profile);
   await assert.rejects(pending, (error) => error.name === "AbortError");
 });
+
+test("cancelled selection also ignores a late native failure", async (t) => {
+  let reject;
+  native(t, () => new Promise((_resolve, no) => { reject = no; }));
+  t.mock.method(globalThis, "fetch", async () => Response.json({ error: "unavailable" }, { status: 503 }));
+  const controller = new AbortController();
+  const pending = new PlayerSkinsClient("https://aurora.test").getPlayerProfile("Notch", controller.signal);
+  await setImmediate();
+  controller.abort(); reject("Jogador não encontrado.");
+  await assert.rejects(pending, (error) => error.name === "AbortError");
+});
