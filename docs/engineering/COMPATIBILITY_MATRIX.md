@@ -1,5 +1,11 @@
 # Compatibility Matrix
 
+## Launcher alpha.9 — integração de 22/09/2026
+
+Integra Core 1.1.5 e Skins 0.2.5 das entregas anteriores, sem alterar os JARs ou ampliar a matriz Minecraft. A retirada do Companion mantém o Assistente desktop. A busca de jogadores ganha fallback oficial Mojang no Worker, preservando o contrato TSV V1 dos módulos existentes. A homologação da grade continua **PARCIAL**, conforme a tabela abaixo.
+
+O desktop adiciona tradução de descrições, armazenamento local da seleção online, face baseada no PNG aplicado, retorno às instâncias após instalação e controles de janela/bandeja. **CONCLUÍDO** nos testes nativos: maximizar, restaurar, minimizar e fechar ocultando a janela com IPC/processo ativos. Menu físico da bandeja e comportamento no computador do destinatário: **PRECISA DE TESTE**. Evidências e limitações em [task-release-alpha9.md](../task-release-alpha9.md).
+
 ## Grade Explorar — Skins 0.2.5 / Core 1.1.5
 
 A grade de 12 slots está integrada nos nove pares abaixo, com lógica comum Java 8, seleção por identidade e paginação pelo provider. Estado: **PARCIAL**: builds e contratos aprovados nos nove pares, verificação gráfica focada em três e runtime pendente nos outros seis. Resultados desta entrega, hashes e limites no [registro da grade](../task-skins-grid.md). A fonte do launcher seleciona os novos candidatos; o histórico abaixo mantém as versões realmente testadas.

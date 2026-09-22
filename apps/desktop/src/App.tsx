@@ -2,9 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { register } from "@tauri-apps/plugin-global-shortcut";
 import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
-import DOMPurify from "dompurify";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { ProjectDescription } from "./features/catalog/ProjectDescription";
+import { drawSkinFace } from "./lib/skinFace";
 import { SkinPreviewCanvas } from "./features/skins/SkinPreviewCanvas";
 import { SkinThumbnail } from "./features/skins/SkinThumbnail";
 import { StartupScreen } from "./features/auth/StartupScreen";
@@ -378,10 +377,7 @@ function SkinHeadAvatar({ source }: { source?: string | null }) {
         setMode("image");
         return;
       }
-      context.imageSmoothingEnabled = false;
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(image, 8, 8, 8, 8, 0, 0, canvas.width, canvas.height);
-      context.drawImage(image, 40, 8, 8, 8, 0, 0, canvas.width, canvas.height);
+      drawSkinFace(context, image);
       setMode("head");
     };
     image.onerror = () => {
@@ -933,7 +929,7 @@ function LauncherApp() {
   const [skinModel, setSkinModel] = useState<"classic" | "slim">("classic");
   const [favoriteName, setFavoriteName] = useState("");
   const [favoriteSearch, setFavoriteSearch] = useState("");
-  const [skinAddMode, setSkinAddMode] = useState<SkinAddMode>("file");
+  const [skinAddMode, setSkinAddMode] = useState<SkinAddMode>("username");
   const [localSkins, setLocalSkins] = useState<LocalSkinView[]>([]);
   const [selectedLocalSkinId, setSelectedSkinIdState] = useState("");
   const selectedSkinIdRef = useRef("");
@@ -1427,6 +1423,21 @@ function LauncherApp() {
     await externalDownloadQueue.enqueue({ ...options, requestId: crypto.randomUUID() });
   }
 
+  async function completeInstanceInstall(id: string, message: string) {
+    setTargetInstance(id);
+    setProjectDetail(undefined);
+    setShowCreateModal(false);
+    closeInstanceEditor();
+    setInstanceFilter("");
+    setActiveSection("instances");
+    setDownloadProgress(undefined);
+    setNotice(message);
+    try {
+      await refresh();
+    } catch {
+      setNotice(message + " A instalação foi concluída, mas a lista não pôde ser atualizada. Reabra o launcher para recarregá-la.");
+    }
+  }
   async function createInstance(event: FormEvent) {
     event.preventDefault();
     if (!instanceName.trim()) return;
@@ -1473,8 +1484,7 @@ function LauncherApp() {
           });
       setInstalledVersionId(result.versionId);
       setInstalledMinecraftVersion(result.minecraftVersion);
-      await refresh();
-      setNotice(`${loadingLabel} pronto em “${targetInstance}”: ${result.libraryCount} bibliotecas e ${result.assetCount} assets verificados.`);
+      await completeInstanceInstall(targetInstance, `Minecraft ${result.minecraftVersion} com ${loadingLabel} instalado! Sua instância “${targetInstance}” está pronta para iniciar.`);
     } catch (error) {
       setDownloadProgress(undefined);
       setNotice(`Não foi possível instalar Minecraft: ${String(error)}`);
@@ -1718,10 +1728,7 @@ function LauncherApp() {
       const result = await installPackIntoInstance(pack, targetInstance);
       setInstalledVersionId(result.minecraft.versionId);
       setInstalledMinecraftVersion(result.minecraftVersion);
-      setNotice(
-        `“${result.name}” instalado em “${targetInstance}” (${result.minecraftVersion}, ${result.loader}): ${result.downloadedFiles} arquivos verificados e ${result.overrideFiles} arquivos extras aplicados.`,
-      );
-      await refresh();
+      await completeInstanceInstall(targetInstance, `“${result.name}” instalado! Abra sua instância “${targetInstance}” para jogar (${result.minecraftVersion}, ${result.loader}).`);
     } catch (error) {
       setDownloadProgress(undefined);
       setNotice(`Não foi possível instalar “${pack.title}”: ${String(error)}`);
@@ -1746,8 +1753,7 @@ function LauncherApp() {
       setInstalledVersionId(result.minecraft.versionId);
       setInstalledMinecraftVersion(result.minecraftVersion);
       setMinecraftVersion(result.minecraftVersion);
-      await refresh();
-      setNotice(`“${result.name}” está pronto para iniciar: ${result.minecraftVersion} com ${result.loader}.`);
+      await completeInstanceInstall(instance.id, `“${result.name}” instalado! Sua instância está pronta para iniciar: ${result.minecraftVersion} com ${result.loader}.`);
     } catch (error) {
       setDownloadProgress(undefined);
       setNotice(`Não foi possível preparar “${pack.title}”: ${String(error)}`);
@@ -2944,6 +2950,30 @@ function LauncherApp() {
       setBusy(false);
     }
   }
+  async function selectOnlineSkin(skin: { name: string; skinUrl: string; model: "classic" | "slim" }) {
+    if (!profile || busy || wardrobeLoading) return;
+    const ownerId = profile.uid;
+    setBusy(true);
+    setNotice(`Baixando a skin de “${skin.name}”…`);
+    try {
+      const loaded = await invoke<AppearanceImage>("load_appearance_url", { url: skin.skinUrl, kind: "skin" });
+      const image = await appearanceBlob(loaded.dataBase64);
+      if (!isCurrentSkinOwner(ownerId)) return;
+      const local = await saveLocalSkin({ ownerId, name: skin.name, skinModel: skin.model, sourceUrl: loaded.url, image });
+      if (!isCurrentSkinOwner(ownerId)) return;
+      selectedSkinIdRef.current = local.id;
+      setSelectedLocalSkinId(local.id);
+      await refreshLocalSkinLibrary(ownerId, local.id);
+      if (!isCurrentSkinOwner(ownerId)) return;
+      setSkinModel(skin.model);
+      setFavoriteName(skin.name);
+      setNotice(`Skin “${skin.name}” pronta. Clique em Aplicar skin para usá-la. Não precisa abrir o Minecraft agora.`);
+    } catch (error) {
+      if (isCurrentSkinOwner(ownerId)) setNotice(`Não foi possível baixar essa skin: ${errorMessage(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function saveAppearance(event: FormEvent) {
     event.preventDefault();
     if (!profile || !services || wardrobeLoading) return;
@@ -3043,12 +3073,12 @@ function LauncherApp() {
         if (!isCurrentSkinOwner(profile.uid)) return;
         setWardrobeView("library");
         setFavoriteName("");
-        setNotice("Skin adicionada à biblioteca local. Clique em Equipar no jogo para aplicá-la.");
+        setNotice("Skin adicionada à biblioteca local. Clique em Aplicar skin para aplicá-la.");
       } else {
         const url = await uploadAppearanceImage(kind, file);
         if (!isCurrentSkinOwner(profile.uid)) return;
         setCapeUrl(url);
-        setNotice("Capa enviada. Clique em Equipar para aplicá-la.");
+        setNotice("Capa enviada. Clique em Aplicar skin para salvar a aparência.");
       }
     } catch (error) {
       if (isCurrentSkinOwner(profile.uid)) setNotice(`Não foi possível adicionar a imagem: ${String(error)}`);
@@ -3090,7 +3120,7 @@ function LauncherApp() {
     setSkinUrl(skin.previewUrl);
     setSkinModel(skin.skinModel);
     setFavoriteName(skin.name);
-    setNotice(`Skin “${skin.name}” selecionada. Clique em Equipar no jogo para aplicá-la.`);
+    setNotice(`Skin “${skin.name}” selecionada. Clique em Aplicar skin para aplicá-la.`);
     if (!skin.image) {
       try {
         if (await cacheSkin(skin)) await refreshLocalSkinLibrary(skin.ownerId);
@@ -3316,7 +3346,7 @@ function LauncherApp() {
           </div>
         </div>
         <div className="sidebar-user" title={`Conta Aurora: ${profile.username}`}>
-          <SkinHeadAvatar source={profile.skinUrl ?? profile.avatarUrl} />
+          <SkinHeadAvatar source={equippedSkin?.previewUrl || profile.skinUrl || profile.avatarUrl} />
           <span><strong>{profile.username}</strong><small>Conta Aurora</small></span>
         </div>
         <nav aria-label="Seções do launcher" className="app-nav">
@@ -3678,12 +3708,7 @@ function LauncherApp() {
               </header>
               <div className="project-detail-scroll">
                 {projectDetail.gallery[0] && <img className="project-hero" src={projectDetail.gallery[0]} alt={`Destaque de ${projectDetail.title}`} />}
-                <div className="project-detail-summary"><strong>Sobre este projeto</strong><p>{projectDetail.summary}</p></div>
-                {detailLoading ? <div className="detail-loading">Carregando página completa…</div> : projectDetail.bodyFormat === "markdown" ? (
-                  <article className="project-description markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: (properties) => <a {...properties} rel="noreferrer" target="_blank" />, img: (properties) => <img {...properties} loading="lazy" /> }}>{projectDetail.body}</ReactMarkdown></article>
-                ) : (
-                  <article className="project-description" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(projectDetail.body) }} />
-                )}
+                <ProjectDescription services={services} summary={projectDetail.summary} body={projectDetail.body} bodyFormat={projectDetail.bodyFormat} loading={detailLoading} />
               </div>
               <footer className="project-detail-actions">
                 {projectDetail.websiteUrl && <a href={projectDetail.websiteUrl} rel="noreferrer" target="_blank">Abrir site oficial</a>}
@@ -3743,8 +3768,8 @@ function LauncherApp() {
             <div className="wardrobe-heading">
               <div><p className="eyebrow">GUARDA-ROUPA</p><h2>Skins <span>({localSkins.length} neste computador)</span></h2></div>
               <div className="wardrobe-actions">
-                <button className={skinAddMode === "file" ? "compact" : "secondary compact"} disabled={busy || wardrobeLoading} onClick={() => { setWardrobeView("library"); setSkinAddMode("file"); }} type="button">+ Adicionar skin</button>
-                <button className="secondary compact" disabled={busy || wardrobeLoading || !skinUrl.trim()} onClick={() => void saveAppearance({ preventDefault() {} } as FormEvent)} type="button">Equipar no jogo</button>
+                <button className={skinAddMode === "username" ? "compact" : "secondary compact"} disabled={busy || wardrobeLoading} onClick={() => { setWardrobeView("library"); setSkinAddMode("username"); }} type="button">+ Adicionar skin</button>
+                <button className="secondary compact" disabled={busy || wardrobeLoading || !skinUrl.trim()} onClick={() => void saveAppearance({ preventDefault() {} } as FormEvent)} type="button">Aplicar skin</button>
               </div>
             </div>
             <div className="wardrobe-layout">
@@ -3762,9 +3787,9 @@ function LauncherApp() {
                       <SkinThumbnail src={equippedSkin.previewUrl} name={equippedSkin.name} className="equipped-skin-thumbnail" />
                       <h3>{equippedSkin.name}</h3>
                       <p className="muted">Modelo {equippedSkin.skinModel === "slim" ? "Slim" : "Clássico"}. PNG salvo neste computador.</p>
-                      <p className="field-hint">Selecionar outra skin na biblioteca só altera a prévia. Ela muda no jogo quando você clica em Equipar no jogo.</p>
+                      <p className="field-hint">Selecionar outra skin na biblioteca só altera a prévia. Clique em Aplicar skin para usá-la na próxima vez que iniciar Minecraft.</p>
                     </> : <>
-                      <p className="muted">{wardrobeLoading ? "Carregando a skin equipada…" : profile.skinUrl ? "Não foi possível recuperar o PNG da skin equipada. Tente novamente ou importe o arquivo salvo." : "Nenhuma skin equipada ainda. Selecione uma na biblioteca e clique em Equipar no jogo."}</p>
+                      <p className="muted">{wardrobeLoading ? "Carregando a skin equipada…" : profile.skinUrl ? "Não foi possível recuperar o PNG da skin equipada. Tente novamente ou importe o arquivo salvo." : "Nenhuma skin equipada ainda. Selecione uma na biblioteca e clique em Aplicar skin."}</p>
                       {!wardrobeLoading && (profile.skinUrl || window.localStorage.getItem(`aurora.localSkinPath.${profile.uid}`)) && <button className="secondary compact" disabled={busy} onClick={() => setWardrobeRetry((value) => value + 1)} type="button">Tentar recuperar novamente</button>}
                     </>}
                   </section>
@@ -3778,11 +3803,7 @@ function LauncherApp() {
                   </div>
                   {skinAddMode === "file" && <label className="file-input">Escolher PNG da skin<input accept="image/png" disabled={busy || wardrobeLoading} onChange={(event) => void uploadAppearance("skin", event.target.files?.[0])} type="file" /></label>}
                   {skinAddMode === "url" && <input value={skinUrl} disabled={busy || wardrobeLoading} onChange={(event) => { setSkinUrl(event.target.value); setSelectedLocalSkinId(""); }} placeholder="Cole a URL HTTPS da skin PNG" />}
-                  {skinAddMode === "username" && <OnlineSkinSearch workerUrl={services.config.workerUrl || "https://aurora-api.aurora-edge-proxy.workers.dev"} onSelect={(skin) => {
-                    if (busy || wardrobeLoading) return;
-                    setSkinUrl(skin.skinUrl); setSkinModel(skin.model); setFavoriteName(skin.name); setSelectedLocalSkinId("");
-                    setNotice(`Skin ${skin.name} selecionada. Guarde localmente ou clique em Equipar no jogo.`);
-                  }} />}
+                  {skinAddMode === "username" && <OnlineSkinSearch disabled={busy || wardrobeLoading} workerUrl={services.config.workerUrl || "https://aurora-api.aurora-edge-proxy.workers.dev"} onSelect={(skin) => void selectOnlineSkin(skin)} />}
                   <div className="model-row"><span>Modelo</span><select value={skinModel} disabled={busy || wardrobeLoading} onChange={(event) => setSkinModel(event.target.value as "classic" | "slim")}><option value="classic">Clássico</option><option value="slim">Slim</option></select></div>
                 </div>
                 <div className="library-toolbar">
@@ -3795,7 +3816,7 @@ function LauncherApp() {
                       <SkinThumbnail src={skin.previewUrl} name={skin.name} /><strong>{skin.name}</strong><span>{skin.skinModel === "slim" ? "Slim" : "Clássico"}{equippedSkin?.id === skin.id ? " · Equipada" : ""}</span><em onClick={(event) => { event.stopPropagation(); void removeFavoriteSkin(skin.id); }}>Remover</em>
                     </button>
                   ))}
-                  {localSkins.length === 0 && !wardrobeLoading && <p className="muted empty-library">Adicione um PNG, URL ou nick para montar sua biblioteca local.</p>}
+                  {localSkins.length === 0 && !wardrobeLoading && <p className="muted empty-library">Escolha uma skin no catálogo acima ou busque pelo nick de um jogador.</p>}
                 </div>
                 </>}
               </div>
@@ -3803,7 +3824,7 @@ function LauncherApp() {
                 <p className="eyebrow">PRÉVIA</p>
                 <SkinPreviewCanvas skinModel={skinModel} skinUrl={skinUrl} />
                 <strong>{favoriteName || profile.username}</strong>
-                <span>{equippedSkin?.id === selectedLocalSkinId && skinModel === equippedSkin.skinModel ? "Skin equipada neste computador." : "Prévia da seleção — clique em Equipar no jogo para aplicar."}</span>
+                <span>{equippedSkin?.id === selectedLocalSkinId && skinModel === equippedSkin.skinModel ? "Skin equipada neste computador." : "Prévia da seleção — clique em Aplicar skin para aplicar."}</span>
               </div>
             </div>
           </article>
