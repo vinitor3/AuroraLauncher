@@ -3,6 +3,7 @@ package com.aurora.skins.minecraft;
 import com.aurora.core.api.AuroraServices;
 import com.aurora.skins.AuroraSkinsRuntime;
 import com.aurora.skins.minecraft.appearance.AuroraSkinManager;
+import com.aurora.skins.minecraft.network.SkinSyncClientBridge;
 import com.aurora.skins.minecraft.ui.AuroraSkinsScreen;
 import com.aurora.skins.minecraft.ui.MinecraftSkinPreviewRenderer;
 import net.minecraft.client.Minecraft;
@@ -19,6 +20,7 @@ public final class AuroraSkinsClient {
         services = auroraServices;
         runtime = AuroraSkinsRuntime.start();
         AuroraSkinManager.initialize(runtime);
+        SkinSyncClientBridge.initialize(runtime);
         auroraServices.previews().register("aurora_skins", new MinecraftSkinPreviewRenderer());
     }
 
@@ -37,6 +39,7 @@ public final class AuroraSkinsClient {
     public static synchronized void shutdown() {
         AuroraServices current = services;
         if (current != null) current.previews().unregister("aurora_skins");
+        SkinSyncClientBridge.shutdown();
         AuroraSkinManager.shutdown();
         services = null;
         runtime = null;

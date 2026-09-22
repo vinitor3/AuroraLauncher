@@ -1,6 +1,6 @@
 architectury { common(rootProject.enabled_platforms.split(",")) }
 dependencies {
-    implementation files(rootProject.file("../../core/build/libs/aurora-skins-core-0.2.4.jar"))
+    implementation files(rootProject.file("../../core/build/libs/aurora-skins-core-0.3.0.jar"))
     compileOnly files(rootProject.file("../../../aurora-core/api/build/libs/aurora-core-api-1.1.4.jar"))
     compileOnly "net.fabricmc:sponge-mixin:0.12.5+mixin.0.8.5"
 }
@@ -11,6 +11,7 @@ tasks.named("compileJava") {
         include "com/aurora/skins/minecraft/AuroraSkinsClient.java"
         include "com/aurora/skins/minecraft/AuroraSkinsModule.java"
         include "com/aurora/skins/minecraft/appearance/AuroraSkinManager.java"
+        include "com/aurora/skins/minecraft/network/SkinSyncClientBridge.java"
     })
 }
 

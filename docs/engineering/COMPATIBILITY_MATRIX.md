@@ -1,5 +1,15 @@
 # Compatibility Matrix
 
+## Aurora Skins 0.3.0 — Multiplayer e aparência — 22/09/2026
+
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. As nove combinações (Forge 1.12.2 e Fabric/Forge 1.16.5, 1.19.2, 1.20.1, 1.21.1) geraram JARs finais e passaram pelos contratos Rust de empacotamento; manifesto em `releases/skins/0.3.0/manifest.json`. Foram aprovados 27 testes do núcleo, incluindo sete do servidor e quatro do cliente de sincronização. Fabric 1.21.1 inicializou o retransmissor dedicado sem Core; Forge 1.21.1 aprovou descoberta de metadados sem Core, mas não executou entrypoints antes da EULA. Ambos encerraram pré-EULA sem mundo/jogadores. Dois clientes reais e Chat Heads continuam com estado **PRECISA DE TESTE**; não há homologação visual ou instalador novo nesta tarefa.
+
+O servidor usa Aurora Skins 0.3.0 da mesma combinação Minecraft/loader, sem exigir Aurora Core/Companion; clientes participantes exigem Core 1.1.3+. Clientes sem Aurora Skins podem entrar, conforme as outras regras do servidor, e continuam vendo a aparência vanilla. O retransmissor limita a 256 participantes e uma publicação por jogador a cada dois segundos, com PNG canônico de até 24 KiB e estado apenas em memória, sem nuvem ou credenciais.
+
+`PlayerInfo` amplia a compatibilidade moderna com chat/tab; consultas adicionais de `SkinManager` atendem 1.19.2/1.20.1/1.21.1, e 1.12.2 mantém o adaptador legado. Não há recurso novo de cabeças no chat nem Chat Heads incluído. Mods que consultam diretamente a Mojang, mantêm caches próprios ou usam cabeças geradas exclusivamente no servidor podem continuar exibindo a skin oficial. Proxy/ViaVersion e travessia entre versões não são suportados; combinação Fabric/Forge não está homologada.
+
+Branch `codex/aur-skins-multiplayer-compat`, base `269d282`: preservar as alterações posteriores de Skins 0.2.5 na integração. Evidência e roteiro: [tarefa multiplayer](../task-skins-multiplayer.md); decisão: [ADR-018](ADR/ADR-018-skins-server-relay.md). O histórico abaixo permanece válido somente para as versões indicadas.
+
 ## Reparos de runtime — 19/09/2026
 
 Fonte: Core **1.1.4**, Skins **0.2.4**, Companion **0.2.3**. Os 27 JARs

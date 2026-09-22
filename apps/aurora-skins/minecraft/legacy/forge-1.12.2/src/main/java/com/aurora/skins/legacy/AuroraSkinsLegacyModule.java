@@ -11,12 +11,13 @@ import net.minecraftforge.common.MinecraftForge;
 public final class AuroraSkinsLegacyModule implements AuroraModule {
     private LegacySkinsUi ui;
     @Override public AuroraModuleMetadata metadata() {
-        return new AuroraModuleMetadata("aurora_skins", "Skins", "0.2.4", "skin", "1.1.3");
+        return new AuroraModuleMetadata("aurora_skins", "Skins", "0.3.0", "skin", "1.1.3");
     }
     @Override public void initialize(AuroraModuleContext context) throws Exception {
         System.setProperty("java.awt.headless", "false");
         AuroraSkinsRuntime runtime = AuroraSkinsRuntime.start();
         LegacySkinManager.initialize(runtime);
+        LegacySkinClientNetwork.initialize(runtime);
         ui = new LegacySkinsUi(runtime);
         MinecraftForge.EVENT_BUS.register(ui);
         context.services().previews().register("aurora_skins", new LegacySkinPreviewRenderer());
@@ -29,6 +30,7 @@ public final class AuroraSkinsLegacyModule implements AuroraModule {
     @Override public void shutdown() {
         if (ui != null) { MinecraftForge.EVENT_BUS.unregister(ui); ui.shutdown(); }
         try { com.aurora.core.api.Aurora.services().previews().unregister("aurora_skins"); } catch (Throwable ignored) { }
+        LegacySkinClientNetwork.shutdown();
         LegacySkinManager.shutdown(); ui = null;
     }
 }

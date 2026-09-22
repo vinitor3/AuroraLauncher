@@ -18,7 +18,7 @@ const mc = child.inheritsFrom || child.id;
 const parent = child.inheritsFrom ? JSON.parse(readFileSync(join(base, 'versions', mc, `${mc}.json`), 'utf8')) : child;
 const loader = child.mainClass?.includes('fabric') ? 'fabric' : 'forge';
 const core = join(repository, '.aurora', 'build-matrix', 'core', '1.1.4', mc, loader, `aurora-core-${loader}-${mc}-1.1.4.jar`);
-const skins = join(repository, '.aurora', 'build-matrix', 'skins', '0.2.4', mc, loader, `aurora-skins-${loader}-${mc}-0.2.4.jar`);
+const skins = join(repository, '.aurora', 'build-matrix', 'skins', '0.3.0', mc, loader, `aurora-skins-${loader}-${mc}-0.3.0.jar`);
 for (const file of [java, core, skins]) if (!existsSync(file)) throw new Error(`Required QA input missing: ${file}`);
 
 function allowed(rules) {
@@ -59,7 +59,7 @@ const replacements = {
   auth_session: '0', user_type: 'legacy', user_properties: '{}', version_name: version, version_type: 'release',
   game_directory: target, assets_root: join(base, 'assets'), game_assets: join(base, 'assets', 'virtual', 'legacy'),
   assets_index_name: parent.assetIndex?.id || parent.assets, natives_directory: join(base, 'natives'),
-  launcher_name: 'AuroraSkinsQA', launcher_version: '0.2.4', clientid: '', auth_xuid: '',
+  launcher_name: 'AuroraSkinsQA', launcher_version: '0.3.0', clientid: '', auth_xuid: '',
   library_directory: join(base, 'libraries'), classpath_separator: ';',
   classpath: [...libraries.values(), client].join(';'), resolution_width: '960', resolution_height: '540',
 };

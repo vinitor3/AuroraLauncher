@@ -135,5 +135,5 @@ function Compare-AuroraMatrix {
 }
 
 Compare-AuroraMatrix "Aurora Core" ".aurora\build-matrix\core\1.1.4" "releases\core\1.1.4" @("org/slf4j/", "net/minecraft/")
-Compare-AuroraMatrix "Aurora Skins" ".aurora\build-matrix\skins\0.2.4" "releases\skins\0.2.4"
+Compare-AuroraMatrix "Aurora Skins" ".aurora\build-matrix\skins\0.3.0" "releases\skins\0.3.0"
 Compare-AuroraMatrix "Aurora Companion" ".aurora\build-matrix\companion\0.2.3" "releases\companion"

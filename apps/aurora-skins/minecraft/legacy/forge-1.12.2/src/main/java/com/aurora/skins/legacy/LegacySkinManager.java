@@ -20,6 +20,14 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.RejectedExecutionException;
+import java.io.ByteArrayInputStream;
+import com.aurora.skins.sync.SkinSyncProtocol;
 
 final class LegacySkinManager {
     private static final long MAX_DOWNLOAD = 2L * 1024L * 1024L;
@@ -32,6 +40,17 @@ final class LegacySkinManager {
     private static volatile AuroraSkinsRuntime runtime;
     private static volatile Object texture;
     private static volatile String model = "classic";
+    private static final Map<UUID, RemoteSkin> REMOTE = new LinkedHashMap<UUID, RemoteSkin>();
+    private static final ThreadPoolExecutor REMOTE_IO = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+        new ArrayBlockingQueue<Runnable>(256), runnable -> {
+            Thread thread = new Thread(runnable, "Aurora-Skins-1.12-Remote"); thread.setDaemon(true); return thread;
+        }, new ThreadPoolExecutor.AbortPolicy());
+    private static final class RemoteSkin {
+        final String fingerprint, model;
+        final LegacyPlayerSkinOverride override = new LegacyPlayerSkinOverride();
+        Object texture;
+        RemoteSkin(String fingerprint, String model) { this.fingerprint = fingerprint; this.model = model; }
+    }
 
     private LegacySkinManager() { }
     static void initialize(AuroraSkinsRuntime value) {
@@ -44,10 +63,66 @@ final class LegacySkinManager {
     static void shutdown() {
         if (runtime != null) runtime.removeListener(LISTENER);
         runtime = null; LOAD_REQUEST.incrementAndGet();
-        LegacyMinecraft.execute(() -> { PLAYER_SKIN.clear(); deleteTexture(texture); texture = null; });
+        LegacyMinecraft.execute(() -> { clearRemoteSkins(); PLAYER_SKIN.clear(); deleteTexture(texture); texture = null; });
     }
     static Object texture() { return texture; }
     static String model() { return model; }
+
+    /** Called on the client thread; each completion must still own its UUID slot. */
+    static void setRemoteSkin(UUID id, byte[] bytes, SkinModel selectedModel) {
+        if (id == null || bytes == null || bytes.length > SkinSyncProtocol.MAX_PNG_BYTES || runtime == null) return;
+        String fingerprint = SkinSyncProtocol.hash(bytes) + selectedModel.id();
+        RemoteSkin previous = REMOTE.get(id);
+        if (previous != null && previous.fingerprint.equals(fingerprint)) return;
+        if (previous == null && REMOTE.size() >= SkinSyncProtocol.MAX_PLAYERS) return;
+        byte[] png = bytes.clone();
+        RemoteSkin replacement = new RemoteSkin(fingerprint, selectedModel.id());
+        REMOTE.put(id, replacement);
+        if (previous != null) { previous.override.clear(); deleteTexture(previous.texture); }
+        try {
+            REMOTE_IO.execute(() -> {
+                try {
+                    BufferedImage image = ImageIO.read(new ByteArrayInputStream(png));
+                    if (image == null || image.getWidth() != 64 || image.getHeight() != 64) throw new IllegalArgumentException("Invalid remote skin");
+                    LegacyMinecraft.execute(() -> {
+                        if (REMOTE.get(id) != replacement || runtime == null) return;
+                        try {
+                            Object dynamic = Class.forName("net.minecraft.client.renderer.texture.DynamicTexture")
+                                .getConstructor(BufferedImage.class).newInstance(image);
+                            Object manager = LegacyMinecraft.invoke(LegacyMinecraft.minecraft(), new String[] {"getTextureManager", "func_110434_K"});
+                            replacement.texture = LegacyMinecraft.invoke(manager, new String[] {"getDynamicTextureLocation", "func_110578_a"}, "aurora_skins_remote", dynamic);
+                            if (replacement.texture == null) { REMOTE.remove(id); return; }
+                            applyRemotePlayers();
+                        } catch (ReflectiveOperationException failed) { REMOTE.remove(id); }
+                    });
+                } catch (Exception invalid) { LegacyMinecraft.execute(() -> { if (REMOTE.get(id) == replacement) REMOTE.remove(id); }); }
+            });
+        } catch (RejectedExecutionException full) { REMOTE.remove(id); }
+    }
+    static void removeRemoteSkin(UUID id) {
+        RemoteSkin previous = REMOTE.remove(id);
+        if (previous != null) { previous.override.clear(); deleteTexture(previous.texture); }
+    }
+    static void clearRemoteSkins() {
+        REMOTE_IO.getQueue().clear();
+        for (RemoteSkin value : REMOTE.values()) { value.override.clear(); deleteTexture(value.texture); }
+        REMOTE.clear();
+    }
+    private static void applyRemotePlayers() {
+        Object minecraft = LegacyMinecraft.minecraft();
+        Object connection = LegacyMinecraft.invoke(minecraft, new String[] {"getConnection", "func_147114_u"});
+        if (connection == null) { clearRemoteSkins(); return; }
+        try {
+            Object key = Class.forName("com.mojang.authlib.minecraft.MinecraftProfileTexture$Type").getField("SKIN").get(null);
+            for (Map.Entry<UUID, RemoteSkin> entry : REMOTE.entrySet()) {
+                RemoteSkin skin = entry.getValue(); if (skin.texture == null) continue;
+                Object info = LegacyMinecraft.invoke(connection, new String[] {"getPlayerInfo", "func_175102_a"}, entry.getKey());
+                if (info == null) { skin.override.clear(); continue; }
+                LegacyMinecraft.invoke(info, new String[] {"getLocationSkin", "func_178837_g"});
+                skin.override.apply(info, key, skin.texture, skin.model);
+            }
+        } catch (ReflectiveOperationException ignored) { }
+    }
 
     private static void load(final SkinEntry entry) {
         if (entry == null || entry.file() == null) return;
@@ -140,6 +215,7 @@ final class LegacySkinManager {
     }
 
     static void applyToLocalPlayer() {
+        applyRemotePlayers();
         Object location = texture;
         if (location == null) return;
         try {

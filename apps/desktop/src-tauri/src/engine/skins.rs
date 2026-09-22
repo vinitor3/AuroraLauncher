@@ -23,15 +23,15 @@ pub fn install_embedded_skins(
     loader: &str,
 ) -> Result<PathBuf, SkinsError> {
     let contents = match (minecraft_version, loader) {
-        ("1.12.2", "forge") => include_bytes!("../../../../../releases/skins/0.2.4/1.12.2/forge/aurora-skins-forge-1.12.2-0.2.4.jar").as_slice(),
-        ("1.16.5", "fabric") => include_bytes!("../../../../../releases/skins/0.2.4/1.16.5/fabric/aurora-skins-fabric-1.16.5-0.2.4.jar").as_slice(),
-        ("1.16.5", "forge") => include_bytes!("../../../../../releases/skins/0.2.4/1.16.5/forge/aurora-skins-forge-1.16.5-0.2.4.jar").as_slice(),
-        ("1.19.2", "fabric") => include_bytes!("../../../../../releases/skins/0.2.4/1.19.2/fabric/aurora-skins-fabric-1.19.2-0.2.4.jar").as_slice(),
-        ("1.19.2", "forge") => include_bytes!("../../../../../releases/skins/0.2.4/1.19.2/forge/aurora-skins-forge-1.19.2-0.2.4.jar").as_slice(),
-        ("1.20.1", "fabric") => include_bytes!("../../../../../releases/skins/0.2.4/1.20.1/fabric/aurora-skins-fabric-1.20.1-0.2.4.jar").as_slice(),
-        ("1.20.1", "forge") => include_bytes!("../../../../../releases/skins/0.2.4/1.20.1/forge/aurora-skins-forge-1.20.1-0.2.4.jar").as_slice(),
-        ("1.21.1", "fabric") => include_bytes!("../../../../../releases/skins/0.2.4/1.21.1/fabric/aurora-skins-fabric-1.21.1-0.2.4.jar").as_slice(),
-        ("1.21.1", "forge") => include_bytes!("../../../../../releases/skins/0.2.4/1.21.1/forge/aurora-skins-forge-1.21.1-0.2.4.jar").as_slice(),
+        ("1.12.2", "forge") => include_bytes!("../../../../../releases/skins/0.3.0/1.12.2/forge/aurora-skins-forge-1.12.2-0.3.0.jar").as_slice(),
+        ("1.16.5", "fabric") => include_bytes!("../../../../../releases/skins/0.3.0/1.16.5/fabric/aurora-skins-fabric-1.16.5-0.3.0.jar").as_slice(),
+        ("1.16.5", "forge") => include_bytes!("../../../../../releases/skins/0.3.0/1.16.5/forge/aurora-skins-forge-1.16.5-0.3.0.jar").as_slice(),
+        ("1.19.2", "fabric") => include_bytes!("../../../../../releases/skins/0.3.0/1.19.2/fabric/aurora-skins-fabric-1.19.2-0.3.0.jar").as_slice(),
+        ("1.19.2", "forge") => include_bytes!("../../../../../releases/skins/0.3.0/1.19.2/forge/aurora-skins-forge-1.19.2-0.3.0.jar").as_slice(),
+        ("1.20.1", "fabric") => include_bytes!("../../../../../releases/skins/0.3.0/1.20.1/fabric/aurora-skins-fabric-1.20.1-0.3.0.jar").as_slice(),
+        ("1.20.1", "forge") => include_bytes!("../../../../../releases/skins/0.3.0/1.20.1/forge/aurora-skins-forge-1.20.1-0.3.0.jar").as_slice(),
+        ("1.21.1", "fabric") => include_bytes!("../../../../../releases/skins/0.3.0/1.21.1/fabric/aurora-skins-fabric-1.21.1-0.3.0.jar").as_slice(),
+        ("1.21.1", "forge") => include_bytes!("../../../../../releases/skins/0.3.0/1.21.1/forge/aurora-skins-forge-1.21.1-0.3.0.jar").as_slice(),
         _ => {
             return Err(SkinsError::Unsupported {
                 minecraft_version: minecraft_version.to_owned(),
@@ -90,6 +90,27 @@ mod tests {
     // Only nested JARs declared to this loader may satisfy class/resource references.
     fn payload(bytes: &[u8], loader: &str, major: u16) -> Contract<Vec<Files>> {
         let mut zip = ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
+        // Only these three explicit networking dependencies may contribute Fabric classes.
+        // They remain loader-declared nested JARs, never shaded into Aurora's namespace.
+        let fabric_api = if loader == "fabric" {
+            let mut metadata = Vec::new();
+            if let Ok(mut entry) = zip.by_name("fabric.mod.json") {
+                entry
+                    .read_to_end(&mut metadata)
+                    .map_err(|e| e.to_string())?;
+            }
+            !metadata.is_empty()
+                && matches!(
+                    json(&metadata)?["id"].as_str(),
+                    Some(
+                        "fabric-api-base"
+                            | "fabric-networking-api-v1"
+                            | "fabric-lifecycle-events-v1"
+                    )
+                )
+        } else {
+            false
+        };
         let mut files = Files::new();
         for index in 0..zip.len() {
             let mut entry = zip.by_index(index).map_err(|e| e.to_string())?;
@@ -106,6 +127,7 @@ mod tests {
                 // Skins' own code and Architectury's generated bridge only:
                 // never shadow Core, Minecraft, loaders, Mixin, SLF4J, Gson, etc.
                 if !name.starts_with("com/aurora/skins/")
+                    && !(fabric_api && name.starts_with("net/fabricmc/fabric/"))
                     && !(name.starts_with("architectury_inject_")
                         && name.ends_with("/PlatformMethods.class"))
                 {
@@ -194,6 +216,15 @@ mod tests {
             "com.aurora.skins.api.PlayerSuggestion",
         ] {
             class(jars, name)?;
+        }
+        if metadata.contains("0.3.0") {
+            for name in [
+                "com.aurora.skins.sync.SkinSyncProtocol",
+                "com.aurora.skins.sync.SkinSyncClient",
+                "com.aurora.skins.sync.SkinSyncServer",
+            ] {
+                class(jars, name)?;
+            }
         }
         if loader == "forge" {
             let entrypoint = if legacy {
