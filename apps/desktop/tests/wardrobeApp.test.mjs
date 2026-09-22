@@ -112,6 +112,7 @@ test("equipped metadata stores identity/model instead of a renderer URL and reje
 
 function launchSetup(overrides = {}) {
   const invocations = [], notices = [], busy = [];
+  const doctor = { failure: undefined };
   const context = loadFunctions(["isCurrentSkinOwner", "launchMinecraft"], {
     profile: { uid: "current", username: "Player", skinModel: "classic", skinUrl: "https://example/remote.png" },
     services: { auth: { currentUser: { uid: "current" } } },
@@ -127,10 +128,13 @@ function launchSetup(overrides = {}) {
     javaMajor: () => 17,
     setNotice: (value) => notices.push(value),
     setBusy: (value) => busy.push(value),
+    setDoctorFailure: (value) => { doctor.failure = typeof value === "function" ? value(doctor.failure) : value; },
     setTargetInstance() {}, setInstalledVersionId() {}, setInstalledMinecraftVersion() {},
     setMinecraftVersion() {}, setRunningInstances() {},
     invoke: async (command, args) => {
       invocations.push([command, args]);
+      if (command === "begin_instance_launch") return { instanceId: args.id, runId: "test-launch-run", outcome: "preparing" };
+      if (command === "cancel_instance_launch" || command === "fail_instance_launch") return;
       if (command === "read_instance_launch_profile") return { versionId: "fabric", minecraftVersion: "1.20.1" };
       if (command === "required_java_for_instance") return 17;
       if (command === "verify_java") return "17";
@@ -139,7 +143,7 @@ function launchSetup(overrides = {}) {
     },
     ...overrides,
   });
-  return { context, invocations, notices, busy };
+  return { context, invocations, notices, busy, doctor };
 }
 
 test("launch waits for initial wardrobe restoration including the first pre-effect render", async () => {
@@ -158,6 +162,9 @@ test("ready launch supplies restored local PNG and equipped model rather than st
   const launch = run.invocations.find(([command]) => command === "launch_instance")[1];
   assert.equal(launch.skinFile, "C:/appearance/current/skin.png");
   assert.equal(launch.skinModel, "slim");
+  assert.equal(launch.runId, "test-launch-run");
+  assert.equal(run.doctor.failure, undefined);
+  assert.ok(!run.invocations.some(([command]) => command === "cancel_instance_launch" || command === "fail_instance_launch"));
   assert.deepEqual(run.busy, [true, false]);
 });
 
@@ -171,6 +178,11 @@ test("logout while preparing Java prevents the native Minecraft launch", async (
   };
   await run.context.launchMinecraft();
   assert.ok(!run.invocations.some(([command]) => command === "launch_instance"));
+  const cancellation = run.invocations.find(([command]) => command === "cancel_instance_launch")?.[1];
+  assert.equal(cancellation?.id, "instance");
+  assert.equal(cancellation?.runId, "test-launch-run");
+  assert.ok(!run.invocations.some(([command]) => command === "fail_instance_launch"));
+  assert.equal(run.doctor.failure, undefined);
   assert.deepEqual(run.busy, [true, false]);
 });
 
