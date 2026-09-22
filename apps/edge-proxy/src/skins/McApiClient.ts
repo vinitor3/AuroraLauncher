@@ -9,9 +9,9 @@ export class McApiClient {
   private readonly http: JsonHttpClient;
   constructor(http = new JsonHttpClient(MC_API_BASE_URL)) { this.http = http; }
 
-  async searchPlayers(query: string): Promise<PlayerSuggestion[]> {
+  async searchPlayers(query: string, deadline?: AbortSignal): Promise<PlayerSuggestion[]> {
     if (!/^[A-Za-z0-9_]{3,16}$/.test(query.trim())) return [];
-    const { data } = await this.http.get<McApiSearchDto>(`/v1/players/search?q=${encodeURIComponent(query.trim())}&limit=12`);
+    const { data } = await this.http.get<McApiSearchDto>(`/v1/players/search?q=${encodeURIComponent(query.trim())}&limit=12`, deadline);
     object(data);
     if (!Array.isArray(data.players) || data.players.length > 50) throw new SkinApiError(502, "Lista de jogadores inválida.");
     return data.players.flatMap((candidate) => {
@@ -23,10 +23,10 @@ export class McApiClient {
     });
   }
 
-  async getPlayerProfile(identifier: string, includeHistory = false): Promise<SkinResult> {
+  async getPlayerProfile(identifier: string, includeHistory = false, deadline?: AbortSignal): Promise<SkinResult> {
     const id = identifier.trim();
     if (!validPlayerName(id) && !normalizeUuid(id)) throw new SkinApiError(400, "Informe um nome ou UUID válido.");
-    const { data, lastKnown } = await this.http.get<McApiProfileDto>(`/v1/profile/${encodeURIComponent(id)}`);
+    const { data, lastKnown } = await this.http.get<McApiProfileDto>(`/v1/profile/${encodeURIComponent(id)}`, deadline);
     object(data);
     const uuid = normalizeUuid(data.uuid);
     const textureUrl = skinImageUrl(data.skin_url) ?? skinImageUrl(data.renders?.skin_png);
@@ -40,7 +40,7 @@ export class McApiClient {
     };
     if (includeHistory) {
       try {
-        const history = await this.http.get<McApiHistoryDto>(`/v1/profile/${uuid}/skins?limit=12`);
+        const history = await this.http.get<McApiHistoryDto>(`/v1/profile/${uuid}/skins?limit=12`, deadline);
         if (Array.isArray(history.data.skins)) result.history = history.data.skins.slice(0, 12).flatMap((candidate): SkinHistoryEntry[] => {
           const row = object(candidate);
           const url = skinImageUrl(row.url);

@@ -1,7 +1,7 @@
 export interface PlayerSuggestion {
   name: string;
   uuid?: string;
-  source: "mc-api" | "mcstat";
+  source: "mc-api" | "mcstat" | "mojang";
   metadata: Record<string, unknown>;
 }
 
@@ -21,7 +21,7 @@ export interface SkinResult {
   headUrl?: string;
   bodyUrl?: string;
   history?: SkinHistoryEntry[];
-  source: "mc-api" | "mcstat";
+  source: "mc-api" | "mcstat" | "mojang";
   stale: boolean;
 }
 

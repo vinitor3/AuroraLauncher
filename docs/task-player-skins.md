@@ -1,5 +1,41 @@
 # AUR-SKINS-API — mc-api + MCStat
 
+## Correção de busca e primeiro uso — 22/09/2026
+
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO** no instalador. Integração e deploy
+pertencem à tarefa de release alpha.9; esta entrega não publica isoladamente.
+
+- Evidência anterior à correção: `GET /v1/skins/profile/Notch` no Worker de
+  produção respondeu HTTP 404 (`Jogador não encontrado.`). Na mesma rodada,
+  mc-api `/v1/profile/Notch`, Mojang `/users/profiles/minecraft/Notch` e
+  sessionserver `/session/minecraft/profile/069a79f444e94726a5befca90e38aaf5`
+  responderam HTTP 200. A causa exata da divergência entre o edge e a consulta
+  local é **NÃO VERIFICADO**; um índice de terceiros ausente não pode determinar
+  sozinho que uma conta Java não existe.
+- Fallback oficial Mojang em caso de 404/indisponibilidade do mc-api; MCStat
+  continua como alternativa em paralelo. UUID/nome/textura são validados; as
+  chaves dos fornecedores não chegam aos endpoints oficiais. 429 mantém
+  cooldown, respostas inválidas não liberam downloads e existe deadline total.
+- O catálogo abre com skins prontas para o primeiro uso; Buscar perfil pode
+  ser acionado durante o autocomplete e cancela sua resposta antiga. Falha de
+  sugestão atrasada não substitui o sucesso da busca explícita.
+- Seleção online é integrada no App com cache local do PNG, botão **Aplicar
+  skin** e avatar a partir da imagem equipada. `SkinFace` compartilha o desenho
+  com o avatar; skins legadas não exibem o preenchimento opaco como face preta.
+- Testes focados: nove regressões Mojang, rota completa Worker → perfil → PNG
+  com SHA-256, três testes de concorrência/UI e três de face/hat legado. Build
+  desktop, dry-run Worker e TypeScript estrito dos módulos de skins aprovados.
+  Testes automatizados não homologam o Minecraft nem o dispositivo do amigo.
+- A revisão independente encontrou e corrigiu dois casos adicionais: cooldown
+  de 401/403 conserva status de indisponibilidade (503), permitindo fallback
+  para outro jogador; lista MCStat vazia não cancela uma correspondência oficial
+  ainda em andamento. As 25 verificações focadas Worker passaram após esses
+  reparos; a suíte completa anterior passou em 77 testes.
+
+Decisão: [ADR-020](engineering/ADR/ADR-020-mojang-player-fallback.md).
+
+## Histórico da entrega original
+
 Data: 2026-09-16. Branch: `codex/mcstat-skins-catalog`, base `b13df76`.
 
 ## Entrega

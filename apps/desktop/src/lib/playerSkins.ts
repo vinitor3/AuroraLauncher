@@ -4,6 +4,10 @@ export type SkinResult = { name: string; uuid: string; model: "classic" | "slim"
 export type CatalogEntry = { id: string; name: string; author: string; model: "classic" | "slim"; hash: string; source: string; tags: string[] };
 export type CatalogPage = { entries: CatalogEntry[]; page: number; hasMore: boolean; sources: string[] };
 
+export function isPlayerIdentifier(value: string): boolean {
+  return /^(?:[A-Za-z0-9_]{1,16}|[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.test(value.trim());
+}
+
 /** Client to Aurora only. Upstream API credentials remain on the Worker. */
 export class PlayerSkinsClient {
   private base: string;
@@ -29,7 +33,8 @@ export class PlayerSkinsClient {
       && typeof player.source === "string" && player.metadata && typeof player.metadata === "object" && !Array.isArray(player.metadata));
   }
   async getPlayerProfile(identifier: string, signal?: AbortSignal): Promise<SkinResult> {
-    const result = await this.get<SkinResult>(`/v1/skins/profile/${encodeURIComponent(identifier)}`, signal);
+    if (!isPlayerIdentifier(identifier)) throw new Error("Informe o nome ou UUID da conta Minecraft Java.");
+    const result = await this.get<SkinResult>(`/v1/skins/profile/${encodeURIComponent(identifier.trim())}`, signal);
     if (!/^[A-Za-z0-9_]{1,16}$/.test(result.name) || !/^[0-9a-f]{32}$/.test(result.uuid)
       || !["classic", "slim"].includes(result.model) || !/^[0-9a-f]{64}$/.test(result.contentHash)
       || !this.validAsset(result.skinUrl)) throw new Error("Perfil de skin inválido.");

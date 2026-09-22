@@ -2,10 +2,10 @@
 
 ## Como usar
 
-- Launcher: Guarda-roupa → Buscar online → Jogadores. Digite pelo menos três caracteres; selecione uma sugestão ou envie um nome/UUID completo em **Buscar perfil**. A prévia muda; equipar continua sendo uma ação separada.
-- Launcher: **Catálogo MCStat + Aurora** pesquisa temas/nomes. Use `#ninja` para filtrar pela tag.
+- Launcher: Guarda-roupa → Adicionar skin abre **Catálogo de skins**, com opções MCStat + Aurora prontas para selecionar. Use `#ninja` para filtrar pela tag. **Aplicar skin** guarda a aparência neste computador sem exigir que o Minecraft esteja aberto.
+- Launcher: **Jogadores** aceita o nome ou UUID da conta Minecraft Java. Sugestões aparecem a partir de três caracteres; **Buscar perfil** continua disponível enquanto elas carregam. A seleção baixa e guarda o PNG; aplicar continua sendo uma ação separada.
 - Minecraft: Skins → Explorar. `@Not` sugere jogadores, `@Notch` pesquisa o nome, `@069a79f444e94726a5befca90e38aaf5` consulta UUID diretamente. Sem `@`, pesquisa catálogo; `#tag` filtra MCStat. A grade mantém 12 slots: clique numa skin pronta para selecionar e use **Usar skin** para aplicar. As setas navegam páginas inteiras; uma pesquisa nova volta à primeira página sem seleção.
-- A prévia do resultado não altera a skin ativa nem adiciona skins à biblioteca. Aplicar/favoritar materializa um PNG validado. Todas as edições suportadas usam a mesma lógica compartilhada.
+- Selecionar um resultado não altera a skin ativa. No desktop, a seleção online já guarda o PNG na biblioteca para permitir aplicar sem uma nova consulta remota. No mod, aplicar/favoritar materializa o PNG validado.
 
 ## Biblioteca desktop e recuperação da equipada
 
@@ -55,7 +55,8 @@ A implementação principal é **TypeScript/fetch no Worker**. Os mods Fabric/Fo
 - `apps/edge-proxy/src/skins/http.ts`: HTTP limitado, timeout, status, corpo limitado e cooldown.
 - `McApiClient.ts`: API oficial `https://mc-api.bisai.dev`; `searchPlayers`, `getPlayerProfile`, `autocompleteSkinNames`, `getSkinImageUrlFromProfile`.
 - `dtos.ts` e `models.ts`: DTOs não confiáveis, validação, `SkinResult`, `PlayerSuggestion`.
-- `SkinService.ts`: caches em memória, coalescência de chamadas simultâneas, fallback MCStat e último perfil em cache em caso de falha.
+- `SkinService.ts`: caches em memória, coalescência de chamadas simultâneas, fallback MCStat/Mojang e último perfil em cache em caso de falha.
+- `MojangClient.ts`: consulta oficial de nome exato em `api.mojang.com` e textura pública em `sessionserver.mojang.com`, sem chave. Valida UUID do perfil e da propriedade `textures`, nome, modelo e origem `textures.minecraft.net`.
 - Desktop: `PlayerSkinsClient` e `OnlineSkinSearch`. Debounce de 250 ms e cancelamento de resultados antigos.
 - Mod: `AuroraCatalogProvider`, `PlayerSuggestion`, `SearchDebouncer`; transporte HTTPS limitado e protocolo TSV V1 preservado. Busca/download não bloqueiam a thread de render.
 
@@ -106,12 +107,18 @@ As rotas Aurora são `GET /v1/skins/players?query=Not`, `GET /v1/skins/profile/N
 
 ## Limites e falhas
 
-- HTTP mc-api: 3 s; MCStat: 2,5 s por chamada; catálogo inteiro: orçamento de 9 s; leitor desktop/mod: 12 s.
+- HTTP mc-api: 3 s; MCStat: 2,5 s; Mojang: 2 s por chamada; busca/perfil: orçamento total de 7,5 s; catálogo/PNG da rota: orçamento de 9 s; leitor desktop/mod: 12 s.
+- Se mc-api responder 404 ou estiver indisponível, Mojang e MCStat (quando configurado) são consultados em paralelo; a primeira resposta válida vence e cancela a outra. O fallback oficial resolve nomes exatos/UUID; não oferece busca por prefixo. Um prefixo ausente retorna sugestões vazias, sem afirmar que a conta não existe. Falha de rede oficial é apresentada como indisponibilidade, e não como jogador inexistente.
 - Cache em memória: busca 60 s, perfil 5 min, último perfil em falha até 1 h; máximo 256 registros. Catálogo MCStat 5 min e 256 páginas, imagens 1 h e 64 entradas. Cache é por processo/isolate, não persistente/global.
 - `SKIN_API_REQUESTS_PER_MINUTE` (Worker var) ajusta o orçamento das consultas de jogador, padrão 30/min, máximo 120. No código, o catálogo MCStat tem orçamento separado de 30/min em `fetchMcstatPage`; rotas de jogador têm proteção por IP de 60/min. Respeite também as cotas do seu plano externo.
 - HTTP 429 respeita `Retry-After`; não há repetição imediata em autocomplete. 401/403 entram em espera, JSON/URLs inválidas são rejeitados. Logs contêm operação/status/cache hit/miss, nunca credencial.
 - Texturas: host/path permitidos, HTTPS, sem redirect, limite 256 KiB no Worker, dimensões 64×64/64×32, CRC e dados PNG íntegros, hash conferido antes de servir/aplicar.
 - Sem rede: catálogo original e biblioteca local continuam disponíveis. Nome não encontrado/limite/falha aparece como mensagem; não se aplica uma skin aleatória.
+
+Correção desktop de 22/09/2026: o rosto da conta prioriza o PNG equipado local,
+inclusive quando a sincronização online falha. Miniaturas e avatar usam a mesma
+regra de transparência para o chapéu de skins legadas 64×32; o preenchimento
+opaco da área não utilizada não cobre mais a face. O atlas original é preservado.
 
 ## Verificação
 

@@ -50,13 +50,14 @@ test("cache unifica buscas concorrentes e mantém perfil vencido durante falha",
   assert.equal(calls, 1);
   clock += 300001;
   assert.equal((await service.getPlayerProfile("Notch")).stale, true);
-  assert.equal(calls, 2);
+  assert.equal(calls, 3, "Failed refresh tries the independent official source before retaining the cached skin");
 });
 
 test("fallback MCStat resolve perfil quando mc-api falha", async () => {
   const service = new SkinService({ mcstat_API_KEY: "test-mcstat" }, Date.now, async (input, init) => {
     const url = new URL(String(input));
     if (url.hostname === "mc-api.bisai.dev") return new Response(null, { status: 502 });
+    if (url.hostname === "api.mojang.com") return new Response(null, { status: 503 });
     assert.equal(url.pathname, "/api/v1/players/Notch");
     assert.equal(new Headers(init?.headers).get("X-API-Key"), "test-mcstat");
     return json({ success: true, data: { player: { mainNickname: "Notch", minecraftUuid: uuid, skinUrl: texture, skinModel: "slim" } } });
@@ -155,6 +156,29 @@ test("rotas QA: cliente desktop recebe hash e asset same-origin; TSV preserva o 
   assert.equal(fields[4], digest);
   assert.equal(new URL(Buffer.from(fields[5], "base64url").toString(), qaOrigin).href, result.skinUrl);
   assert.equal(h.calls.length, 2, "Cached profile/asset must not spend more upstream calls");
+});
+
+test("rotas QA: jogador fora dos índices usa Mojang e entrega PNG verificado ao launcher", async (t) => {
+  let png: Uint8Array;
+  const h = await routeHarness(t, ({ url, init }) => {
+    if (url.hostname === "mc-api.bisai.dev" || url.hostname === "mcstat.org") return new Response(null, { status: 404 });
+    assert.equal(new Headers(init?.headers).has("X-API-Key"), false);
+    if (url.hostname === "api.mojang.com") return json({ name: "Notch", id: uuid });
+    if (url.hostname === "sessionserver.mojang.com") return json({ name: "Notch", id: uuid, properties: [{
+      name: "textures", value: btoa(JSON.stringify({ profileId: uuid, textures: { SKIN: { url: texture } } })),
+    }] });
+    assert.equal(url.href, texture);
+    return new Response(png, { headers: { "Content-Type": "image/png" } });
+  }, { MCSTAT_API_KEY: "qa-mcstat-key" });
+  png = new Uint8Array(await (await h.request("/v1/skins/catalog/solar-ninja.png")).arrayBuffer());
+  const result = await h.client.getPlayerProfile("Notch");
+  assert.equal(result.source, "mojang");
+  assert.equal(result.name, "Notch");
+  const response = await h.request(result.skinUrl);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("Access-Control-Allow-Origin"), "*");
+  const digest = Buffer.from(await crypto.subtle.digest("SHA-256", await response.arrayBuffer())).toString("hex");
+  assert.equal(result.contentHash, digest);
 });
 
 test("rotas QA: 429 é compartilhado entre buscas, informa espera e se recupera após expirar", async (t) => {

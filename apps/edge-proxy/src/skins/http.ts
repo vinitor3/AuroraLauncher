@@ -33,6 +33,7 @@ export async function boundedBytes(response: Response, maximum: number): Promise
 
 export class JsonHttpClient {
   private cooldownUntil = 0;
+  private cooldownStatus: 429 | 503 = 429;
   private windowStart = 0;
   private requests = 0;
   private readonly base: string;
@@ -49,7 +50,9 @@ export class JsonHttpClient {
 
   async response(path: string, accept = "application/json", deadline?: AbortSignal): Promise<Response> {
     const now = this.now();
-    if (now < this.cooldownUntil) throw new SkinApiError(429, "Aguarde para consultar skins novamente.", Math.ceil((this.cooldownUntil - now) / 1000));
+    if (now < this.cooldownUntil) throw new SkinApiError(this.cooldownStatus,
+      this.cooldownStatus === 429 ? "Aguarde para consultar skins novamente." : "A fonte de skins está temporariamente indisponível.",
+      this.cooldownStatus === 429 ? Math.ceil((this.cooldownUntil - now) / 1000) : 0);
     if (now - this.windowStart >= 60000) { this.requests = 0; this.windowStart = now; }
     if (++this.requests > this.perMinute) throw new SkinApiError(429, "Limite temporário da busca de skins.", 60);
     // One attempt: retries inside an autocomplete multiply bursts. The next user query/cache refresh retries.
@@ -63,8 +66,11 @@ export class JsonHttpClient {
         const seconds = Number(response.headers.get("Retry-After"));
         const date = Date.parse(response.headers.get("Retry-After") ?? "");
         const retryAfter = Number.isFinite(seconds) && seconds > 0 ? seconds : Number.isFinite(date) ? (date - now) / 1000 : 60;
-        if (response.status === 429) this.cooldownUntil = now + Math.max(1, Math.min(86400, retryAfter)) * 1000;
-        if (response.status === 401 || response.status === 403) this.cooldownUntil = now + 60000;
+        if (response.status === 429) {
+          this.cooldownUntil = now + Math.max(1, Math.min(86400, retryAfter)) * 1000;
+          this.cooldownStatus = 429;
+        }
+        if (response.status === 401 || response.status === 403) { this.cooldownUntil = now + 60000; this.cooldownStatus = 503; }
         await response.body?.cancel();
         throw new SkinApiError(response.status === 404 ? 404 : response.status === 429 ? 429 : 503,
           response.status === 404 ? "Jogador não encontrado." : "A fonte de skins está temporariamente indisponível.",
@@ -77,9 +83,9 @@ export class JsonHttpClient {
     }
   }
 
-  async get<T>(path: string): Promise<{ data: T; lastKnown: boolean }> {
+  async get<T>(path: string, deadline?: AbortSignal): Promise<{ data: T; lastKnown: boolean }> {
     try {
-      const response = await this.response(path);
+      const response = await this.response(path, "application/json", deadline);
       if (!(response.headers.get("Content-Type") ?? "").includes("application/json")) {
         await response.body?.cancel();
         throw new SkinApiError(502, "Resposta inválida da fonte de skins.");
