@@ -1,5 +1,7 @@
 .project-translation-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: .75rem; min-height: 2.8rem; margin: .45rem 0 .25rem; }
 .project-translation-toolbar > span { color: #baaec9; font-size: .73rem; }
+.project-description-content[hidden] { display: none; }
+.project-translation .project-translation-resume { padding: .4rem .65rem; border: 1px solid #cfb3ff50; border-radius: 8px; color: #e2d1ff; background: #3d2959; font-size: .75rem; }
 .project-translation .project-translate-button { display: inline-grid; place-items: center; flex: 0 0 2.55rem; width: 2.55rem; height: 2.55rem; padding: .55rem; border: 1px solid #cfb3ff50; border-radius: 50%; color: #e2d1ff; background: linear-gradient(145deg, #3d2959, #251b38); box-shadow: 0 3px 10px #00000030; }
 .project-translation .project-translate-button:hover:not(:disabled), .project-translation .project-translate-button[aria-pressed="true"] { border-color: #c8a5ff; color: #fff; background: linear-gradient(145deg, #754cac, #492e72); }
 .project-translate-button:focus-visible { outline: 2px solid #ddc4ff; outline-offset: 3px; }

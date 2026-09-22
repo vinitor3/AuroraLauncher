@@ -51,6 +51,7 @@ test("rota autenticada retorna trechos estruturados, com schema, idioma e limite
     const body = JSON.parse(String(init?.body));
     assert.equal(body.generationConfig.temperature, 0);
     assert.equal(body.generationConfig.responseMimeType, "application/json");
+    assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: "minimal" });
     assert.equal(body.generationConfig.responseSchema.properties.translations.minItems, 2);
     assert.equal(body.generationConfig.responseSchema.properties.translations.maxItems, 2);
     assert.match(body.systemInstruction.parts[0].text, /DADOS NÃO CONFIÁVEIS/);
@@ -72,13 +73,13 @@ test("entrada inválida, lote grande e corpo excessivo não consultam Gemini", a
   }
 });
 
-test("respostas truncadas, reordenadas, vazias e incompletas preservam original com erro legível", async () => {
-  for (const result of [[], [{ id: 0, text: "Baixar" }], [{ id: 1, text: "Baixar" }, { id: 0, text: "mod" }],
+test("respostas truncadas, vazias e incompletas preservam original com erro legível", async () => {
+  for (const result of [[], [{ id: 0, text: "Baixar" }], [{ id: 0, text: "Baixar" }, { id: 0, text: "mod" }],
     [{ id: 0, text: "" }, { id: 1, text: "mod" }], [{ id: 0, text: "x".repeat(3000) }, { id: 1, text: "mod" }]]) {
     mockGemini(() => geminiResponse(result));
     const response = await handleProjectTranslation(request(), env);
     assert.equal(response.status, 503);
-    assert.match(await response.text(), /original foi mantido/);
+    assert.match(await response.text(), /Não foi possível traduzir este trecho/);
   }
   mockGemini(() => geminiResponse([{ id: 0, text: "Baixe" }, { id: 1, text: "mod" }], "MAX_TOKENS"));
   assert.equal((await handleProjectTranslation(request(), env)).status, 503);
@@ -104,4 +105,113 @@ test("modelo ausente pode usar fallback sem perder os trechos", async () => {
   mockGemini(() => ++calls === 1 ? new Response("missing", { status: 404 }) : geminiResponse([{ id: 0, text: "Baixe" }, { id: 1, text: "mod" }]));
   assert.equal((await handleProjectTranslation(request(), env)).status, 200);
   assert.equal(calls, 2);
+});
+
+test("IDs únicos fora de ordem são reorganizados para seus trechos originais", async () => {
+  mockGemini(() => geminiResponse([{ id: 1, text: "este mod" }, { id: 0, text: "Baixe" }]));
+  const response = await handleProjectTranslation(request(), env);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { targetLanguage: "pt-BR", translations: [{ id: 0, text: "Baixe" }, { id: 1, text: "este mod" }] });
+});
+
+test("IDs duplicados, inválidos e omitidos nunca permitem associar texto ao nó errado", async () => {
+  for (const id of [0, -1, 2, 0.5, "1", null]) {
+    let calls = 0;
+    mockGemini(() => { calls += 1; return geminiResponse([{ id: 0, text: "Baixe" }, { id, text: "este mod" }]); });
+    assert.equal((await handleProjectTranslation(request(), env)).status, 503, `id: ${id}`);
+    assert.equal(calls, 2, "resposta inválida deve usar somente um fallback");
+  }
+});
+
+test("página mista mantém português e nomes enquanto traduz japonês, chinês e inglês", async () => {
+  const segments = ["このMODは新しい建物を追加します。", "这个模组支持多人游戏。", "Install the mod with Fabric.", "Configurações de desempenho", "Fabric API"];
+  const translations = ["Este mod adiciona novas construções.", "Este mod oferece suporte a jogos multijogador.", "Instale o mod com Fabric.", segments[3], segments[4]];
+  mockGemini((_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    assert.deepEqual(JSON.parse(body.contents[0].parts[0].text), segments.map((text, id) => ({ id, text })));
+    assert.match(body.systemInstruction.parts[0].text, /idioma de cada trecho separadamente/);
+    assert.match(body.systemInstruction.parts[0].text, /japonês, chinês/);
+    assert.equal(body.generationConfig.maxOutputTokens, 16384);
+    return geminiResponse(translations.map((text, id) => ({ id, text })).reverse());
+  });
+  const response = await handleProjectTranslation(request({ ...valid, segments }), env);
+  assert.equal(response.status, 200);
+  const result = await response.json() as { translations: Array<{ id: number; text: string }> };
+  assert.deepEqual(result.translations.map(({ text }) => text), translations);
+});
+
+test("expansão de caracteres CJK para português pode superar o antigo limite de seis vezes", async () => {
+  const source = "漢".repeat(100);
+  const translated = "Descrição completa em português. ".repeat(30).trim();
+  assert.ok(translated.length > source.length * 6 + 200);
+  assert.ok(translated.length <= source.length * 12 + 200);
+  mockGemini(() => geminiResponse([{ id: 0, text: translated }]));
+  const response = await handleProjectTranslation(request({ ...valid, segments: [source] }), env);
+  assert.equal(response.status, 200);
+  mockGemini(() => geminiResponse([{ id: 0, text: "x".repeat(source.length * 12 + 201) }]));
+  assert.equal((await handleProjectTranslation(request({ ...valid, segments: [source] }), env)).status, 503);
+});
+
+test("JSON quebrado, trecho ausente e limite de tokens tentam o segundo modelo sem publicar parciais", async () => {
+  for (const firstResponse of [
+    () => new Response("not-json", { headers: { "Content-Type": "application/json" } }),
+    () => geminiResponse([{ id: 0, text: "Baixe" }]),
+    () => geminiResponse([{ id: 0, text: "Baixe" }, { id: 1, text: "este mod" }], "MAX_TOKENS"),
+  ]) {
+    let calls = 0;
+    mockGemini((url, init) => {
+      calls += 1;
+      if (calls === 1) return firstResponse();
+      assert.match(url.pathname, /gemini-2\.5-flash:generateContent$/);
+      assert.deepEqual(JSON.parse(String(init?.body)).generationConfig.thinkingConfig, { thinkingBudget: 0 });
+      return geminiResponse([{ id: 0, text: "Baixe agora" }, { id: 1, text: "o mod" }]);
+    });
+    const response = await handleProjectTranslation(request(), env);
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json() as { translations: unknown }).translations, [{ id: 0, text: "Baixe agora" }, { id: 1, text: "o mod" }]);
+    assert.equal(calls, 2);
+  }
+});
+
+test("prosa CJK copiada literalmente pede fallback; nomes curtos e português podem ficar iguais", async () => {
+  const original = "この新しいMODをインストールすると建物が追加されます。";
+  let calls = 0;
+  mockGemini(() => geminiResponse([{ id: 0, text: ++calls === 1 ? original : "Instale este novo mod para adicionar construções." }]));
+  assert.equal((await handleProjectTranslation(request({ ...valid, segments: [original] }), env)).status, 200);
+  assert.equal(calls, 2);
+  mockGemini(() => geminiResponse([{ id: 0, text: original }]));
+  assert.equal((await handleProjectTranslation(request({ ...valid, segments: [original] }), env)).status, 503);
+  const names = ["Fabric API", "Sodium", "東方幻想郷", "Configurações de desempenho"];
+  calls = 0;
+  mockGemini(() => { calls += 1; return geminiResponse(names.map((text, id) => ({ id, text }))); });
+  assert.equal((await handleProjectTranslation(request({ ...valid, segments: names }), env)).status, 200);
+  assert.equal(calls, 1, "nomes e português não devem gerar custo ou erro por falso no-op");
+});
+
+test("cancelamento impede iniciar ou continuar fallback e credencial negada não provoca repetição", async () => {
+  let calls = 0;
+  const controller = new AbortController();
+  controller.abort();
+  mockGemini(() => { calls += 1; throw new Error("não deveria consultar upstream"); });
+  assert.equal((await handleProjectTranslation(request(valid, true, controller.signal), env)).status, 503);
+  assert.equal(calls, 0);
+  const running = new AbortController();
+  mockGemini(() => { calls += 1; running.abort(); throw new DOMException("cancelled", "AbortError"); });
+  assert.equal((await handleProjectTranslation(request(valid, true, running.signal), env)).status, 503);
+  assert.equal(calls, 1);
+  mockGemini(() => { calls += 1; return new Response(null, { status: 403 }); });
+  assert.equal((await handleProjectTranslation(request(), env)).status, 503);
+  assert.equal(calls, 2);
+});
+
+test("resposta excessiva e configuração recusada têm fallback limitado", async () => {
+  for (const firstResponse of [
+    () => new Response("x".repeat(256001)),
+    () => new Response(null, { status: 400 }),
+  ]) {
+    let calls = 0;
+    mockGemini(() => ++calls === 1 ? firstResponse() : geminiResponse([{ id: 0, text: "Baixe" }, { id: 1, text: "este mod" }]));
+    assert.equal((await handleProjectTranslation(request(), env)).status, 200);
+    assert.equal(calls, 2);
+  }
 });
