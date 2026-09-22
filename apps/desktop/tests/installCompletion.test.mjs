@@ -8,9 +8,10 @@ const source = ts.createSourceFile("App.tsx", readFileSync(new URL("../src/App.t
 const app = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "LauncherApp");
 function setup(failInstall = false, failRefresh = false) {
   const events = [];
-  const declarations = ["completeInstanceInstall", "createAndInstallModrinth"].map((name) => app.body.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(source));
+  const declarations = ["closeProjectDetail", "completeInstanceInstall", "createAndInstallModrinth"].map((name) => app.body.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(source));
   const globals = {
     instances: [], packVersions: {}, minecraftVersion: "1.20.1",
+    projectDetailRequestId: { current: 0 },
     preferredPackVersion: () => "1.20.1", safeInstanceId: () => "test-pack",
     invoke: async () => ({ id: "test-pack" }),
     installPackIntoInstance: async () => {
@@ -20,7 +21,7 @@ function setup(failInstall = false, failRefresh = false) {
     refresh: async () => { if (failRefresh) throw new Error("Listagem indisponível"); },
     closeInstanceEditor: () => events.push(["closeEditor"]),
   };
-  for (const name of ["setTargetInstance", "setProjectDetail", "setShowCreateModal", "setInstanceFilter", "setActiveSection", "setDownloadProgress", "setNotice", "setBusy", "setInstalledVersionId", "setInstalledMinecraftVersion", "setMinecraftVersion"]) globals[name] = (value) => events.push([name, value]);
+  for (const name of ["setTargetInstance", "setProjectDetail", "setDetailLoading", "setShowCreateModal", "setInstanceFilter", "setActiveSection", "setDownloadProgress", "setNotice", "setBusy", "setInstalledVersionId", "setInstalledMinecraftVersion", "setMinecraftVersion"]) globals[name] = (value) => events.push([name, value]);
   const context = vm.createContext(globals);
   vm.runInContext(ts.transpileModule(declarations.join("\n"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText, context);
   return { context, events };
@@ -29,10 +30,11 @@ function setup(failInstall = false, failRefresh = false) {
 test("completed modpack installation reveals the selected instance and closes overlapping views", async () => {
   const run = setup();
   await run.context.createAndInstallModrinth({ title: "Test Pack" });
-  for (const expected of [["setActiveSection", "instances"], ["setTargetInstance", "test-pack"], ["setProjectDetail", undefined], ["setInstanceFilter", ""], ["closeEditor"]]) {
+  for (const expected of [["setActiveSection", "instances"], ["setTargetInstance", "test-pack"], ["setProjectDetail", undefined], ["setDetailLoading", false], ["setInstanceFilter", ""], ["closeEditor"]]) {
     assert.ok(run.events.some((event) => JSON.stringify(event) === JSON.stringify(expected)));
   }
   assert.match(run.events.filter(([name]) => name === "setNotice").at(-1)[1], /instalado!/);
+  assert.equal(run.context.projectDetailRequestId.current, 1);
 });
 
 test("a failed installation stays on the source view and never announces success", async () => {

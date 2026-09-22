@@ -900,6 +900,7 @@ function LauncherApp() {
   const catalogCategoryRequests = useRef(new Set<string>());
   const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
   const [detailLoading, setDetailLoading] = useState(false);
+  const projectDetailRequestId = useRef(0);
   const [instanceContent, setInstanceContent] = useState<InstanceContent>({ mods: [], shaderpacks: [], resourcepacks: [] });
   const [selectedContentNames, setSelectedContentNames] = useState<string[]>([]);
   const [contentUpdateScans, setContentUpdateScans] = useState<Partial<Record<ContentType, ContentUpdateScanView>>>({});
@@ -1000,7 +1001,7 @@ function LauncherApp() {
       if (event.key !== "Escape" || updatesApplying) return;
       if (updateReview) return;
       event.preventDefault();
-      if (projectDetail) setProjectDetail(undefined);
+      if (projectDetail) closeProjectDetail();
       else if (!busy) closeInstanceEditor();
     };
     window.addEventListener("keydown", onKeyDown);
@@ -1425,7 +1426,7 @@ function LauncherApp() {
 
   async function completeInstanceInstall(id: string, message: string) {
     setTargetInstance(id);
-    setProjectDetail(undefined);
+    closeProjectDetail();
     setShowCreateModal(false);
     closeInstanceEditor();
     setInstanceFilter("");
@@ -2608,7 +2609,13 @@ function LauncherApp() {
     setContentCategoryFilter("");
     void loadContentCatalog({ query: "", sort: "popular", version, loader, category: "" });
   }
+  function closeProjectDetail() {
+    projectDetailRequestId.current += 1;
+    setProjectDetail(undefined);
+    setDetailLoading(false);
+  }
   async function openContentDetail(item: CatalogContent) {
+    const requestId = ++projectDetailRequestId.current;
     setDetailLoading(true);
     setProjectDetail({
       source: item.source,
@@ -2635,7 +2642,7 @@ function LauncherApp() {
           discord_url?: string;
           gallery?: Array<{ url?: string; featured?: boolean }>;
         };
-        setProjectDetail((current) => current?.content?.projectId === item.projectId ? {
+        setProjectDetail((current) => requestId === projectDetailRequestId.current && current?.content?.projectId === item.projectId ? {
           ...current,
           body: normalizeProjectMarkdown(project.body ?? item.description),
           iconUrl: project.icon_url ?? item.iconUrl,
@@ -2644,15 +2651,16 @@ function LauncherApp() {
         } : current);
       } else if (services && item.curseForgeId) {
         const description = await requestCurseForgeCatalog<{ data?: string }>(services, { action: "description", modId: item.curseForgeId });
-        setProjectDetail((current) => current?.content?.projectId === item.projectId ? { ...current, body: description.data ?? item.description } : current);
+        setProjectDetail((current) => requestId === projectDetailRequestId.current && current?.content?.projectId === item.projectId ? { ...current, body: description.data ?? item.description } : current);
       }
     } catch (error) {
-      setNotice(`A descrição completa não pôde ser carregada: ${String(error)}`);
+      if (requestId === projectDetailRequestId.current) setNotice(`A descrição completa não pôde ser carregada: ${String(error)}`);
     } finally {
-      setDetailLoading(false);
+      if (requestId === projectDetailRequestId.current) setDetailLoading(false);
     }
   }
   async function openModpackDetail(pack: CatalogPack) {
+    const requestId = ++projectDetailRequestId.current;
     setDetailLoading(true);
     setProjectDetail({
       source: pack.source,
@@ -2672,15 +2680,15 @@ function LauncherApp() {
         const response = await fetch(`https://api.modrinth.com/v2/project/${encodeURIComponent(pack.projectId)}`);
         if (!response.ok) throw new Error("A página do modpack não está disponível.");
         const project = await response.json() as { body?: string; icon_url?: string; gallery?: Array<{ url?: string; featured?: boolean }> };
-        setProjectDetail((current) => current?.pack?.projectId === pack.projectId ? { ...current, body: normalizeProjectMarkdown(project.body ?? pack.description), iconUrl: project.icon_url ?? pack.iconUrl, gallery: (project.gallery ?? []).sort((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))).map((image) => image.url ?? "").filter(Boolean) } : current);
+        setProjectDetail((current) => requestId === projectDetailRequestId.current && current?.pack?.projectId === pack.projectId ? { ...current, body: normalizeProjectMarkdown(project.body ?? pack.description), iconUrl: project.icon_url ?? pack.iconUrl, gallery: (project.gallery ?? []).sort((left, right) => Number(Boolean(right.featured)) - Number(Boolean(left.featured))).map((image) => image.url ?? "").filter(Boolean) } : current);
       } else if (services && pack.curseForgeId) {
         const description = await requestCurseForgeCatalog<{ data?: string }>(services, { action: "description", modId: pack.curseForgeId });
-        setProjectDetail((current) => current?.pack?.projectId === pack.projectId ? { ...current, body: description.data ?? pack.description } : current);
+        setProjectDetail((current) => requestId === projectDetailRequestId.current && current?.pack?.projectId === pack.projectId ? { ...current, body: description.data ?? pack.description } : current);
       }
     } catch (error) {
-      setNotice(`A descrição completa não pôde ser carregada: ${String(error)}`);
+      if (requestId === projectDetailRequestId.current) setNotice(`A descrição completa não pôde ser carregada: ${String(error)}`);
     } finally {
-      setDetailLoading(false);
+      if (requestId === projectDetailRequestId.current) setDetailLoading(false);
     }
   }
   function rememberContentArtworkData(
@@ -2859,7 +2867,7 @@ function LauncherApp() {
       setInstanceContent(await invoke<InstanceContent>("list_instance_content", { id }));
       rememberContentArtwork(id, filename, item);
       setEditorView("installed");
-      setProjectDetail(undefined);
+      closeProjectDetail();
       setNotice(`“${filename}” foi instalado em “${id}”.`);
     } catch (error) {
       setDownloadProgress(undefined);
@@ -3704,7 +3712,7 @@ function LauncherApp() {
                   {projectDetail.iconUrl ? <img alt="" src={projectDetail.iconUrl} /> : <span>◈</span>}
                   <div><p className="eyebrow">{projectDetail.source === "modrinth" ? "MODRINTH" : "CURSEFORGE"} · {projectDetail.kind === "modpack" ? "MODPACK" : contentType === "mod" ? "MOD" : contentType === "shader" ? "SHADER" : "PACOTE DE RECURSOS"}</p><h2>{projectDetail.title}</h2>{projectDetail.author && <small>por {projectDetail.author}</small>}</div>
                 </div>
-                <button aria-label="Fechar página do projeto" className="editor-close" onClick={() => setProjectDetail(undefined)} type="button">×</button>
+                <button aria-label="Fechar página do projeto" className="editor-close" onClick={closeProjectDetail} type="button">×</button>
               </header>
               <div className="project-detail-scroll">
                 {projectDetail.gallery[0] && <img className="project-hero" src={projectDetail.gallery[0]} alt={`Destaque de ${projectDetail.title}`} />}
