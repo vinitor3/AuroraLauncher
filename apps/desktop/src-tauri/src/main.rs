@@ -5,6 +5,7 @@
 )]
 
 mod commands;
+mod doctor_runs;
 mod manual_downloads;
 mod player_profiles;
 
@@ -90,6 +91,7 @@ fn main() {
         })
         .manage(commands::IpcSessions::default())
         .manage(commands::RunningInstances::default())
+        .manage(doctor_runs::DoctorRuns::default())
         .manage(manual_downloads::ManualDownloads::default())
         .invoke_handler(tauri::generate_handler![
             player_profiles::lookup_player_skin,
@@ -127,6 +129,11 @@ fn main() {
             commands::read_instance_log,
             commands::read_instance_launch_profile,
             commands::launch_instance,
+            commands::begin_instance_launch,
+            commands::fail_instance_launch,
+            commands::cancel_instance_launch,
+            commands::read_latest_doctor_run,
+            commands::analyze_instance,
             commands::list_running_instances,
             commands::poll_ipc_events,
             commands::synthesize_speech,

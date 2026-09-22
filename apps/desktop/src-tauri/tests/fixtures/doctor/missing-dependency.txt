@@ -1,0 +1,1 @@
+[main/ERROR]: Mod 'Synthetic Example' (synthetic_example) 1.0 requires version 2.0 or later of synthetic_library, which is missing!
