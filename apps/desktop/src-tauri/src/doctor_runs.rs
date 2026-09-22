@@ -1,5 +1,5 @@
 //! Launcher-owned execution records. Analysis never writes into an instance.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -22,6 +22,7 @@ struct StoredRun {
 pub struct DoctorRuns {
     owner: String,
     records: Mutex<BTreeMap<String, StoredRun>>,
+    memory_only: Mutex<BTreeSet<String>>,
 }
 
 impl Default for DoctorRuns {
@@ -29,6 +30,7 @@ impl Default for DoctorRuns {
         Self {
             owner: uuid::Uuid::new_v4().to_string(),
             records: Mutex::new(BTreeMap::new()),
+            memory_only: Mutex::new(BTreeSet::new()),
         }
     }
 }
@@ -107,26 +109,50 @@ fn secure_open(path: &Path) -> Result<File, String> {
 }
 
 impl DoctorRuns {
+    fn read_disk(directory: &Path, instance_id: &str) -> Result<Option<StoredRun>, String> {
+        let path = record_path(directory, instance_id);
+        check_path(&path)?;
+        match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(STORAGE_ERROR.into()),
+            Ok(_) => {}
+        }
+        let mut bytes = Vec::new();
+        secure_open(&path)?
+            .take(256 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| STORAGE_ERROR.to_owned())?;
+        if bytes.len() > 256 * 1024 {
+            return Err(STORAGE_ERROR.into());
+        }
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|_| STORAGE_ERROR.to_owned())
+    }
+
     pub fn read(&self, directory: &Path, instance_id: &str) -> Result<Option<DoctorRun>, String> {
         let mut records = self.records.lock().map_err(|_| STORAGE_ERROR.to_owned())?;
         if !records.contains_key(instance_id) {
-            let path = record_path(directory, instance_id);
-            check_path(&path)?;
-            match fs::symlink_metadata(&path) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(_) => return Err(STORAGE_ERROR.into()),
-                Ok(_) => {}
-            }
-            let mut bytes = Vec::new();
-            secure_open(&path)?
-                .take(256 * 1024 + 1)
-                .read_to_end(&mut bytes)
+            let mut memory_only = self
+                .memory_only
+                .lock()
                 .map_err(|_| STORAGE_ERROR.to_owned())?;
-            if bytes.len() > 256 * 1024 {
-                return Err(STORAGE_ERROR.into());
+            if memory_only.contains(instance_id) {
+                return Ok(None);
             }
-            let stored = serde_json::from_slice(&bytes).map_err(|_| STORAGE_ERROR.to_owned())?;
-            records.insert(instance_id.to_owned(), stored);
+            match Self::read_disk(directory, instance_id) {
+                Ok(Some(stored)) => {
+                    records.insert(instance_id.to_owned(), stored);
+                }
+                Ok(None) => return Ok(None),
+                Err(_) => {
+                    // Diagnostics must not prevent a healthy instance from
+                    // launching. Keep an unreadable/unsafe journal untouched for
+                    // the entire session; subsequent tracking stays in memory.
+                    memory_only.insert(instance_id.to_owned());
+                    return Ok(None);
+                }
+            }
         }
         let created = instance_creation(directory, instance_id)?;
         if records
@@ -149,6 +175,8 @@ impl DoctorRuns {
     }
 
     pub fn start(&self, directory: &Path, instance_id: &str, run: DoctorRun) -> Result<(), String> {
+        // Check existing storage even for direct callers before any write.
+        self.read(directory, instance_id)?;
         self.save_record(directory, instance_id, run, true)
     }
 
@@ -194,6 +222,26 @@ impl DoctorRuns {
 
     fn persist(
         &self,
+        directory: &Path,
+        instance_id: &str,
+        stored: &StoredRun,
+    ) -> Result<(), String> {
+        let mut memory_only = self
+            .memory_only
+            .lock()
+            .map_err(|_| STORAGE_ERROR.to_owned())?;
+        if memory_only.contains(instance_id) {
+            return Ok(());
+        }
+        if Self::persist_to_disk(directory, instance_id, stored).is_err() {
+            // Write failures disable only journal persistence, not the in-memory
+            // execution identity, concurrent-start guard or terminal outcome.
+            memory_only.insert(instance_id.to_owned());
+        }
+        Ok(())
+    }
+
+    fn persist_to_disk(
         directory: &Path,
         instance_id: &str,
         stored: &StoredRun,
@@ -455,5 +503,233 @@ mod tests {
             .unwrap()
             .is_none());
         fs::remove_dir_all(data).unwrap();
+    }
+
+    fn cleanup_fallback_fixture(directory: &Path) {
+        assert_eq!(directory.parent(), Some(std::env::temp_dir().as_path()));
+        assert!(directory
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("aurora-doctor-fallback-"));
+        check_path(directory).unwrap();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn corrupt_journal_does_not_block_launch_tracking_or_get_overwritten() {
+        let directory =
+            std::env::temp_dir().join(format!("aurora-doctor-fallback-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        let path = record_path(&directory, "fixture");
+        let original = b"{corrupt or unknown journal";
+        fs::write(&path, original).unwrap();
+        let registry = DoctorRuns::default();
+        let first = run();
+        assert!(registry.read(&directory, "fixture").unwrap().is_none());
+        registry
+            .start(&directory, "fixture", first.clone())
+            .unwrap();
+        registry.save(&directory, "fixture", first.clone()).unwrap();
+        assert_eq!(
+            registry
+                .read(&directory, "fixture")
+                .unwrap()
+                .unwrap()
+                .run_id,
+            first.run_id
+        );
+        assert!(
+            registry.start(&directory, "fixture", run()).is_err(),
+            "memory fallback keeps the concurrent-launch guard"
+        );
+        registry
+            .finish(
+                &directory,
+                "fixture",
+                &first.run_id,
+                "success",
+                Some(0),
+                None,
+            )
+            .unwrap();
+        registry.save(&directory, "fixture", first.clone()).unwrap();
+        assert_eq!(
+            registry
+                .read(&directory, "fixture")
+                .unwrap()
+                .unwrap()
+                .outcome,
+            "success",
+            "a delayed launch result cannot overwrite a terminal outcome"
+        );
+        let second = run();
+        registry
+            .start(&directory, "fixture", second.clone())
+            .unwrap();
+        assert!(registry
+            .finish(
+                &directory,
+                "fixture",
+                &first.run_id,
+                "failed",
+                Some(1),
+                None
+            )
+            .is_err());
+        assert_eq!(
+            registry
+                .read(&directory, "fixture")
+                .unwrap()
+                .unwrap()
+                .run_id,
+            second.run_id
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(
+            DoctorRuns::default()
+                .read(&directory, "fixture")
+                .unwrap()
+                .is_none(),
+            "memory-only history does not invent a durable record"
+        );
+        cleanup_fallback_fixture(&directory);
+    }
+
+    #[test]
+    fn write_failure_after_begin_keeps_the_run_and_exit_result_available() {
+        let directory =
+            std::env::temp_dir().join(format!("aurora-doctor-fallback-{}", uuid::Uuid::new_v4()));
+        let registry = DoctorRuns::default();
+        let mut attempt = run();
+        attempt.outcome = "preparing".into();
+        registry
+            .start(&directory, "fixture", attempt.clone())
+            .unwrap();
+        let destination = record_path(&directory, "fixture");
+        fs::remove_file(&destination).unwrap();
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("sentinel"), "preserve").unwrap();
+        attempt.outcome = "running".into();
+        registry
+            .save(&directory, "fixture", attempt.clone())
+            .unwrap();
+        assert_eq!(
+            registry
+                .read(&directory, "fixture")
+                .unwrap()
+                .unwrap()
+                .outcome,
+            "running"
+        );
+        registry
+            .finish(
+                &directory,
+                "fixture",
+                &attempt.run_id,
+                "failed",
+                Some(1),
+                Some("failed to download"),
+            )
+            .unwrap();
+        assert_eq!(
+            registry
+                .read(&directory, "fixture")
+                .unwrap()
+                .unwrap()
+                .outcome,
+            "failed"
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("sentinel")).unwrap(),
+            "preserve"
+        );
+        assert_eq!(
+            fs::read_dir(&directory).unwrap().count(),
+            1,
+            "failed atomic writes leave no temporary journal behind"
+        );
+        cleanup_fallback_fixture(&directory);
+    }
+
+    #[test]
+    fn concurrent_memory_only_starts_still_keep_one_authoritative_run() {
+        let directory =
+            std::env::temp_dir().join(format!("aurora-doctor-fallback-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        fs::write(record_path(&directory, "fixture"), b"invalid JSON").unwrap();
+        let registry = std::sync::Arc::new(DoctorRuns::default());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let threads = (0..2)
+            .map(|_| {
+                let registry = registry.clone();
+                let barrier = barrier.clone();
+                let directory = directory.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    registry.start(&directory, "fixture", run()).is_ok()
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        assert_eq!(
+            threads
+                .into_iter()
+                .map(|thread| usize::from(thread.join().unwrap()))
+                .sum::<usize>(),
+            1
+        );
+        assert_eq!(
+            fs::read(record_path(&directory, "fixture")).unwrap(),
+            b"invalid JSON"
+        );
+        cleanup_fallback_fixture(&directory);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn linked_journal_storage_uses_memory_without_writing_through_the_link() {
+        use std::os::windows::process::CommandExt;
+        let directory =
+            std::env::temp_dir().join(format!("aurora-doctor-fallback-{}", uuid::Uuid::new_v4()));
+        let external = directory.join("external");
+        let journal = directory.join("doctor-runs");
+        fs::create_dir_all(&external).unwrap();
+        fs::write(external.join("sentinel"), "preserve").unwrap();
+        let result = std::process::Command::new("powershell.exe")
+            .creation_flags(0x08000000)
+            .args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path $env:AURORA_DOCTOR_QA_LINK -Target $env:AURORA_DOCTOR_QA_TARGET | Out-Null"])
+            .env("AURORA_DOCTOR_QA_LINK", &journal).env("AURORA_DOCTOR_QA_TARGET", &external)
+            .output().unwrap();
+        assert!(
+            result.status.success(),
+            "synthetic junction creation failed"
+        );
+        let registry = DoctorRuns::default();
+        let attempt = run();
+        registry
+            .start(&journal, "fixture", attempt.clone())
+            .unwrap();
+        registry
+            .finish(
+                &journal,
+                "fixture",
+                &attempt.run_id,
+                "success",
+                Some(0),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            registry.read(&journal, "fixture").unwrap().unwrap().outcome,
+            "success"
+        );
+        assert_eq!(fs::read_dir(&external).unwrap().count(), 1);
+        assert_eq!(
+            fs::read_to_string(external.join("sentinel")).unwrap(),
+            "preserve"
+        );
+        fs::remove_dir(&journal).expect("unlink only the test junction");
+        cleanup_fallback_fixture(&directory);
     }
 }
