@@ -1,6 +1,7 @@
 import { SkinService } from "./skins/SkinService.ts";
 import { SkinApiError } from "./skins/http.ts";
 import { skinImageUrl, type PlayerSkinEnv } from "./skins/models.ts";
+import { handleProjectTranslation } from "./translation.ts";
 
 export interface Env extends PlayerSkinEnv {
   FIREBASE_PROJECT_ID: string;
@@ -2296,9 +2297,12 @@ export default {
         // authenticated route its own bounded budget; assistant/appearance
         // keep the stricter shared budget below.
         enforceRateLimit(`curseforge:${userId}`, 48);
+      } else if (url.pathname === "/v1/translate") {
+        enforceRateLimit(`translation:${userId}`, 24);
       } else {
         enforceRateLimit(userId);
       }
+      if (url.pathname === "/v1/translate") return await handleProjectTranslation(request, env);
       if (url.pathname === "/v1/assistant") return await askGemini(request, env);
       if (url.pathname === "/v1/curseforge") return await curseForgeCatalog(request, env, userId);
       if (url.pathname === "/v1/appearance") return await uploadAppearance(request, env, userId);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
-import { askAuroraAssistant } from "./edge.ts";
+import { askAuroraAssistant, translateProjectSegments } from "./edge.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -42,4 +42,19 @@ test("falhas de autorização e quota permanecem disponíveis para os controles 
   await assert.rejects(askAuroraAssistant(services, "Olá"), /sessão expirou/);
   globalThis.fetch = async () => Response.json({ error: "O limite temporário do Gemini foi atingido." }, { status: 429 });
   await assert.rejects(askAuroraAssistant(services, "Olá"), /limite temporário/);
+});
+
+test("tradução autentica somente os textos, define idioma e aceita cancelamento", async () => {
+  const controller = new AbortController();
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, "https://aurora.test/v1/translate");
+    assert.equal(init.headers.Authorization, "Bearer test-session-token");
+    assert.deepEqual(JSON.parse(init.body), { targetLanguage: "pt-BR", segments: ["Download"] });
+    assert.ok(init.signal instanceof AbortSignal);
+    return Response.json({ translations: [{ id: 0, text: "Baixar" }] });
+  };
+  assert.deepEqual(await translateProjectSegments(services, ["Download"], controller.signal), [{ id: 0, text: "Baixar" }]);
+  controller.abort();
+  globalThis.fetch = async () => { throw new DOMException("aborted", "AbortError"); };
+  await assert.rejects(translateProjectSegments(services, ["Download"], controller.signal), { name: "AbortError" });
 });
