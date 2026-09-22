@@ -45,6 +45,13 @@ Falha real de Minecraft observada de ponta a ponta após esta mudança, cópia p
 
 ## Limitações e continuidade
 
+Na integração alpha.10, `692f1b7` corrigiu o bloqueio de lançamento causado por
+journal corrompido/inacessível: fallback em memória por instância durante a sessão,
+preservando o arquivo defeituoso. Nove testes do armazenamento e estado passaram,
+incluindo corrida entre starts, preservação do resultado terminal e junction sem
+escrita fora do armazenamento. Formatação e Clippy aprovados. Isso não acrescenta
+homologação de execução real do Minecraft.
+
 O Doctor não interpreta toda falha possível nem atribui causalidade a um mod citado apenas em stack trace. Sem dados suficientes, explica a ausência de evidência. A análise de logs históricos não comprova a causa de uma nova tentativa. O relatório resumido sanitizado omite os trechos livres dos logs e não substitui uma investigação manual quando as regras não concluem.
 
 O próximo incremento é uma proposta de recuperação estreita, revisável e reversível para um problema confirmado, com confirmação de mutações e rollback. Esse incremento não foi implementado. Comportamento e fronteiras: [Aurora Doctor](aurora-doctor.md).

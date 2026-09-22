@@ -10,6 +10,14 @@ O registro de inicialização identifica a tentativa, sua configuração e seu r
 
 Os registros ficam em `doctor-runs` no diretório de dados do launcher, fora da instância. Apenas a última tentativa é conservada por identificador de instância. A associação também verifica a criação da pasta, para evitar herdar a execução de uma instância apagada e recriada com o mesmo nome. Renomear uma instância não transfere o registro anterior para o novo nome. Solicitar pelo atalho uma tentativa já substituída pede uma nova análise do estado atual.
 
+Se esse histórico estiver corrompido, inacessível ou não puder ser gravado, a
+execução continua sendo acompanhada em memória. A persistência dessa instância
+fica desativada até o launcher reiniciar; o arquivo problemático é preservado.
+O diagnóstico não bloqueia o jogo por falha de armazenamento do histórico.
+Os bloqueios de inicialização concorrente e as verificações de caminhos da
+própria instância continuam ativos. Nesse modo, o histórico novo não sobrevive
+ao encerramento do launcher.
+
 Logs já existentes antes de uma tentativa precisam de evidência de alteração para serem associados a ela. Conteúdo histórico, ausência de logs e associação incompleta são apresentados como limites da análise. Nomes de mods em stack traces, sozinhos, não demonstram responsabilidade. Quando não existe uma regra sustentada por evidência suficiente, o resultado informa **causa não identificada**.
 
 ## Regras e limites
