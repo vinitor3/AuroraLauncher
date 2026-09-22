@@ -7,9 +7,86 @@
 mod commands;
 mod manual_downloads;
 
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager, WindowEvent,
+};
+
+const MAIN_TRAY_ID: &str = "aurora-main-tray";
+
+fn show_launcher(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn create_launcher_tray(app: &tauri::App) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "open-launcher", "Abrir Aurora", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(
+        app,
+        "quit-launcher",
+        "Fechar o launcher",
+        true,
+        None::<&str>,
+    )?;
+    let menu = Menu::with_items(app, &[&open, &separator, &quit])?;
+
+    TrayIconBuilder::with_id(MAIN_TRAY_ID)
+        .icon(tauri::include_image!("icons/32x32.png"))
+        .tooltip("Aurora Smart Launcher • Clique para abrir")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open-launcher" => show_launcher(app),
+            // Exit the launcher explicitly. Minecraft processes are independent
+            // and retain their existing lifecycle; no game is terminated here.
+            "quit-launcher" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }
+            ) {
+                show_launcher(tray.app_handle());
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .setup(|app| {
+            if create_launcher_tray(app).is_err() {
+                // On systems without a tray, retain normal closing behavior
+                // instead of hiding the only way to reach the launcher.
+                eprintln!(
+                    "A bandeja do sistema não está disponível; a janela fechará normalmente."
+                );
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    if window.app_handle().tray_by_id(MAIN_TRAY_ID).is_some()
+                        && window.hide().is_ok()
+                    {
+                        api.prevent_close();
+                    }
+                }
+            }
+        })
         .manage(commands::IpcSessions::default())
         .manage(commands::RunningInstances::default())
         .manage(manual_downloads::ManualDownloads::default())
