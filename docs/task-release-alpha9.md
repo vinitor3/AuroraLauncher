@@ -30,4 +30,12 @@ O smoke ampliado encontrou falhas por nome em outros jogadores: timeout no índi
 
 ## Distribuição
 
-Versão nova e imutável, gerada por `npm run release:package` depois dos commits e verificações. Instalador NSIS, SHA-256 e manifesto de origem/hash. Sem assinatura digital do instalador. Publicação do serviço e resultados dos testes online são registrados no relatório de entrega após execução.
+**CONCLUÍDO**: instalador gerado por `npm run release:package` em 22/09/2026, a partir do commit `a0b417c832b97c5112f8e133cf4b91b5e2ff5f4d`. Preflight inicial/final aprovados com 19 worktrees; Core 9/9 + Skins 9/9 recompilados e comparados. Nenhum artefato histórico foi sobrescrito.
+
+- Arquivo: `Aurora Smart Launcher_0.1.1-alpha.9_x64-setup.exe`.
+- Tamanho: 6.813.927 bytes.
+- SHA-256: `17a12443ab08207c8c5e8b79ff46e7c4aac7dc752eec99d72fde285b895dfeed`.
+- Manifesto e checksum ao lado do instalador; sem assinatura Authenticode.
+- Teste no executável final de release repetiu com sucesso maximizar/restaurar/minimizar e fechar para bandeja, com IPC vivo. O instalador não foi executado sobre a instalação do usuário. O campo runtime do manifesto permanece conservador, sem alegar homologação Minecraft completa.
+
+Logs locais em `.aurora/release-runs/20260922-105612-02044836/build.log` e smokes em `.aurora` (não versionados). Os processos e o PNG da identidade exclusiva de QA foram encerrados/removidos; mundos e aparência da conta não foram alterados.

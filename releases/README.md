@@ -3,13 +3,15 @@
 Os artefatos desta pasta são imutáveis. Um nome de versão já publicado nunca
 deve ser sobrescrito nem removido.
 
-## Estado histórico e próxima saída
+## Release atual — 0.1.1-alpha.9
 
-O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados das fontes atuais. A próxima saída contém somente nove Core e nove Skins (18 JARs), além do Assistente desktop e suas dependências no aplicativo. A retirada não modifica os instaladores/JARs abaixo nem publica um novo instalador. Artefatos Companion antigos servem apenas como histórico/evidência de migração.
+[Instalador Windows alpha.9](<Aurora Smart Launcher_0.1.1-alpha.9_x64-setup.exe>), gerado em 22/09/2026. Inclui Core 1.1.5 e Skins 0.2.5 (18/18 JARs conferidos), grade de 12 skins, tradução de páginas, recuperação de jogadores/skins, face local, controles de janela e bandeja. O Assistente desktop permanece; o mod Companion foi retirado. Artefatos históricos foram preservados.
+
+SHA-256: `17a12443ab08207c8c5e8b79ff46e7c4aac7dc752eec99d72fde285b895dfeed`. Manifesto ao lado do instalador e [evidências da entrega](../docs/task-release-alpha9.md). Sem assinatura Authenticode; homologação completa de Minecraft permanece parcial.
 
 ## Fluxo obrigatório do instalador desktop
 
-Release histórica mais recente já gerada: **0.1.1-alpha.8**, compilada em 19/09/2026. Inclui alpha.7,
+Release anterior preservada: **0.1.1-alpha.8**, compilada em 19/09/2026. Inclui alpha.7,
 reforço visual da animação de carregamento e reparos de runtime com Core 1.1.4,
 Skins 0.2.4 e Companion 0.2.3.
 Artefato, SHA-256 e manifesto estão nesta pasta; evidências em
