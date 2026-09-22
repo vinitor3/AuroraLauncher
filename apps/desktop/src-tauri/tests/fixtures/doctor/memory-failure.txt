@@ -1,0 +1,1 @@
+[Render thread/ERROR]: java.lang.OutOfMemoryError: Java heap space

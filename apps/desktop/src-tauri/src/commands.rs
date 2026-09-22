@@ -6,6 +6,11 @@ use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use crate::doctor_runs::{self, DoctorRuns};
+use aurora_launcher_core::engine::{
+    analyze_instance as analyze_doctor, canonical_launch_failure, snapshot_logs, DoctorContext,
+    DoctorReport, DoctorRun,
+};
 use aurora_launcher_core::{
     auth::{offline_uuid_for_nickname, validate_nickname},
     engine::{
@@ -105,6 +110,7 @@ pub struct AppearanceImageSummary {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchSummary {
+    run_id: String,
     process_id: u32,
     version_id: String,
     core_installed: bool,
@@ -210,6 +216,7 @@ fn emit_download_event(app: &AppHandle, progress: DownloadProgressEvent) {
 pub struct IpcSessions(Mutex<BTreeMap<u32, IpcServer>>);
 
 struct RunningInstance {
+    doctor: Option<(AppHandle, String)>,
     instance_id: String,
     child: Child,
     // The OS lock also excludes updates from another launcher process.
@@ -284,9 +291,34 @@ fn summarize_instance(id: String, path: PathBuf) -> InstanceSummary {
 fn prune_finished_processes(processes: &mut BTreeMap<u32, RunningInstance>) -> Vec<u32> {
     let finished = processes
         .iter_mut()
-        .filter_map(|(process_id, process)| match process.child.try_wait() {
-            Ok(Some(_)) | Err(_) => Some(*process_id),
-            Ok(None) => None,
+        .filter_map(|(process_id, process)| {
+            let (outcome, code) = match process.child.try_wait() {
+                Ok(Some(status)) => (
+                    doctor_runs::outcome_for_exit(status.code(), status.success()),
+                    status.code(),
+                ),
+                Err(_) => ("unknown", None),
+                Ok(None) => return None,
+            };
+            if let Some((app, run_id)) = &process.doctor {
+                if let Ok(directory) = doctor_directory(app) {
+                    let records = app.state::<DoctorRuns>();
+                    if records
+                        .finish(
+                            &directory,
+                            &process.instance_id,
+                            run_id,
+                            outcome,
+                            code,
+                            None,
+                        )
+                        .is_ok()
+                    {
+                        emit_doctor_run(app, &process.instance_id, run_id, outcome);
+                    }
+                }
+            }
+            Some(*process_id)
         })
         .collect::<Vec<_>>();
     for process_id in &finished {
@@ -1597,9 +1629,10 @@ pub fn read_instance_launch_profile(
 ) -> Result<InstanceLaunchProfile, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
     let instance = layout(&app)?.open(id);
+    doctor_runs::check_path(instance.root())?;
     for filename in ["aurora-modpack.json", "aurora-instance.json"] {
         let path = instance.root().join(filename);
-        let Ok(contents) = fs::read(path) else {
+        let Ok(contents) = bounded_profile_read(&path) else {
             continue;
         };
         let Ok(document) = serde_json::from_slice::<serde_json::Value>(&contents) else {
@@ -1615,16 +1648,19 @@ pub fn read_instance_launch_profile(
         }
     }
     let versions_dir = instance.root().join("versions");
+    doctor_runs::check_path(&versions_dir)?;
     if let Ok(entries) = fs::read_dir(versions_dir) {
         let mut candidates = entries
+            .take(512)
             .filter_map(Result::ok)
             .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
             .filter_map(|entry| {
                 let version_id = entry.file_name().to_string_lossy().into_owned();
                 let profile_path = entry.path().join(format!("{version_id}.json"));
-                let document =
-                    serde_json::from_slice::<serde_json::Value>(&fs::read(profile_path).ok()?)
-                        .ok()?;
+                let document = serde_json::from_slice::<serde_json::Value>(
+                    &bounded_profile_read(&profile_path).ok()?,
+                )
+                .ok()?;
                 let minecraft_version = document["inheritsFrom"]
                     .as_str()
                     .or_else(|| {
@@ -1658,6 +1694,47 @@ pub fn read_instance_launch_profile(
         version_id: None,
         minecraft_version: None,
     })
+}
+
+fn bounded_profile_read(path: &Path) -> Result<Vec<u8>, String> {
+    doctor_runs::check_path(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(0x0020_0000);
+    }
+    let file = options
+        .open(path)
+        .map_err(|_| "Perfil local indisponível.".to_owned())?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if file
+            .metadata()
+            .map_err(|_| "Perfil local indisponível.")?
+            .file_attributes()
+            & 0x400
+            != 0
+        {
+            return Err("O perfil local contém um caminho não autorizado.".into());
+        }
+    }
+    if !file
+        .metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 2 * 1024 * 1024)
+    {
+        return Err("Perfil local excede o limite de leitura.".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(2 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "Perfil local indisponível.".to_owned())?;
+    if bytes.len() > 2 * 1024 * 1024 {
+        return Err("Perfil local excede o limite de leitura.".into());
+    }
+    Ok(bytes)
 }
 
 // A JVM can outlive the launcher. Detect it before migration even when this
@@ -1732,6 +1809,166 @@ fn ensure_no_external_instance_game(_root: &Path) -> Result<(), String> {
     Err("a retirada automática do Companion requer verificação de processos disponível no Windows; arquivos preservados".into())
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DoctorRunEvent {
+    instance_id: String,
+    run_id: String,
+    outcome: String,
+}
+
+fn doctor_directory(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(data_directory(app)?.join("doctor-runs"))
+}
+
+fn emit_doctor_run(app: &AppHandle, id: &str, run_id: &str, outcome: &str) {
+    let _ = app.emit(
+        "aurora-doctor-run",
+        DoctorRunEvent {
+            instance_id: id.into(),
+            run_id: run_id.into(),
+            outcome: outcome.into(),
+        },
+    );
+}
+
+#[tauri::command]
+pub fn begin_instance_launch(
+    app: AppHandle,
+    running: tauri::State<RunningInstances>,
+    id: String,
+) -> Result<DoctorRunEvent, String> {
+    let parsed = InstanceId::parse(&id).map_err(|_| "Identificador de instância inválido.")?;
+    if instance_is_running(&running, &id)? {
+        return Err("Esta instância já está rodando.".into());
+    }
+    let records = app.state::<DoctorRuns>();
+    let directory = doctor_directory(&app)?;
+    if records
+        .read(&directory, &id)?
+        .is_some_and(|run| matches!(run.outcome.as_str(), "preparing" | "running"))
+    {
+        return Err("Uma inicialização desta instância já está em andamento.".into());
+    }
+    let instance = layout(&app)?.open(parsed);
+    doctor_runs::check_path(instance.root())?;
+    let profile = read_instance_launch_profile(app.clone(), id.clone())?;
+    let run = DoctorRun {
+        run_id: uuid::Uuid::new_v4().to_string(),
+        started_at_ms: doctor_runs::now_ms(),
+        ended_at_ms: None,
+        outcome: "preparing".into(),
+        exit_code: None,
+        version_id: profile.version_id.unwrap_or_default(),
+        minecraft_version: profile.minecraft_version.unwrap_or_default(),
+        java_executable: String::new(),
+        java_major: None,
+        max_memory_mb: 4096,
+        failure: None,
+        logs_before: snapshot_logs(&instance),
+    };
+    let event = DoctorRunEvent {
+        instance_id: id.clone(),
+        run_id: run.run_id.clone(),
+        outcome: run.outcome.clone(),
+    };
+    records.start(&directory, &id, run)?;
+    emit_doctor_run(&app, &id, &event.run_id, "preparing");
+    Ok(event)
+}
+
+#[tauri::command]
+pub fn read_latest_doctor_run(
+    app: AppHandle,
+    running: tauri::State<RunningInstances>,
+    id: String,
+) -> Result<Option<DoctorRunEvent>, String> {
+    InstanceId::parse(&id).map_err(|_| "Identificador de instância inválido.")?;
+    let _ = instance_is_running(&running, &id)?;
+    Ok(app
+        .state::<DoctorRuns>()
+        .read(&doctor_directory(&app)?, &id)?
+        .map(|run| DoctorRunEvent {
+            instance_id: id,
+            run_id: run.run_id,
+            outcome: run.outcome,
+        }))
+}
+
+#[tauri::command]
+pub fn fail_instance_launch(
+    app: AppHandle,
+    id: String,
+    run_id: String,
+    failure: String,
+) -> Result<(), String> {
+    finish_preparation(&app, &id, &run_id, "failed", Some(&failure))
+}
+
+#[tauri::command]
+pub fn cancel_instance_launch(app: AppHandle, id: String, run_id: String) -> Result<(), String> {
+    finish_preparation(&app, &id, &run_id, "cancelled", None)
+}
+
+fn finish_preparation(
+    app: &AppHandle,
+    id: &str,
+    run_id: &str,
+    outcome: &str,
+    failure: Option<&str>,
+) -> Result<(), String> {
+    InstanceId::parse(id).map_err(|_| "Identificador de instância inválido.")?;
+    let directory = doctor_directory(app)?;
+    let records = app.state::<DoctorRuns>();
+    let run = records
+        .read(&directory, id)?
+        .ok_or("Execução não encontrada.")?;
+    // Frontend preparation errors must never overwrite an observed JVM result.
+    if run.run_id != run_id {
+        return Err("A execução solicitada já foi substituída.".into());
+    }
+    if run.outcome == "preparing" {
+        records.finish(&directory, id, run_id, outcome, None, failure)?;
+        emit_doctor_run(app, id, run_id, outcome);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn analyze_instance(
+    app: AppHandle,
+    id: String,
+    java_executable: Option<String>,
+    run_id: Option<String>,
+) -> Result<DoctorReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let parsed = InstanceId::parse(&id).map_err(|_| "Identificador de instância inválido.")?;
+        let instance = layout(&app)?.open(parsed);
+        doctor_runs::check_path(instance.root())?;
+        let _ = instance_is_running(&app.state::<RunningInstances>(), &id)?;
+        let run = app.state::<DoctorRuns>().read(&doctor_directory(&app)?, &id)?;
+        if let Some(requested) = &run_id {
+            if run.as_ref().is_none_or(|run| &run.run_id != requested) {
+                return Err("Essa execução não é mais a última da instância. Atualize o diagnóstico para analisar a execução atual.".into());
+            }
+        }
+        let profile = read_instance_launch_profile(app.clone(), id)?;
+        let context = if run_id.is_some() {
+            let run = run.as_ref().ok_or("Execução não encontrada.")?;
+            DoctorContext { version_id: run.version_id.clone(), minecraft_version: run.minecraft_version.clone(), java_executable: Some(run.java_executable.clone()).filter(|value| !value.is_empty()), max_memory_mb: run.max_memory_mb }
+        } else {
+            DoctorContext { version_id: profile.version_id.unwrap_or_default(), minecraft_version: profile.minecraft_version.unwrap_or_default(), java_executable: java_executable.filter(|value| !value.trim().is_empty()), max_memory_mb: 4096 }
+        };
+        let observed_run_id = run.as_ref().map(|run| run.run_id.clone());
+        let report = analyze_doctor(&instance, context, run)?;
+        let current_run_id = app.state::<DoctorRuns>().read(&doctor_directory(&app)?, instance.id().as_str())?.map(|run| run.run_id);
+        if current_run_id != observed_run_id {
+            return Err("Uma nova execução começou durante a análise. Analise novamente.".into());
+        }
+        Ok(report)
+    }).await.map_err(|_| "Não foi possível concluir a análise local. Tente novamente.".to_owned())?
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn launch_instance(
@@ -1747,6 +1984,73 @@ pub fn launch_instance(
     skin_file: Option<String>,
     cape_url: Option<String>,
     skin_model: Option<String>,
+    run_id: Option<String>,
+) -> Result<LaunchSummary, String> {
+    let run_id = match run_id {
+        Some(run_id) => run_id,
+        None => begin_instance_launch(app.clone(), running.clone(), id.clone())?.run_id,
+    };
+    let directory = doctor_directory(&app)?;
+    let records = app.state::<DoctorRuns>();
+    let mut run = records
+        .read(&directory, &id)?
+        .ok_or("Execução não encontrada.")?;
+    if run.run_id != run_id || run.outcome != "preparing" {
+        return Err("A tentativa de inicialização não está mais disponível.".into());
+    }
+    run.version_id = version_id.clone();
+    run.minecraft_version = minecraft_version.clone();
+    run.java_executable = java_executable.clone();
+    records.save(&directory, &id, run.clone())?;
+    let result = launch_instance_tracked(
+        app.clone(),
+        sessions,
+        running,
+        id.clone(),
+        version_id,
+        minecraft_version,
+        java_executable,
+        nickname,
+        skin_url,
+        skin_file,
+        cape_url,
+        skin_model,
+        &mut run,
+    );
+    match result {
+        Ok(summary) => {
+            run.outcome = "running".into();
+            let _ = records.save(&directory, &id, run);
+            if let Ok(Some(observed)) = records.read(&directory, &id) {
+                emit_doctor_run(&app, &id, &observed.run_id, &observed.outcome);
+            }
+            Ok(summary)
+        }
+        Err(error) => {
+            // Persist only recognized, allowlisted evidence; never a raw credential/path.
+            let _ = records.save(&directory, &id, run);
+            let _ = records.finish(&directory, &id, &run_id, "failed", None, Some(&error));
+            emit_doctor_run(&app, &id, &run_id, "failed");
+            Err(canonical_launch_failure(&error))
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_instance_tracked(
+    app: AppHandle,
+    sessions: tauri::State<IpcSessions>,
+    running: tauri::State<RunningInstances>,
+    id: String,
+    version_id: String,
+    minecraft_version: String,
+    java_executable: String,
+    nickname: String,
+    skin_url: Option<String>,
+    skin_file: Option<String>,
+    cape_url: Option<String>,
+    skin_model: Option<String>,
+    doctor_run: &mut DoctorRun,
 ) -> Result<LaunchSummary, String> {
     let nickname = nickname.trim().to_owned();
     validate_nickname(&nickname).map_err(|error| error.to_string())?;
@@ -1781,6 +2085,7 @@ pub fn launch_instance(
         skins_installed = true;
         let required_java = required_java_major_for_instance(&instance, &minecraft_version);
         let selected_java = java.major_version().map_err(|error| error.to_string())?;
+        doctor_run.java_major = Some(selected_java);
         let baseline_java = required_java_major(&minecraft_version);
         let compatible = if required_java > baseline_java {
             selected_java >= required_java
@@ -1858,12 +2163,14 @@ pub fn launch_instance(
     processes.insert(
         process_id,
         RunningInstance {
+            doctor: Some((app.clone(), doctor_run.run_id.clone())),
             instance_id,
             child,
             _mutation_lock: mutation_lock,
         },
     );
     Ok(LaunchSummary {
+        run_id: doctor_run.run_id.clone(),
         process_id,
         version_id,
         core_installed,
@@ -2344,6 +2651,7 @@ mod tests {
         processes.insert(
             process_id,
             super::RunningInstance {
+                doctor: None,
                 instance_id: "locked-game".to_owned(),
                 child,
                 _mutation_lock: guard,

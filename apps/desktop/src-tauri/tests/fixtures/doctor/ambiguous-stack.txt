@@ -1,0 +1,4 @@
+[main/ERROR]: Unexpected exception while starting the game
+java.lang.IllegalStateException: Something went wrong
+    at synthetic.unrelated.mod.Entry.initialize(Entry.java:42)
+    at net.minecraft.client.Main.main(Main.java:100)

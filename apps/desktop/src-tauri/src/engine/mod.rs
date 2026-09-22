@@ -4,6 +4,7 @@ mod companion_migration;
 mod content_updates;
 mod core;
 mod curseforge;
+mod doctor;
 mod download;
 mod external_downloads;
 mod instance;
@@ -36,6 +37,10 @@ pub use curseforge::{
     curseforge_archive_path, install_curseforge_modpack_with_progress,
     prepare_curseforge_modpack_with_progress, read_cached_curseforge_manifest,
     CurseForgeManifestFile, CurseForgeManifestSummary, CurseForgeResolvedFile,
+};
+pub use doctor::{
+    analyze_instance, canonical_launch_failure, snapshot_logs, DoctorContext, DoctorLogStamp,
+    DoctorReport, DoctorRun,
 };
 pub use download::{TransferProgress, DEFAULT_DOWNLOAD_CONCURRENCY};
 pub use external_downloads::{

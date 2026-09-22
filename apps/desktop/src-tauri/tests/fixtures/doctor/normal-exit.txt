@@ -1,0 +1,4 @@
+[Render thread/INFO]: Stopping!
+[Server thread/INFO]: Saving players
+[Server thread/INFO]: Saving worlds
+[Server thread/INFO]: All dimensions are saved

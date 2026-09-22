@@ -42,6 +42,8 @@ import { ExternalDownloadQueue, type ExternalDownloadEvent } from "./lib/externa
 import { OnlineSkinSearch } from "./features/skins/OnlineSkinSearch";
 import { ContentUpdatesView } from "./features/content-updates/ContentUpdatesView";
 import { UpdateReviewDialog } from "./features/content-updates/UpdateReviewDialog";
+import { DoctorView } from "./features/doctor/DoctorView";
+import type { DoctorRun } from "./features/doctor/types";
 import type {
   ContentRollbackSummary,
   ContentUpdateFilter,
@@ -116,7 +118,7 @@ type ModrinthContent = {
   dateModified: string;
 };
 type ContentType = "mod" | "shader" | "resourcepack";
-type EditorView = "installed" | "updates" | "discover";
+type EditorView = "installed" | "updates" | "discover" | "doctor";
 type ContentSort = "popular" | "relevance" | "updated";
 type CatalogContent = ModrinthContent & {
   source: CatalogSource;
@@ -198,6 +200,7 @@ type LauncherSection = "instances" | "discover" | "appearance" | "java";
 type CatalogSource = "modrinth" | "curseforge";
 type LaunchSummary = {
   processId: number;
+  runId: string;
   versionId: string;
   coreInstalled: boolean;
   skinsInstalled: boolean;
@@ -250,7 +253,7 @@ const DEFAULT_FORGE_VERSION: Record<string, string> = {
   "1.21.1": "52.0.57",
 };
 const UPDATE_CONTENT_TYPES: ContentType[] = ["mod", "shader", "resourcepack"];
-const EDITOR_VIEWS: EditorView[] = ["installed", "updates", "discover"];
+const EDITOR_VIEWS: EditorView[] = ["installed", "updates", "discover", "doctor"];
 
 function formatBytes(value?: number) {
   if (!value || value < 1) return "0 B";
@@ -885,6 +888,8 @@ function LauncherApp() {
   const [editingInstance, setEditingInstance] = useState("");
   const [contentType, setContentType] = useState<ContentType>("mod");
   const [editorView, setEditorView] = useState<EditorView>("installed");
+  const [doctorRunId, setDoctorRunId] = useState<string>();
+  const [doctorFailure, setDoctorFailure] = useState<{ instanceId: string; runId?: string }>();
   const [installedContentFilter, setInstalledContentFilter] = useState("");
   const [contentArtwork, setContentArtwork] = useState<Record<string, ContentArtworkEntry>>({});
   const [contentQuery, setContentQuery] = useState("");
@@ -1125,6 +1130,21 @@ function LauncherApp() {
           : catalog.available.includes(16) ? 16 : catalog.available[0]);
       })
       .catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    let disposed = false;
+    let stopListening: (() => void) | undefined;
+    void listen<DoctorRun>("aurora-doctor-run", (event) => {
+      if (disposed || event.payload.outcome !== "failed") return;
+      setDoctorFailure({ instanceId: event.payload.instanceId, runId: event.payload.runId });
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stopListening = unlisten;
+    }).catch(() => {
+      // Manual diagnosis and persisted run history remain available if an event
+      // listener cannot be registered. Normal exits never become crash notices.
+    });
+    return () => { disposed = true; stopListening?.(); };
   }, []);
   useEffect(() => {
     let disposed = false;
@@ -1810,7 +1830,7 @@ function LauncherApp() {
     setContentArtwork(mergedArtwork);
     return mergedArtwork;
   }
-  async function openEditor(id: string) {
+  async function openEditor(id: string, initialView: EditorView = "installed", runId?: string) {
     const editorRequest = { generation: editorOpenRequestRef.current.generation + 1, id };
     editorOpenRequestRef.current = editorRequest;
     const editorIsCurrent = () => editorOpenRequestRef.current.generation === editorRequest.generation
@@ -1820,7 +1840,8 @@ function LauncherApp() {
     activeInstanceRef.current = { ...activeInstanceRef.current, editingInstance: id };
     setEditingInstance(id);
     setRenameDraft(id);
-    setEditorView("installed");
+    setEditorView(initialView);
+    setDoctorRunId(runId);
     setSelectedContentNames([]);
     setInstalledContentFilter("");
     setContentQuery("");
@@ -2276,7 +2297,7 @@ function LauncherApp() {
   function activateEditorView(view: EditorView) {
     if (view === "updates") showContentUpdates();
     else if (view === "discover") showContentCatalog();
-    else setEditorView("installed");
+    else setEditorView(view);
   }
   function handleEditorViewKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, view: EditorView) {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -2891,7 +2912,11 @@ function LauncherApp() {
     }
     setBusy(true);
     setNotice(`Montando “${instanceId}” e iniciando Minecraft…`);
+    let runId: string | undefined;
+    setDoctorFailure((current) => current?.instanceId === instanceId ? undefined : current);
     try {
+      const run = await invoke<DoctorRun>("begin_instance_launch", { id: instanceId });
+      runId = run.runId;
       const launchProfile = await invoke<InstanceLaunchProfile>("read_instance_launch_profile", { id: instanceId });
       if (!launchProfile.versionId || !launchProfile.minecraftVersion) {
         throw new Error("instale Fabric ou Forge nesta instância antes de iniciar");
@@ -2933,9 +2958,13 @@ function LauncherApp() {
         setJavaPath(executable);
         window.localStorage.setItem("aurora.javaExecutable", executable);
       }
-      if (!isCurrentSkinOwner(profile.uid)) return;
+      if (!isCurrentSkinOwner(profile.uid)) {
+        await invoke("cancel_instance_launch", { id: instanceId, runId }).catch(() => undefined);
+        return;
+      }
       const result = await invoke<LaunchSummary>("launch_instance", {
         id: instanceId,
+        runId,
         versionId,
         minecraftVersion: gameVersion,
         javaExecutable: executable,
@@ -2953,6 +2982,10 @@ function LauncherApp() {
         `“${instanceId}” está rodando (processo ${result.processId}) com o perfil ${result.versionId}${result.coreInstalled ? " e Aurora Core" : ""}${result.skinsInstalled ? " + Skins" : ""}.`,
       );
     } catch (error) {
+      if (runId) {
+        await invoke("fail_instance_launch", { id: instanceId, runId, failure: String(error) }).catch(() => undefined);
+        setDoctorFailure({ instanceId, runId });
+      }
       setNotice(`Não foi possível iniciar Minecraft: ${String(error)}`);
     } finally {
       setBusy(false);
@@ -3390,6 +3423,11 @@ function LauncherApp() {
             <h1>{sectionTitles[activeSection]}</h1>
           </div>
         </header>
+        {doctorFailure && <aside className="doctor-failure-banner" aria-label="Diagnóstico de inicialização" role="status">
+          <span>Houve uma falha ao iniciar ou executar “{doctorFailure.instanceId}”. O Aurora Doctor pode analisar os dados disponíveis.</span>
+          <button className="secondary compact" disabled={busy || updatesApplying} onClick={() => void openEditor(doctorFailure.instanceId, "doctor", doctorFailure.runId)} type="button">{doctorFailure.runId ? "Analisar esta execução" : "Analisar instância"}</button>
+          <button className="secondary compact" aria-label="Dispensar aviso de diagnóstico" onClick={() => setDoctorFailure(undefined)} type="button">×</button>
+        </aside>}
         <section className="workspace-grid">
           <div className="workspace-main">
         <article className="panel instances section-instances">
@@ -3589,9 +3627,19 @@ function LauncherApp() {
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "installed"} className={editorView === "installed" ? "active" : ""} id="editor-view-tab-installed" onClick={() => activateEditorView("installed")} onKeyDown={(event) => handleEditorViewKeyDown(event, "installed")} role="tab" tabIndex={editorView === "installed" ? 0 : -1} type="button">Instalados</button>
                 <button aria-controls="editor-view-panel" aria-label={updateTabLabel} aria-selected={editorView === "updates"} className={editorView === "updates" ? "active" : ""} id="editor-view-tab-updates" onClick={() => activateEditorView("updates")} onKeyDown={(event) => handleEditorViewKeyDown(event, "updates")} role="tab" tabIndex={editorView === "updates" ? 0 : -1} type="button">Atualizações{updateTabBadge && <span aria-hidden="true" className={`tab-count ${updatesScanning ? "scanning" : updateScanIssueCount > 0 || (totalAvailableUpdates === 0 && totalUpdateAttention > 0) ? "attention" : ""}`}>{updateTabBadge}</span>}</button>
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "discover"} className={editorView === "discover" ? "active" : ""} id="editor-view-tab-discover" onClick={() => activateEditorView("discover")} onKeyDown={(event) => handleEditorViewKeyDown(event, "discover")} role="tab" tabIndex={editorView === "discover" ? 0 : -1} type="button">＋ Adicionar</button>
+                <button aria-controls="editor-view-panel" aria-selected={editorView === "doctor"} className={editorView === "doctor" ? "active" : ""} id="editor-view-tab-doctor" onClick={() => activateEditorView("doctor")} onKeyDown={(event) => handleEditorViewKeyDown(event, "doctor")} role="tab" tabIndex={editorView === "doctor" ? 0 : -1} type="button">Diagnóstico</button>
               </div>
               <div aria-labelledby={`editor-view-tab-${editorView}`} className="editor-body" id="editor-view-panel" role="tabpanel" tabIndex={0}>
-                {editorView === "installed" ? (
+                {editorView === "doctor" ? (
+                  <DoctorView
+                    busy={busy || updatesApplying}
+                    instanceId={editingInstance}
+                    javaExecutable={javaPath}
+                    key={`${editingInstance}:${doctorRunId ?? "current"}`}
+                    onSelectRun={setDoctorRunId}
+                    runId={doctorRunId}
+                  />
+                ) : editorView === "installed" ? (
                   <>
                     <div className="editor-toolbar">
                       <label className="editor-filter">

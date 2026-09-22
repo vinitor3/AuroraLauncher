@@ -1,5 +1,9 @@
 # Compatibility Matrix
 
+## Aurora Doctor local — 22/09/2026
+
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. O launcher passa a registrar e analisar tentativas de inicialização localmente, com regras determinísticas, associação limitada de logs e relatório sanitizado. Esse incremento não altera os JARs Core/Skins nem amplia Minecraft/loaders/Java suportados. Fixtures sintéticas e testes do diagnóstico não promovem os estados de homologação runtime abaixo. Comportamento e evidências específicas em [aurora-doctor.md](../aurora-doctor.md) e [task-aurora-doctor.md](../task-aurora-doctor.md).
+
 ## Launcher alpha.9 — integração de 22/09/2026
 
 Integra Core 1.1.5 e Skins 0.2.5 das entregas anteriores, sem alterar os JARs ou ampliar a matriz Minecraft. A retirada do Companion mantém o Assistente desktop. A busca de jogadores ganha fallback oficial Mojang no Worker, preservando o contrato TSV V1 dos módulos existentes. A homologação da grade continua **PARCIAL**, conforme a tabela abaixo.
