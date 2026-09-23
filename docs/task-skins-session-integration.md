@@ -41,3 +41,11 @@ Resultados executados:
 O usuário confirmou multiplayer e Chat Heads funcionando na 0.3.0 em Minecraft 1.20.1 Forge e Fabric. As versões exatas dos loaders e os hashes usados nesse teste não foram informados. Esse relato não homologa os nove pares nem os novos hashes da 0.3.1.
 
 Homologação real com duas contas em múltiplos launchers e dois clientes Minecraft por versão/loader: **PRECISA DE TESTE**. A evidência da grade 0.2.5 e do multiplayer 0.3.0 permanece nos registros históricos e não é transferida para novos binários.
+
+## Entrega
+
+**CONCLUÍDO**: integração e empacotamento oficial do launcher `0.1.1-alpha.11`, Core `1.1.5`, Skins `0.3.1`. Commit de fontes: `9185963`, com os históricos `4c58a3b` (launcher atual/grade) e `e45e2b5` (multiplayer) preservados como pais do merge. `npm run release:package` executou o fluxo oficial uma vez, com preflight inicial/final e recompilação/comparação dos 18 JARs aprovados.
+
+Instalador: `releases/Aurora Smart Launcher_0.1.1-alpha.11_x64-setup.exe`, 7.872.374 bytes. SHA-256: `9fca73176ce3bb2553b19ce4888e33ab534a57526bddf4d35587867b47882b6a`. Arquivos `.sha256` e `.manifest.json` registram fontes e hashes dos módulos; o manifesto não declara homologação runtime.
+
+Pacote dos nove Skins para instalação manual/servidor: `.aurora/dist/aurora-skins-0.3.1.zip`, SHA-256 `59c3f207d11fe32e33e55ea9962a8d70cd7d08bf99913d0847104e1b0b311fdd`. No servidor, escolher somente o JAR da combinação correta; Core é requisito do cliente.
