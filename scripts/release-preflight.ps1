@@ -111,6 +111,7 @@ try {
         "apps/aurora-skins",
         "tools/gradle",
         "apps/edge-proxy",
+        "shared",
         "firebase",
         "functions",
         "scripts",

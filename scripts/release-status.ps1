@@ -18,7 +18,7 @@ $worktreePaths = @(Read-Git @('-c', 'core.quotepath=false', 'worktree', 'list', 
     Where-Object { $_ -like 'worktree *' } |
     ForEach-Object { $_.Substring(9) })
 $sourcePaths = @('apps/desktop', 'apps/aurora-core', 'apps/aurora-skins', 'tools/gradle',
-    'apps/edge-proxy', 'firebase', 'functions', 'scripts', 'package.json')
+    'apps/edge-proxy', 'shared', 'firebase', 'functions', 'scripts', 'package.json')
 # Historical sibling worktrees may still contain the retired module. Keep their
 # pending work visible without making that module part of the active build.
 $sourcePaths += 'apps/companion-mod'
