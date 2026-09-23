@@ -21,7 +21,7 @@ function functionSource(name) {
   return declaration.getText(source);
 }
 
-test("Ctrl+Alt+/ alterna o painel em Pressed, ignora Released e dispensa qualquer comando do jogo", async () => {
+function shortcutEffectSource() {
   let effect;
   function visit(node) {
     if (ts.isCallExpression(node) && node.expression.getText(source) === "useEffect"
@@ -30,10 +30,15 @@ test("Ctrl+Alt+/ alterna o painel em Pressed, ignora Released e dispensa qualque
   }
   visit(source);
   assert.ok(effect, "O atalho desktop deve continuar registrado");
+  return effect.getText(source);
+}
+
+test("Ctrl+Alt+/ alterna o painel em Pressed, ignora Released e dispensa qualquer comando do jogo", async () => {
   let open = false;
   let callback;
   const notices = [];
-  const runEffect = compile(effect.getText(source), {
+  const runEffect = compile(shortcutEffectSource(), {
+    services: { authScope: { persistent: true } },
     register: async (shortcut, handler) => { assert.equal(shortcut, "Ctrl+Alt+/"); callback = handler; },
     setAssistantOpen: (update) => { open = update(open); },
     setNotice: (value) => notices.push(value),
@@ -46,7 +51,8 @@ test("Ctrl+Alt+/ alterna o painel em Pressed, ignora Released e dispensa qualque
   callback({ state: "Pressed" });
   assert.equal(open, false);
   assert.deepEqual(notices, []);
-  const failure = compile(effect.getText(source), {
+  const failure = compile(shortcutEffectSource(), {
+    services: { authScope: { persistent: true } },
     register: async () => { throw new Error("shortcut unavailable"); },
     setAssistantOpen: () => assert.fail("falha no registro não deve alternar o painel"),
     setNotice: (value) => notices.push(value),
@@ -54,6 +60,16 @@ test("Ctrl+Alt+/ alterna o painel em Pressed, ignora Released e dispensa qualque
   failure();
   await Promise.resolve();
   assert.match(notices.at(-1), /Ctrl\+Alt\+\/ indisponível/);
+});
+
+test("sessão independente não registra nem disputa o atalho global do Assistente", () => {
+  const runEffect = compile(shortcutEffectSource(), {
+    services: { authScope: { persistent: false } },
+    register: () => assert.fail("sessão independente não deve registrar Ctrl+Alt+/"),
+    setAssistantOpen: () => assert.fail("o efeito não deve alterar o painel"),
+    setNotice: () => assert.fail("não há falha de atalho quando o registro é dispensado"),
+  });
+  assert.equal(runEffect(), undefined);
 });
 
 test("polling preserva processos e renderiza o contrato serializado do Core sem tratar pedidos legados", async () => {

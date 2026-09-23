@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
-import type { DoctorIssue, DoctorReport, DoctorRun } from "./types";
+import type { DoctorExplanation, DoctorIssue, DoctorReport, DoctorRun } from "./types";
+import { GeminiAdvice } from "./GeminiAdvice";
 import "./doctor.css";
 
 type Props = {
@@ -9,6 +10,7 @@ type Props = {
   javaExecutable: string;
   runId?: string;
   busy: boolean;
+  onExplain?: DoctorExplanation;
   onSelectRun: (runId?: string) => void;
 };
 
@@ -61,7 +63,7 @@ function IssueDetails({ issue }: { issue: DoctorIssue }) {
   );
 }
 
-export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRun }: Props) {
+export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRun, onExplain }: Props) {
   // Reports are tied to the exact inputs as well as a request generation. Changing
   // instance, Java or run never makes an earlier response visible in a new context.
   const context = JSON.stringify([instanceId, javaExecutable, runId ?? null]);
@@ -73,6 +75,9 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
   currentContext.current = context;
   const current = analysis?.context === context ? analysis : undefined;
   const report = current?.report;
+  const leadIssue = report?.issues.find((issue) => issue.severity === "error")
+    ?? report?.issues.find((issue) => issue.severity === "warning")
+    ?? report?.issues[0];
   const loading = current?.phase === "loading";
   const latest = latestRun?.context === context ? latestRun.run : undefined;
 
@@ -154,7 +159,7 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
   return (
     <section aria-label="Aurora Doctor" aria-busy={loading} className="doctor-view">
       <header className="doctor-heading">
-        <div><p className="eyebrow">AURORA DOCTOR</p><h2>Diagnóstico da instância</h2><p>Verifique Java, arquivos e sinais de falha nos logs, com análise local e sem alterar a instância.</p></div>
+        <div><p className="eyebrow">AURORA DOCTOR</p><h2>Diagnóstico da instância</h2><p>Análise local. Nenhum arquivo é alterado.</p></div>
         <button disabled={loading || busy} onClick={() => void analyze()} type="button">{loading ? "Analisando…" : "Analisar instância"}</button>
       </header>
       <div className="doctor-scope">
@@ -167,10 +172,23 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
         : !report ? <div className="doctor-state"><span aria-hidden="true" className="doctor-state-icon">⌕</span><strong>Entenda o que aconteceu</strong><p>Clique em “Analisar instância” para obter evidências, grau de confiança e próximos passos. Nenhum log será enviado a serviços externos.</p></div>
         : <>
           <div className={`doctor-result-summary doctor-result-${report.status}`} role="status">
-            <strong>{report.status === "no_logs" ? "Nenhum log disponível" : report.status === "no_issues" ? "Nenhum problema detectado" : report.status === "incomplete" ? "Diagnóstico limitado" : `${report.issues.length} ${report.issues.length === 1 ? "ponto de atenção" : "pontos de atenção"}`}</strong>
-            <p>{report.summary}</p>
-            {report.status === "no_issues" && <small>Este resultado se limita aos dados disponíveis e às verificações desta versão do Doctor.</small>}
+            <span className="doctor-summary-label">DIAGNÓSTICO LOCAL</span>
+            <strong>{leadIssue?.title ?? (report.status === "no_logs" ? "Nenhum log disponível" : report.status === "no_issues" ? "Nenhum problema detectado" : "Diagnóstico limitado")}</strong>
+            <p>{leadIssue?.explanation ?? report.summary}</p>
+            {leadIssue && <div className="doctor-essential-next"><span>O que fazer</span><p>{leadIssue.nextStep}</p></div>}
+            <div className="doctor-summary-meta">
+              {leadIssue && <small>{leadIssue.kind === "fact" ? "Fato observado" : "Hipótese"} · Confiança {leadIssue.confidence === "high" ? "alta" : "moderada"}</small>}
+              {report.lastRun && <small>{runId ? "Execução selecionada" : "Última execução"}: {outcomes[report.lastRun.outcome]}</small>}
+              {report.issues.length > 1 && <small>+{report.issues.length - 1} {report.issues.length === 2 ? "ponto nos detalhes" : "pontos nos detalhes"}</small>}
+            </div>
+            {report.status === "no_issues" && <small>Limitado às verificações e aos dados disponíveis.</small>}
           </div>
+          {onExplain && <GeminiAdvice report={report} explain={onExplain} busy={busy} />}
+          {report.issues.length > 0 && <details className="doctor-details">
+            <summary>Evidências e detalhes ({report.issues.length})</summary>
+            <div aria-label="Problemas identificados" className="doctor-issues">{report.issues.map((issue) => <IssueDetails issue={issue} key={issue.id} />)}</div>
+          </details>}
+          <details className="doctor-coverage"><summary>Dados da instância, fontes e limites</summary>
           <dl className="doctor-context">
             <div><dt>Minecraft</dt><dd>{report.instance.minecraftVersion || "Não identificado"}</dd></div>
             <div><dt>Loader</dt><dd>{report.instance.loader || "Não identificado"}</dd></div>
@@ -183,17 +201,19 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
             {runDate(report.lastRun.startedAtMs) && <span>Início: {runDate(report.lastRun.startedAtMs)}</span>}
             {runDate(report.lastRun.endedAtMs) && <span>Fim: {runDate(report.lastRun.endedAtMs)}</span>}
           </div>}
-          {report.issues.length > 0 && <div aria-label="Problemas identificados" className="doctor-issues">{report.issues.map((issue) => <IssueDetails issue={issue} key={issue.id} />)}</div>}
-          <details className="doctor-coverage"><summary>Fontes consultadas e limites da análise</summary>
+            <p>{report.summary}</p>
             {report.logs.length > 0 ? <ul>{report.logs.map((log, index) => <li key={`${log.source}-${index}`}><strong>{log.source}</strong><span>{associations[log.association]} · {log.bytesRead.toLocaleString("pt-BR")} bytes lidos{log.truncated ? " · leitura parcial" : ""}</span></li>)}</ul> : <p>Não há logs legíveis disponíveis para esta análise.</p>}
             {report.limitations.length > 0 && <ul>{report.limitations.map((limitation, index) => <li key={index}>{limitation}</li>)}</ul>}
           </details>
-          <section aria-label="Compartilhar relatório sanitizado" className="doctor-share">
+          <details aria-label="Compartilhar relatório sanitizado" className="doctor-share">
+            <summary>Relatório sanitizado · copiar ou exportar</summary>
+            <div className="doctor-share-body">
             <div><strong>Relatório sanitizado</strong><p>Revise o conteúdo antes de compartilhar. A exportação e a cópia usam somente este relatório.</p></div>
             <div className="doctor-share-actions"><button className="secondary compact" onClick={() => void copyReport()} type="button">Copiar relatório</button><button className="secondary compact" onClick={exportReport} type="button">Exportar JSON</button></div>
             {shareMessage && <p className="doctor-share-message" role="status">{shareMessage}</p>}
             <details><summary>Ver conteúdo do relatório</summary><textarea aria-label="Conteúdo do relatório sanitizado" readOnly spellCheck={false} value={report.sanitizedJson} /></details>
-          </section>
+            </div>
+          </details>
         </>}
     </section>
   );

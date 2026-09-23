@@ -1,0 +1,18 @@
+[main/INFO]: No java.lang.OutOfMemoryError occurred
+[main/INFO]: Example: java.lang.UnsupportedClassVersionError: synthetic
+[main/INFO]: Recovered java.net.ConnectException: synthetic.invalid
+[main/INFO]: Checking duplicate mod IDs
+[main/INFO]: Duplicate mod IDs: none
+[main/INFO]: Found duplicate mods: []
+[main/INFO]: Mod sample recommends any version of optional_ui, which is missing!
+[main/INFO]: Mod sample conflicts with any version of optional_ui, which is present with the following version: 1.0!
+[main/INFO]: Mod sample requires library 1.0 or above
+Currently, library is 2.0
+[main/INFO]: GLFW error code 65542 can be reported by old drivers
+[Render thread/INFO]: [CHAT] java.lang.OutOfMemoryError: Java heap space
+java.lang.OutOfMemoryError was not thrown
+    at synthetic.java.lang.OutOfMemoryError.throwIfNeeded(Synthetic.java:3)
+    at org.spongepowered.asm.mixin.transformer.MixinProcessor.applyMixins(MixinProcessor.java:77)
+Access denied by multiplayer server
+Unsupported installed optional dependencies:
+	Mod ID: 'synthetic_optional', Requested by: 'synthetic_sample', Expected range: '[3.0,)', Actual version: '1.2.0'

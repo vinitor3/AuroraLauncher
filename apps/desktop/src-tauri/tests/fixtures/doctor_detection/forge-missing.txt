@@ -1,0 +1,2 @@
+[main/ERROR] [net.minecraftforge.fml.loading.ModSorter/LOADING]: Missing or unsupported mandatory dependencies:
+	Mod ID: 'synthetic_library', Requested by: 'synthetic_sample', Expected range: '[3.0,)', Actual version: '[MISSING]'

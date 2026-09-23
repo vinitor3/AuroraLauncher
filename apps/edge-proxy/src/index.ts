@@ -2,6 +2,8 @@ import { SkinService } from "./skins/SkinService.ts";
 import { SkinApiError } from "./skins/http.ts";
 import { skinImageUrl, type PlayerSkinEnv } from "./skins/models.ts";
 import { handleProjectTranslation } from "./translation.ts";
+import { handleDoctorAdvice } from "./doctor.ts";
+import { readDoctorJson, withDoctorAbort } from "../../../shared/doctorTransport.ts";
 
 export interface Env extends PlayerSkinEnv {
   FIREBASE_PROJECT_ID: string;
@@ -385,7 +387,7 @@ function parseJsonSegment<T>(segment: string): T {
   return JSON.parse(textDecoder.decode(fromBase64Url(segment))) as T;
 }
 
-async function verifyFirebaseToken(request: Request, env: Env): Promise<FirebaseClaims> {
+async function verifyFirebaseToken(request: Request, env: Env, signal?: AbortSignal): Promise<FirebaseClaims> {
   const authorization = request.headers.get("Authorization");
   if (!authorization?.startsWith("Bearer ")) throw new Error("Faça login no Aurora para continuar.");
   const token = authorization.slice("Bearer ".length).trim();
@@ -414,11 +416,13 @@ async function verifyFirebaseToken(request: Request, env: Env): Promise<Firebase
     throw new Error("Sua sessão Aurora expirou. Entre novamente.");
   }
 
-  const keysResponse = await fetch(firebaseJwksUrl, {
+  const keyRequest = fetch(firebaseJwksUrl, {
     cf: { cacheTtl: 3600, cacheEverything: true },
+    ...(signal ? { signal } : {}),
   });
+  const keysResponse = signal ? await withDoctorAbort(keyRequest, signal) : await keyRequest;
   if (!keysResponse.ok) throw new Error("Não foi possível validar a sessão Aurora.");
-  const keySet = await keysResponse.json() as { keys?: Array<JsonWebKey & { kid?: string; alg?: string; use?: string }> };
+  const keySet = (signal ? await readDoctorJson(keysResponse, 65_536, signal) : await keysResponse.json()) as { keys?: Array<JsonWebKey & { kid?: string; alg?: string; use?: string }> };
   const verificationKey = keySet.keys?.find((key) => key.kid === header.kid && key.kty === "RSA" && key.alg === "RS256");
   if (!verificationKey) throw new Error("Sua sessão Aurora precisa ser atualizada.");
   const publicKey = await crypto.subtle.importKey(
@@ -2288,8 +2292,15 @@ export default {
     }
     if (request.method === "GET" && url.pathname.startsWith("/v1/skins/catalog/")) return skinCatalogAsset(url.pathname);
     if (request.method !== "POST") return error("Rota não encontrada.", 404);
+    const doctorDeadline = url.pathname === "/v1/doctor/advice"
+      ? AbortSignal.any([request.signal, AbortSignal.timeout(20_000)]) : undefined;
     try {
-      const claims = await verifyFirebaseToken(request, env);
+      if (doctorDeadline && (request.headers.get("Authorization")?.length ?? 0) > 16_384) {
+        return error("A sessão Aurora não é válida.", 401);
+      }
+      const claims = doctorDeadline
+        ? await withDoctorAbort(verifyFirebaseToken(request, env, doctorDeadline), doctorDeadline)
+        : await verifyFirebaseToken(request, env);
       const userId = claims.user_id ?? claims.sub;
       if (url.pathname === "/v1/curseforge") {
         // CurseForge update scans are deliberately split into <=4 projects so
@@ -2297,17 +2308,25 @@ export default {
         // authenticated route its own bounded budget; assistant/appearance
         // keep the stricter shared budget below.
         enforceRateLimit(`curseforge:${userId}`, 48);
+      } else if (url.pathname === "/v1/doctor/advice") {
+        enforceRateLimit(`doctor:${userId}`, 6);
       } else if (url.pathname === "/v1/translate") {
         enforceRateLimit(`translation:${userId}`, 24);
       } else {
         enforceRateLimit(userId);
       }
+      if (url.pathname === "/v1/doctor/advice") return await handleDoctorAdvice(request, env, doctorDeadline);
       if (url.pathname === "/v1/translate") return await handleProjectTranslation(request, env);
       if (url.pathname === "/v1/assistant") return await askGemini(request, env);
       if (url.pathname === "/v1/curseforge") return await curseForgeCatalog(request, env, userId);
       if (url.pathname === "/v1/appearance") return await uploadAppearance(request, env, userId);
       return error("Rota não encontrada.", 404);
     } catch (cause) {
+      if (doctorDeadline) {
+        if (doctorDeadline.aborted) return error("A consulta demorou ou foi cancelada. O diagnóstico local continua disponível.", 503);
+        if (cause instanceof PublicError && cause.status === 429) return error("Muitas consultas ao Gemini. Aguarde um minuto; o diagnóstico local continua disponível.", 429);
+        return error("Não foi possível validar sua sessão Aurora. Entre novamente e tente consultar o Gemini.", 401);
+      }
       const message = cause instanceof Error ? cause.message : "Não foi possível concluir a solicitação.";
       const status = cause instanceof PublicError
         ? cause.status

@@ -1,3 +1,7 @@
+import type { DoctorAdvice } from "../../../../../shared/doctorAdvice";
+
+export type DoctorExplanation = (report: DoctorReport, signal: AbortSignal) => Promise<DoctorAdvice>;
+
 export type DoctorRun = {
   instanceId: string;
   runId: string;

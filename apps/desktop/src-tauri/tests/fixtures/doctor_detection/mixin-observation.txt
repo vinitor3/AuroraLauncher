@@ -1,0 +1,2 @@
+[main/FATAL] [mixin/]: Mixin apply failed synthetic_private.mixins.json:SyntheticPrivateMixin -> synthetic.target.Class: org.spongepowered.asm.mixin.transformer.throwables.InvalidMixinException synthetic target not found
+    at synthetic.unrelated.Library.process(Library.java:42)

@@ -1,5 +1,9 @@
 # Compatibility Matrix
 
+## Aurora Doctor — orientação Gemini opcional — 23/09/2026
+
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. O incremento parte de `6f3a13b`, launcher alpha.11, Core 1.1.5 e Skins 0.3.1. Amplia regras locais e acrescenta explicação Gemini por ação explícita, com contrato reduzido, timeout e passos manuais permitidos. Não altera os JARs, a matriz de Minecraft/loaders/Java ou as sessões independentes. A análise determinística continua offline; testes com respostas sintéticas não homologam Gemini real nem uma nova implantação do Worker. Evidências em [task-doctor-gemini.md](../task-doctor-gemini.md).
+
 ## Skins 0.3.1 e sessões independentes — 23/09/2026
 
 Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. A integração parte do launcher alpha.10 atual (`4c58a3b`) e reúne a grade/cache da 0.2.5 com o multiplayer/compatibilidade da 0.3.0 nos nove pares existentes. Core permanece 1.1.5; o servidor recebe Skins da mesma combinação Minecraft/loader e não exige Core. O contrato cumulativo de features passa a bloquear artefatos sem grade, cache ou sincronização. Não há mudança da matriz Java, inclusão de Chat Heads ou retorno de Companion.

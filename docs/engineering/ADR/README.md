@@ -22,5 +22,6 @@
 | [018](ADR-018-remove-companion-keep-desktop-assistant.md) | Retirar mod Companion; preservar Assistente desktop, Core/Skins e IPC | Aceita |
 | [022](ADR-022-skins-server-relay.md) | Retransmitir skins pela conexão Minecraft, com integração da grade preservada | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 | [023](ADR-023-independent-launcher-sessions.md) | Isolar autenticação das janelas mantendo login principal e instâncias protegidas | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| [024](ADR-024-doctor-gemini-guidance.md) | Explicar o Doctor por consulta Gemini opcional com contrato reduzido e passos manuais permitidos | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 
 Estados mudam somente por novo ADR que substitua o anterior ou por revisão explícita deste arquivo.

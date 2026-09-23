@@ -1,7 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { register } from "@tauri-apps/plugin-global-shortcut";
-import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import { ProjectDescription } from "./features/catalog/ProjectDescription";
 import { drawSkinFace } from "./lib/skinFace";
 import { SkinPreviewCanvas } from "./features/skins/SkinPreviewCanvas";
@@ -27,6 +27,7 @@ import {
 } from "./lib/firebase";
 import {
   askAuroraAssistant,
+  requestDoctorAdvice,
   requestCurseForgeCatalog,
   uploadAuroraAppearanceImage,
   type CurseForgeUpdateFile,
@@ -44,7 +45,7 @@ import { OnlineSkinSearch } from "./features/skins/OnlineSkinSearch";
 import { ContentUpdatesView } from "./features/content-updates/ContentUpdatesView";
 import { UpdateReviewDialog } from "./features/content-updates/UpdateReviewDialog";
 import { DoctorView } from "./features/doctor/DoctorView";
-import type { DoctorRun } from "./features/doctor/types";
+import type { DoctorReport, DoctorRun } from "./features/doctor/types";
 import type {
   ContentRollbackSummary,
   ContentUpdateFilter,
@@ -881,6 +882,8 @@ function LauncherStartup() {
 
 function LauncherApp({ services }: { services: FirebaseServices }) {
   const [profile, setProfileState] = useState<AuroraUserProfile>();
+  const explainDoctorReport = useCallback((report: DoctorReport, signal: AbortSignal) =>
+    requestDoctorAdvice(services, report, signal), [services, profile?.uid]);
   function setProfile(next: AuroraUserProfile | undefined) {
     setProfileState((current) => guardSessionProfile(current, next, services.auth.currentUser?.uid));
   }
@@ -3638,6 +3641,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                     instanceId={editingInstance}
                     javaExecutable={javaPath}
                     key={`${editingInstance}:${doctorRunId ?? "current"}`}
+                    onExplain={explainDoctorReport}
                     onSelectRun={setDoctorRunId}
                     runId={doctorRunId}
                   />

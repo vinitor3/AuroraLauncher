@@ -1,4 +1,6 @@
 import type { FirebaseServices } from "./firebase";
+import { buildDoctorAdviceInput, parseDoctorAdvice, type DoctorAdvice } from "../../../../shared/doctorAdvice.ts";
+import { readDoctorJson, withDoctorAbort } from "../../../../shared/doctorTransport.ts";
 
 function endpoint(services: FirebaseServices, path: string) {
   const base = services.config.workerUrl?.trim().replace(/\/+$/, "");
@@ -63,6 +65,52 @@ export async function askAuroraAssistant(
     },
     70_000,
   )).text;
+}
+
+/** Optional Doctor call. It never sends the serialized/local report or logs. */
+export async function requestDoctorAdvice(services: FirebaseServices, report: unknown, cancellation: AbortSignal): Promise<DoctorAdvice> {
+  const timeout = AbortSignal.timeout(25_000);
+  const signal = AbortSignal.any([cancellation, timeout]);
+  const input = buildDoctorAdviceInput(report);
+  const user = services.auth.currentUser;
+  if (!user) throw new Error("Entre na sua conta Aurora para consultar o Gemini.");
+  const unavailable = "Não foi possível obter a explicação do Gemini. O diagnóstico local continua disponível.";
+  try {
+    signal.throwIfAborted();
+    const token = await withDoctorAbort(user.getIdToken(), signal);
+    signal.throwIfAborted();
+    if (services.auth.currentUser?.uid !== user.uid) throw new DOMException("Sessão alterada.", "AbortError");
+    const response = await withDoctorAbort(fetch(endpoint(services, "/v1/doctor/advice"), {
+      method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify(input), signal,
+    }), signal);
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => undefined);
+      if (response.status === 429) throw new Error("O limite temporário do Gemini foi atingido. Aguarde um pouco; o diagnóstico local continua disponível.");
+      if (response.status === 401) throw new Error("Entre novamente na sua conta Aurora para consultar o Gemini.");
+      if (response.status === 404) throw new Error("O serviço de explicação do Doctor ainda não está disponível neste servidor. O diagnóstico local continua funcionando.");
+      throw new Error(unavailable);
+    }
+    if (!response.headers.get("Content-Type")?.toLowerCase().includes("application/json")) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new Error(unavailable);
+    }
+    const advice = parseDoctorAdvice(await readDoctorJson(response, 8_192, signal), input);
+    if (!advice) throw new Error(unavailable);
+    signal.throwIfAborted();
+    if (services.auth.currentUser?.uid !== user.uid) throw new DOMException("Sessão alterada.", "AbortError");
+    return advice;
+  } catch (cause) {
+    if (cancellation.aborted || services.auth.currentUser?.uid !== user.uid) throw new DOMException("Consulta cancelada.", "AbortError");
+    if (timeout.aborted) throw new Error("O Gemini demorou para responder. O diagnóstico local continua disponível.");
+    // Only our fixed public errors may reach UI; never server bodies or raw exceptions.
+    if (cause instanceof Error && [unavailable,
+      "O limite temporário do Gemini foi atingido. Aguarde um pouco; o diagnóstico local continua disponível.",
+      "Entre novamente na sua conta Aurora para consultar o Gemini.",
+      "O serviço de explicação do Doctor ainda não está disponível neste servidor. O diagnóstico local continua funcionando.",
+    ].includes(cause.message)) throw cause;
+    throw new Error(unavailable);
+  }
 }
 
 export async function uploadAuroraAppearanceImage(

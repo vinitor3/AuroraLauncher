@@ -2,6 +2,7 @@
 // Run: node apps/desktop/src/features/doctor/DoctorView.smoke.mjs
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -35,18 +36,33 @@ window.HTMLAnchorElement.prototype.click = function () { download = this.downloa
 
 const { act, createElement } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const input = await readFile(new URL("./DoctorView.tsx", import.meta.url), "utf8");
-let output = ts.transpileModule(input, {
-  fileName: "DoctorView.tsx",
-  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX },
-}).outputText.replace('import "./doctor.css";', "");
-for (const specifier of ["react/jsx-runtime", "react", "@tauri-apps/api/core", "@tauri-apps/api/event"]) {
-  output = output.replaceAll(`from "${specifier}"`, `from ${JSON.stringify(pathToFileURL(require.resolve(specifier)).href)}`);
+const moduleUrls = new Map();
+async function transpiledModule(sourceUrl) {
+  if (moduleUrls.has(sourceUrl.href)) return moduleUrls.get(sourceUrl.href);
+  const input = await readFile(sourceUrl, "utf8");
+  let output = ts.transpileModule(input, {
+    fileName: fileURLToPath(sourceUrl),
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX },
+  }).outputText.replace(/^import ["'][^"']+\.css["'];?$/gm, "");
+  for (const { fileName: specifier } of ts.preProcessFile(output).importedFiles) {
+    let resolved;
+    if (specifier.startsWith(".")) {
+      const dependency = ["", ".ts", ".tsx"].map((extension) => new URL(specifier + extension, sourceUrl)).find((url) => existsSync(fileURLToPath(url)));
+      assert.ok(dependency, `Missing smoke source dependency: ${specifier}`);
+      resolved = await transpiledModule(dependency);
+    } else resolved = pathToFileURL(require.resolve(specifier)).href;
+    output = output.replaceAll(`from "${specifier}"`, `from ${JSON.stringify(resolved)}`);
+  }
+  const url = `data:text/javascript;base64,${Buffer.from(output).toString("base64")}`;
+  moduleUrls.set(sourceUrl.href, url);
+  return url;
 }
-const { DoctorView } = await import(`data:text/javascript;base64,${Buffer.from(output).toString("base64")}`);
+const { DoctorView } = await import(await transpiledModule(new URL("./DoctorView.tsx", import.meta.url)));
 const container = document.getElementById("root");
 const root = createRoot(container);
-const props = { instanceId: "synthetic-a", javaExecutable: "synthetic-java-17", busy: false, onSelectRun: () => {} };
+const adviceRequests = [];
+const explain = (report, signal) => new Promise((resolve, reject) => adviceRequests.push({ report, signal, resolve, reject }));
+const props = { instanceId: "synthetic-a", javaExecutable: "synthetic-java-17", busy: false, onSelectRun: () => {}, onExplain: explain };
 const button = (label) => {
   const element = [...container.querySelectorAll("button")].find((item) => item.textContent === label);
   assert.ok(element, `Missing button: ${label}`);
@@ -65,8 +81,10 @@ const report = (overrides = {}) => ({
 });
 const finish = async (result) => { const request = requests.shift(); assert.ok(request); await act(async () => request.resolve(result)); return request; };
 const emitRun = async (run) => { await act(async () => { for (const listener of listeners.values()) listener({ payload: run }); }); };
+const advice = (overrides = {}) => ({ schemaVersion: 1, summary: "A JVM registrou falta de memória.", cause: "A memória disponível não atendeu à tentativa.", certainty: "supported", actions: ["check_memory"], evidenceIds: ["memory_failure"], ...overrides });
 
 await render();
+assert.equal(adviceRequests.length, 0);
 assert.match(container.textContent, /Entenda o que aconteceu/);
 await click("Analisar instância");
 assert.match(container.textContent, /Analisando os dados locais/);
@@ -115,23 +133,119 @@ assert.equal(selectedRun, "run-c");
 await render({ instanceId: "synthetic-c", runId: "run-c" });
 await click("Analisar instância");
 assert.equal(requests[0].args.runId, "run-c");
-await finish(report({
+const memoryReport = report({
   status: "issues",
   summary: "Problema sintético.",
   lastRun: { outcome: "failed", exitCode: 1, runId: null, startedAtMs: null, endedAtMs: null },
-  issues: [{ id: "synthetic-memory", title: "Memória insuficiente", severity: "error", explanation: "Fixture sintética de falha explícita.", evidence: [{ source: "JVM", summary: "OutOfMemoryError reconhecido." }], confidence: "high", kind: "fact", nextStep: "Revise a memória configurada." }],
+  issues: [{ id: "memory_failure", title: "Memória insuficiente", severity: "error", explanation: "Fixture sintética de falha explícita.", evidence: [{ source: "JVM", summary: "OutOfMemoryError reconhecido." }], confidence: "high", kind: "fact", nextStep: "Revise a memória configurada." }],
   logs: [{ source: "crash histórico", association: "historical", bytesRead: 128, truncated: true }],
-}));
+});
+await finish(memoryReport);
 assert.equal(container.querySelectorAll("details.doctor-issue").length, 1);
 assert.match(container.textContent, /Fato observado/);
 assert.match(container.textContent, /Confiança alta/);
 assert.match(container.textContent, /Próximo passo/);
 assert.match(container.textContent, /Histórico — não comprova a causa desta execução/);
 assert.match(container.textContent, /leitura parcial/);
+assert.match(container.querySelector(".doctor-result-summary").textContent, /Memória insuficiente.*Fixture sintética.*O que fazer.*Revise a memória/s);
+assert.equal(container.querySelector(".doctor-details").hasAttribute("open"), false);
+assert.equal(container.querySelector(".doctor-coverage").hasAttribute("open"), false);
+assert.equal(container.querySelector(".doctor-share").hasAttribute("open"), false);
+assert.match(container.querySelector(".doctor-gemini-heading").textContent, /Sem logs, nomes ou caminhos/);
+assert.equal(adviceRequests.length, 0, "Local analysis must never consult Gemini automatically");
+
+// Cancel even when a provider ignores the abort and eventually resolves.
+await click("Explicar com Gemini");
+assert.equal(adviceRequests.length, 1);
+const cancelledAdvice = adviceRequests.shift();
+assert.equal(cancelledAdvice.report, memoryReport);
+assert.equal(cancelledAdvice.signal.aborted, false);
+await click("Cancelar");
+assert.equal(cancelledAdvice.signal.aborted, true);
+await act(async () => cancelledAdvice.resolve(advice({ summary: "CANCELLED_AI_MUST_NOT_APPEAR" })));
+assert.doesNotMatch(container.textContent, /CANCELLED_AI_MUST_NOT_APPEAR/);
+assert.match(container.textContent, /Consulta cancelada/);
+assert.match(container.querySelector(".doctor-result-summary").textContent, /Memória insuficiente/);
+
+// Quota/offline/provider errors and malformed responses preserve the local report.
+await click("Tentar Gemini novamente");
+const failedAdvice = adviceRequests.shift();
+await act(async () => failedAdvice.reject(new Error("SYNTHETIC_PROVIDER_SECRET")));
+assert.match(container.textContent, /Gemini indisponível/);
+assert.doesNotMatch(container.textContent, /SYNTHETIC_PROVIDER_SECRET/);
+await click("Tentar Gemini novamente");
+const malformedAdvice = adviceRequests.shift();
+await act(async () => malformedAdvice.resolve(advice({ actions: ["execute_shell"] })));
+assert.match(container.textContent, /Gemini indisponível/);
+assert.equal(container.querySelector(".doctor-gemini-result"), null);
+assert.match(container.querySelector(".doctor-result-summary").textContent, /Memória insuficiente/);
+await click("Tentar Gemini novamente");
+const goodAdvice = adviceRequests.shift();
+await act(async () => goodAdvice.resolve(advice()));
+const { DOCTOR_ACTIONS } = await import(await transpiledModule(new URL("../../../../../shared/doctorAdvice.ts", import.meta.url)));
+assert.equal(container.querySelector(".doctor-gemini-result li").textContent, DOCTOR_ACTIONS.check_memory);
+assert.match(container.querySelector(".doctor-gemini-result").textContent, /Sugestão do Gemini/);
+assert.doesNotMatch(container.querySelector(".doctor-gemini-result").textContent, /memory_failure|check_memory/);
+assert.equal(container.querySelectorAll(".doctor-gemini-result a, .doctor-gemini-result pre, .doctor-gemini-result code").length, 0);
+
+// A new local report in the same instance/run invalidates the old explanation.
+await click("Explicar novamente");
+const obsoleteSameContext = adviceRequests.shift();
+await click("Analisar instância");
+assert.equal(obsoleteSameContext.signal.aborted, true);
+await finish({ ...memoryReport });
+await act(async () => obsoleteSameContext.resolve(advice({ summary: "OLD_REPORT_AI_MUST_NOT_APPEAR" })));
+assert.doesNotMatch(container.textContent, /OLD_REPORT_AI_MUST_NOT_APPEAR/);
+assert.equal(container.querySelector(".doctor-gemini-result"), null);
+assert.equal(adviceRequests.length, 0);
+
+// Session callback boundaries abort requests without losing the local report.
+await click("Explicar com Gemini");
+const oldAccount = adviceRequests.shift();
+const otherAccountExplain = (report, signal) => explain(report, signal);
+await render({ instanceId: "synthetic-c", runId: "run-c", onExplain: otherAccountExplain });
+assert.equal(oldAccount.signal.aborted, true);
+await act(async () => oldAccount.resolve(advice({ summary: "OLD_ACCOUNT_AI_MUST_NOT_APPEAR" })));
+assert.doesNotMatch(container.textContent, /OLD_ACCOUNT_AI_MUST_NOT_APPEAR/);
+assert.match(container.querySelector(".doctor-result-summary").textContent, /Memória insuficiente/);
+
+for (const nextContext of [
+  { instanceId: "synthetic-c", runId: "run-c", javaExecutable: "synthetic-java-21" },
+  { instanceId: "synthetic-c", runId: "run-d" },
+  { instanceId: "synthetic-d", runId: "run-d" },
+]) {
+  await click("Explicar com Gemini");
+  const obsolete = adviceRequests.shift();
+  await render(nextContext);
+  assert.equal(obsolete.signal.aborted, true);
+  await act(async () => obsolete.resolve(advice({ summary: "OBSOLETE_CONTEXT_AI_MUST_NOT_APPEAR" })));
+  assert.doesNotMatch(container.textContent, /OBSOLETE_CONTEXT_AI_MUST_NOT_APPEAR/);
+  await click("Analisar instância");
+  await finish({ ...memoryReport });
+  assert.equal(adviceRequests.length, 0);
+}
+await click("Explicar com Gemini");
+const oldExecution = adviceRequests.shift();
+await emitRun({ instanceId: "synthetic-d", runId: "run-e", outcome: "preparing" });
+assert.equal(oldExecution.signal.aborted, true);
+await act(async () => oldExecution.resolve(advice({ summary: "OLD_EXECUTION_AI_MUST_NOT_APPEAR" })));
+assert.doesNotMatch(container.textContent, /OLD_EXECUTION_AI_MUST_NOT_APPEAR/);
+await click("Analisar instância");
+await finish({ ...memoryReport });
+await click("Explicar com Gemini");
+const unmountedAdvice = adviceRequests.shift();
+await act(async () => root.unmount());
+assert.equal(unmountedAdvice.signal.aborted, true);
+await act(async () => unmountedAdvice.resolve(advice()));
+assert.equal(container.textContent, "");
+
+// Retain independent coverage for an unfinished native analysis at unmount.
+const nativeOnlyRoot = createRoot(container);
+await act(async () => nativeOnlyRoot.render(createElement(DoctorView, props)));
 await click("Analisar instância");
 const pendingAtUnmount = requests.shift();
-await act(async () => root.unmount());
+await act(async () => nativeOnlyRoot.unmount());
 await act(async () => pendingAtUnmount.resolve(report()));
 assert.equal(container.textContent, "");
 
-console.log(JSON.stringify({ result: "PASS", fixtures: "synthetic", checks: ["loading", "instance-switch-stale-response", "java-change-invalidates-report", "no-logs", "analysis-error-redacted", "no-issues-normal-exit", "copy-export-sanitized-only", "run-events-invalidate-only-own-instance", "cancelled-run-is-not-failure", "failed-run-link", "evidence-confidence-next-step", "historical-log-label", "unmounted-response"], source: fileURLToPath(import.meta.url) }, null, 2));
+console.log(JSON.stringify({ result: "PASS", fixtures: "synthetic", checks: ["loading", "instance-switch-stale-response", "java-change-invalidates-report", "no-logs", "analysis-error-redacted", "no-issues-normal-exit", "copy-export-sanitized-only", "run-events-invalidate-only-own-instance", "cancelled-run-is-not-failure", "failed-run-link", "evidence-confidence-next-step", "historical-log-label", "unmounted-response", "concise-local-lead-details-collapsed", "gemini-explicit-click-only", "gemini-cancel-ignores-late-provider", "gemini-error-malformed-preserve-local", "gemini-fixed-actions-no-markdown", "gemini-new-report-same-context", "gemini-account-instance-java-run-invalidation", "gemini-execution-event-unmount-abort"], source: fileURLToPath(import.meta.url) }, null, 2));

@@ -12,6 +12,9 @@ use sha2::{Digest, Sha256};
 use super::content_updates::{ensure_no_symlink_components, metadata_is_link};
 use super::{required_java_major, Instance};
 
+#[path = "doctor_rules.rs"]
+mod rules;
+
 const MAX_LOGS: usize = 12;
 const MAX_DIRECTORY_ENTRIES: usize = 256;
 const MAX_LOG_BYTES: u64 = 128 * 1024;
@@ -19,6 +22,7 @@ const MAX_TOTAL_BYTES: u64 = 1024 * 1024;
 const MAX_PROFILE_BYTES: u64 = 2 * 1024 * 1024;
 const HEAD_BYTES: u64 = 4096;
 const SAFE_READ_ERROR: &str = "Não foi possível ler com segurança os arquivos desta instância.";
+const LEGACY_DEPENDENCY_FAILURE: &str = "Dependência obrigatória ausente ou não atendida.";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -135,11 +139,26 @@ pub fn snapshot_logs(instance: &Instance) -> Vec<DoctorLogStamp> {
 /// Reduce errors at the lifecycle boundary, so persistence also avoids secrets.
 pub fn canonical_launch_failure(error: &str) -> String {
     let bounded: String = error.chars().take(8192).collect();
-    let lower = bounded.to_lowercase();
-    for rule in RULES {
-        if rule.matches(&lower) {
-            return rule.canonical.to_owned();
-        }
+    // Alpha.11 persisted a broader category. Preserve its known, private-safe
+    // wording rather than silently asserting that absence was confirmed.
+    if bounded
+        .trim()
+        .eq_ignore_ascii_case(LEGACY_DEPENDENCY_FAILURE)
+    {
+        return LEGACY_DEPENDENCY_FAILURE.into();
+    }
+    if let Some(rule) = RULES
+        .iter()
+        .find(|rule| bounded.trim().eq_ignore_ascii_case(rule.canonical))
+    {
+        return rule.canonical.to_owned();
+    }
+    let findings = rules::detect(&bounded);
+    if let Some(rule) = RULES
+        .iter()
+        .find(|rule| findings.iter().any(|finding| finding.id == rule.id))
+    {
+        return rule.canonical.to_owned();
     }
     "Falha de preparação sem causa identificada.".to_owned()
 }
@@ -698,55 +717,63 @@ struct Rule {
     canonical: &'static str,
     explanation: &'static str,
     next_step: &'static str,
-    markers: &'static [&'static str],
 }
 
+#[cfg(test)]
 impl Rule {
     fn matches(&self, lower: &str) -> bool {
-        lower.contains(&self.canonical.to_lowercase())
-            || self.markers.iter().any(|marker| lower.contains(marker))
-            || match self.id {
-                "missing_dependency" => {
-                    lower.contains("requires")
-                        && (lower.contains("which is missing")
-                            || lower.contains("but it is not installed"))
-                }
-                "incompatible_version" => {
-                    lower.contains("requires")
-                        && lower.contains("but only")
-                        && lower.contains("is present")
-                }
-                _ => false,
-            }
+        lower.trim().eq_ignore_ascii_case(self.canonical)
+            || rules::detect(lower)
+                .iter()
+                .any(|finding| finding.id == self.id)
     }
 }
 
 static RULES: &[Rule] = &[
-    Rule { id: "java_missing", title: "Java selecionado ausente", canonical: "Java selecionado não encontrado.", explanation: "O Java necessário para iniciar não está disponível no caminho selecionado.", next_step: "Selecione uma instalação Java disponível nas configurações e tente iniciar novamente.", markers: &["o executável java não existe", "no java runtime present", "java executable not found"] },
-    Rule { id: "java_incompatible", title: "Java incompatível", canonical: "Java incompatível com a instância.", explanation: "Há uma indicação explícita de incompatibilidade entre a versão do Java e uma classe ou requisito da instância.", next_step: "Confira o Java exigido pelo Minecraft e pelo modpack; selecione a versão compatível antes de tentar novamente.", markers: &["unsupportedclassversionerror", "compiled by a more recent version of the java runtime", "esta instância precisa do java", "unsupported class file major version"] },
-    Rule { id: "missing_dependency", title: "Dependência obrigatória não atendida", canonical: "Dependência obrigatória ausente ou não atendida.", explanation: "O loader declarou uma dependência obrigatória ausente ou não atendida. Isso não identifica um mod culpado por uma stack trace.", next_step: "Consulte a mensagem de dependências na origem indicada e instale a dependência na versão exigida pelo modpack e pelo loader.", markers: &["missing mandatory dependencies:", "missing or unsupported mandatory dependencies:", "missing mandatory mod"] },
-    Rule { id: "incompatible_version", title: "Incompatibilidade declarada pelo loader", canonical: "Incompatibilidade explícita de versão.", explanation: "O loader ou o verificador de versões declarou conteúdo incompatível. A regra não atribui responsabilidade a nomes encontrados na stack trace.", next_step: "Confira no erro do loader as versões exigidas de Minecraft, loader e mods e use uma combinação declarada compatível pelo modpack.", markers: &["incompatible mods found!", "incompatible mod set!", "mod resolution encountered an incompatible mod set"] },
-    Rule { id: "duplicate_mod", title: "Identificador de mod duplicado", canonical: "Identificador de mod duplicado confirmado pelo loader.", explanation: "O loader declarou um identificador de mod duplicado; nomes de arquivos parecidos, sozinhos, não geram esta conclusão.", next_step: "Confira o identificador e os arquivos apontados pelo loader. Revise as cópias instaladas antes de fazer qualquer alteração manual.", markers: &["duplicate versions for mod id", "duplicate mod id", "duplicate modids", "found duplicate mods", "duplicatemodsfoundexception"] },
-    Rule { id: "missing_file", title: "Arquivo obrigatório ausente ou inacessível", canonical: "Arquivo obrigatório ausente ou inacessível.", explanation: "Um arquivo necessário foi declarado ausente ou inacessível. Isso pode indicar instalação incompleta ou restrição de acesso; o marcador sozinho não distingue essas situações.", next_step: "Confira a instalação do perfil e o arquivo apontado na origem local. Conclua ou repita a instalação pelo launcher quando houver esse recurso.", markers: &["arquivo obrigatório não encontrado", "perfil instalado não encontrado", "unable to access jarfile"] },
-    Rule { id: "corrupt_file", title: "Arquivo inválido ou integridade divergente", canonical: "Arquivo inválido ou corrompido.", explanation: "Foi encontrada uma falha explícita de formato ou integridade. A análise não realizou uma verificação completa de todos os arquivos.", next_step: "Confira a origem indicada e reinstale o arquivo afetado a partir da fonte oficial. Se uma instalação estiver em andamento, aguarde e analise novamente.", markers: &["invalid or corrupt jarfile", "zip end header not found", "invalid loc header", "checksum mismatch", "hash mismatch", "não passou na verificação de integridade", "integridade inválida para", "perfil minecraft inválido", "invalid zip archive"] },
-    Rule { id: "memory_failure", title: "Falha explícita de memória", canonical: "Falha explícita de memória da JVM.", explanation: "A JVM registrou falta de memória ou falha ao reservar memória. Apenas a quantidade de RAM configurada não seria evidência suficiente.", next_step: "Feche programas para liberar memória e confira a RAM atribuída ao perfil. Aumente o limite apenas se houver memória livre; falhas de reserva podem exigir reduzi-lo.", markers: &["java.lang.outofmemoryerror", "could not reserve enough space", "native memory allocation (malloc) failed", "there is insufficient memory for the java runtime environment", "gc overhead limit exceeded"] },
-    Rule { id: "network_failure", title: "Falha registrada de rede ou download", canonical: "Falha de rede ou download na inicialização.", explanation: "Há um erro explícito de conexão ou transferência na tentativa. Um serviço opcional também pode produzir esse erro; ele não prova, sozinho, a causa do encerramento.", next_step: "Confira a conexão e a disponibilidade da fonte indicada no log local. Tente novamente após restabelecer o acesso; não compartilhe URLs autenticadas ou tokens.", markers: &["java.net.unknownhostexception", "java.net.connectexception", "java.net.sockettimeoutexception", "java.net.ssl.sslhandshakeexception", "failed to download", "download failed", "não foi possível baixar", "falha de rede em", "o servidor não aceitou a retomada", "dns error", "error sending request for url", "connection timed out", "connection refused"] },
+    Rule { id: "java_missing", title: "Java selecionado ausente", canonical: "Java selecionado não encontrado.", explanation: "O Java selecionado não está disponível para iniciar o jogo.", next_step: "Selecione uma instalação Java disponível nas configurações e tente novamente." },
+    Rule { id: "java_incompatible", title: "Java incompatível", canonical: "Java incompatível com a instância.", explanation: "O Java selecionado não atende ao requisito da instância ou ao formato de uma classe carregada.", next_step: "Selecione o Java exigido pelo perfil e pelos mods. As evidências podem indicar a versão necessária." },
+    Rule { id: "missing_dependency", title: "Dependência obrigatória ausente", canonical: "Dependência obrigatória ausente.", explanation: "O loader informou que falta uma dependência necessária para carregar o conteúdo.", next_step: "Confira a dependência no erro local e instale a versão indicada para o mesmo Minecraft e loader do modpack." },
+    Rule { id: "incompatible_version", title: "Versões incompatíveis declaradas", canonical: "Incompatibilidade explícita de versão.", explanation: "O loader recusou uma versão, um ambiente ou uma combinação de conteúdo incompatível.", next_step: "Compare as versões exigidas no erro local com as instaladas e use a combinação indicada pelo autor do modpack." },
+    Rule { id: "duplicate_mod", title: "Identificador de mod duplicado", canonical: "Identificador de mod duplicado confirmado pelo loader.", explanation: "O loader encontrou mais de um arquivo declarando o mesmo identificador de mod.", next_step: "Confira os arquivos apontados pelo loader antes de ajustar as cópias instaladas. Nomes parecidos não bastam para decidir." },
+    Rule { id: "missing_file", title: "Arquivo obrigatório ausente ou inacessível", canonical: "Arquivo obrigatório ausente ou inacessível.", explanation: "A preparação não encontrou ou não conseguiu acessar um arquivo obrigatório.", next_step: "Confira o arquivo apontado no erro local e se a instalação terminou. Reinstale o componente pela fonte oficial quando necessário." },
+    Rule { id: "corrupt_file", title: "Arquivo inválido ou integridade divergente", canonical: "Arquivo inválido ou corrompido.", explanation: "Um arquivo falhou na verificação de formato ou integridade.", next_step: "Aguarde instalações em andamento. Se o erro persistir, obtenha novamente o arquivo afetado pela fonte oficial." },
+    Rule { id: "memory_failure", title: "Falha explícita de memória", canonical: "Falha explícita de memória da JVM.", explanation: "A JVM informou falta de memória ou falha ao reservar memória.", next_step: "Feche outros programas e confira a RAM do perfil. Aumente-a apenas com memória livre; falhas de reserva podem exigir reduzi-la." },
+    Rule { id: "network_failure", title: "Falha registrada de rede ou download", canonical: "Falha de rede ou download na inicialização.", explanation: "Uma conexão ou transferência falhou. Isso pode envolver um serviço opcional e não confirma sozinho a causa do encerramento.", next_step: "Confira a conexão e a disponibilidade da fonte indicada no log local. Tente novamente quando o acesso estiver restabelecido." },
+    Rule { id: "mixin_failure", title: "Falha ao aplicar mixins", canonical: "Falha de aplicação de mixins observada.", explanation: "A transformação de classes falhou. Esse registro não identifica o mod responsável nem confirma a causa original.", next_step: "Confira se as versões de Minecraft, loader e mods correspondem ao modpack. Investigue a primeira exceção associada antes de remover conteúdo." },
+    Rule { id: "graphics_failure", title: "Falha ao iniciar o OpenGL", canonical: "Falha explícita de inicialização gráfica.", explanation: "A biblioteca gráfica não conseguiu criar o contexto OpenGL exigido pelo jogo.", next_step: "Confira o driver no site do fabricante da GPU e o suporte da placa ao Minecraft escolhido. Em acesso remoto, tente uma sessão local." },
+    Rule { id: "disk_space", title: "Espaço insuficiente no disco", canonical: "Falha explícita por falta de espaço no disco.", explanation: "Uma operação de arquivo foi recusada porque o volume não tem espaço suficiente.", next_step: "Confira o espaço livre no disco da instância e na pasta temporária. Libere espaço com cuidado e tente novamente." },
+    Rule { id: "file_permission", title: "Acesso a arquivo recusado", canonical: "Falha explícita de permissão de arquivo.", explanation: "O sistema recusou uma operação de leitura ou gravação de arquivo.", next_step: "Confira as permissões da pasta e se outro programa bloqueou o arquivo. Use uma conta com acesso aos arquivos da instância." },
 ];
 
+static LEGACY_DEPENDENCY_RULE: Rule = Rule {
+    id: "missing_dependency",
+    title: "Dependência obrigatória não atendida",
+    canonical: LEGACY_DEPENDENCY_FAILURE,
+    explanation: "O registro antigo indica uma dependência não atendida, sem distinguir ausência de versão incompatível.",
+    next_step: "Confira se a dependência está instalada na versão exigida. Inicie novamente para obter evidências atuais antes de alterar o conteúdo.",
+};
+
 fn inspect_text(text: &str, source: &str, report: &mut DoctorReport) -> bool {
-    let mut matched = false;
-    for line in text.lines() {
-        // Bound pathological single lines and match a declaration in the same
-        // line; never join unrelated mentions into an invented dependency.
-        let lower = line.chars().take(8192).collect::<String>().to_lowercase();
-        for rule in RULES {
-            if rule.matches(&lower) {
-                add_issue(report, rule, source, rule.canonical);
-                matched = true;
-            }
+    if text.trim().eq_ignore_ascii_case(LEGACY_DEPENDENCY_FAILURE) {
+        add_issue(report, &LEGACY_DEPENDENCY_RULE, source,
+            "O registro de uma versão anterior do launcher confirma uma dependência não atendida; ele não distingue ausência de incompatibilidade.");
+        return true;
+    }
+    if let Some(rule) = RULES
+        .iter()
+        .find(|rule| text.trim().eq_ignore_ascii_case(rule.canonical))
+    {
+        add_issue(report, rule, source, rule.canonical);
+        return !matches!(rule.id, "mixin_failure" | "network_failure");
+    }
+    let mut specific_indicator = false;
+    for finding in rules::detect(text) {
+        if let Some(rule) = RULES.iter().find(|rule| rule.id == finding.id) {
+            add_issue(report, rule, source, &finding.evidence);
+            specific_indicator |= !matches!(rule.id, "mixin_failure" | "network_failure");
         }
     }
-    matched
+    specific_indicator
 }
 
 fn add_issue(report: &mut DoctorReport, rule: &Rule, source: &str, evidence: &str) {
@@ -764,7 +791,7 @@ fn add_issue(report: &mut DoctorReport, rule: &Rule, source: &str, evidence: &st
     report.issues.push(DoctorIssue {
         id: rule.id.into(),
         title: rule.title.into(),
-        severity: if rule.id == "network_failure" {
+        severity: if matches!(rule.id, "network_failure" | "mixin_failure") {
             "warning"
         } else {
             "error"
@@ -775,7 +802,9 @@ fn add_issue(report: &mut DoctorReport, rule: &Rule, source: &str, evidence: &st
             source: source.into(),
             summary: evidence.into(),
         }],
-        confidence: if rule.id == "network_failure" {
+        confidence: if matches!(rule.id, "network_failure" | "mixin_failure")
+            || rule.canonical == LEGACY_DEPENDENCY_FAILURE
+        {
             "medium"
         } else {
             "high"
