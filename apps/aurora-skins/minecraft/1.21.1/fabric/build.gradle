@@ -6,6 +6,12 @@ dependencies {
     minecraft "com.mojang:minecraft:${rootProject.minecraft_version}"
     mappings loom.officialMojangMappings()
     modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
+    // Embed only the modules needed by the optional multiplayer channel.
+    ["fabric-api-base:0.4.42+6573ed8c19", "fabric-networking-api-v1:4.3.0+c7469b2119",
+     "fabric-lifecycle-events-v1:2.6.0+0865547519"].each { module ->
+        modImplementation "net.fabricmc.fabric-api:${module}"
+        include "net.fabricmc.fabric-api:${module}"
+    }
     implementation project(":skins-core")
     include project(":skins-core")
     compileOnly files(rootProject.file("../../../aurora-core/api/build/libs/aurora-core-api-1.1.5.jar"))
@@ -24,6 +30,7 @@ tasks.named("compileJava") {
         include "com/aurora/skins/minecraft/AuroraSkinsBootstrap.java"
         include "com/aurora/skins/minecraft/AuroraSkinsClient.java"
         include "com/aurora/skins/minecraft/AuroraSkinsModule.java"
+        include "com/aurora/skins/minecraft/network/SkinSyncClientBridge.java"
         include "com/aurora/skins/minecraft/mixin/TitleScreenMixin.java"
         include "com/aurora/skins/minecraft/ui/AuroraSkinsScreen.java"
     })

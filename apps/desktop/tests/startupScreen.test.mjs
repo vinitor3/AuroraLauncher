@@ -76,7 +76,7 @@ test("error stops busy state, announces the exact error, and removes all loading
   assert.equal(withClass(tree, "startup-content-error").length, 1);
   assert.equal(withClass(tree, "startup-loading").length, 0);
   assert.equal(withClass(tree, "startup-progress").length, 0);
-  assert.equal(buttons(tree).length, 2);
+  assert.equal(buttons(tree).length, 1);
   assert.ok(buttons(tree).every((button) => button.props.type === "button"));
 });
 
@@ -107,7 +107,12 @@ test("retry render returns to loading without stale errors, actions, or authenti
 
 test("optional error callbacks do not prevent a safe render", () => {
   const tree = render({ error: "Sem conexão" });
-  assert.equal(buttons(tree).length, 2);
+  assert.equal(buttons(tree).length, 1);
   assert.ok(buttons(tree).every((button) => button.props.onClick === undefined));
   assert.equal(tree.props["aria-busy"], false);
+});
+
+test("pre-authentication startup errors offer retry without an unsafe sign-out action", () => {
+  const tree = render({ error: "Sessão da janela indisponível", onRetry() {} });
+  assert.deepEqual(buttons(tree).map(text), ["Tentar novamente"]);
 });

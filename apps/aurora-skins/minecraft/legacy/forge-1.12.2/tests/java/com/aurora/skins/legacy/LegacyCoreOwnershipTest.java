@@ -48,7 +48,7 @@ public final class LegacyCoreOwnershipTest {
         try (AuroraCoreRuntime runtime = AuroraCoreRuntime.start(test.platform(root))) {
             runtime.modules().register(new AuroraModule() {
                 @Override public AuroraModuleMetadata metadata() {
-                    return new AuroraModuleMetadata("aurora_skins", "Skins", "0.2.5", "skins", "1.1.3");
+                    return new AuroraModuleMetadata("aurora_skins", "Skins", "0.3.1", "skins", "1.1.3");
                 }
                 @Override public void registerSettings(AuroraSettingsRegistry settings) {
                     settings.register(new AuroraSettingsPage("aurora_skins", "aurora_skins", "Skins", "", "skins", 10, context -> {

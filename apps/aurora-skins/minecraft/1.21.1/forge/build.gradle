@@ -24,6 +24,7 @@ tasks.named("compileJava") {
         include "com/aurora/skins/minecraft/AuroraSkinsBootstrap.java"
         include "com/aurora/skins/minecraft/AuroraSkinsClient.java"
         include "com/aurora/skins/minecraft/AuroraSkinsModule.java"
+        include "com/aurora/skins/minecraft/network/SkinSyncClientBridge.java"
         include "com/aurora/skins/minecraft/mixin/TitleScreenMixin.java"
         include "com/aurora/skins/minecraft/ui/AuroraSkinsScreen.java"
     })

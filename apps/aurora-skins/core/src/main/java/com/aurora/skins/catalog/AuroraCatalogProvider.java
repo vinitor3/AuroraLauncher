@@ -350,7 +350,7 @@ public final class AuroraCatalogProvider implements SkinProvider {
         connection.setRequestMethod("GET");
         // Some CDN edges reject the default Java/<version> agent with HTTP 403.
         // Identify this client honestly, for catalog, profile and PNG requests alike.
-        connection.setRequestProperty("User-Agent", "AuroraSkins/0.2.5");
+        connection.setRequestProperty("User-Agent", "AuroraSkins/0.3.1");
         return connection;
     }
 

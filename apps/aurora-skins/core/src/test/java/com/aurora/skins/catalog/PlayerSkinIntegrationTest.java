@@ -45,7 +45,7 @@ final class PlayerSkinIntegrationTest {
         AtomicInteger requests = new AtomicInteger();
         server.createContext("/", exchange -> {
             requests.incrementAndGet(); assertNull(exchange.getRequestHeaders().getFirst("X-API-Key"));
-            assertEquals("AuroraSkins/0.2.5", exchange.getRequestHeaders().getFirst("User-Agent"));
+            assertEquals("AuroraSkins/0.3.1", exchange.getRequestHeaders().getFirst("User-Agent"));
             String path = exchange.getRequestURI().getPath();
             byte[] body = path.equals("/skin.png") ? png : (path.equals("/v1/skins/players")
                 ? "AURORA_PLAYERS_V1\nNotch\t" + uuid + "\tmc-api\t" + b64("{\"current\":true}") + "\n" : profile).getBytes(StandardCharsets.UTF_8);

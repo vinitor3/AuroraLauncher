@@ -338,6 +338,16 @@ fn instance_is_running(running: &RunningInstances, instance_id: &str) -> Result<
         .any(|process| process.instance_id == instance_id))
 }
 
+fn acquire_idle_instance(
+    instance: &aurora_launcher_core::engine::Instance,
+) -> Result<InstanceMutationGuard, String> {
+    acquire_instance_mutation_lock(instance).map_err(|error| match error {
+        aurora_launcher_core::engine::ContentUpdateError::Busy =>
+            "Esta instância está em uso em outro jogo ou launcher. Aguarde a operação terminar ou use outra instância para jogar com duas contas.".to_owned(),
+        error => error.to_string(),
+    })
+}
+
 fn firebase_config_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(data_directory(app)?.join("firebase-public-config.json"))
 }
@@ -518,6 +528,9 @@ pub fn rename_instance(
     if destination.exists() {
         return Err("já existe uma instância com esse nome".to_owned());
     }
+    let _mutation_lock = acquire_idle_instance(&layout.open(id))?;
+    #[cfg(windows)]
+    ensure_no_external_instance_game(&source)?;
     fs::rename(&source, &destination)
         .map_err(|error| format!("não foi possível renomear a instância: {error}"))?;
     Ok(summarize_instance(new_id.as_str().to_owned(), destination))
@@ -596,6 +609,9 @@ pub fn delete_instance(
     if !instance.root().exists() {
         return Ok(());
     }
+    let _mutation_lock = acquire_idle_instance(&instance)?;
+    #[cfg(windows)]
+    ensure_no_external_instance_game(instance.root())?;
     fs::remove_dir_all(instance.root())
         .map_err(|error| format!("não foi possível excluir a instância: {error}"))
 }
@@ -1737,13 +1753,16 @@ fn bounded_profile_read(path: &Path) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-// A JVM can outlive the launcher. Detect it before migration even when this
-// process has no RunningInstances entry. Only a boolean is returned by the
+// A JVM can outlive the launcher. Detect it before launch/migration even when
+// this process has no RunningInstances entry. Only a status is returned by the
 // child process: command lines (which can contain credentials) never enter logs.
 #[cfg(windows)]
 fn ensure_no_external_instance_game(root: &Path) -> Result<(), String> {
     run_instance_game_probe(INSTANCE_GAME_PROBE, root, None)
 }
+
+const INSTANCE_GAME_RUNNING: &str = "Esta instância já está aberta no Minecraft, inclusive se o launcher que a iniciou foi fechado. Use outra instância para jogar com duas contas.";
+const INSTANCE_GAME_UNAVAILABLE: &str = "Não foi possível confirmar que esta instância está livre. Feche o Minecraft/Java em execução e tente novamente.";
 
 #[cfg(windows)]
 const INSTANCE_GAME_PROBE: &str = r#"$ErrorActionPreference = 'Stop'
@@ -1798,10 +1817,14 @@ fn run_instance_game_probe(script: &str, root: &Path, fixture: Option<&str>) -> 
     let output = child
         .wait_with_output()
         .map_err(|_| "falha ao verificar processos Minecraft".to_owned())?;
-    if output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "STOPPED" {
-        return Ok(());
+    if output.status.success() {
+        match String::from_utf8_lossy(&output.stdout).trim() {
+            "STOPPED" => return Ok(()),
+            "RUNNING" => return Err(INSTANCE_GAME_RUNNING.into()),
+            _ => {}
+        }
     }
-    Err("encerre os processos Minecraft/Java desta instância antes da migração Companion".into())
+    Err(INSTANCE_GAME_UNAVAILABLE.into())
 }
 
 #[cfg(not(windows))]
@@ -1842,6 +1865,14 @@ pub fn begin_instance_launch(
     if instance_is_running(&running, &id)? {
         return Err("Esta instância já está rodando.".into());
     }
+    let instance = layout(&app)?.open(parsed);
+    // A second launcher must not replace the Doctor record of an active game.
+    // Install/launch commands acquire their own guard after this preparation ends.
+    let _mutation_lock = acquire_idle_instance(&instance)?;
+    // The UI may install a loader after this command, before launch_instance.
+    // Reject an orphaned Minecraft before either that install or Doctor writes.
+    #[cfg(windows)]
+    ensure_no_external_instance_game(instance.root())?;
     let records = app.state::<DoctorRuns>();
     let directory = doctor_directory(&app)?;
     if records
@@ -1850,7 +1881,6 @@ pub fn begin_instance_launch(
     {
         return Err("Uma inicialização desta instância já está em andamento.".into());
     }
-    let instance = layout(&app)?.open(parsed);
     doctor_runs::check_path(instance.root())?;
     let profile = read_instance_launch_profile(app.clone(), id.clone())?;
     let run = DoctorRun {
@@ -2031,7 +2061,12 @@ pub fn launch_instance(
             let _ = records.save(&directory, &id, run);
             let _ = records.finish(&directory, &id, &run_id, "failed", None, Some(&error));
             emit_doctor_run(&app, &id, &run_id, "failed");
-            Err(canonical_launch_failure(&error))
+            // These exact native statuses contain no path, command line or
+            // credential; preserve the actionable explanation for another game.
+            Err(match error.as_str() {
+                INSTANCE_GAME_RUNNING | INSTANCE_GAME_UNAVAILABLE => error,
+                _ => canonical_launch_failure(&error),
+            })
         }
     }
 }
@@ -2062,7 +2097,12 @@ fn launch_instance_tracked(
     let instance = layout(&app)?.open(id);
     let mutation_lock =
         acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
+    // The mutation lock belongs to the launcher process, but its Minecraft can
+    // survive that process. Check the game directory before replacing any JAR.
+    #[cfg(windows)]
+    ensure_no_external_instance_game(instance.root())?;
     if companion_migration_required(&instance).map_err(|error| error.to_string())? {
+        #[cfg(not(windows))]
         ensure_no_external_instance_game(instance.root())?;
         migrate_managed_companion(&instance, &mutation_lock, false)
             .map_err(|error| error.to_string())?;
@@ -2598,7 +2638,7 @@ pub fn save_firebase_config(app: AppHandle, config: FirebasePublicConfig) -> Res
 mod tests {
     #[cfg(windows)]
     #[test]
-    fn migration_process_probe_compares_exact_game_directory() {
+    fn process_probe_detects_orphan_game_without_matching_neighbor_instance() {
         let script = super::INSTANCE_GAME_PROBE.replace(
             "Get-CimInstance Win32_Process -Filter \"Name='java.exe' OR Name='javaw.exe'\"",
             "ConvertFrom-Json $env:AURORA_QA_GAMES",
@@ -2619,6 +2659,20 @@ mod tests {
                 stopped
             );
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn process_probe_fails_closed_when_a_java_command_line_cannot_be_read() {
+        let script = super::INSTANCE_GAME_PROBE.replace(
+            "Get-CimInstance Win32_Process -Filter \"Name='java.exe' OR Name='javaw.exe'\"",
+            "ConvertFrom-Json $env:AURORA_QA_GAMES",
+        );
+        let root = std::path::Path::new(r"C:\Aurora QA\instances\foo");
+        let fixture = serde_json::json!([{ "CommandLine": null }]).to_string();
+        let error = super::run_instance_game_probe(&script, root, Some(&fixture)).unwrap_err();
+        assert!(error.contains("Não foi possível confirmar"));
+        assert!(!error.contains("migração"));
     }
 
     use std::fs;
@@ -2673,6 +2727,34 @@ mod tests {
         );
         let released = super::acquire_instance_mutation_lock(&instance).unwrap();
         drop(released);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn other_launcher_cannot_prepare_or_modify_a_locked_game_directory() {
+        use aurora_launcher_core::engine::{InstanceId, InstanceLayout};
+        let directory = std::env::temp_dir().join(format!(
+            "aurora-other-launcher-lock-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let instance =
+            InstanceLayout::new(&directory).open(InstanceId::parse("shared-instance").unwrap());
+        instance.ensure_layout().unwrap();
+        let game_guard = super::acquire_instance_mutation_lock(&instance).unwrap();
+        let error = match super::acquire_idle_instance(&instance) {
+            Ok(_) => panic!("another launcher must not acquire an active instance"),
+            Err(error) => error,
+        };
+        assert!(error.contains("outro jogo ou launcher"));
+        assert!(error.contains("outra instância"));
+        drop(game_guard);
+
+        // Renaming/removing an idle instance still works while its guard is held.
+        let idle_guard = super::acquire_idle_instance(&instance).unwrap();
+        let renamed = directory.join("instances/renamed-instance");
+        fs::rename(instance.root(), &renamed).unwrap();
+        fs::remove_dir_all(&renamed).unwrap();
+        drop(idle_guard);
         fs::remove_dir_all(directory).unwrap();
     }
 

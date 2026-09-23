@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$ForgeJar,
     [Parameter(Mandatory = $true)][string]$CoreJar,
+    [Parameter(Mandatory = $true)][string]$NettyJar,
     [string]$Java = 'java',
     [string]$Javac = 'javac'
 )
@@ -12,7 +13,8 @@ New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 # Copy read-only inputs locally: Java's ZIP provider may request write access to JARs.
 Copy-Item -LiteralPath $ForgeJar -Destination (Join-Path $testRoot 'forge.jar')
 Copy-Item -LiteralPath $CoreJar -Destination (Join-Path $testRoot 'core.jar')
-$dependencies = (Join-Path $testRoot 'forge.jar') + ';' + (Join-Path $testRoot 'core.jar')
+Copy-Item -LiteralPath $NettyJar -Destination (Join-Path $testRoot 'netty.jar')
+$dependencies = (Join-Path $testRoot 'forge.jar') + ';' + (Join-Path $testRoot 'core.jar') + ';' + (Join-Path $testRoot 'netty.jar')
 $production = @(Get-ChildItem -LiteralPath (Join-Path $legacyRoot 'src/main/java') -Recurse -Filter '*.java' | ForEach-Object FullName)
 $shared = @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'apps/aurora-skins/core/src/main/java') -Recurse -Filter '*.java' | ForEach-Object FullName)
 $coreUi = Join-Path $repoRoot 'apps/aurora-core/minecraft/legacy/forge-1.12.2/src/main/java/com/aurora/core/minecraft/legacy/LegacyAuroraUi.java'

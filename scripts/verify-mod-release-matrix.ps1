@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 $Matrix = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot "active-mod-matrix.json") | ConvertFrom-Json
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+. (Join-Path $PSScriptRoot "skins-feature-contract.ps1")
 function Get-AuroraSha256Bytes {
     param([Parameter(Mandatory = $true)][byte[]]$Bytes)
 
@@ -121,6 +122,11 @@ function Compare-AuroraMatrix {
 
         $archive = [IO.Compression.ZipFile]::OpenRead($artifact.FullName)
         try {
+            if ($Module -eq "skins") {
+                $minecraft = $relative.Split([char[]]@('/', '\'))[0]
+                try { Assert-AuroraSkinsFeatures -Archive $archive -Minecraft $minecraft }
+                catch { throw "${relative}: $($_.Exception.Message)" }
+            }
             $entryNames = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
             if ($entryNames -notcontains "pack.mcmeta") {
                 throw "$Name não contém pack.mcmeta em ${relative}; o Forge descartaria seus recursos."

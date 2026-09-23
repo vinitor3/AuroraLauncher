@@ -38,6 +38,7 @@ Use exatamente: `CONCLUÍDO`, `PARCIAL`, `PROTÓTIPO`, `IMPLEMENTADO MAS NÃO HO
 4. Não misturar refatoração ampla e feature sem critério de aceite específico.
 5. Não sobrescrever alterações de outro agente. Interromper e informar conflito real.
 6. Integration Agent revisa e integra; QA independente tenta quebrar a mudança.
+7. Antes de ampliar um módulo, conferir a versão selecionada na matriz ativa e os commits do checkout atual do launcher. Uma entrega feita sobre base antiga deve integrar primeiro os recursos posteriores; não substituir o módulo atual por uma cópia dessa entrega. Registrar base e versões no task file. O contrato cumulativo `scripts/skins-feature-contract.json` protege grade, cache e multiplayer; não remover requisitos para fazer uma release passar.
 
 ## Validação mínima
 

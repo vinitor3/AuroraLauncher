@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "description": "Cumulative Aurora Skins features required in every active release. Update only when an explicitly approved product change replaces a capability, never to accept an older implementation.",
+  "requirements": [
+    { "scope": "all", "resource": "com/aurora/skins/ui/CatalogGridState.class", "markers": ["PAGE_SIZE", "selectedPreview", "previewFailed"] },
+    { "scope": "all", "resource": "com/aurora/skins/ui/CatalogGridLayout.class", "markers": ["calculate", "modelScale"] },
+    { "scope": "all", "resource": "com/aurora/skins/catalog/AuroraCatalogProvider.class", "markers": ["previewCache", "downloads", "preparePreview", "cachedCatalogSkin"] },
+    { "scope": "all", "resource": "com/aurora/skins/storage/AuroraSkinStore.class", "markers": ["cachedCatalogSkin", "cacheCatalogSkin", "favorites", "history"] },
+    { "scope": "all", "resource": "com/aurora/skins/sync/SkinSyncProtocol.class", "markers": [] },
+    { "scope": "all", "resource": "com/aurora/skins/sync/SkinSyncClient.class", "markers": [] },
+    { "scope": "all", "resource": "com/aurora/skins/sync/SkinSyncServer.class", "markers": [] },
+    { "scope": "modern", "resource": "com/aurora/skins/minecraft/ui/AuroraSkinsScreen.class", "markers": ["com/aurora/skins/ui/CatalogGridState", "com/aurora/skins/ui/CatalogGridLayout", "loadCard", "renderCard", "applySelected", "toggleFavorite"] },
+    { "scope": "modern", "resource": "com/aurora/skins/minecraft/ui/MinecraftSkinPreviewRenderer.class", "markers": ["renderCard", "isReady"] },
+    { "scope": "modern", "resource": "com/aurora/skins/minecraft/appearance/AuroraSkinManager.class", "markers": ["setRemoteSkin", "removeRemoteSkin", "clearRemoteSkins"] },
+    { "scope": "modern", "resource": "com/aurora/skins/minecraft/network/SkinSyncClientBridge.class", "markers": ["com/aurora/skins/sync/SkinSyncClient"] },
+    { "scope": "modern", "resource": "com/aurora/skins/minecraft/mixin/PlayerInfoMixin.class", "markers": ["com/aurora/skins/minecraft/appearance/AuroraSkinManager"] },
+    { "scope": "modern", "resource": "aurora_skins.mixins.json", "markers": ["AbstractClientPlayerMixin", "PlayerInfoMixin"] },
+    { "scope": "legacy", "resource": "com/aurora/skins/legacy/LegacySkinsUi.class", "markers": ["com/aurora/skins/ui/CatalogGridState", "com/aurora/skins/ui/CatalogGridLayout", "loadCard", "renderCard"] },
+    { "scope": "legacy", "resource": "com/aurora/skins/legacy/LegacySkinPreviewRenderer.class", "markers": ["renderCard", "previewTexture"] },
+    { "scope": "legacy", "resource": "com/aurora/skins/legacy/LegacySkinManager.class", "markers": ["setRemoteSkin", "removeRemoteSkin", "clearRemoteSkins"] },
+    { "scope": "legacy", "resource": "com/aurora/skins/legacy/LegacySkinClientNetwork.class", "markers": ["com/aurora/skins/sync/SkinSyncClient"] },
+    { "scope": "legacy", "resource": "com/aurora/skins/legacy/LegacySkinNetwork.class", "markers": ["com/aurora/skins/sync/SkinSyncServer"] }
+  ]
+}

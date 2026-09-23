@@ -6,6 +6,7 @@ license="GPL-3.0-only"
 modId="aurora_skins"
 version="${version}"
 displayName="Aurora Skins"
+displayTest="IGNORE_ALL_VERSION"
 description='''Biblioteca e renderização de skins integradas ao Aurora Core.'''
 
 [[dependencies.aurora_skins]]
@@ -20,4 +21,4 @@ modId="minecraft"
 mandatory=true
 versionRange="[1.20.1,1.21)"
 ordering="NONE"
-side="CLIENT"
+side="BOTH"

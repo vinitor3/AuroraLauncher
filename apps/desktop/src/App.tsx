@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { register } from "@tauri-apps/plugin-global-shortcut";
 import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
@@ -8,6 +8,7 @@ import { SkinPreviewCanvas } from "./features/skins/SkinPreviewCanvas";
 import { SkinThumbnail } from "./features/skins/SkinThumbnail";
 import { StartupScreen } from "./features/auth/StartupScreen";
 import { guardSessionProfile, startSessionStartup, type SessionStartupState } from "./lib/sessionStartup";
+import { browserLauncherAuthScope, prepareLauncherServices } from "./lib/launcherAuthScope";
 import {
   bundledFirebaseConfig,
   createFirebaseServices,
@@ -751,8 +752,10 @@ function AssistantPanel({ services, username, onClose }: { services: FirebaseSer
 
 function AuthScreen({
   authenticate,
+  independent = false,
 }: {
   authenticate: (mode: AuthMode, nickname: string, password: string) => Promise<void>;
+  independent?: boolean;
 }) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [nickname, setNickname] = useState("");
@@ -787,6 +790,7 @@ function AuthScreen({
           Entre somente com seu nick e senha. Seu perfil Aurora acompanha suas
           instâncias.
         </p>
+        {independent && <p className="muted">Esta janela tem uma sessão independente. O login desta janela é temporário e termina quando você encerra este launcher.</p>}
         <div className="auth-tabs">
           <button
             className={mode === "login" ? "selected" : "secondary"}
@@ -854,15 +858,32 @@ function AuthScreen({
 }
 
 
-function LauncherApp() {
-  const [services, setServices] = useState<FirebaseServices>(() =>
-    createFirebaseServices(bundledFirebaseConfig),
-  );
+function LauncherStartup() {
+  const [services, setServices] = useState<FirebaseServices>();
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let disposed = false;
+    prepareLauncherServices({
+      loadScope: () => isTauri() ? invoke("launcher_auth_scope") : Promise.resolve(browserLauncherAuthScope()),
+      loadConfig: () => invoke<FirebasePublicConfig | null>("load_firebase_config"),
+      bundledConfig: bundledFirebaseConfig,
+      create: createFirebaseServices,
+    }).then((ready) => { if (!disposed) setServices(ready); })
+      .catch(() => { if (!disposed) setError("Não foi possível preparar a sessão desta janela. Tente novamente."); });
+    return () => { disposed = true; };
+  }, [attempt]);
+  if (error) return <StartupScreen error={error}
+    onRetry={() => { setError(""); setAttempt((value) => value + 1); }} />;
+  if (!services) return <StartupScreen />;
+  return <LauncherApp services={services} />;
+}
+
+function LauncherApp({ services }: { services: FirebaseServices }) {
   const [profile, setProfileState] = useState<AuroraUserProfile>();
   function setProfile(next: AuroraUserProfile | undefined) {
     setProfileState((current) => guardSessionProfile(current, next, services.auth.currentUser?.uid));
   }
-  const [configReady, setConfigReady] = useState(false);
   const [sessionStartup, setSessionStartup] = useState<SessionStartupState<AuroraUserProfile>>({ phase: "loading" });
   const [sessionRetry, setSessionRetry] = useState(0);
   const sessionController = useRef<ReturnType<typeof startSessionStartup> | undefined>(undefined);
@@ -1087,25 +1108,6 @@ function LauncherApp() {
     setEquippedSkin({ id: skin.id, name: skin.name, skinModel: model, previewUrl, image: skin.image });
   }
   useEffect(() => {
-    let disposed = false;
-    // A stalled native config read must not keep startup locked forever. The
-    // bundled public configuration is also the existing fallback on IPC failure.
-    const timeout = window.setTimeout(() => {
-      disposed = true;
-      setConfigReady(true);
-    }, 5_000);
-    invoke<FirebasePublicConfig | null>("load_firebase_config")
-      .then((config) => {
-        if (!disposed && config) setServices(createFirebaseServices(config));
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (!disposed) setConfigReady(true);
-        window.clearTimeout(timeout);
-      });
-    return () => { disposed = true; window.clearTimeout(timeout); };
-  }, []);
-  useEffect(() => {
     const savedJava = window.localStorage.getItem("aurora.javaExecutable");
     if (savedJava) setJavaPath(savedJava);
     invoke<JavaRuntime[]>("discover_java")
@@ -1209,14 +1211,14 @@ function LauncherApp() {
     return () => window.clearTimeout(timer);
   }, [notice, noticeHovered, busy]);
   useEffect(() => {
+    if (!services.authScope.persistent) return;
     register("Ctrl+Alt+/", (event) => {
       if (event.state === "Pressed") {
         setAssistantOpen((current) => !current);
       }
     }).catch(() => setNotice("Atalho Ctrl+Alt+/ indisponível neste computador."));
-  }, []);
+  }, [services]);
   useEffect(() => {
-    if (!configReady) return;
     const controller = startSessionStartup({
       observe: (next, error) => observeAuroraSession(services, next, error),
       currentUser: () => services.auth.currentUser,
@@ -1231,7 +1233,7 @@ function LauncherApp() {
       controller.dispose();
       if (sessionController.current === controller) sessionController.current = undefined;
     };
-  }, [services, configReady, sessionRetry]);
+  }, [services, sessionRetry]);
   useEffect(() => {
     if (!profile || !services) return;
     void syncAuroraPublicProfile(services, profile).catch(() => undefined);
@@ -3312,7 +3314,7 @@ function LauncherApp() {
       setBusy(false);
     }
   }
-  if (!configReady || sessionStartup.phase === "loading") return <StartupScreen />;
+  if (sessionStartup.phase === "loading") return <StartupScreen />;
   if (sessionStartup.phase === "error") return <StartupScreen error={sessionStartup.error}
     onRetry={() => { setSessionStartup({ phase: "loading" }); setSessionRetry((value) => value + 1); }}
     onSignOut={() => { void logoutAuroraUser(services).then(() => {
@@ -3324,7 +3326,7 @@ function LauncherApp() {
     || profile.uid !== sessionStartup.profile.uid
     || profile.uid !== services.auth.currentUser?.uid)) return <StartupScreen />;
   if (sessionStartup.phase !== "ready" || !profile)
-    return <AuthScreen authenticate={async (mode, nickname, password) => {
+    return <AuthScreen independent={!services.authScope.persistent} authenticate={async (mode, nickname, password) => {
       const controller = sessionController.current;
       if (!controller) throw new Error("A sessão ainda está sendo preparada. Tente novamente.");
       await controller.authenticate(() => mode === "login"
@@ -3388,7 +3390,7 @@ function LauncherApp() {
         </div>
         <div className="sidebar-user" title={`Conta Aurora: ${profile.username}`}>
           <SkinHeadAvatar source={equippedSkin?.previewUrl || profile.skinUrl || profile.avatarUrl} />
-          <span><strong>{profile.username}</strong><small>Conta Aurora</small></span>
+          <span><strong>{profile.username}</strong><small>{services.authScope.persistent ? "Conta Aurora" : "Sessão independente"}</small></span>
         </div>
         <nav aria-label="Seções do launcher" className="app-nav">
           {([
@@ -3960,5 +3962,5 @@ function LauncherApp() {
 }
 
 export default function App() {
-  return <LauncherApp />;
+  return <LauncherStartup />;
 }

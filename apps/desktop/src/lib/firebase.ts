@@ -1,7 +1,8 @@
 import { initializeApp, type FirebaseApp } from "firebase/app";
-import { createUserWithEmailAndPassword, deleteUser, getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, type Auth, type User } from "firebase/auth";
+import { browserLocalPersistence, browserSessionPersistence, createUserWithEmailAndPassword, deleteUser, indexedDBLocalPersistence, initializeAuth, inMemoryPersistence, onAuthStateChanged, signInWithEmailAndPassword, signOut, type Auth, type User } from "firebase/auth";
 import { deleteField, doc, getDoc, getFirestore, runTransaction, serverTimestamp, setDoc, updateDoc, type Firestore } from "firebase/firestore";
 import { getDownloadURL, getStorage, ref, uploadBytes, type FirebaseStorage } from "firebase/storage";
+import { validateLauncherAuthScope, type LauncherAuthScope } from "./launcherAuthScope";
 
 export type FirebasePublicConfig = {
   apiKey: string;
@@ -13,7 +14,7 @@ export type FirebasePublicConfig = {
   workerUrl?: string;
 };
 
-export type FirebaseServices = { config: FirebasePublicConfig; app: FirebaseApp; auth: Auth; db: Firestore; storage: FirebaseStorage };
+export type FirebaseServices = { config: FirebasePublicConfig; app: FirebaseApp; auth: Auth; db: Firestore; storage: FirebaseStorage; authScope: LauncherAuthScope };
 
 const bundledWorkerUrl = import.meta.env.VITE_AURORA_API_URL?.trim();
 const officialFirebaseProjectId = "auroralauncher";
@@ -39,16 +40,24 @@ export type AuroraSkinFavorite = {
   skinModel: "classic" | "slim";
 };
 
-export function createFirebaseServices(config: FirebasePublicConfig): FirebaseServices {
+export function createFirebaseServices(config: FirebasePublicConfig, authScope: LauncherAuthScope): FirebaseServices {
+  const scope = validateLauncherAuthScope(authScope);
   // Old saved public configs predate workerUrl. Restore this build's matching
   // endpoint without sending another Firebase project's tokens to that Worker.
   const resolvedConfig = { ...config, workerUrl: config.workerUrl?.trim()
     || (config.projectId === bundledFirebaseConfig.projectId ? bundledFirebaseConfig.workerUrl : undefined) };
-  const app = initializeApp(resolvedConfig, `aurora-${resolvedConfig.projectId}`);
+  // Keep the primary app name and persistence hierarchy so existing remembered
+  // accounts migrate normally. Additional windows never touch that storage key.
+  const appName = `aurora-${resolvedConfig.projectId}${scope.persistent ? "" : `-session-${scope.id}`}`;
+  const app = initializeApp(resolvedConfig, appName);
+  const auth = initializeAuth(app, { persistence: scope.persistent
+    ? [indexedDBLocalPersistence, browserLocalPersistence, browserSessionPersistence, inMemoryPersistence]
+    : [browserSessionPersistence, inMemoryPersistence] });
   return {
     config: resolvedConfig,
     app,
-    auth: getAuth(app),
+    auth,
+    authScope: scope,
     db: getFirestore(app),
     storage: getStorage(app),
   };

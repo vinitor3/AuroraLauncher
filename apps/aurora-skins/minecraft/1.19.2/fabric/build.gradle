@@ -2,10 +2,14 @@ plugins { id "com.github.johnrengelman.shadow" }
 architectury { platformSetupLoomIde(); fabric() }
 configurations { common; shadowCommon; compileClasspath.extendsFrom common; runtimeClasspath.extendsFrom common }
 dependencies {
+    include(modImplementation('net.fabricmc.fabric-api:fabric-api-base:0.4.15+8f4e8eb390'))
+    include(modImplementation('net.fabricmc.fabric-api:fabric-lifecycle-events-v1:2.2.4+1b46dc7890'))
+    include(modImplementation('net.fabricmc.fabric-api:fabric-networking-api-v1:1.2.12+def3f86d90'))
+    compileOnly files(rootProject.file("../../core/build/libs/aurora-skins-core-0.3.1.jar"))
     modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
     common(project(path: ":common", configuration: "namedElements")) { transitive false }
     shadowCommon(project(path: ":common", configuration: "transformProductionFabric")) { transitive false }
-    shadowCommon files(rootProject.file("../../core/build/libs/aurora-skins-core-0.2.5.jar"))
+    shadowCommon files(rootProject.file("../../core/build/libs/aurora-skins-core-0.3.1.jar"))
 }
 processResources { inputs.properties "version": project.version; filesMatching("fabric.mod.json") { expand "version": project.version } }
 shadowJar {

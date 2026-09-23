@@ -2519,12 +2519,29 @@ pub fn acquire_instance_mutation_lock(
     instance: &Instance,
 ) -> Result<InstanceMutationGuard, ContentUpdateError> {
     ensure_instance_root_secure(instance)?;
-    let directory = instance.root().join(".aurora").join("content-updates");
-    ensure_no_symlink_components(instance.root(), ".aurora/content-updates")?;
+    let root = instance
+        .root()
+        .canonicalize()
+        .map_err(|source| io_error(instance.root(), source))?;
+    // Keep the handle outside the instance: Windows cannot rename a directory
+    // containing our open lock file. All mutations use this same stable path,
+    // including launch, updates, rename and delete; never unlink the lock file.
+    let data_directory = root
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| ContentUpdateError::UnsafeFilename(root.display().to_string()))?;
+    let identity = root.to_string_lossy();
+    #[cfg(windows)]
+    let identity = identity.to_lowercase();
+    let relative = format!(
+        ".aurora/instance-locks/{:x}.lock",
+        Sha1::digest(identity.as_bytes())
+    );
+    let directory = data_directory.join(".aurora").join("instance-locks");
+    ensure_no_symlink_components(data_directory, ".aurora/instance-locks")?;
     fs::create_dir_all(&directory).map_err(|source| io_error(&directory, source))?;
-    ensure_no_symlink_components(instance.root(), ".aurora/content-updates")?;
-    ensure_no_symlink_components(instance.root(), ".aurora/content-updates/mutation.lock")?;
-    let path = directory.join("mutation.lock");
+    ensure_no_symlink_components(data_directory, &relative)?;
+    let path = data_directory.join(relative);
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -2536,13 +2553,7 @@ pub fn acquire_instance_mutation_lock(
         fs::TryLockError::WouldBlock => ContentUpdateError::Busy,
         fs::TryLockError::Error(source) => io_error(&path, source),
     })?;
-    Ok(InstanceMutationGuard {
-        _file: file,
-        root: instance
-            .root()
-            .canonicalize()
-            .map_err(|source| io_error(instance.root(), source))?,
-    })
+    Ok(InstanceMutationGuard { _file: file, root })
 }
 
 fn transaction_root(instance: &Instance) -> PathBuf {
@@ -3076,6 +3087,45 @@ mod tests {
         ));
         drop(first);
         acquire_instance_mutation_lock(&instance).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_case_alias_cannot_acquire_a_second_mutation_lock() {
+        let (root, instance) = test_instance("case-lock");
+        let guard = acquire_instance_mutation_lock(&instance).unwrap();
+        let alias = InstanceLayout::new(&root).open(InstanceId::parse("TEST").unwrap());
+        assert!(matches!(
+            acquire_instance_mutation_lock(&alias),
+            Err(ContentUpdateError::Busy)
+        ));
+        drop(guard);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn mutation_lock_storage_does_not_follow_a_junction() {
+        use crate::engine::process::background_command;
+        let (root, instance) = test_instance("lock-junction");
+        let outside = root.join("outside-locks");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("preserved"), b"unchanged").unwrap();
+        let link = root.join(".aurora/instance-locks");
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        let output = background_command("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link.to_string_lossy().replace('/', "\\"))
+            .arg(outside.to_string_lossy().replace('/', "\\"))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(acquire_instance_mutation_lock(&instance).is_err());
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
+        assert_eq!(fs::read(outside.join("preserved")).unwrap(), b"unchanged");
+        // Remove the junction itself before the fixture; never recurse through it.
+        fs::remove_dir(link).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

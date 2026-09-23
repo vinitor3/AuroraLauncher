@@ -1,5 +1,21 @@
 # Compatibility Matrix
 
+## Skins 0.3.1 e sessões independentes — 23/09/2026
+
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. A integração parte do launcher alpha.10 atual (`4c58a3b`) e reúne a grade/cache da 0.2.5 com o multiplayer/compatibilidade da 0.3.0 nos nove pares existentes. Core permanece 1.1.5; o servidor recebe Skins da mesma combinação Minecraft/loader e não exige Core. O contrato cumulativo de features passa a bloquear artefatos sem grade, cache ou sincronização. Não há mudança da matriz Java, inclusão de Chat Heads ou retorno de Companion.
+
+O launcher preserva o login lembrado na primeira janela e isola as contas das adicionais. Dois jogos usam pastas de instância separadas. Relato do usuário: multiplayer e Chat Heads funcionaram na 0.3.0 em Minecraft 1.20.1 Forge e Fabric; o relato não homologa os novos hashes nem os nove pares. Execução gráfica completa da 0.3.1 e duas contas reais simultâneas: **PRECISA DE TESTE**. Evidências em [integração](../task-skins-session-integration.md).
+
+## Aurora Skins 0.3.0 — Multiplayer e aparência — 22/09/2026
+
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. As nove combinações (Forge 1.12.2 e Fabric/Forge 1.16.5, 1.19.2, 1.20.1, 1.21.1) geraram JARs finais e passaram pelos contratos Rust de empacotamento; manifesto em `releases/skins/0.3.0/manifest.json`. Foram aprovados 27 testes do núcleo, incluindo sete do servidor e quatro do cliente de sincronização. Fabric 1.21.1 inicializou o retransmissor dedicado sem Core; Forge 1.21.1 aprovou descoberta de metadados sem Core, mas não executou entrypoints antes da EULA. Ambos encerraram pré-EULA sem mundo/jogadores. Dois clientes reais e Chat Heads continuam com estado **PRECISA DE TESTE**; não há homologação visual ou instalador novo nesta tarefa.
+
+O servidor usa Aurora Skins 0.3.0 da mesma combinação Minecraft/loader, sem exigir Aurora Core/Companion; clientes participantes exigem Core 1.1.3+. Clientes sem Aurora Skins podem entrar, conforme as outras regras do servidor, e continuam vendo a aparência vanilla. O retransmissor limita a 256 participantes e uma publicação por jogador a cada dois segundos, com PNG canônico de até 24 KiB e estado apenas em memória, sem nuvem ou credenciais.
+
+`PlayerInfo` amplia a compatibilidade moderna com chat/tab; consultas adicionais de `SkinManager` atendem 1.19.2/1.20.1/1.21.1, e 1.12.2 mantém o adaptador legado. Não há recurso novo de cabeças no chat nem Chat Heads incluído. Mods que consultam diretamente a Mojang, mantêm caches próprios ou usam cabeças geradas exclusivamente no servidor podem continuar exibindo a skin oficial. Proxy/ViaVersion e travessia entre versões não são suportados; combinação Fabric/Forge não está homologada.
+
+Branch `codex/aur-skins-multiplayer-compat`, base `269d282`: preservar as alterações posteriores de Skins 0.2.5 na integração. Evidência e roteiro: [tarefa multiplayer](../task-skins-multiplayer.md); decisão: [ADR-022](ADR/ADR-022-skins-server-relay.md). O histórico abaixo permanece válido somente para as versões indicadas.
+
 ## Aurora Doctor local — 22/09/2026
 
 Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. O launcher passa a registrar e analisar tentativas de inicialização localmente, com regras determinísticas, associação limitada de logs e relatório sanitizado. Esse incremento não altera os JARs Core/Skins nem amplia Minecraft/loaders/Java suportados. Fixtures sintéticas e testes do diagnóstico não promovem os estados de homologação runtime abaixo. Comportamento e evidências específicas em [aurora-doctor.md](../aurora-doctor.md) e [task-aurora-doctor.md](../task-aurora-doctor.md).

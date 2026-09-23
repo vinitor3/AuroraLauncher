@@ -3,6 +3,6 @@
   "minVersion": "0.8",
   "package": "com.aurora.skins.minecraft.mixin",
   "compatibilityLevel": "JAVA_8",
-  "client": ["AbstractClientPlayerMixin", "TitleScreenMixin"],
+  "client": ["AbstractClientPlayerMixin", "PlayerInfoMixin", "TitleScreenMixin"],
   "injectors": { "defaultRequire": 0 }
 }

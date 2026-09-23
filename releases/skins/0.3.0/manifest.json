@@ -1,0 +1,55 @@
+{
+  "version": "0.3.0",
+  "coreMinimum": "1.1.3",
+  "serverRequiresCore": false,
+  "protocol": 1,
+  "runtimeStatus": "IMPLEMENTADO MAS NÃO HOMOLOGADO",
+  "evidence": "docs/task-skins-multiplayer.md",
+  "artifacts": [
+    {
+      "path": "1.12.2/forge/aurora-skins-forge-1.12.2-0.3.0.jar",
+      "sha256": "4d54405bb7bd30c2ada539f7473aeaf8bd2adf083e698baca0f4ea3d6b066661",
+      "size": 125934
+    },
+    {
+      "path": "1.16.5/fabric/aurora-skins-fabric-1.16.5-0.3.0.jar",
+      "sha256": "44627dd199a110450df990fd351517fb1b4de77f4bf657e919b06e1ae8fd9558",
+      "size": 257785
+    },
+    {
+      "path": "1.16.5/forge/aurora-skins-forge-1.16.5-0.3.0.jar",
+      "sha256": "a134572058c742a546a936cbcc48d6387fc49a7a3838d63955dd9ee4a34f4e6e",
+      "size": 119171
+    },
+    {
+      "path": "1.19.2/fabric/aurora-skins-fabric-1.19.2-0.3.0.jar",
+      "sha256": "e4674bef1e5c61fb8229b7ae56f6776400ad7efdf59736cad35cd8a8370b7de2",
+      "size": 319248
+    },
+    {
+      "path": "1.19.2/forge/aurora-skins-forge-1.19.2-0.3.0.jar",
+      "sha256": "58fecfaedcbca16c312ddd050e249db25b83d12ca3cdc8431a3a790c86e2fac2",
+      "size": 119640
+    },
+    {
+      "path": "1.20.1/fabric/aurora-skins-fabric-1.20.1-0.3.0.jar",
+      "sha256": "967beddd23d436eccfd6317240bdb995ed3a752e546916a150e01189df9b4096",
+      "size": 327634
+    },
+    {
+      "path": "1.20.1/forge/aurora-skins-forge-1.20.1-0.3.0.jar",
+      "sha256": "b12b7fee86bddf20785f4792adeb78ffb271031e07570f89b7d96fd56e0ff514",
+      "size": 120847
+    },
+    {
+      "path": "1.21.1/fabric/aurora-skins-fabric-1.21.1-0.3.0.jar",
+      "sha256": "fa98c8972b9ce4def0ef2dea0ce0e0d92ab1f878d3df159024b756728111549f",
+      "size": 389928
+    },
+    {
+      "path": "1.21.1/forge/aurora-skins-forge-1.21.1-0.3.0.jar",
+      "sha256": "295a8933a96aae8c24e95af1aabb3f576ebcf91801d7959c949170eba2d1346f",
+      "size": 109567
+    }
+  ]
+}

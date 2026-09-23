@@ -23,15 +23,15 @@ pub fn install_embedded_skins(
     loader: &str,
 ) -> Result<PathBuf, SkinsError> {
     let contents = match (minecraft_version, loader) {
-        ("1.12.2", "forge") => include_bytes!("../../../../../releases/skins/0.2.5/1.12.2/forge/aurora-skins-forge-1.12.2-0.2.5.jar").as_slice(),
-        ("1.16.5", "fabric") => include_bytes!("../../../../../releases/skins/0.2.5/1.16.5/fabric/aurora-skins-fabric-1.16.5-0.2.5.jar").as_slice(),
-        ("1.16.5", "forge") => include_bytes!("../../../../../releases/skins/0.2.5/1.16.5/forge/aurora-skins-forge-1.16.5-0.2.5.jar").as_slice(),
-        ("1.19.2", "fabric") => include_bytes!("../../../../../releases/skins/0.2.5/1.19.2/fabric/aurora-skins-fabric-1.19.2-0.2.5.jar").as_slice(),
-        ("1.19.2", "forge") => include_bytes!("../../../../../releases/skins/0.2.5/1.19.2/forge/aurora-skins-forge-1.19.2-0.2.5.jar").as_slice(),
-        ("1.20.1", "fabric") => include_bytes!("../../../../../releases/skins/0.2.5/1.20.1/fabric/aurora-skins-fabric-1.20.1-0.2.5.jar").as_slice(),
-        ("1.20.1", "forge") => include_bytes!("../../../../../releases/skins/0.2.5/1.20.1/forge/aurora-skins-forge-1.20.1-0.2.5.jar").as_slice(),
-        ("1.21.1", "fabric") => include_bytes!("../../../../../releases/skins/0.2.5/1.21.1/fabric/aurora-skins-fabric-1.21.1-0.2.5.jar").as_slice(),
-        ("1.21.1", "forge") => include_bytes!("../../../../../releases/skins/0.2.5/1.21.1/forge/aurora-skins-forge-1.21.1-0.2.5.jar").as_slice(),
+        ("1.12.2", "forge") => include_bytes!("../../../../../releases/skins/0.3.1/1.12.2/forge/aurora-skins-forge-1.12.2-0.3.1.jar").as_slice(),
+        ("1.16.5", "fabric") => include_bytes!("../../../../../releases/skins/0.3.1/1.16.5/fabric/aurora-skins-fabric-1.16.5-0.3.1.jar").as_slice(),
+        ("1.16.5", "forge") => include_bytes!("../../../../../releases/skins/0.3.1/1.16.5/forge/aurora-skins-forge-1.16.5-0.3.1.jar").as_slice(),
+        ("1.19.2", "fabric") => include_bytes!("../../../../../releases/skins/0.3.1/1.19.2/fabric/aurora-skins-fabric-1.19.2-0.3.1.jar").as_slice(),
+        ("1.19.2", "forge") => include_bytes!("../../../../../releases/skins/0.3.1/1.19.2/forge/aurora-skins-forge-1.19.2-0.3.1.jar").as_slice(),
+        ("1.20.1", "fabric") => include_bytes!("../../../../../releases/skins/0.3.1/1.20.1/fabric/aurora-skins-fabric-1.20.1-0.3.1.jar").as_slice(),
+        ("1.20.1", "forge") => include_bytes!("../../../../../releases/skins/0.3.1/1.20.1/forge/aurora-skins-forge-1.20.1-0.3.1.jar").as_slice(),
+        ("1.21.1", "fabric") => include_bytes!("../../../../../releases/skins/0.3.1/1.21.1/fabric/aurora-skins-fabric-1.21.1-0.3.1.jar").as_slice(),
+        ("1.21.1", "forge") => include_bytes!("../../../../../releases/skins/0.3.1/1.21.1/forge/aurora-skins-forge-1.21.1-0.3.1.jar").as_slice(),
         _ => {
             return Err(SkinsError::Unsupported {
                 minecraft_version: minecraft_version.to_owned(),
@@ -78,6 +78,51 @@ mod tests {
         resource(jars, &format!("{}.class", name.replace('.', "/"))).map(|_| ())
     }
 
+    // The active product contract is cumulative and independent of the version
+    // string. Historical fixtures still use validate() for their original shape.
+    fn validate_active_features(jars: &[Files], minecraft: &str) -> Contract<()> {
+        let contract = json(include_bytes!(
+            "../../../../../scripts/skins-feature-contract.json"
+        ))?;
+        if contract["schemaVersion"] != 1 {
+            return Err("versão inválida do contrato de funcionalidades".into());
+        }
+        let requirements = contract["requirements"]
+            .as_array()
+            .filter(|entries| !entries.is_empty())
+            .ok_or("contrato de funcionalidades vazio")?;
+        let scope = if minecraft == "1.12.2" {
+            "legacy"
+        } else {
+            "modern"
+        };
+        for requirement in requirements {
+            let required_scope = requirement["scope"].as_str().ok_or("escopo ausente")?;
+            if !["all", "legacy", "modern"].contains(&required_scope) {
+                return Err(format!("escopo inválido: {required_scope}"));
+            }
+            if required_scope != "all" && required_scope != scope {
+                continue;
+            }
+            let name = requirement["resource"].as_str().ok_or("recurso ausente")?;
+            let bytes = resource(jars, name)?;
+            // Stable Aurora symbols in the JVM constant pool show that screen,
+            // preview, cache and networking implementations retain their links.
+            for marker in strings(&requirement["markers"])? {
+                if marker.is_empty()
+                    || !bytes
+                        .windows(marker.len())
+                        .any(|part| part == marker.as_bytes())
+                {
+                    return Err(format!(
+                        "ligação de funcionalidade ausente: {name}: {marker}"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn strings(value: &Value) -> Contract<Vec<&str>> {
         value
             .as_array()
@@ -90,6 +135,27 @@ mod tests {
     // Only nested JARs declared to this loader may satisfy class/resource references.
     fn payload(bytes: &[u8], loader: &str, major: u16) -> Contract<Vec<Files>> {
         let mut zip = ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
+        // Only these three explicit networking dependencies may contribute Fabric classes.
+        // They remain loader-declared nested JARs, never shaded into Aurora's namespace.
+        let fabric_api = if loader == "fabric" {
+            let mut metadata = Vec::new();
+            if let Ok(mut entry) = zip.by_name("fabric.mod.json") {
+                entry
+                    .read_to_end(&mut metadata)
+                    .map_err(|e| e.to_string())?;
+            }
+            !metadata.is_empty()
+                && matches!(
+                    json(&metadata)?["id"].as_str(),
+                    Some(
+                        "fabric-api-base"
+                            | "fabric-networking-api-v1"
+                            | "fabric-lifecycle-events-v1"
+                    )
+                )
+        } else {
+            false
+        };
         let mut files = Files::new();
         for index in 0..zip.len() {
             let mut entry = zip.by_index(index).map_err(|e| e.to_string())?;
@@ -106,6 +172,7 @@ mod tests {
                 // Skins' own code and Architectury's generated bridge only:
                 // never shadow Core, Minecraft, loaders, Mixin, SLF4J, Gson, etc.
                 if !name.starts_with("com/aurora/skins/")
+                    && !(fabric_api && name.starts_with("net/fabricmc/fabric/"))
                     && !(name.starts_with("architectury_inject_")
                         && name.ends_with("/PlatformMethods.class"))
                 {
@@ -336,8 +403,7 @@ mod tests {
                 };
                 let result = payload(&fs::read(path).unwrap(), loader, major).and_then(|jars| {
                     validate(&jars, minecraft, loader)?;
-                    class(&jars, "com.aurora.skins.ui.CatalogGridState")?;
-                    class(&jars, "com.aurora.skins.ui.CatalogGridLayout")
+                    validate_active_features(&jars, minecraft)
                 });
                 if let Err(error) = result {
                     failures.push(format!("{minecraft}/{loader}: {error}"));
@@ -346,6 +412,60 @@ mod tests {
         }
         fs::remove_dir_all(root).unwrap();
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn active_features_reject_each_incomplete_historical_line() {
+        let grid_only = payload(
+            include_bytes!("../../../../../releases/skins/0.2.5/1.20.1/forge/aurora-skins-forge-1.20.1-0.2.5.jar"),
+            "forge", 61,
+        ).unwrap();
+        assert!(validate_active_features(&grid_only, "1.20.1")
+            .unwrap_err()
+            .contains("SkinSyncProtocol.class"));
+        let multiplayer_only = payload(
+            include_bytes!("../../../../../releases/skins/0.3.0/1.20.1/forge/aurora-skins-forge-1.20.1-0.3.0.jar"),
+            "forge", 61,
+        ).unwrap();
+        assert!(validate_active_features(&multiplayer_only, "1.20.1")
+            .unwrap_err()
+            .contains("CatalogGridState.class"));
+    }
+
+    #[test]
+    fn active_features_reject_unused_grid_classes_and_removed_preview_cache() {
+        let mut jars = payload(
+            include_bytes!("../../../../../releases/skins/0.3.1/1.20.1/forge/aurora-skins-forge-1.20.1-0.3.1.jar"),
+            "forge", 61,
+        ).unwrap();
+        validate_active_features(&jars, "1.20.1").unwrap();
+        // Keeping GridState/Layout in the JAR must not allow a reverted screen,
+        // renderer or provider to pass. Mutations exist only in memory.
+        for (name, marker) in [
+            (
+                "com/aurora/skins/minecraft/ui/AuroraSkinsScreen.class",
+                "renderCard",
+            ),
+            (
+                "com/aurora/skins/catalog/AuroraCatalogProvider.class",
+                "previewCache",
+            ),
+            ("aurora_skins.mixins.json", "PlayerInfoMixin"),
+        ] {
+            let original = jars[0][name].clone();
+            let bytes = jars[0].get_mut(name).unwrap();
+            let mut matches = 0;
+            for offset in 0..=bytes.len() - marker.len() {
+                if &bytes[offset..offset + marker.len()] == marker.as_bytes() {
+                    bytes[offset..offset + marker.len()].fill(b'_');
+                    matches += 1;
+                }
+            }
+            assert!(matches > 0, "fixture marker missing: {marker}");
+            let error = validate_active_features(&jars, "1.20.1").unwrap_err();
+            assert!(error.contains(name) && error.contains(marker), "{error}");
+            jars[0].insert(name.to_owned(), original);
+        }
     }
 
     #[test]

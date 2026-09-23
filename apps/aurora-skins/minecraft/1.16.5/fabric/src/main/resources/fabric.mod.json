@@ -4,13 +4,26 @@
   "version": "${version}",
   "name": "Aurora Skins",
   "description": "Biblioteca e renderização de skins integradas ao Aurora Core.",
-  "environment": "client",
-  "entrypoints": { "client": ["com.aurora.skins.minecraft.fabric.AuroraSkinsFabric"] },
-  "mixins": ["aurora_skins.mixins.json"],
+  "environment": "*",
+  "entrypoints": {
+    "client": [
+      "com.aurora.skins.minecraft.fabric.AuroraSkinsFabric"
+    ],
+    "main": [
+      "com.aurora.skins.minecraft.fabric.SkinSyncFabricServer"
+    ]
+  },
+  "mixins": [
+    "aurora_skins.mixins.json"
+  ],
   "depends": {
     "fabricloader": ">=0.13.3",
     "minecraft": "~1.16.5",
     "java": ">=8",
+    "fabric-networking-api-v1": "*",
+    "fabric-lifecycle-events-v1": "*"
+  },
+  "suggests": {
     "aurora_core": ">=1.1.3"
   }
 }

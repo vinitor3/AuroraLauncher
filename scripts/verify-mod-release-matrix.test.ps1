@@ -30,6 +30,8 @@ foreach ($scenario in @('forbidden-companion', 'source-mismatch', 'unexpected-ta
     $scripts = Join-Path $root 'scripts'
     New-Item -ItemType Directory -Force -Path $scripts | Out-Null
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'verify-mod-release-matrix.ps1') -Destination $scripts
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'skins-feature-contract.ps1') -Destination $scripts
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'skins-feature-contract.json') -Destination $scripts
     $matrix = @{
         schemaVersion = 1
         modules = @(@{ name = 'core'; version = 'fixture'; forbiddenEntryPrefixes = @('com/aurora/mod/') })

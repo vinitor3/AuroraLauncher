@@ -20,5 +20,7 @@
 | [017](ADR-017-external-content-downloads.md) | Download externo por SHA-1 oficial e fila correlacionada | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 
 | [018](ADR-018-remove-companion-keep-desktop-assistant.md) | Retirar mod Companion; preservar Assistente desktop, Core/Skins e IPC | Aceita |
+| [022](ADR-022-skins-server-relay.md) | Retransmitir skins pela conexão Minecraft, com integração da grade preservada | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| [023](ADR-023-independent-launcher-sessions.md) | Isolar autenticação das janelas mantendo login principal e instâncias protegidas | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 
 Estados mudam somente por novo ADR que substitua o anterior ou por revisão explícita deste arquivo.

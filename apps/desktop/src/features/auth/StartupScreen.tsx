@@ -21,7 +21,7 @@ export function StartupScreen({ error, onRetry, onSignOut }: Props) {
         {error ? (
           <div className="startup-actions">
             <button onClick={onRetry} type="button">Tentar novamente</button>
-            <button className="secondary" onClick={onSignOut} type="button">Voltar para entrar</button>
+            {onSignOut && <button className="secondary" onClick={onSignOut} type="button">Voltar para entrar</button>}
           </div>
         ) : (
           <div className="startup-loading" aria-hidden="true">

@@ -6,6 +6,7 @@
 
 mod commands;
 mod doctor_runs;
+mod launcher_sessions;
 mod manual_downloads;
 mod player_profiles;
 
@@ -91,9 +92,11 @@ fn main() {
         })
         .manage(commands::IpcSessions::default())
         .manage(commands::RunningInstances::default())
+        .manage(launcher_sessions::LauncherSessionState::default())
         .manage(doctor_runs::DoctorRuns::default())
         .manage(manual_downloads::ManualDownloads::default())
         .invoke_handler(tauri::generate_handler![
+            launcher_sessions::launcher_auth_scope,
             player_profiles::lookup_player_skin,
             commands::engine_status,
             commands::list_instances,
