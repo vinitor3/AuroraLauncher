@@ -1,0 +1,135 @@
+{
+    "schemaVersion":  1,
+    "product":  "Aurora Smart Launcher",
+    "version":  "0.1.1-alpha.12",
+    "artifact":  "Aurora Smart Launcher_0.1.1-alpha.12_x64-setup.exe",
+    "sizeBytes":  7888064,
+    "sha256":  "4c887fef1c95ad3dac83ce310bbb19cc0db3c32ffa8283e3f0f480f56d560adc",
+    "createdAtUtc":  "2026-09-23T12:56:33.9635454Z",
+    "source":  {
+                   "commit":  "42abd2d111e9f871b0dc4c5b51bf12eed9291c96",
+                   "branch":  "codex/aur-release-alpha12",
+                   "clean":  true
+               },
+    "buildCommand":  "npm run desktop:build",
+    "validation":  {
+                       "releasePreflight":  "passed",
+                       "modSourceMatrix":  "18/18",
+                       "runtime":  "NAO VERIFICADO",
+                       "codeSigning":  "NAO VERIFICADO"
+                   },
+    "modVersions":  {
+                        "core":  "1.1.5",
+                        "skins":  "0.3.1"
+                    },
+    "modArtifacts":  [
+                         {
+                             "mod":  "core",
+                             "version":  "1.1.5",
+                             "path":  "releases/core/1.1.5/1.12.2/forge/aurora-core-forge-1.12.2-1.1.5.jar",
+                             "sha256":  "ec92bd3fa2603cc795ee10c287a9dcd2e64e969b65879c7d203c674d5119fcbd"
+                         },
+                         {
+                             "mod":  "core",
+                             "version":  "1.1.5",
+                             "path":  "releases/core/1.1.5/1.16.5/fabric/aurora-core-fabric-1.16.5-1.1.5.jar",
+                             "sha256":  "0ae407af7f0c5abb05e9eb0c6d51d4c25bc91ccd1e03402ebcdc2a6a6bacfbce"
+                         },
+                         {
+                             "mod":  "core",
+                             "version":  "1.1.5",
+                             "path":  "releases/core/1.1.5/1.16.5/forge/aurora-core-forge-1.16.5-1.1.5.jar",
+                             "sha256":  "01749ea49f1150ad79f4c228f5da4edb1896001a4cac6639111d6db8c4126941"
+                         },
+                         {
+                             "mod":  "core",
+                             "version":  "1.1.5",
+                             "path":  "releases/core/1.1.5/1.19.2/fabric/aurora-core-fabric-1.19.2-1.1.5.jar",
+                             "sha256":  "1b90842cd0ce75486987be4841abe92fc0ba29ed31aaa266f72d62945eee38cf"
+                         },
+                         {
+                             "mod":  "core",
+                             "version":  "1.1.5",
+                             "path":  "releases/core/1.1.5/1.19.2/forge/aurora-core-forge-1.19.2-1.1.5.jar",
+                             "sha256":  "48eea8c41e9c4fb88228b972cbdd3fb10c9aec54d3155759c6505978d3da8240"
+                         },
+                         {
+                             "mod":  "core",
+                             "version":  "1.1.5",
+                             "path":  "releases/core/1.1.5/1.20.1/fabric/aurora-core-fabric-1.20.1-1.1.5.jar",
+                             "sha256":  "0b644673f04658ec9d8bd5441dcfdf7c27d22b94d8810fd467a9bc8b5a246bdc"
+                         },
+                         {
+                             "mod":  "core",
+                             "version":  "1.1.5",
+                             "path":  "releases/core/1.1.5/1.20.1/forge/aurora-core-forge-1.20.1-1.1.5.jar",
+                             "sha256":  "529ba7e835f7d5ee46914ae1677d20217e245cd34871d64250da17fbf05c0419"
+                         },
+                         {
+                             "mod":  "core",
+                             "version":  "1.1.5",
+                             "path":  "releases/core/1.1.5/1.21.1/fabric/aurora-core-fabric-1.21.1-1.1.5.jar",
+                             "sha256":  "728484ceb089dbede186a08bcb826796cc6b577c139bf3268b71f4cd0e1bfa1e"
+                         },
+                         {
+                             "mod":  "core",
+                             "version":  "1.1.5",
+                             "path":  "releases/core/1.1.5/1.21.1/forge/aurora-core-forge-1.21.1-1.1.5.jar",
+                             "sha256":  "9cf08d71c7efc19f7281d6719f5e660571e2ab89fd42d9c6284373b0578c5dfa"
+                         },
+                         {
+                             "mod":  "skins",
+                             "version":  "0.3.1",
+                             "path":  "releases/skins/0.3.1/1.12.2/forge/aurora-skins-forge-1.12.2-0.3.1.jar",
+                             "sha256":  "2e6a98361282b0f807f6751f87af80a04b188242de8ad9b8222188281e4cd871"
+                         },
+                         {
+                             "mod":  "skins",
+                             "version":  "0.3.1",
+                             "path":  "releases/skins/0.3.1/1.16.5/fabric/aurora-skins-fabric-1.16.5-0.3.1.jar",
+                             "sha256":  "90985bfeb1b7cec13e5102b227921360540a5ecdb2ff77826250db090de4d5d0"
+                         },
+                         {
+                             "mod":  "skins",
+                             "version":  "0.3.1",
+                             "path":  "releases/skins/0.3.1/1.16.5/forge/aurora-skins-forge-1.16.5-0.3.1.jar",
+                             "sha256":  "325346133f2ae8fd1fef6546a9bc220ccd3f257053d4e8bd9aa82fa1e5e4ac1c"
+                         },
+                         {
+                             "mod":  "skins",
+                             "version":  "0.3.1",
+                             "path":  "releases/skins/0.3.1/1.19.2/fabric/aurora-skins-fabric-1.19.2-0.3.1.jar",
+                             "sha256":  "30b6912a6be55d72119378352c27ea048eeb4b8f60e35e9e247f780ba5078ccb"
+                         },
+                         {
+                             "mod":  "skins",
+                             "version":  "0.3.1",
+                             "path":  "releases/skins/0.3.1/1.19.2/forge/aurora-skins-forge-1.19.2-0.3.1.jar",
+                             "sha256":  "50069b8858fabb4f0c26e2f3fc7e6a6e7dfa2bd3348114056adccb17c1a171b0"
+                         },
+                         {
+                             "mod":  "skins",
+                             "version":  "0.3.1",
+                             "path":  "releases/skins/0.3.1/1.20.1/fabric/aurora-skins-fabric-1.20.1-0.3.1.jar",
+                             "sha256":  "76f8d7300c89d3a18960f5604fea292906dbf3a2d79d28b74348cd4ab02c09f7"
+                         },
+                         {
+                             "mod":  "skins",
+                             "version":  "0.3.1",
+                             "path":  "releases/skins/0.3.1/1.20.1/forge/aurora-skins-forge-1.20.1-0.3.1.jar",
+                             "sha256":  "c0f5aeaa3e0980fbcb52fcf2ca29a07352cd17b78de8c1c1a7c5ffca9c4d3442"
+                         },
+                         {
+                             "mod":  "skins",
+                             "version":  "0.3.1",
+                             "path":  "releases/skins/0.3.1/1.21.1/fabric/aurora-skins-fabric-1.21.1-0.3.1.jar",
+                             "sha256":  "fdfe82f248204e3a0de3bc0c0886c3b98efab2c59bfae140f686411cdb4a2258"
+                         },
+                         {
+                             "mod":  "skins",
+                             "version":  "0.3.1",
+                             "path":  "releases/skins/0.3.1/1.21.1/forge/aurora-skins-forge-1.21.1-0.3.1.jar",
+                             "sha256":  "53deb275bd8d44f4aee9fb0ffdb53da76da4ceaeba0e368efcf87e4f790b1c03"
+                         }
+                     ]
+}

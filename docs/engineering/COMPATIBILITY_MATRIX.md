@@ -1,5 +1,9 @@
 # Compatibility Matrix
 
+## Instalador integrado alpha.12 — 28/09/2026
+
+Empacotamento: **CONCLUÍDO**. O build oficial de 23/09 foi conferido na retomada de 28/09, com 18/18 JARs Core 1.1.5/Skins 0.3.1, sessões independentes e Doctor com orientação Gemini opcional. Não altera a matriz de Minecraft/loaders/Java. Consulta Gemini real e homologação completa de Minecraft: **NÃO VERIFICADO**. Artefato e hashes em [task-release-alpha12.md](../task-release-alpha12.md).
+
 ## Aurora Doctor — orientação Gemini opcional — 23/09/2026
 
 Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. O incremento parte de `6f3a13b`, launcher alpha.11, Core 1.1.5 e Skins 0.3.1. Amplia regras locais e acrescenta explicação Gemini por ação explícita, com contrato reduzido, timeout e passos manuais permitidos. Não altera os JARs, a matriz de Minecraft/loaders/Java ou as sessões independentes. A análise determinística continua offline; testes com respostas sintéticas não homologam Gemini real nem uma nova implantação do Worker. Evidências em [task-doctor-gemini.md](../task-doctor-gemini.md).

@@ -3,7 +3,17 @@
 Os artefatos desta pasta são imutáveis. Um nome de versão já publicado nunca
 deve ser sobrescrito nem removido.
 
-## Release atual — 0.1.1-alpha.10
+## Release atual — 0.1.1-alpha.12
+
+[Instalador Windows alpha.12](<Aurora Smart Launcher_0.1.1-alpha.12_x64-setup.exe>), gerado em 23/09/2026 e conferido em 28/09/2026. Integra o Doctor com identificação ampliada e explicação Gemini curta, preservando as entregas anteriores, sessões independentes, Core 1.1.5 e Skins 0.3.1. Matriz 18/18 JARs conferida pelo build oficial.
+
+SHA-256: `4c887fef1c95ad3dac83ce310bbb19cc0db3c32ffa8283e3f0f480f56d560adc`. Manifesto ao lado do instalador e [evidências da entrega](../docs/task-release-alpha12.md). Gemini online depende da publicação da nova rota Worker; consulta real e homologação completa de Minecraft: **NÃO VERIFICADO**. Sem assinatura Authenticode.
+
+## Release anterior — 0.1.1-alpha.11
+
+[Instalador Windows alpha.11](<Aurora Smart Launcher_0.1.1-alpha.11_x64-setup.exe>), preservado com seu SHA-256 e manifesto. Reuniu Skins 0.3.1 e sessões independentes na base do launcher, mantendo Core 1.1.5.
+
+## Release anterior — 0.1.1-alpha.10
 
 [Instalador Windows alpha.10](<Aurora Smart Launcher_0.1.1-alpha.10_x64-setup.exe>), gerado em 22/09/2026. Corrige a tradução de páginas com idiomas misturados, progresso/retomada, configuração antiga e carregamento de projetos; integra o Aurora Doctor local. Core 1.1.5 e Skins 0.2.5 mantidos, 18/18 JARs conferidos.
 
