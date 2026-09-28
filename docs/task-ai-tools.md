@@ -1,10 +1,10 @@
 # Gemini e ações confirmadas no Aurora
 
-Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Há implementação no Worker, cliente e broker Rust, com gates nativos aprovados. Assistente, Doctor e Tools responderam usando Gemini real em preview remoto com entradas sintéticas; publicação e instalador permanecem pendentes.
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Worker atualizado em produção e instalador alpha.13 gerado, com gates nativos aprovados. Assistente, Doctor e Tools responderam usando Gemini real em preview remoto com entradas sintéticas; a operação completa numa instância real do jogador permanece sem homologação.
 
 ## Base e escopo
 
-Trabalho em `codex/aur-ai-tools`, worktree exclusiva, sobre `ab1e1b5afda45d55ec3cb6aa12b1f11bf69d8a7c` do repositório ativo AuroraLauncher. Base: launcher `0.1.1-alpha.12`, Core `1.1.5` e Skins `0.3.1`, conferidos no checkout e na matriz ativa. O código do launcher foi atualizado para alpha.13; empacotamento e publicação do Worker permanecem pendentes após os gates. Versões e JARs Core/Skins e a matriz Minecraft/loaders/Java permanecem inalterados; resultado do instalador e implantação serão registrados quando executados.
+Trabalho em `codex/aur-ai-tools`, worktree exclusiva, sobre `ab1e1b5afda45d55ec3cb6aa12b1f11bf69d8a7c` do repositório ativo AuroraLauncher. Base: launcher `0.1.1-alpha.12`, Core `1.1.5` e Skins `0.3.1`, conferidos no checkout e na matriz ativa. O launcher foi atualizado para alpha.13. As versões Core/Skins e a matriz Minecraft/loaders/Java permanecem inalteradas; o build oficial reconstruiu e verificou os 18 JARs.
 
 O incremento centraliza o acesso Gemini, distingue erros operacionais e oferece propostas estreitas de remoção reversível de mod e ajuste de opções permitidas. Assistente e Doctor compartilham revisão, confirmação, histórico e restauração locais. A análise determinística do Doctor continua utilizável sem Gemini. Preserva Assistente desktop, TTS, microfone, sessões independentes e integrações Core/Skins; não reintroduz Companion.
 
@@ -14,7 +14,9 @@ A inspeção inicial foi somente leitura, usando a autenticação Wrangler exist
 
 A rota Gemini do Doctor entrou no código em 23/09, commit `0ed345f`, depois dessa implantação. Isso sustenta a hipótese de serviço antigo sem a rota nova; HTTP 401 anônimo não comprova a existência de uma rota, porque a autenticação antecede o despacho. A presença do nome de um secret também não comprova sua validade.
 
-Em preview remoto temporário, usando o secret existente, uma consulta real do Assistente retornou HTTP 200 e `modelVersion=gemini-3.8-flash`. A consulta de metadados desse modelo retornou HTTP 200. Doctor também retornou HTTP 200 com JSON completo validado para a entrada sintética `memory_failure`, evidência correspondente e passos permitidos. Tools retornou HTTP 200, `model=gemini-3.8-flash` e nenhuma proposta para um contexto sem evidência de falha. As tentativas também encontraram HTTP 503 `UNAVAILABLE` intermitente. A estrutura e o acesso real foram demonstrados; isso não comprova disponibilidade contínua nem a qualidade de uma sugestão de alteração. Produção ainda não foi atualizada nesta etapa.
+Em preview remoto temporário, usando o secret existente, uma consulta real do Assistente retornou HTTP 200 e `modelVersion=gemini-3.8-flash`. A consulta de metadados desse modelo retornou HTTP 200. Doctor também retornou HTTP 200 com JSON completo validado para a entrada sintética `memory_failure`, evidência correspondente e passos permitidos. Tools retornou HTTP 200, `model=gemini-3.8-flash` e nenhuma proposta para um contexto sem evidência de falha. As tentativas também encontraram HTTP 503 `UNAVAILABLE` intermitente, inclusive numa solicitação sintética explícita de ajuste de configuração. A estrutura e o acesso real foram demonstrados; isso não comprova disponibilidade contínua nem a qualidade de uma sugestão de alteração. O preview foi encerrado e seu helper e credencial temporários foram removidos após os testes.
+
+O Worker foi publicado com `npm --prefix apps/edge-proxy run deploy`, versão `f4847c3e-9f6e-465c-86e3-670b819820f8`. A saúde de produção respondeu HTTP 200 com revisão `2026-09-28-gemini-tools-v1`; as três rotas de IA retornaram HTTP 401 `session` para consultas anônimas. A presença do secret Gemini foi conferida novamente sem ler seu valor. Não foi extraído token do jogador para testar uma consulta autenticada em produção: as respostas reais acima pertencem ao preview, e os testes autenticados de rota usam chaves e sessões sintéticas.
 
 ## Implementação e limites
 
@@ -40,10 +42,14 @@ Detalhes de formatos, capacidades e limites: [Aurora AI Tools](aurora-ai-tools.m
 | Rust completo, clippy, fmt e broker de mutação final | **CONCLUÍDO**: 190 testes aprovados, cinco opt-in ignorados; `cargo fmt --all -- --check` e `cargo clippy --all-targets -- -D warnings` aprovados. |
 | Assistente Gemini real em preview | **CONCLUÍDO** para uma resposta HTTP 200 que identificou `gemini-3.8-flash`; disponibilidade contínua não foi demonstrada. |
 | Doctor/Tools com resposta estruturada Gemini real | **CONCLUÍDO** para entradas sintéticas controladas: HTTP 200 e validação dos contratos nos dois fluxos. Também houve 503 intermitente do provedor. |
-| Nova versão publicada no Worker de produção | **NÃO IMPLEMENTADO** nesta etapa. |
-| Instalador alpha.13 | **PRECISA DE TESTE**; empacotamento previsto após gates e integração. |
+| Nova versão publicada no Worker de produção | **CONCLUÍDO**: versão e revisão acima, saúde 200, proteção de sessão 401 e secret preservado. |
+| Instalador alpha.13 | **CONCLUÍDO**: build oficial, preflight inicial/final e matriz 18/18 aprovados; instalação e execução nativas pelo jogador ainda **NÃO VERIFICADO**. |
 | UI nativa autenticada com uma ação real e restauração | **PRECISA DE TESTE**; testes DOM e fixtures Rust não são essa homologação. |
 
 A revisão independente encontrou correções incorporadas e cobertas pelos gates: vazamento de basename de JAR sem metadados; recuperação de configuração quando a interrupção deixa o destino ausente; vínculo do journal à identidade da instância preservando renomeação e recusando cópia; histórico genérico ou journal corrompido ocultando outros recibos de recuperação; e UI tratando recibo pendente como sucesso. Testes com arquivos sintéticos exercitam escrita/backup/restauração reais no filesystem, sem modificar instâncias do jogador.
 
-Não foram lidos tokens pessoais do navegador. As verificações descritas não instalam JAR nem iniciam jogo para provocar crash. Publicação, instalador, Gemini estruturado e operação nativa devem registrar precisamente o ambiente e o resultado antes de serem marcados como concluídos.
+## Entrega alpha.13
+
+Fonte do instalador: commit `db74fb5ee2353ee4f729100d1adab4614d8ad270`, checkout limpo, `npm run release:package` executando `npm run desktop:build`. Artefato em `releases/Aurora Smart Launcher_0.1.1-alpha.13_x64-setup.exe`, 8.048.800 bytes, SHA-256 `918167c1d5e45fb8a8bc7d686098abd1f917d9976b7ef912e4b1d4afc8f406b4`. Manifesto e arquivo SHA-256 acompanham o instalador; releases anteriores foram preservadas. O manifesto declara runtime e assinatura digital **NÃO VERIFICADO**.
+
+Não foram lidos tokens pessoais do navegador. As verificações descritas não instalam JAR numa instância do jogador nem iniciam jogo para provocar crash. O instalador foi gerado, não executado automaticamente.
