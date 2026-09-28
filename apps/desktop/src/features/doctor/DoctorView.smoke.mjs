@@ -14,6 +14,8 @@ Object.assign(globalThis, { window, document, HTMLElement: window.HTMLElement, I
 let clipboard = "";
 Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: "Synthetic React DOM smoke", clipboard: { writeText: async (value) => { clipboard = value; } } } });
 const requests = [];
+const recordedAdvice = [];
+const nativeContext = { schemaVersion: 1, contextId: "synthetic-context", mods: [], settings: [], truncated: false, history: [] };
 const listeners = new Map();
 let callbackId = 0;
 let latestRun = null;
@@ -23,6 +25,8 @@ window.__TAURI_INTERNALS__ = {
     if (command === "plugin:event|listen") return Promise.resolve(args.handler);
     if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); return Promise.resolve(); }
     if (command === "read_latest_doctor_run") return Promise.resolve(latestRun);
+    if (command === "ai_tools_context") return Promise.resolve(nativeContext);
+    if (command === "ai_record_advice") { recordedAdvice.push(args); return Promise.resolve({}); }
     assert.equal(command, "analyze_instance");
     return new Promise((resolve, reject) => requests.push({ args, resolve, reject }));
   },
@@ -171,17 +175,25 @@ assert.match(container.querySelector(".doctor-result-summary").textContent, /Mem
 await click("Tentar Gemini novamente");
 const failedAdvice = adviceRequests.shift();
 await act(async () => failedAdvice.reject(new Error("SYNTHETIC_PROVIDER_SECRET")));
-assert.match(container.textContent, /Gemini indisponível/);
+assert.match(container.textContent, /Gemini não retornou uma resposta válida/);
 assert.doesNotMatch(container.textContent, /SYNTHETIC_PROVIDER_SECRET/);
+await click("Tentar Gemini novamente");
+const missingKeyAdvice = adviceRequests.shift();
+await act(async () => missingKeyAdvice.reject({ code: "not_configured" }));
+assert.match(container.textContent, /chave do Gemini não está configurada no Worker/);
+assert.equal(button("Tentar Gemini novamente").disabled, false);
 await click("Tentar Gemini novamente");
 const malformedAdvice = adviceRequests.shift();
 await act(async () => malformedAdvice.resolve(advice({ actions: ["execute_shell"] })));
-assert.match(container.textContent, /Gemini indisponível/);
+assert.match(container.textContent, /Gemini não retornou uma resposta válida/);
 assert.equal(container.querySelector(".doctor-gemini-result"), null);
 assert.match(container.querySelector(".doctor-result-summary").textContent, /Memória insuficiente/);
 await click("Tentar Gemini novamente");
 const goodAdvice = adviceRequests.shift();
 await act(async () => goodAdvice.resolve(advice()));
+assert.equal(recordedAdvice.at(-1).id, "synthetic-c");
+assert.deepEqual(recordedAdvice.at(-1).advice.proposals, []);
+assert.match(recordedAdvice.at(-1).advice.summary, /JVM registrou falta de memória/);
 const { DOCTOR_ACTIONS } = await import(await transpiledModule(new URL("../../../../../shared/doctorAdvice.ts", import.meta.url)));
 assert.equal(container.querySelector(".doctor-gemini-result li").textContent, DOCTOR_ACTIONS.check_memory);
 assert.match(container.querySelector(".doctor-gemini-result").textContent, /Sugestão do Gemini/);

@@ -82,7 +82,7 @@ test("quota, old server, invalid output and private upstream errors never replac
   }
   for (const value of [{ ...advice, actions: ["delete_everything"] }, { ...advice, evidenceIds: ["duplicate_mod"] }, { ...advice, summary: "x".repeat(161) }]) {
     globalThis.fetch = async () => Response.json(value);
-    await assert.rejects(requestDoctorAdvice(services(), report, new AbortController().signal), /diagnóstico local continua/);
+    await assert.rejects(requestDoctorAdvice(services(), report, new AbortController().signal), { code: "invalid_response" });
   }
   assert.equal(JSON.stringify(report), original);
 });
@@ -102,7 +102,7 @@ test("large replies, missing session, aborted start and unknown local categories
   await assert.rejects(requestDoctorAdvice(services(), report, new AbortController().signal));
   assert.equal(calls, 1);
   const session = services(); session.auth.currentUser = null;
-  await assert.rejects(requestDoctorAdvice(session, report, new AbortController().signal), /Entre na sua conta/);
+  await assert.rejects(requestDoctorAdvice(session, report, new AbortController().signal), { code: "session" });
   await assert.rejects(requestDoctorAdvice(services(), report, AbortSignal.abort()), { name: "AbortError" });
   await assert.rejects(requestDoctorAdvice(services(), { ...report, issues: [{ id: "untrusted", confidence: "high", kind: "fact" }] }, new AbortController().signal));
   assert.equal(calls, 1);

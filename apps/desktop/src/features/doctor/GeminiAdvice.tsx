@@ -1,22 +1,28 @@
 import { useEffect, useRef, useState } from "react";
 import { buildDoctorAdviceInput, DOCTOR_ACTIONS, DOCTOR_ISSUE_LABELS, parseDoctorAdvice, type DoctorAdvice } from "../../../../../shared/doctorAdvice";
 import type { DoctorExplanation, DoctorReport } from "./types";
+import { publicAiError } from "../../../../../shared/aiErrors";
+import { invoke } from "@tauri-apps/api/core";
+import type { AiToolContext } from "../../../../../shared/aiTools";
 
-type Props = { report: DoctorReport; explain: DoctorExplanation; busy: boolean };
+type Props = { instanceId: string; report: DoctorReport; explain: DoctorExplanation; busy: boolean };
 type Result = {
+  instanceId: string;
   report: DoctorReport;
   explain: DoctorExplanation;
   phase: "loading" | "ready" | "error" | "cancelled";
   advice?: DoctorAdvice;
+  error?: string;
+  historyWarning?: boolean;
 };
 
-export function GeminiAdvice({ report, explain, busy }: Props) {
+export function GeminiAdvice({ instanceId, report, explain, busy }: Props) {
   const [result, setResult] = useState<Result>();
   const generation = useRef(0);
   const pending = useRef<AbortController | undefined>(undefined);
-  const currentInputs = useRef({ report, explain });
-  currentInputs.current = { report, explain };
-  const current = result?.report === report && result.explain === explain ? result : undefined;
+  const currentInputs = useRef({ instanceId, report, explain });
+  currentInputs.current = { instanceId, report, explain };
+  const current = result?.instanceId === instanceId && result.report === report && result.explain === explain ? result : undefined;
   const loading = current?.phase === "loading";
 
   useEffect(() => {
@@ -26,13 +32,13 @@ export function GeminiAdvice({ report, explain, busy }: Props) {
       pending.current?.abort();
       pending.current = undefined;
     };
-  }, [report, explain]);
+  }, [instanceId, report, explain]);
 
   function cancel() {
     generation.current += 1;
     pending.current?.abort();
     pending.current = undefined;
-    setResult({ report, explain, phase: "cancelled" });
+    setResult({ instanceId, report, explain, phase: "cancelled" });
   }
 
   async function requestExplanation() {
@@ -40,20 +46,28 @@ export function GeminiAdvice({ report, explain, busy }: Props) {
     const controller = new AbortController();
     const request = ++generation.current;
     pending.current = controller;
-    setResult({ report, explain, phase: "loading" });
+    setResult({ instanceId, report, explain, phase: "loading" });
     const stillCurrent = () => !controller.signal.aborted && generation.current === request
-      && currentInputs.current.report === report && currentInputs.current.explain === explain;
+      && currentInputs.current.instanceId === instanceId && currentInputs.current.report === report && currentInputs.current.explain === explain;
     try {
       // Validate again at the display boundary. Model-authored repair text and
       // arbitrary evidence IDs are never accepted as actions or references.
       const input = buildDoctorAdviceInput(report);
+      let historyContext: AiToolContext | undefined;
+      try { historyContext = await invoke<AiToolContext>("ai_tools_context", { id: instanceId }); } catch { /* Explanation remains available if history storage is unavailable. */ }
+      if (!stillCurrent()) return;
       const response = await explain(report, controller.signal);
       if (!stillCurrent()) return;
       const advice = parseDoctorAdvice(response, input);
       if (!advice) throw new Error("Invalid structured explanation");
-      setResult({ report, explain, phase: "ready", advice });
-    } catch {
-      if (stillCurrent()) setResult({ report, explain, phase: "error" });
+      let historyWarning = !historyContext;
+      if (historyContext) {
+        try { await invoke("ai_record_advice", { id: instanceId, contextId: historyContext.contextId, advice: { summary: `${advice.summary} ${advice.cause}`.slice(0, 400), proposals: [] } }); }
+        catch { historyWarning = true; }
+      }
+      if (stillCurrent()) setResult({ instanceId, report, explain, phase: "ready", advice, historyWarning });
+    } catch (cause) {
+      if (stillCurrent()) setResult({ instanceId, report, explain, phase: "error", error: publicAiError(cause) });
     } finally {
       if (pending.current === controller) pending.current = undefined;
     }
@@ -69,7 +83,7 @@ export function GeminiAdvice({ report, explain, busy }: Props) {
         </div>
       </div>
       {loading && <p className="doctor-gemini-status" role="status">Preparando uma explicação curta…</p>}
-      {current?.phase === "error" && <p className="doctor-gemini-status" role="status">Gemini indisponível ou sem resposta válida. O diagnóstico local continua disponível.</p>}
+      {current?.phase === "error" && <p className="doctor-gemini-status" role="status">{current.error} O diagnóstico local continua disponível.</p>}
       {current?.phase === "cancelled" && <p className="doctor-gemini-status" role="status">Consulta cancelada. O diagnóstico local continua disponível.</p>}
       {current?.advice && <div className="doctor-gemini-result">
         <p className="doctor-gemini-disclaimer">Sugestão do Gemini · confira as evidências locais</p>
@@ -77,6 +91,7 @@ export function GeminiAdvice({ report, explain, busy }: Props) {
         <div><h3>{current.advice.certainty === "unknown" ? "Causa não identificada" : "Possível causa"}</h3><p>{current.advice.cause}</p></div>
         <div><h3>Próximos passos</h3><ol>{current.advice.actions.map((action) => <li key={action}>{DOCTOR_ACTIONS[action]}</li>)}</ol></div>
         {current.advice.evidenceIds.length > 0 && <small>Baseado em: {current.advice.evidenceIds.map((id) => DOCTOR_ISSUE_LABELS[id]).join(" · ")}.</small>}
+        {current.historyWarning && <small>Não foi possível guardar esta explicação no histórico local.</small>}
       </div>}
     </section>
   );

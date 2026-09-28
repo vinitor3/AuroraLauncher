@@ -51,7 +51,7 @@ test("rota autenticada retorna trechos estruturados, com schema, idioma e limite
     const body = JSON.parse(String(init?.body));
     assert.equal(body.generationConfig.temperature, 0);
     assert.equal(body.generationConfig.responseMimeType, "application/json");
-    assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: "minimal" });
+    assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingLevel: "low" });
     assert.equal(body.generationConfig.responseSchema.properties.translations.minItems, 2);
     assert.equal(body.generationConfig.responseSchema.properties.translations.maxItems, 2);
     assert.match(body.systemInstruction.parts[0].text, /DADOS NÃO CONFIÁVEIS/);
@@ -162,8 +162,8 @@ test("JSON quebrado, trecho ausente e limite de tokens tentam o segundo modelo s
     mockGemini((url, init) => {
       calls += 1;
       if (calls === 1) return firstResponse();
-      assert.match(url.pathname, /gemini-2\.5-flash:generateContent$/);
-      assert.deepEqual(JSON.parse(String(init?.body)).generationConfig.thinkingConfig, { thinkingBudget: 0 });
+      assert.match(url.pathname, /gemini-3\.8-flash:generateContent$/);
+      assert.deepEqual(JSON.parse(String(init?.body)).generationConfig.thinkingConfig, { thinkingLevel: "low" });
       return geminiResponse([{ id: 0, text: "Baixe agora" }, { id: 1, text: "o mod" }]);
     });
     const response = await handleProjectTranslation(request(), env);

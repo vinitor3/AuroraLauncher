@@ -8,6 +8,12 @@ use std::time::Duration;
 
 use crate::doctor_runs::{self, DoctorRuns};
 use aurora_launcher_core::engine::{
+    ai_history,
+    ai_tools::{
+        AiToolAdvice, AiToolBroker, AiToolContext, AiToolHistoryEntry, AiToolPlan, AiToolProposal,
+    },
+};
+use aurora_launcher_core::engine::{
     analyze_instance as analyze_doctor, canonical_launch_failure, snapshot_logs, DoctorContext,
     DoctorReport, DoctorRun,
 };
@@ -1990,13 +1996,194 @@ pub async fn analyze_instance(
             DoctorContext { version_id: profile.version_id.unwrap_or_default(), minecraft_version: profile.minecraft_version.unwrap_or_default(), java_executable: java_executable.filter(|value| !value.trim().is_empty()), max_memory_mb: 4096 }
         };
         let observed_run_id = run.as_ref().map(|run| run.run_id.clone());
-        let report = analyze_doctor(&instance, context, run)?;
+        let mut report = analyze_doctor(&instance, context, run)?;
         let current_run_id = app.state::<DoctorRuns>().read(&doctor_directory(&app)?, instance.id().as_str())?.map(|run| run.run_id);
         if current_run_id != observed_run_id {
             return Err("Uma nova execução começou durante a análise. Analise novamente.".into());
         }
+        if ai_history::record_diagnosis(&instance, &report).is_err() {
+            report.limitations.push("O diagnóstico foi concluído, mas não foi possível registrar o histórico local.".into());
+            report.sanitized_json.clear();
+            report.sanitized_json = serde_json::to_string_pretty(&report).map_err(|_| "Falha ao gerar relatório sanitizado.")?;
+        } else {
+            let _ = app.emit("aurora-ai-history-changed", serde_json::json!({"instanceId":instance.id().as_str()}));
+        }
         Ok(report)
     }).await.map_err(|_| "Não foi possível concluir a análise local. Tente novamente.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn ai_tools_context(
+    window: tauri::WebviewWindow,
+    id: String,
+) -> Result<AiToolContext, String> {
+    let app = window.app_handle().clone();
+    let owner = window.label().to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        let instance =
+            layout(&app)?.open(InstanceId::parse(id).map_err(|_| "Instância inválida.")?);
+        let history = ai_history::safe_for_model(&instance)?;
+        app.state::<AiToolBroker>()
+            .context(instance, &owner, history)
+    })
+    .await
+    .map_err(|_| "Não foi possível preparar o contexto local.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn prepare_ai_tool(
+    window: tauri::WebviewWindow,
+    id: String,
+    context_id: String,
+    proposal: AiToolProposal,
+) -> Result<AiToolPlan, String> {
+    let app = window.app_handle().clone();
+    let owner = window.label().to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        let instance =
+            layout(&app)?.open(InstanceId::parse(id).map_err(|_| "Instância inválida.")?);
+        app.state::<AiToolBroker>()
+            .prepare(&instance, &owner, &context_id, proposal)
+    })
+    .await
+    .map_err(|_| "Não foi possível preparar a revisão da ação.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn confirm_ai_tool(
+    window: tauri::WebviewWindow,
+    plan_id: String,
+    digest: String,
+) -> Result<AiToolHistoryEntry, String> {
+    let app = window.app_handle().clone();
+    let owner = window.label().to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut selected = None;
+        let applied =
+            app.state::<AiToolBroker>()
+                .confirm(&owner, &plan_id, &digest, |instance| {
+                    if instance_is_running(
+                        &app.state::<RunningInstances>(),
+                        instance.id().as_str(),
+                    )? {
+                        return Err("Feche o Minecraft antes de confirmar a alteração.".into());
+                    }
+                    ensure_no_external_instance_game(instance.root())?;
+                    selected = Some(instance.clone());
+                    Ok(())
+                })?;
+        let instance = selected.ok_or("Não foi possível identificar a ação concluída.")?;
+        let receipt = applied.receipt;
+        let recorded = ai_history::record_action(
+            &instance,
+            receipt.action_id.as_deref().ok_or("Ação inválida.")?,
+            &receipt.title,
+            &receipt.status,
+            receipt.undo_available,
+            &applied.action_kind,
+            &applied.target_name,
+        )
+        .unwrap_or(receipt);
+        let _ = app.emit(
+            "aurora-ai-tool-changed",
+            serde_json::json!({"instanceId":instance.id().as_str(),"status":recorded.status}),
+        );
+        let _ = app.emit(
+            "aurora-ai-history-changed",
+            serde_json::json!({"instanceId":instance.id().as_str()}),
+        );
+        Ok(recorded)
+    })
+    .await
+    .map_err(|_| {
+        "Não foi possível concluir a ação. Consulte o histórico antes de tentar novamente."
+            .to_owned()
+    })?
+}
+
+#[tauri::command]
+pub fn revoke_ai_tool_plan(window: tauri::WebviewWindow, plan_id: String) -> Result<(), String> {
+    window
+        .app_handle()
+        .state::<AiToolBroker>()
+        .revoke(window.label(), &plan_id)
+}
+
+#[tauri::command]
+pub async fn prepare_ai_tool_undo(
+    window: tauri::WebviewWindow,
+    id: String,
+    action_id: String,
+) -> Result<AiToolPlan, String> {
+    let app = window.app_handle().clone();
+    let owner = window.label().to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        let instance =
+            layout(&app)?.open(InstanceId::parse(id).map_err(|_| "Instância inválida.")?);
+        app.state::<AiToolBroker>()
+            .prepare_undo(&instance, &owner, &action_id)
+    })
+    .await
+    .map_err(|_| "Não foi possível preparar a restauração.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn ai_tool_history(
+    window: tauri::WebviewWindow,
+    id: String,
+) -> Result<Vec<AiToolHistoryEntry>, String> {
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let instance =
+            layout(&app)?.open(InstanceId::parse(id).map_err(|_| "Instância inválida.")?);
+        let mut entries = ai_history::read_history(&instance).unwrap_or_default();
+        for journal in app.state::<AiToolBroker>().history(&instance)? {
+            if let Some(entry) = entries
+                .iter_mut()
+                .find(|entry| entry.action_id == journal.action_id)
+            {
+                if entry.status != journal.status {
+                    entry.assessment = Some("inconclusive".into());
+                    entry.summary = journal.summary.clone();
+                }
+                entry.status = journal.status;
+                entry.undo_available = journal.undo_available;
+            } else {
+                entries.push(journal);
+            }
+        }
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
+        entries.truncate(64);
+        Ok(entries)
+    })
+    .await
+    .map_err(|_| "Não foi possível consultar o histórico local.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn ai_record_advice(
+    window: tauri::WebviewWindow,
+    id: String,
+    context_id: String,
+    advice: AiToolAdvice,
+) -> Result<AiToolHistoryEntry, String> {
+    let app = window.app_handle().clone();
+    let owner = window.label().to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        let instance =
+            layout(&app)?.open(InstanceId::parse(id).map_err(|_| "Instância inválida.")?);
+        let targets =
+            app.state::<AiToolBroker>()
+                .validate_advice(&instance, &owner, &context_id, &advice)?;
+        let entry = ai_history::record_advice(&instance, &context_id, &advice, &targets)?;
+        let _ = app.emit(
+            "aurora-ai-history-changed",
+            serde_json::json!({"instanceId":instance.id().as_str()}),
+        );
+        Ok(entry)
+    })
+    .await
+    .map_err(|_| "Não foi possível registrar a orientação local.".to_owned())?
 }
 
 #[tauri::command]

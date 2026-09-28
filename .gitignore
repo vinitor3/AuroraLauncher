@@ -8,6 +8,7 @@
 **/build/
 functions/lib/
 apps/edge-proxy/.wrangler/
+**/.wrangler/
 .firebase/
 .aurora/
 

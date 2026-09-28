@@ -1,5 +1,9 @@
 # Compatibility Matrix
 
+## Gemini e ações locais confirmadas — 28/09/2026
+
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. O incremento parte de `ab1e1b5`, launcher alpha.12, Core 1.1.5 e Skins 0.3.1, sem alterar a matriz ativa ou os JARs; alpha.13 e implantação do Worker seguem pela integração. Assistente e Doctor compartilham transporte Gemini e revisão de remoção reversível de mod/ajuste de opções JSON permitidas, com histórico e restauração locais. Assistente e respostas estruturadas Doctor/Tools foram comprovados em preview com Gemini real e entradas sintéticas; também houve 503 intermitente. Testes de broker, DOM e Worker não homologam os pares Minecraft/loader abaixo. Evidências em [task-ai-tools.md](../task-ai-tools.md).
+
 ## Instalador integrado alpha.12 — 28/09/2026
 
 Empacotamento: **CONCLUÍDO**. O build oficial de 23/09 foi conferido na retomada de 28/09, com 18/18 JARs Core 1.1.5/Skins 0.3.1, sessões independentes e Doctor com orientação Gemini opcional. Não altera a matriz de Minecraft/loaders/Java. Consulta Gemini real e homologação completa de Minecraft: **NÃO VERIFICADO**. Artefato e hashes em [task-release-alpha12.md](../task-release-alpha12.md).

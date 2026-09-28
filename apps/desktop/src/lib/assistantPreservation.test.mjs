@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
+import { AI_ERRORS, publicAiError } from "../../../../shared/aiErrors.ts";
+import { nativeToolError } from "../features/ai-tools/types.ts";
 
 const source = ts.createSourceFile("App.tsx", await readFile(new URL("../App.tsx", import.meta.url), "utf8"),
   ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -171,7 +173,7 @@ test("fala desktop trata áudio inválido e falhas de mídia/reprodução", asyn
   }
 });
 
-function panelHarness({ recognitionAvailable = true, ask = async () => "Resposta desktop" } = {}) {
+function panelHarness({ recognitionAvailable = true, ask = async () => "Resposta desktop", instance, requestToolAdvice, native = async () => assert.fail("Nenhum comando nativo esperado") } = {}) {
   const slots = [];
   const cleanups = [];
   const effects = [];
@@ -203,9 +205,14 @@ function panelHarness({ recognitionAvailable = true, ask = async () => "Resposta
       stop() { this.stopped = true; this.onend?.(); }
     } } : {},
     askAuroraAssistant: ask,
+    publicAiError, nativeToolError,
+    invoke: native,
+    listen: async () => () => {},
+    AiToolProposalList: () => null,
     playAuroraSpeech: async (text) => { spoken = text; return { pause: () => { audioPaused += 1; } }; },
   });
-  const render = () => { slot = 0; effectIndex = 0; return Panel({ services: {}, username: "QA", onClose: () => {} }); };
+  const panelProps = { services: {}, username: "QA", instance, requestToolAdvice, accountId: "synthetic-account", onClose: () => {} };
+  const render = () => { slot = 0; effectIndex = 0; return Panel(panelProps); };
   function find(tree, predicate) {
     if (predicate(tree)) return tree;
     return tree.children?.map((child) => typeof child === "object" ? find(child, predicate) : null).find(Boolean);
@@ -213,12 +220,15 @@ function panelHarness({ recognitionAvailable = true, ask = async () => "Resposta
   return {
     render,
     control: (label) => find(render(), (node) => node.props?.["aria-label"] === label),
+    checkbox: () => find(render(), (node) => node.type === "input" && node.props?.type === "checkbox"),
+    button: (label) => find(render(), (node) => node.type === "button" && node.children?.includes(label)),
     form: () => find(render(), (node) => node.type === "form"),
     text: () => JSON.stringify(render()),
     recognition: () => recognition,
     spoken: () => spoken,
     audioPaused: () => audioPaused,
     unmount: () => cleanups.forEach((cleanup) => cleanup()),
+    changeInstance: (next) => { panelProps.instance = next; render(); },
   };
 }
 
@@ -244,14 +254,78 @@ test("painel mantém conversa, transcrição, mute e reprodução sem instância
 });
 
 test("painel mantém mensagens de falha de rede e microfone", async () => {
-  const panel = panelHarness({ ask: async () => { throw new Error("Falha de rede tratada"); } });
+  const panel = panelHarness({ ask: async () => { throw { code: "network" }; } });
   panel.control("Mensagem para o Assistente").props.onChange({ target: { value: "Olá" } });
   await panel.form().props.onSubmit({ preventDefault() {} });
-  assert.match(panel.text(), /Falha de rede tratada/);
+  assert.ok(panel.text().includes(AI_ERRORS.network));
   panel.control("Usar microfone").props.onClick();
   panel.recognition().onerror();
   assert.match(panel.text(), /Não consegui compreender o áudio/);
   const unavailable = panelHarness({ recognitionAvailable: false });
   unavailable.control("Usar microfone").props.onClick();
   assert.match(unavailable.text(), /microfone por voz não está disponível/);
+});
+
+test("resposta vazia ou erro do Gemini encerra o carregamento e mostra motivo público", async () => {
+  for (const scenario of [
+    { ask: async () => "", expected: AI_ERRORS.invalid_response },
+    { ask: async () => { throw { code: "not_configured" }; }, expected: AI_ERRORS.not_configured },
+    { ask: async () => { throw { code: "model_unavailable" }; }, expected: AI_ERRORS.model_unavailable },
+    { ask: async () => { throw new Error("SYNTHETIC_PROVIDER_SECRET"); }, expected: AI_ERRORS.invalid_response },
+  ]) {
+    const panel = panelHarness(scenario);
+    panel.control("Mensagem para o Assistente").props.onChange({ target: { value: "Olá" } });
+    await panel.form().props.onSubmit({ preventDefault() {} });
+    assert.ok(panel.text().includes(scenario.expected));
+    assert.doesNotMatch(panel.text(), /typing-dots|Pensando…|SYNTHETIC_PROVIDER_SECRET/);
+    assert.equal(panel.spoken(), undefined);
+  }
+});
+
+test("lista de mods só segue na consulta marcada e gera sugestões sem executar alterações", async () => {
+  const commands = [];
+  const context = { schemaVersion: 1, contextId: "synthetic-context", mods: [], settings: [], history: [], truncated: false };
+  let calls = 0;
+  const panel = panelHarness({
+    instance: { id: "synthetic-instance", name: "Instância sintética" },
+    native: async (command, args) => {
+      commands.push({ command, args });
+      if (command === "ai_tools_context") return context;
+      if (command === "ai_record_advice") return {};
+      assert.fail("Não deve preparar ou aplicar ações automaticamente");
+    },
+    requestToolAdvice: async (received, question, signal) => {
+      calls += 1; assert.equal(received, context); assert.equal(question, "Confira os mods"); assert.equal(signal.aborted, false);
+      return { summary: "Sugestão sintética sem alteração.", proposals: [], model: "gemini-test" };
+    },
+  });
+  assert.equal(panel.checkbox().props.checked, false);
+  panel.control("Mensagem para o Assistente").props.onChange({ target: { value: "Pergunta comum" } });
+  await panel.form().props.onSubmit({ preventDefault() {} });
+  assert.equal(calls, 0);
+  assert.deepEqual(commands, []);
+  panel.checkbox().props.onChange({ target: { checked: true } });
+  panel.control("Mensagem para o Assistente").props.onChange({ target: { value: "Confira os mods" } });
+  await panel.form().props.onSubmit({ preventDefault() {} });
+  assert.equal(calls, 1);
+  assert.deepEqual(commands.map((item) => item.command), ["ai_tools_context", "ai_record_advice"]);
+  assert.equal(panel.spoken(), "Sugestão sintética sem alteração.");
+});
+
+test("cancelar, trocar de instância e fechar descartam respostas tardias do Assistente", async () => {
+  for (const finish of ["cancel", "instance", "unmount"]) {
+    let resolve;
+    let signal;
+    const panel = panelHarness({ ask: (_services, _question, receivedSignal) => { signal = receivedSignal; return new Promise((done) => { resolve = done; }); } });
+    panel.control("Mensagem para o Assistente").props.onChange({ target: { value: "Olá" } });
+    const operation = panel.form().props.onSubmit({ preventDefault() {} });
+    if (finish === "cancel") panel.button("Cancelar consulta").props.onClick();
+    else if (finish === "instance") panel.changeInstance({ id: "other-instance", name: "Outra instância" });
+    else panel.unmount();
+    assert.equal(signal.aborted, true);
+    resolve("STALE_ASSISTANT_RESPONSE");
+    await operation;
+    assert.doesNotMatch(panel.text(), /STALE_ASSISTANT_RESPONSE/);
+    assert.equal(panel.spoken(), undefined);
+  }
 });

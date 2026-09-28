@@ -2,11 +2,10 @@ import {
   allowedDoctorActions, DOCTOR_ACTIONS, DOCTOR_ISSUE_LABELS,
   parseDoctorAdvice, parseDoctorAdviceInput, type DoctorAdviceInput,
 } from "../../../shared/doctorAdvice.ts";
-import { readDoctorJson, withDoctorAbort } from "../../../shared/doctorTransport.ts";
+import { readDoctorJson } from "../../../shared/doctorTransport.ts";
+import { aiFailureResponse, generateGemini, GEMINI_THINKING, GeminiFailure } from "./gemini.ts";
 
 type DoctorEnvironment = { GEMINI_API_KEY?: string };
-const unavailable = "Não foi possível obter a explicação do Gemini. O diagnóstico local continua disponível.";
-const model = "gemini-3.5-flash-lite";
 function json(body: unknown, status = 200) {
   return Response.json(body, { status, headers: { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" } });
 }
@@ -34,7 +33,7 @@ function generationRequest(input: DoctorAdviceInput) {
       allowedActions: actions.map((id) => ({ id, instruction: DOCTOR_ACTIONS[id] })),
     }) }] }],
     generationConfig: {
-      temperature: 0, maxOutputTokens: 800, thinkingConfig: { thinkingLevel: "minimal" },
+      temperature: 0, maxOutputTokens: 2_048, thinkingConfig: GEMINI_THINKING,
       responseMimeType: "application/json",
       responseSchema: {
         type: "OBJECT", required: ["schemaVersion", "summary", "cause", "certainty", "actions", "evidenceIds"],
@@ -52,47 +51,18 @@ function generationRequest(input: DoctorAdviceInput) {
   };
 }
 
-/** Caller enforces Firebase authentication + a dedicated budget. No automatic retries. */
+/** Caller enforces Firebase authentication and a shared AI request deadline. */
 export async function handleDoctorAdvice(request: Request, env: DoctorEnvironment, deadline?: AbortSignal): Promise<Response> {
-  const signal = deadline ?? AbortSignal.any([request.signal, AbortSignal.timeout(20_000)]);
-  if (!request.headers.get("Content-Type")?.toLowerCase().startsWith("application/json")) {
-    return json({ error: "Envie um diagnóstico válido em JSON." }, 400);
-  }
-  let input: DoctorAdviceInput | null;
-  try { input = parseDoctorAdviceInput(await readDoctorJson(request, 8_192, signal)); }
-  catch { return json({ error: signal.aborted ? unavailable : "O diagnóstico enviado é inválido ou excede o limite." }, signal.aborted ? 503 : 400); }
-  if (!input) return json({ error: "O diagnóstico enviado é inválido; analise a instância novamente." }, 400);
-  if (!env.GEMINI_API_KEY?.trim() || signal.aborted) return json({ error: unavailable }, 503);
+  const signal = deadline ?? AbortSignal.any([request.signal, AbortSignal.timeout(35_000)]);
   try {
-    const response = await withDoctorAbort(fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY.trim() },
-      body: JSON.stringify(generationRequest(input)), signal,
-    }), signal);
-    if (!response.ok) {
-      void response.body?.cancel().catch(() => undefined);
-      return json({ error: response.status === 429
-        ? "O limite temporário do Gemini foi atingido. Aguarde um pouco; o diagnóstico local continua disponível."
-        : unavailable }, response.status === 429 ? 429 : 503);
-    }
-    if (!response.headers.get("Content-Type")?.toLowerCase().includes("application/json")) {
-      void response.body?.cancel().catch(() => undefined);
-      return json({ error: unavailable }, 503);
-    }
-    const payload = await readDoctorJson(response, 24_576, signal) as {
-      candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: unknown; thought?: boolean }> } }>;
-    };
-    const candidate = payload?.candidates?.[0];
-    if (candidate?.finishReason !== "STOP" || !Array.isArray(candidate.content?.parts)) return json({ error: unavailable }, 503);
-    const parts = candidate.content.parts.filter((part) => !part.thought);
-    if (!parts.length || parts.some((part) => typeof part.text !== "string")) return json({ error: unavailable }, 503);
-    const text = parts.map((part) => part.text).join("");
-    if (text.length > 3_000) return json({ error: unavailable }, 503);
-    const advice = parseDoctorAdvice(JSON.parse(text), input);
-    if (!advice || signal.aborted) return json({ error: unavailable }, 503);
+    if (!request.headers.get("Content-Type")?.toLowerCase().startsWith("application/json")) throw new GeminiFailure("invalid_request", 400);
+    let input: DoctorAdviceInput | null;
+    try { input = parseDoctorAdviceInput(await readDoctorJson(request, 8_192, signal)); }
+    catch { throw new GeminiFailure(signal.aborted ? "timeout" : "invalid_request", signal.aborted ? 504 : 400); }
+    if (!input) throw new GeminiFailure("invalid_request", 400);
+    const result = await generateGemini(env, generationRequest(input), signal);
+    const advice = parseDoctorAdvice(JSON.parse(result.text), input);
+    if (!advice) throw new GeminiFailure("invalid_response", 502);
     return json(advice);
-  } catch {
-    // No prompt, report, upstream body, key or raw exception goes to logs/clients.
-    return json({ error: unavailable }, 503);
-  }
+  } catch (cause) { return aiFailureResponse(cause instanceof SyntaxError ? new GeminiFailure("invalid_response", 502) : cause); }
 }

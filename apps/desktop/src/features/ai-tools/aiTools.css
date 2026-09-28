@@ -1,0 +1,45 @@
+.ai-tools { display: grid; gap: .7rem; color: #ded4ec; }
+.ai-tools-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .6rem; padding: .8rem; border: 1px solid #c7aaff24; border-radius: 9px; background: #b391ff07; }
+.ai-tools-heading > div { min-width: 0; flex: 1; }
+.ai-tools-heading strong { font-size: .82rem; }
+.ai-tools-heading p, .ai-tools-note { margin: .3rem 0 0; color: #a99fb7; font-size: .72rem; line-height: 1.55; }
+.ai-tools-buttons { display: flex; flex-wrap: wrap; gap: .4rem; }
+.ai-tools-summary { margin: 0; color: #cfc0df; font-size: .8rem; line-height: 1.6; }
+.ai-tool-proposals { display: grid; gap: .6rem; }
+.ai-tool-card { padding: .75rem; border: 1px solid #ffffff18; border-radius: 9px; background: #09071466; }
+.ai-tool-card strong { font-size: .8rem; }
+.ai-tool-card p { margin: .35rem 0 .65rem; color: #b8adc8; font-size: .75rem; line-height: 1.5; overflow-wrap: anywhere; }
+.ai-tool-card .ai-tools-note { margin: .4rem 0 0; font-size: .69rem; }
+.ai-tool-error { margin: .45rem 0 0; color: #ffbac6; font-size: .76rem; line-height: 1.55; }
+.ai-tool-status { margin: .45rem 0 0; color: #c5b8d8; font-size: .76rem; line-height: 1.55; }
+.ai-tool-history { border: 1px solid #ffffff14; border-radius: 9px; padding: .75rem; }
+.ai-tool-history > summary { cursor: pointer; color: #d0bcdf; font-size: .75rem; }
+.ai-tool-history-list { display: grid; gap: .55rem; margin-top: .7rem; }
+.ai-tool-history-list article { padding: .6rem; border-left: 2px solid #b391ff40; background: #09071466; }
+.ai-tool-history-list strong { font-size: .77rem; }
+.ai-tool-history-list small { display: block; margin: .3rem 0; color: #9f94b0; font-size: .67rem; }
+.ai-tool-history-list p { margin: .35rem 0; color: #c5b8d8; font-size: .73rem; line-height: 1.5; }
+.ai-tool-history-list .ai-tool-unresolved { color: #f2d184; }
+.ai-tool-modal-backdrop { position: fixed; z-index: 160; inset: 0; display: grid; align-items: center; justify-items: center; padding: 1rem; background: #080511d6; backdrop-filter: blur(3px); }
+.ai-tool-review { display: flex; flex-direction: column; width: min(620px, 100%); max-height: calc(100vh - 2rem); overflow: hidden; border: 1px solid #cba9ff66; border-radius: 14px; background: #120c20; color: #e9e2f5; box-shadow: 0 25px 100px #000b; }
+.ai-tool-review header, .ai-tool-review footer { flex: 0 0 auto; padding: 1rem; }
+.ai-tool-review header { border-bottom: 1px solid #ffffff14; }
+.ai-tool-review header > p:last-child { margin: .5rem 0 0; color: #b6a8c8; font-size: .79rem; overflow-wrap: anywhere; }
+.ai-tool-review-body { min-height: 0; overflow: auto; padding: .9rem 1rem; }
+.ai-tool-review-body > p { font-size: .8rem; line-height: 1.6; }
+.ai-tool-review footer { display: flex; justify-content: flex-end; gap: .6rem; border-top: 1px solid #ffffff14; }
+.ai-tool-diff { display: grid; gap: .6rem; }
+.ai-tool-diff article { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; border: 1px solid #ffffff1a; border-radius: 9px; padding: .75rem; }
+.ai-tool-diff article > strong { grid-column: 1 / -1; font-size: .8rem; overflow-wrap: anywhere; }
+.ai-tool-diff article > div { min-width: 0; padding: .55rem; border-radius: 6px; background: #ffffff07; }
+.ai-tool-diff article > div:last-child { background: #73e4bb0b; }
+.ai-tool-diff span { color: #a497b5; font-size: .68rem; }
+.ai-tool-diff p { margin: .35rem 0 0; font-size: .77rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+.ai-tool-warnings { display: grid; gap: .45rem; margin: .8rem 0 0; padding-left: 1.2rem; color: #e4cd94; font-size: .76rem; line-height: 1.5; }
+.assistant-instance-context { margin: .5rem .8rem 0; padding: .65rem; border: 1px solid #c7aaff24; border-radius: 9px; }
+.assistant-instance-context label { display: flex; gap: .5rem; align-items: flex-start; color: #d0bcdf; font-size: .73rem; line-height: 1.5; }
+.assistant-instance-context input { width: auto; min-height: auto; margin-top: .2rem; }
+.assistant-instance-context small { display: block; margin-top: .35rem; color: #a99fb7; font-size: .68rem; line-height: 1.5; }
+.assistant-messages > .ai-tools { flex: 0 0 auto; }
+.ai-tool-history > summary:focus-visible { outline: 2px solid #c8a6ff; outline-offset: 3px; border-radius: 4px; }
+@media (max-width: 540px) { .ai-tool-diff article { grid-template-columns: 1fr; } .ai-tool-review footer { flex-wrap: wrap; } }

@@ -3,6 +3,9 @@ import { SkinApiError } from "./skins/http.ts";
 import { skinImageUrl, type PlayerSkinEnv } from "./skins/models.ts";
 import { handleProjectTranslation } from "./translation.ts";
 import { handleDoctorAdvice } from "./doctor.ts";
+import { handleAssistant } from "./assistant.ts";
+import { handleAiTools } from "./aiTools.ts";
+import { aiFailureResponse, GeminiFailure } from "./gemini.ts";
 import { readDoctorJson, withDoctorAbort } from "../../../shared/doctorTransport.ts";
 
 export interface Env extends PlayerSkinEnv {
@@ -44,7 +47,7 @@ const curseForgeApiBase = "https://api.curseforge.com/v1";
 const mcstatApiBase = "https://mcstat.org/api/v1";
 const supabaseBase = "https://pgbzkinjfwbncifurirb.supabase.co";
 const appearanceBucket = "aurora-appearance";
-const auroraApiRevision = "2026-09-17-integrated-catalog-skins-updates-v1";
+const auroraApiRevision = "2026-09-28-gemini-tools-v1";
 const minecraftGameId = 432;
 const curseForgeClassIds = { mod: 6, modpack: 4471, resourcepack: 12, shader: 6552 } as const;
 const curseForgeLoaderIds = { forge: 1, fabric: 4 } as const;
@@ -627,81 +630,6 @@ async function uploadAppearance(request: Request, env: Env, userId: string): Pro
   }
   const publicUrl = `${supabaseBase}/storage/v1/object/public/${appearanceBucket}/${objectPath}`;
   return json({ url: publicUrl });
-}
-
-async function askGemini(request: Request, env: Env): Promise<Response> {
-  if (!env.GEMINI_API_KEY) return error("O Assistente Aurora ainda não foi configurado.", 503);
-  const body = await readBody(request);
-  const message = boundedText(body.message, 2_000, "Mensagem");
-  const mode = optionalBoundedText(body.mode, 20, "Modo");
-  if ((mode && mode !== "launcher") || "screenshotBase64" in body) {
-    return error("A integração do Assistente com o jogo foi retirada. Use o Assistente do Aurora Launcher.");
-  }
-  const complexQuestion = message.length > 320
-    || /\b(crash|erro|exception|stacktrace|log|config|conflito|incompat|kubejs|script|código|diagn[oó]stico)\b/i.test(message);
-  const modelCandidates = complexQuestion
-    ? ["gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"]
-    : ["gemini-3.5-flash-lite", "gemini-3.7-flash", "gemini-2.5-flash"];
-  const parts: Array<Record<string, unknown>> = [{ text: message }];
-  const requestBody = JSON.stringify({
-    systemInstruction: {
-      parts: [{
-        text: "Você é o Assistente do Aurora Launcher. Ajude com Minecraft, mods, desempenho e erros de instâncias. Responda em português, de forma curta, segura e útil. Não peça senhas, tokens ou dados privados.",
-      }],
-    },
-    contents: [{ role: "user", parts }],
-    generationConfig: { maxOutputTokens: 400 },
-  });
-  let lastFailure: { status: number; apiStatus: string } | null = null;
-  for (const model of modelCandidates) {
-    let response: Response;
-    try {
-      response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
-          body: requestBody,
-          signal: AbortSignal.timeout(20_000),
-        },
-      );
-    } catch (cause) {
-      console.error("Gemini upstream timeout", {
-        model,
-        message: cause instanceof Error ? cause.message.slice(0, 200) : "falha de rede",
-      });
-      lastFailure = { status: 503, apiStatus: "UNAVAILABLE" };
-      continue;
-    }
-    if (response.ok) {
-      const result = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-      const text = result.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim();
-      if (!text) return error("O Assistente Aurora não retornou uma resposta.", 503);
-      return json({ text: text.slice(0, 8_000), model });
-    }
-
-    const upstream = await response.json().catch(() => null) as { error?: { message?: string; status?: string } } | null;
-    const apiStatus = upstream?.error?.status ?? "";
-    lastFailure = { status: response.status, apiStatus };
-    console.error("Gemini upstream failure", {
-      model,
-      httpStatus: response.status,
-      apiStatus,
-      message: upstream?.error?.message?.slice(0, 300) ?? "sem detalhes",
-    });
-    if (response.status === 429 || /quota|resource_exhausted/i.test(apiStatus)) {
-      return error("O limite temporário do Gemini foi atingido. Aguarde um pouco e tente novamente.", 429);
-    }
-    const unsupportedModel = response.status === 404
-      || (response.status === 400 && /model|not found|not supported/i.test(upstream?.error?.message ?? ""));
-    const temporarilyUnavailable = response.status === 503 || response.status === 524
-      || /unavailable|high demand/i.test(apiStatus + " " + (upstream?.error?.message ?? ""));
-    if (!unsupportedModel && !temporarilyUnavailable) break;
-  }
-  if (lastFailure?.status === 400 || lastFailure?.status === 403) {
-    return error("A chave do Gemini não autorizou o serviço. Verifique se a Gemini API está ativa no Google AI Studio.", 503);
-  }
-  return error("O Assistente Aurora não está disponível agora.", 503);
 }
 
 async function protectCurseForgeFileUrl(
@@ -2292,8 +2220,8 @@ export default {
     }
     if (request.method === "GET" && url.pathname.startsWith("/v1/skins/catalog/")) return skinCatalogAsset(url.pathname);
     if (request.method !== "POST") return error("Rota não encontrada.", 404);
-    const doctorDeadline = url.pathname === "/v1/doctor/advice"
-      ? AbortSignal.any([request.signal, AbortSignal.timeout(20_000)]) : undefined;
+    const doctorDeadline = ["/v1/doctor/advice", "/v1/assistant", "/v1/ai/tools"].includes(url.pathname)
+      ? AbortSignal.any([request.signal, AbortSignal.timeout(35_000)]) : undefined;
     try {
       if (doctorDeadline && (request.headers.get("Authorization")?.length ?? 0) > 16_384) {
         return error("A sessão Aurora não é válida.", 401);
@@ -2308,7 +2236,7 @@ export default {
         // authenticated route its own bounded budget; assistant/appearance
         // keep the stricter shared budget below.
         enforceRateLimit(`curseforge:${userId}`, 48);
-      } else if (url.pathname === "/v1/doctor/advice") {
+      } else if (url.pathname === "/v1/doctor/advice" || url.pathname === "/v1/ai/tools") {
         enforceRateLimit(`doctor:${userId}`, 6);
       } else if (url.pathname === "/v1/translate") {
         enforceRateLimit(`translation:${userId}`, 24);
@@ -2316,16 +2244,17 @@ export default {
         enforceRateLimit(userId);
       }
       if (url.pathname === "/v1/doctor/advice") return await handleDoctorAdvice(request, env, doctorDeadline);
+      if (url.pathname === "/v1/ai/tools") return await handleAiTools(request, env, doctorDeadline!);
       if (url.pathname === "/v1/translate") return await handleProjectTranslation(request, env);
-      if (url.pathname === "/v1/assistant") return await askGemini(request, env);
+      if (url.pathname === "/v1/assistant") return await handleAssistant(request, env, doctorDeadline!);
       if (url.pathname === "/v1/curseforge") return await curseForgeCatalog(request, env, userId);
       if (url.pathname === "/v1/appearance") return await uploadAppearance(request, env, userId);
       return error("Rota não encontrada.", 404);
     } catch (cause) {
       if (doctorDeadline) {
-        if (doctorDeadline.aborted) return error("A consulta demorou ou foi cancelada. O diagnóstico local continua disponível.", 503);
-        if (cause instanceof PublicError && cause.status === 429) return error("Muitas consultas ao Gemini. Aguarde um minuto; o diagnóstico local continua disponível.", 429);
-        return error("Não foi possível validar sua sessão Aurora. Entre novamente e tente consultar o Gemini.", 401);
+        if (doctorDeadline.aborted) return aiFailureResponse(new GeminiFailure("timeout", 504));
+        if (cause instanceof PublicError && cause.status === 429) return aiFailureResponse(new GeminiFailure("quota", 429));
+        return aiFailureResponse(new GeminiFailure("session", 401));
       }
       const message = cause instanceof Error ? cause.message : "Não foi possível concluir a solicitação.";
       const status = cause instanceof PublicError

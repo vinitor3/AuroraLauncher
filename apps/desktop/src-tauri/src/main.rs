@@ -95,6 +95,7 @@ fn main() {
         .manage(launcher_sessions::LauncherSessionState::default())
         .manage(doctor_runs::DoctorRuns::default())
         .manage(manual_downloads::ManualDownloads::default())
+        .manage(aurora_launcher_core::engine::ai_tools::AiToolBroker::default())
         .invoke_handler(tauri::generate_handler![
             launcher_sessions::launcher_auth_scope,
             player_profiles::lookup_player_skin,
@@ -137,6 +138,13 @@ fn main() {
             commands::cancel_instance_launch,
             commands::read_latest_doctor_run,
             commands::analyze_instance,
+            commands::ai_tools_context,
+            commands::prepare_ai_tool,
+            commands::confirm_ai_tool,
+            commands::revoke_ai_tool_plan,
+            commands::prepare_ai_tool_undo,
+            commands::ai_tool_history,
+            commands::ai_record_advice,
             commands::list_running_instances,
             commands::poll_ipc_events,
             commands::synthesize_speech,

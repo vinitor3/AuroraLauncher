@@ -1,5 +1,8 @@
 //! Serviços de instância, Java e inicialização da JVM.
 
+pub mod ai_history;
+pub mod ai_tools;
+
 mod companion_migration;
 mod content_updates;
 mod core;

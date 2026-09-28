@@ -3,6 +3,9 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import type { DoctorExplanation, DoctorIssue, DoctorReport, DoctorRun } from "./types";
 import { GeminiAdvice } from "./GeminiAdvice";
+import { AiToolSuggestions } from "../ai-tools/AiToolSuggestions";
+import { AiToolProposalList } from "../ai-tools/AiToolProposalList";
+import type { AiToolAdviceRequest } from "../ai-tools/types";
 import "./doctor.css";
 
 type Props = {
@@ -11,6 +14,7 @@ type Props = {
   runId?: string;
   busy: boolean;
   onExplain?: DoctorExplanation;
+  onSuggest?: AiToolAdviceRequest;
   onSelectRun: (runId?: string) => void;
 };
 
@@ -63,7 +67,7 @@ function IssueDetails({ issue }: { issue: DoctorIssue }) {
   );
 }
 
-export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRun, onExplain }: Props) {
+export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRun, onExplain, onSuggest }: Props) {
   // Reports are tied to the exact inputs as well as a request generation. Changing
   // instance, Java or run never makes an earlier response visible in a new context.
   const context = JSON.stringify([instanceId, javaExecutable, runId ?? null]);
@@ -84,17 +88,23 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
   useEffect(() => {
     const request = ++generation.current;
     let disposed = false;
-    let stopListening: (() => void) | undefined;
+    const stopListening: Array<() => void> = [];
     setShareMessage("");
-    void listen<DoctorRun>("aurora-doctor-run", (event) => {
+    const invalidate = (event: { payload: { instanceId: string } }) => {
       if (disposed || event.payload.instanceId !== instanceId || currentContext.current !== context) return;
       generation.current += 1;
       setAnalysis(undefined);
       setShareMessage("");
-      setLatestRun({ context, run: event.payload });
+    };
+    void listen<DoctorRun>("aurora-doctor-run", (event) => {
+      invalidate(event);
+      if (!disposed && event.payload.instanceId === instanceId) setLatestRun({ context, run: event.payload });
     }).then((unlisten) => {
       if (disposed) unlisten();
-      else stopListening = unlisten;
+      else stopListening.push(unlisten);
+    }).catch(() => undefined);
+    void listen<{ instanceId: string }>("aurora-ai-tool-changed", invalidate).then((unlisten) => {
+      if (disposed) unlisten(); else stopListening.push(unlisten);
     }).catch(() => undefined);
     void invoke<DoctorRun | null>("read_latest_doctor_run", { id: instanceId }).then((run) => {
       if (generation.current === request && currentContext.current === context) setLatestRun({ context, run });
@@ -102,7 +112,7 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
       // A missing run does not prevent the read-only analysis from reporting its
       // own coverage and limitations. Never manufacture a failed run here.
     });
-    return () => { disposed = true; generation.current += 1; stopListening?.(); };
+    return () => { disposed = true; generation.current += 1; stopListening.forEach((stop) => stop()); };
   }, [context, instanceId]);
 
   async function analyze() {
@@ -183,7 +193,8 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
             </div>
             {report.status === "no_issues" && <small>Limitado às verificações e aos dados disponíveis.</small>}
           </div>
-          {onExplain && <GeminiAdvice report={report} explain={onExplain} busy={busy} />}
+          {onExplain && <GeminiAdvice instanceId={instanceId} report={report} explain={onExplain} busy={busy} />}
+          {onSuggest && <AiToolSuggestions instanceId={instanceId} report={report} requestAdvice={onSuggest} busy={busy} />}
           {report.issues.length > 0 && <details className="doctor-details">
             <summary>Evidências e detalhes ({report.issues.length})</summary>
             <div aria-label="Problemas identificados" className="doctor-issues">{report.issues.map((issue) => <IssueDetails issue={issue} key={issue.id} />)}</div>
@@ -215,6 +226,7 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
             </div>
           </details>
         </>}
+      {!report && onSuggest && <AiToolProposalList instanceId={instanceId} disabled={busy || loading} />}
     </section>
   );
 }

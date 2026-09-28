@@ -27,7 +27,7 @@ test("mensagem inválida ou sessão ausente não faz consulta externa", async ()
   globalThis.fetch = async () => { throw new Error("Não deveria chamar fetch"); };
   await assert.rejects(askAuroraAssistant(services, "  "), /1 e 2.000/);
   await assert.rejects(askAuroraAssistant(services, "x".repeat(2_001)), /1 e 2.000/);
-  await assert.rejects(askAuroraAssistant({ ...services, auth: { currentUser: null } }, "Olá"), /Entre na sua conta/);
+  await assert.rejects(askAuroraAssistant({ ...services, auth: { currentUser: null } }, "Olá"), { code: "session" });
 });
 
 test("erros de rede e timeout mantêm mensagens legíveis no painel", async () => {
@@ -39,7 +39,7 @@ test("erros de rede e timeout mantêm mensagens legíveis no painel", async () =
 
 test("falhas de autorização e quota permanecem disponíveis para os controles desktop", async () => {
   globalThis.fetch = async () => Response.json({ error: "Sua sessão expirou." }, { status: 401 });
-  await assert.rejects(askAuroraAssistant(services, "Olá"), /sessão expirou/);
+  await assert.rejects(askAuroraAssistant(services, "Olá"), { code: "session" });
   globalThis.fetch = async () => Response.json({ error: "O limite temporário do Gemini foi atingido." }, { status: 429 });
   await assert.rejects(askAuroraAssistant(services, "Olá"), /limite temporário/);
 });

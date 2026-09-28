@@ -28,6 +28,7 @@ import {
 import {
   askAuroraAssistant,
   requestDoctorAdvice,
+  requestAiToolAdvice,
   requestCurseForgeCatalog,
   uploadAuroraAppearanceImage,
   type CurseForgeUpdateFile,
@@ -46,6 +47,10 @@ import { ContentUpdatesView } from "./features/content-updates/ContentUpdatesVie
 import { UpdateReviewDialog } from "./features/content-updates/UpdateReviewDialog";
 import { DoctorView } from "./features/doctor/DoctorView";
 import type { DoctorReport, DoctorRun } from "./features/doctor/types";
+import { publicAiError } from "../../../shared/aiErrors";
+import type { AiToolAdvice, AiToolContext } from "../../../shared/aiTools";
+import { AiToolProposalList } from "./features/ai-tools/AiToolProposalList";
+import { nativeToolError, type AiToolAdviceRequest } from "./features/ai-tools/types";
 import type {
   ContentRollbackSummary,
   ContentUpdateFilter,
@@ -618,13 +623,26 @@ async function playAuroraSpeech(text: string) {
   return audio;
 }
 
-function AssistantPanel({ services, username, onClose }: { services: FirebaseServices; username: string; onClose: () => void }) {
+function AssistantPanel({ services, username, accountId, instance, requestToolAdvice, onClose }: {
+  services: FirebaseServices;
+  username: string;
+  accountId?: string;
+  instance?: { id: string; name: string };
+  requestToolAdvice?: AiToolAdviceRequest;
+  onClose: () => void;
+}) {
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<OverlayMessage[]>([]);
   const [notice, setNotice] = useState("Pronto para ajudar");
   const [busy, setBusy] = useState(false);
   const [listening, setListening] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [includeInstance, setIncludeInstance] = useState(false);
+  const [toolResult, setToolResult] = useState<{ instanceId: string; context: AiToolContext; advice: AiToolAdvice }>();
+  const requestGeneration = useRef(0);
+  const pendingRequest = useRef<AbortController | undefined>(undefined);
+  const requestInputs = useRef({ instanceId: instance?.id, accountId, requestToolAdvice });
+  requestInputs.current = { instanceId: instance?.id, accountId, requestToolAdvice };
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement>(null);
@@ -635,7 +653,27 @@ function AssistantPanel({ services, username, onClose }: { services: FirebaseSer
   useEffect(() => () => {
     recognitionRef.current?.stop();
     audioRef.current?.pause();
+    requestGeneration.current += 1;
+    pendingRequest.current?.abort();
   }, []);
+  useEffect(() => {
+    requestGeneration.current += 1;
+    pendingRequest.current?.abort(); pendingRequest.current = undefined;
+    setBusy(false); setIncludeInstance(false); setToolResult(undefined);
+    if (!instance?.id) return;
+    let disposed = false;
+    const stops: Array<() => void> = [];
+    for (const name of ["aurora-doctor-run", "aurora-ai-tool-changed"]) {
+      void listen<{ instanceId: string }>(name, (event) => {
+        if (disposed || event.payload.instanceId !== instance.id) return;
+        requestGeneration.current += 1;
+        pendingRequest.current?.abort(); pendingRequest.current = undefined;
+        setBusy(false); setToolResult(undefined);
+        setNotice("Os dados da instância mudaram. Consulte novamente para usar o estado atual.");
+      }).then((stop) => { if (disposed) stop(); else stops.push(stop); }).catch(() => undefined);
+    }
+    return () => { disposed = true; stops.forEach((stop) => stop()); };
+  }, [instance?.id, accountId, requestToolAdvice]);
 
   async function speak(text: string) {
     if (muted) return;
@@ -693,22 +731,54 @@ function AssistantPanel({ services, username, onClose }: { services: FirebaseSer
   }
   async function send(event: FormEvent) {
     event.preventDefault();
-    if (!draft.trim() || busy) return;
+    if (!draft.trim() || busy || pendingRequest.current) return;
     const question = draft.trim();
+    const controller = new AbortController();
+    const request = ++requestGeneration.current;
+    pendingRequest.current = controller;
+    const scopedInstance = includeInstance && requestToolAdvice ? instance : undefined;
+    const stillCurrent = () => requestGeneration.current === request && !controller.signal.aborted
+      && requestInputs.current.instanceId === instance?.id && requestInputs.current.accountId === accountId
+      && requestInputs.current.requestToolAdvice === requestToolAdvice;
     setDraft("");
+    setToolResult(undefined);
     setMessages((current) => [...current, { role: "user", text: question }]);
     setBusy(true);
     setNotice("Pensando…");
+    let stage: "native" | "provider" = "provider";
     try {
-      const answer = await askAuroraAssistant(services, question);
+      let answer: string;
+      let historyWarning = false;
+      if (scopedInstance && requestToolAdvice) {
+        stage = "native";
+        const context = await invoke<AiToolContext>("ai_tools_context", { id: scopedInstance.id });
+        if (!stillCurrent()) return;
+        stage = "provider";
+        const advice = await requestToolAdvice(context, question, controller.signal);
+        if (!stillCurrent()) return;
+        try {
+          await invoke("ai_record_advice", { id: scopedInstance.id, contextId: context.contextId, advice: { summary: advice.summary, proposals: advice.proposals } });
+        } catch { historyWarning = true; }
+        if (!stillCurrent()) return;
+        setToolResult({ instanceId: scopedInstance.id, context, advice });
+        answer = advice.summary;
+      } else answer = await askAuroraAssistant(services, question, controller.signal);
+      if (!stillCurrent()) return;
+      if (!answer.trim()) throw new Error("Empty assistant response");
       setMessages((current) => [...current, { role: "assistant", text: answer }]);
-      setNotice("Resposta pronta");
+      setNotice(historyWarning ? "Resposta pronta; não foi possível salvar a sugestão no histórico local." : "Resposta pronta");
       void speak(answer);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "O Assistente Aurora não respondeu");
+      if (stillCurrent()) setNotice(stage === "native" ? nativeToolError(error) : publicAiError(error));
     } finally {
-      setBusy(false);
+      if (pendingRequest.current === controller) { pendingRequest.current = undefined; setBusy(false); }
     }
+  }
+  function cancelRequest() {
+    requestGeneration.current += 1;
+    pendingRequest.current?.abort(); pendingRequest.current = undefined;
+    setBusy(false);
+    setNotice("Consulta cancelada. Nenhuma alteração foi aplicada.");
   }
   return (
     <aside aria-label="Assistente Aurora" className="assistant-panel">
@@ -719,6 +789,10 @@ function AssistantPanel({ services, username, onClose }: { services: FirebaseSer
           <button aria-label="Fechar Assistente" className="assistant-icon" onClick={onClose} type="button">×</button>
         </div>
       </header>
+      {instance && requestToolAdvice && <div className="assistant-instance-context">
+        <label><input type="checkbox" checked={includeInstance} disabled={busy} onChange={(event) => { setIncludeInstance(event.target.checked); setToolResult(undefined); }} />Incluir lista de mods e configurações de “{instance.name}”</label>
+        <small>Ao enviar, o Gemini recebe a lista, configurações permitidas e histórico resumido. Arquivos e logs não são enviados. Alterações sempre pedem prévia e confirmação.</small>
+      </div>}
       <div className="assistant-messages">
         {messages.length === 0 && (
           <div className="assistant-welcome">
@@ -738,6 +812,7 @@ function AssistantPanel({ services, username, onClose }: { services: FirebaseSer
           </div>
         ))}
         {busy && <div className="assistant-message assistant"><span className="message-avatar">✦</span><p className="typing-dots"><i /><i /><i /></p></div>}
+        {includeInstance && instance && <AiToolProposalList key={`${instance.id}:${toolResult?.context.contextId ?? "history"}`} instanceId={instance.id} context={toolResult?.instanceId === instance.id ? toolResult.context : undefined} proposals={toolResult?.instanceId === instance.id ? toolResult.advice.proposals : undefined} disabled={busy} />}
         <div ref={messageEndRef} />
       </div>
       {listening && <div className="mic-live" aria-live="polite"><span className="mic-waves" aria-hidden="true">{[0, 1, 2, 3, 4, 5, 6].map((bar) => <i key={bar} />)}</span><strong>Ouvindo…</strong></div>}
@@ -746,7 +821,7 @@ function AssistantPanel({ services, username, onClose }: { services: FirebaseSer
         <textarea aria-label="Mensagem para o Assistente" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="Mensagem para o Aurora…" maxLength={2_000} rows={1} />
         <button aria-label="Enviar mensagem" className="send-button" disabled={busy || !draft.trim()} type="submit">↑</button>
       </form>
-      <footer className="assistant-footer"><span>{notice}</span><span>Enter para enviar · Shift + Enter para quebrar linha</span></footer>
+      <footer className="assistant-footer"><span>{notice}</span>{busy ? <button className="text-button" onClick={cancelRequest} type="button">Cancelar consulta</button> : <span>Enter para enviar · Shift + Enter para quebrar linha</span>}</footer>
     </aside>
   );
 }
@@ -884,6 +959,8 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [profile, setProfileState] = useState<AuroraUserProfile>();
   const explainDoctorReport = useCallback((report: DoctorReport, signal: AbortSignal) =>
     requestDoctorAdvice(services, report, signal), [services, profile?.uid]);
+  const requestInstanceAdvice = useCallback<AiToolAdviceRequest>((context, question, signal, report) =>
+    requestAiToolAdvice(services, context, question, signal, report), [services, profile?.uid]);
   function setProfile(next: AuroraUserProfile | undefined) {
     setProfileState((current) => guardSessionProfile(current, next, services.auth.currentUser?.uid));
   }
@@ -1151,6 +1228,26 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     });
     return () => { disposed = true; stopListening?.(); };
   }, []);
+  useEffect(() => {
+    if (!profile?.uid) return;
+    let disposed = false;
+    let stopListening: (() => void) | undefined;
+    void listen<{ instanceId: string; status?: string }>("aurora-ai-tool-changed", (event) => {
+      if (disposed) return;
+      const { instanceId, status: actionStatus } = event.payload;
+      setNotice(actionStatus === "applied" ? `Alteração confirmada aplicada em “${instanceId}”. Analise novamente para conferir o resultado.`
+        : actionStatus === "undone" ? `Alteração desfeita em “${instanceId}”. O histórico local foi atualizado.`
+          : `Há uma operação pendente em “${instanceId}”. Confira o histórico e revise a recuperação antes de tentar novamente.`);
+      if (activeInstanceRef.current.editingInstance !== instanceId) return;
+      const editorGeneration = editorOpenRequestRef.current.generation;
+      invalidateContentUpdatePlan();
+      setSelectedContentNames([]);
+      void invoke<InstanceContent>("list_instance_content", { id: instanceId }).then((content) => {
+        if (!disposed && activeInstanceRef.current.editingInstance === instanceId && editorOpenRequestRef.current.generation === editorGeneration) setInstanceContent(content);
+      }).catch(() => undefined);
+    }).then((stop) => { if (disposed) stop(); else stopListening = stop; }).catch(() => undefined);
+    return () => { disposed = true; stopListening?.(); };
+  }, [profile?.uid]);
   useEffect(() => {
     let disposed = false;
     let stopListening: (() => void) | undefined;
@@ -3642,6 +3739,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                     javaExecutable={javaPath}
                     key={`${editingInstance}:${doctorRunId ?? "current"}`}
                     onExplain={explainDoctorReport}
+                    onSuggest={requestInstanceAdvice}
                     onSelectRun={setDoctorRunId}
                     runId={doctorRunId}
                   />
@@ -3960,7 +4058,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         </aside>
       )}
     </main>
-    {assistantOpen && <AssistantPanel services={services} username={profile.username} onClose={() => setAssistantOpen(false)} />}
+    {assistantOpen && <AssistantPanel key={profile.uid} services={services} username={profile.username} accountId={profile.uid} instance={targetInstance ? { id: targetInstance, name: instances.find((item) => item.id === targetInstance)?.displayName || targetInstance } : undefined} requestToolAdvice={requestInstanceAdvice} onClose={() => setAssistantOpen(false)} />}
     </>
   );
 }

@@ -155,7 +155,8 @@ test("real authenticated route sends only reduced contract with fixed instructio
     assert.deepEqual(sent.diagnosis, valid);
     assert.deepEqual(sent.categories.map((category: { id: string }) => category.id), ["memory_failure"]);
     assert.equal(body.generationConfig.responseMimeType, "application/json");
-    assert.ok(body.generationConfig.maxOutputTokens <= 1000);
+    assert.equal(body.generationConfig.thinkingConfig.thinkingLevel, "low");
+    assert.equal(body.generationConfig.maxOutputTokens, 2048);
     assert.ok(body.systemInstruction.parts[0].text.length > 20);
     assert.doesNotMatch(String(init?.body), /synthetic-user-|doctor-adversarial-key/);
     return provider();
