@@ -45,6 +45,8 @@ Décimo quarto incremento: 005/008 têm helper funcional de plano/staging com no
 
 Décimo quinto incremento: 002/005/008 ganham guest-tcp e plano somente game, sem autorizar aux desnecessário. Smoke com dois processos atravessa STATUS/pong independente e recusa protocolo divergente; 59 Rust/dois Node aprovados. Contrato do plano canônico registra aux opcional; integração de runtime segue pendente. [Roteiro](../../aurora-connect.md#plano-explícito-de-serviços-do-laboratório).
 
+Décimo sexto incremento: T-LIFE-01/02/008 têm supervisor funcional de filho próprio, 18 testes de saída/prazo/cancelamento/cleanup e ambiente mínimo. Não aprova artefato/termos/readiness nem executa Java; [contrato](../../aurora-connect-runtime.md#supervisor-de-processo-próprio--décimo-sexto-incremento).
+
 ## 1. Evidência de partida e limites do inventário
 
 Leitura local feita em 29/09/2026, sem build, lançamento do jogo, conexão externa ou teste runtime. A existência de um símbolo ou de um teste no arquivo não equivale à execução desse teste.

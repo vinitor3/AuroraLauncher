@@ -53,6 +53,7 @@ Baseline de 29/09/2026, comandos/saídas/achados no [task de execução](../task
 
 | Prova executada | Requisitos/tarefas relacionados | Limite da prova |
 | --- | --- | --- |
+| Décimo sexto incremento: supervisor de filho explícito com stop/deadline/cancelamento/saída limitada e close observado; 18 testes Node | T-LIFE-01/02; T-SEC; 005/008 | Sem Java/Minecraft, aprovação ou readiness. Callback cooperativo e nenhum descendente; kill forçado é erro, não PASS normal |
 | Décimo quinto incremento: guest-tcp/plano game obrigatório e aux opcional; CLI e smoke com dois agentes, STATUS/pong por fixture independente | T-MC-01 parcial; T-UX-02/04; 002/005/008 | 59 Rust e dois smokes Node aprovados; zero JVM. QUIC ainda usa UDP. guest_ready é listener; acesso efetivo exerce autorização |
 | Décimo quarto incremento: plano/staging limitado com pins oficiais e gate de termos; 17 testes Node com HTTP local e JDK sintético | T-MC-01 preparação; T-SEC/T-CONFIG; 005/008 | Nenhum download Minecraft/JVM real. Consentimento de fixture não é aceitação do usuário. MZ/hash não valida todo JDK; runtime aguarda autorização |
 | Décimo terceiro incremento: quatro cenários de entrega/retomada do lock com recibo vivo, restauração estrita/revisada SVC/Plasmo e preservação de edições | T-LIFE-01/02; T-CONFIG-03/04; 006/007/008 | Locks/CAS reais com probes controlados; não executa JVM/writer, não torna recibo durável nem automatiza encerramento |

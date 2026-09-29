@@ -43,6 +43,8 @@ Décimo quarto incremento: helper prepara plano/staging verificável para o par 
 
 Décimo quinto incremento: guest-tcp e plano sem aux; STATUS/pong de fixture via dois processos reais, protocolo divergente recusado e agentes encerrados. 59 Rust e dois smokes Node aprovados. Sem Java/login/mundo/voz; [roteiro](../aurora-connect.md#plano-explícito-de-serviços-do-laboratório).
 
+Décimo sexto incremento: supervisor opt-in de filho local, 18 testes com Node e encerramento observado. Ainda não inicia Minecraft ou homologa mod; [limites](../aurora-connect-runtime.md#supervisor-de-processo-próprio--décimo-sexto-incremento).
+
 ## Doctor, recuperação e cópias de teste — 29/09/2026
 
 Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Launcher alpha.14 integra integralmente a recuperação manual de `be3a1c4`, preserva a base alpha.13 com Doctor, Gemini, Assistente e sessões, e acrescenta observações verificadas por tentativa e cópias independentes com aplicação seletiva, proteção e desfazer. Não amplia Minecraft/loaders/Java e conserva Core 1.1.5/Skins 0.3.1. Mundos são excluídos por padrão e nunca transferidos ao aplicar; cópia explícita de mundo serve somente ao teste. Testes automatizados usam dados descartáveis; partida real, skins/capa, multiplayer, autenticação e voz não recebem nova homologação por build. Evidências: [AUR-1167](../task-aur-1167-doctor-lab.md).
