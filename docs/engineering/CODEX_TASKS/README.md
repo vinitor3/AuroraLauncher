@@ -1,6 +1,6 @@
 # Backlog executável Codex
 
-Revisão R4 de 29/09/2026: [Aurora Connect V2 — AUR-R4-001 a AUR-R4-008](AUR-R4-CONNECT-BACKLOG.md), com contratos completos de tarefa, testes e matriz de compatibilidade candidata. Não substitui as tarefas/gates R0/R1 abaixo nem reabre implementações alpha.14 como ausentes.
+Backlog canônico R4: [AUR-R4-001 a AUR-R4-008](AUR-R4-CONNECT-BACKLOG.md), com contratos, testes e matriz candidata. [Correspondência dos IDs anteriores](../AURORA_CONNECT_REVIEW.md) e [rastreabilidade](../AURORA_CONNECT_TRACEABILITY.md). Não substitui tarefas/gates R0/R1 nem reabre implementações alpha.14 como ausentes.
 
 Cada arquivo abaixo é um contrato de implementação. O agente deve respeitar ownership, dependências e “não tocar”. Prompts prontos da Wave 0 ficam em [`../CODEX_PROMPTS/README.md`](../CODEX_PROMPTS/README.md).
 

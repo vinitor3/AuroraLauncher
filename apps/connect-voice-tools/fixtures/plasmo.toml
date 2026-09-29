@@ -1,0 +1,14 @@
+# Synthetic fixture based on the documented configuration keys.
+[host]
+ip = "127.0.0.1"
+port = 0
+
+[host.public]
+ip = "example.invalid"
+port = 25565
+
+[voice]
+mtu_size = 1024
+
+[voice.proximity]
+distances = [8, 16, 32]

@@ -1,6 +1,6 @@
 # Prompts prontos — próxima wave
 
-Prompt atual de pesquisa/primeiro incremento isolado: **[Aurora Connect V2](AUR-R4-CONNECT-V2.md)**. Autossuficiente, reconciliado com alpha.14, incluindo preservação, TCP/UDP, mods de voz, relay gratuito condicionado e testes. Sua PoC não libera o produto nem revoga gates anteriores. Os prompts da Wave 0 abaixo continuam úteis para lacunas remanescentes; reconfirmar código/estado antes de executar, sem refazer trabalho concluído.
+Prompt operacional consolidado: **[Aurora Connect V2](AUR-R4-CONNECT-V2.md)**. Incorpora continuidade autorizada e [reconciliação dos pacotes](../AURORA_CONNECT_REVIEW.md), preservando alpha.14, TCP/UDP, mods de voz, relay gratuito condicionado e testes. Não parar após PoC TCP; avançar nos incrementos independentes. Laboratório não libera produto nem revoga gates. Os prompts da Wave 0 continuam úteis para lacunas remanescentes, com reconsulta do estado real.
 
 Use exatamente um prompt por task/worktree. Todos partem do mesmo baseline e devem ser integrados pelo plano em [`../CODEX_INTEGRATION_PLAN.md`](../CODEX_INTEGRATION_PLAN.md).
 

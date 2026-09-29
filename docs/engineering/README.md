@@ -1,12 +1,12 @@
 # Engenharia Aurora
 
-Revisão atual de documentação: **[Aurora Connect V2 — sete entregáveis](../task-aur-r4-connect-v2-review.md)**, 29/09/2026, reconciliada com launcher alpha.14. Inclui roadmap completo, especificação TCP/UDP/voz, proposta de ADR, backlog/matriz, dependências zero-spend e prompt executável. Connect continua **NÃO IMPLEMENTADO**; recovery/Doctor/Tools/cópias existentes foram preservados. Estados de entregas anteriores abaixo são registros datados, não validação repetida nesta revisão.
+Documentação canônica de **[Aurora Connect V2](AURORA_CONNECT_REVIEW.md)**, reconciliada em 29/09/2026 com launcher alpha.14 e os dois pacotes anteriores. [Rastreabilidade e IDs](AURORA_CONNECT_TRACEABILITY.md); [execução local, estado e testes](../task-aur-r4-connect.md). Inclui roadmap, contrato TCP/UDP/voz, decisão de laboratório, backlog/matriz, zero-spend e prompt único. Produto/voz/redes não são homologados por laboratório; recovery/Doctor/Tools/cópias permanecem. Estados anteriores abaixo são registros datados, não validação repetida.
 
 Escopo vigente em 21/09/2026: **O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados.** Consulte o [mapa de consumidores e validação](../task-remove-companion.md), a [ADR-018](ADR/ADR-018-remove-companion-keep-desktop-assistant.md) e o [IPC do Core](../core-ipc.md). Auditorias de agosto/setembro conservam resultados históricos; não são autorização para restaurar o mod.
 
 ## Evidência histórica de segurança da revisão inicial
 
-O registro da revisão inicial documentou regras Firestore locais bloqueando autoatribuição de `ADMIN` e payloads iniciais incoerentes, com 7/7 testes da suíte [`../../firebase/tests/firestore.rules.test.mjs`](../../firebase/tests/firestore.rules.test.mjs) no Emulator. Esta branch Connect V2 altera documentação e não repetiu esses testes nem consultou o estado de produção. O gate continua exigindo evidência de auditoria dos perfis existentes e implantação das regras; não presumir conclusão por esse resultado histórico.
+O registro da revisão inicial documentou regras Firestore locais bloqueando autoatribuição de `ADMIN` e payloads iniciais incoerentes, com 7/7 testes da suíte [`../../firebase/tests/firestore.rules.test.mjs`](../../firebase/tests/firestore.rules.test.mjs) no Emulator. A preparação documental Connect V2 não repetiu esses testes nem consultou o estado de produção; os novos testes do laboratório de transporte também não revalidam Firestore. O gate continua exigindo evidência de auditoria dos perfis existentes e implantação das regras; não presumir conclusão por esse resultado histórico.
 
 ## Ordem de leitura
 

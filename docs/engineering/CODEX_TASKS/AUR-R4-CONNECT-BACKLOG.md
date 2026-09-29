@@ -1,10 +1,25 @@
 # Aurora Connect — backlog incremental e homologação R4
 
-Data: 29/09/2026. Natureza: **proposta documental**, não entrega de transporte. Os oito incrementos abaixo estão **NÃO IMPLEMENTADO** no inventário limitado desta revisão; a execução de seus testes está **NÃO VERIFICADO**. Isso não reclassifica funcionalidades anteriores do launcher como ausentes.
+Data: 29/09/2026. Backlog canônico reconciliado; objetivos e testes permanecem completos. O inventário e a matriz abaixo registram a preparação documental original; o [task de implementação](../../task-aur-r4-connect.md) registra o estado e os comandos executados do laboratório. Não reclassificar capacidades anteriores como ausentes nem tratar critérios T-* como provas já produzidas.
 
 Base atualizada: `6a107b87adc4882bd464909e22650185f862ea5e`, launcher `0.1.1-alpha.14`, Core `1.1.5`, Skins `0.3.1`. A base inclui recuperação manual e cópias de diagnóstico; não começar da base histórica `aurora-skins-runtime`. Reconfirmar HEAD, mudanças locais, versões e colisões de IDs ao iniciar implementação.
 
 Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../AURORA_CONNECT_SPEC.md), [proposta de ADR sem número reservado](../ADR/PROPOSAL-aurora-connect.md), [dependências e zero-spend](../AURORA_CONNECT_DEPENDENCIES.md), [diagnóstico/rastreabilidade/alterações](../../task-aur-r4-connect-v2-review.md) e [prompt Codex](../CODEX_PROMPTS/AUR-R4-CONNECT-V2.md). Requisitos explícitos da revisão V2 prevalecem sobre proibições antigas de todo relay.
+
+## Estado da execução local — 29/09/2026
+
+| Tarefa/capacidade | Estado comprovado | Trabalho ainda necessário |
+| --- | --- | --- |
+| 001 inventário/decisão | Reconciliados contratos/IDs/base; Iroh 1.3.0 fixado somente no laboratório | Gates de integração/distribuição, termos de qualquer infraestrutura futura |
+| 002 TCP | **PROTÓTIPO** real autenticado: duplex, 8 MiB/contrapressão, half-close, concorrência, autorização e encerramento testados | Minecraft e redes externas; não concluir tarefa de produto |
+| 003 UDP | **PROTÓTIPO** real: retorno isolado por peer/sessão/serviço, framing, MTU, abuso, expiração e carga TCP | Perfil downstream autorizado para protocolos que recebem mais do que enviam; medidas e mod real |
+| 004 caminhos | Direto IPv4/IPv6 **loopback** testado; roteiro de dois computadores preparado | LAN, NAT/CGNAT, redes distintas, relay elegível e UDP bloqueado |
+| 005 Minecraft/convites/UI | **NÃO IMPLEMENTADO**; lease/pin manual é mecanismo de laboratório | Adaptadores, sinalização autorizada, fluxo social e estados reais |
+| 006 Simple Voice Chat | Inspector e rascunho sem escrita: **PARCIAL** | Artefato local, adaptador de endereço, transporte/runtime e áudio próprios |
+| 007 Plasmo Voice | Inspector e rascunho sem escrita: **PARCIAL** | Gates separados de SVC, incluindo lifecycle do cliente/adaptador |
+| 008 robustez/liberação | Testes locais adversariais e rollback do laboratório | Matriz real, saturação prolongada, produto e todos os gates anteriores |
+
+Baseline comprovado no [registro de comandos/resultados](../../task-aur-r4-connect.md): 24/24 testes Rust, cinco repetições de transporte com 55/55 resultados, fmt/clippy, 14/14 testes do inspector e smoke multiprocesso com 1 MiB TCP por direção/dez UDP em duas origens/1358 bytes negociados/limpeza aprovada. A falha anterior de UDP sob carga TCP foi preservada no histórico e corrigida com reserva de 16 KiB para datagramas no orçamento agregado. Isso não promete fairness universal nem perda zero. Critérios T-* abrangem mais cenários do que estes testes; nenhum é marcado integralmente concluído por semelhança de nome.
 
 ## 1. Evidência de partida e limites do inventário
 
@@ -35,7 +50,18 @@ Os registros de testes alpha.14 em AUR-1167 são evidência histórica daquele i
 
 ## 3. Sequência e dependências
 
-IDs `AUR-R4-001` a `AUR-R4-008` são **propostos**: busca em `docs/` na base, antes da criação destes documentos, não encontrou colisão. Não reservar um número ADR por inferência. O proprietário da integração reconfirma ambos antes de aceitar a mudança.
+IDs `AUR-R4-001` a `AUR-R4-008` são canônicos desta implementação, após comparar os pacotes de `d6f31db` e `5ac2f7e`. Não reservar um número ADR por inferência.
+
+| Pacote alpha.13 / ID histórico | ID canônico alpha.14 | Significado preservado |
+| --- | --- | --- |
+| AUR-R4-001..005 | AUR-R4-001..005 | Inventário, TCP, UDP, redes, Minecraft/convites/UI |
+| AUR-R4-006 / EV-R4-006-SVC | AUR-R4-006 | Simple Voice Chat |
+| AUR-R4-006 / EV-R4-006-PV | AUR-R4-007 | Plasmo Voice |
+| AUR-R4-007 / EV-R4-007 | AUR-R4-008 | Robustez/manifesto/liberação |
+
+Referência histórica sem sufixo/SHA não autoriza reatribuir evidência. [Reconciliação completa](../AURORA_CONNECT_REVIEW.md) e [requisito → teste](../AURORA_CONNECT_TRACEABILITY.md). O arquivo alpha.13 `AURORA_CONNECT_BACKLOG.md` permanece histórico em Git; este é o único backlog ativo.
+
+Local efetivamente escolhido para 001–003: `apps/connect-lab/`, crate Rust independente e experimental; os caminhos `engine/connect/` nas propostas de tarefa abaixo só se aplicam a futura integração autorizada. Não adicionar dependência/ponto de entrada no desktop para declarar uma PoC como produto. O pin e a decisão estão na ADR; testes/limites efetivos no task. Estado por incremento deve ser atualizado apenas com essa evidência, preservando os critérios não executados.
 
 ```text
 AUR-R4-001 inventário/decisão/contratos
@@ -244,8 +270,8 @@ Coluna “caminhos” lista cenários de teste separados: D4 = IPv4 direto; D6 =
 
 | ID | Serviço/mod | Versão do mod | Minecraft / loader candidato | Hospedagem | Caminhos a validar individualmente | Endereçamento / modo misto | Estado |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| C-TCP | Endpoint TCP controlado | Harness a criar/versionar | Sem JVM/loader | Agente host + endpoint controlado | Loopback, LAN, D4, D6, N, RG, UB aplicável | Listener loopback aprovado por sessão | NÃO IMPLEMENTADO / NÃO VERIFICADO |
-| C-UDP | Endpoint UDP controlado | Harness a criar/versionar | Sem JVM/loader | Agente host + endpoint controlado | Loopback, LAN, D4, D6, N, RG, UB aplicável | Associação/resposta por participante/serviço | NÃO IMPLEMENTADO / NÃO VERIFICADO |
+| C-TCP | Endpoint TCP controlado | `apps/connect-lab`, Iroh 1.3.0/lock próprio | Sem JVM/loader | Agente host + endpoint controlado | Loopback IPv4/IPv6 comprovado; LAN, D4/D6 externos, N, RG, UB pendentes | Listener loopback aprovado por sessão | PROTÓTIPO local; sem homologação externa |
+| C-UDP | Endpoint UDP controlado | `apps/connect-lab`, framing 24 B | Sem JVM/loader | Agente host + endpoint controlado | Loopback IPv4/IPv6 comprovado; LAN, D4/D6 externos, N, RG, UB pendentes | Associação/resposta por participante/sessão/serviço testada | PROTÓTIPO local; política 1:1 não aprova voz |
 | C-MC-P | Jogo público sem voz | Protocolo do jogo a registrar | 1.20.1 / Fabric 0.16.14 ou Forge 47.4.23 | Servidor público acessível | Rede normal, sem túnel obrigatório | Manter entrada/auth oficiais | Connect NÃO IMPLEMENTADO / cenário NÃO VERIFICADO |
 | C-MC-D | Jogo por Connect | Protocolo do jogo a registrar | 1.20.1 / Fabric 0.16.14 ou Forge 47.4.23 | Dedicado com agente autorizado | LAN, D4, D6, N, RG, UB aplicável | Porta real do jogo; status e sessão distintos | NÃO IMPLEMENTADO / NÃO VERIFICADO |
 | C-MC-L | Jogo por Connect | Protocolo do jogo a registrar | 1.20.1 / Fabric 0.16.14 ou Forge 47.4.23 | Singleplayer aberto para LAN | LAN, D4, D6, N, RG, UB aplicável | Descoberta/abrir LAN/auto-join separados | NÃO IMPLEMENTADO / NÃO VERIFICADO |
@@ -263,6 +289,8 @@ Coluna “caminhos” lista cenários de teste separados: D4 = IPv4 direto; D6 =
 | C-EXT | Outros serviços TCP/UDP | Seleção futura explícita | Matriz e licença a verificar | Destino aprovado por serviço | Somente após testes próprios | Novo adaptador/capacidade explícita, nunca proxy genérico | NÃO IMPLEMENTADO / NÃO VERIFICADO |
 
 Fazer uma linha de evidência por combinação realmente executada, incluindo patch exato do loader e mod, Java, sistema operacional, host/convidados e caminho. Um mod aprovado em dedicado não aprova LAN; um loader aprovado não aprova outro; D4 não aprova relay/UDP bloqueado. Cada distribuição futura publica somente as linhas comprovadas, mantendo o restante experimental/desligado.
+
+A [preparação posterior dos mods](../../aurora-connect-voice.md) pesquisou candidatos Fabric 1.21.1 SVC 2.6.22 e Plasmo 2.1.17, dentro dos nove pares existentes. Os 14 testes do inspector usam fixtures de configuração e versões declaradas; nenhum JAR/loader/JVM foi executado. Assim, não preenchem as linhas runtime 1.20.1 acima nem criam uma linha 1.21.1 homologada. Transporte e endereçamento continuam gates independentes para cada mod.
 
 ## 6. Registro de evidência e métricas
 
@@ -287,6 +315,6 @@ Modelo a preencher em arquivo de evidência próprio **proposto** dentro da past
 
 Antes de comparar desempenho, fixar metodologia e amostra; distinguir RTT medido no transporte, tempo fim a fim até ouvir e saúde do servidor Minecraft. Não criar porcentagem de sucesso NAT, promessa de redução de ping ou prazo fechado sem dados. Diagnósticos compartilhados devem explicar limitações sem expor IPs/segredos.
 
-## 7. Validação documental desta revisão
+## 7. Validação documental histórica e execução posterior
 
-Foi feito inventário read-only dos materiais indicados, conferência de base/matriz e criação deste backlog. Nenhum caso T-* foi executado, nenhum mod/relay foi homologado e nenhum arquivo de código/configuração de jogador foi alterado por este documento. Os próximos agentes devem preservar os recursos alpha.14 existentes, usar comandos reais adequados ao diff e anexar o relatório de evidências; referências documentais não são atalhos para declarar implementação.
+Na preparação documental original foi feito inventário read-only, conferência de base/matriz e criação deste backlog, sem execução dos casos T-* ou alteração de código/configuração de jogador. A implementação posterior está resumida no início e detalhada no task; não altera retrospectivamente o alcance daquela revisão. Nenhum mod/relay foi homologado. Os próximos incrementos preservam alpha.14, usam comandos reais adequados ao diff e anexam evidências; referências documentais não são atalhos para declarar implementação.

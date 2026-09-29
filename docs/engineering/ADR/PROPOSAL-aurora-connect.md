@@ -1,6 +1,6 @@
-# Proposta de ADR — transporte do Aurora Connect
+# Decisão experimental de transporte — Aurora Connect
 
-Data: 29/09/2026. Estado: **HIPÓTESE**; decisão ainda não aceita. Não foi reservado número de ADR. Base documental: launcher alpha.14, commit `6a107b87adc4882bd464909e22650185f862ea5e`, Core 1.1.5 e Skins 0.3.1. Aurora Connect: **NÃO IMPLEMENTADO** na inspeção limitada registrada nesta revisão; pesquisa upstream não é homologação Aurora.
+Data: 29/09/2026. Decisão aceita somente para laboratório local; arquitetura/infraestrutura de produto permanecem **HIPÓTESE**, sem homologação. Conserva o caminho documental existente, sem reservar outro número ADR. Base cumulativa alpha.14 `5ac2f7e` sobre `6a107b8`; Core 1.1.5 e Skins 0.3.1. [Execução e testes](../../task-aur-r4-connect.md), [reconciliação](../AURORA_CONNECT_REVIEW.md). Pesquisa upstream não é homologação Aurora.
 
 Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependências e zero-spend](../AURORA_CONNECT_DEPENDENCIES.md), [backlog](../CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md), [roadmap](../MASTER_ROADMAP.md) e [diagnóstico/rastreabilidade](../../task-aur-r4-connect-v2-review.md).
 
@@ -12,15 +12,23 @@ Esta proposta preserva a organização, os IDs e gates do roadmap. Não altera R
 
 A stack real foi identificada nos manifests pela revisão principal como Rust, React/TypeScript e Tauri 2. Não se deduz existência do Connect de uma biblioteca transitiva no lockfile. A revisão desta ADR pesquisou fontes upstream; não executou transporte nem jogos.
 
-## Decisão proposta
+## Decisão para o incremento local
 
-**Avaliar Iroh primeiro e selecionar uma única implementação após o inventário**, condicionada à compatibilidade do compilador, plataformas, licenças, APIs da versão fixada e teste da menor ponte autenticada. A hipótese principal é integração Rust no launcher, sem novo processo auxiliar. Não há aprovação antecipada de Iroh, relay ou distribuição pública.
+Selecionado **Iroh `=1.3.0`** em `apps/connect-lab/`, crate independente `publish = false`, edition 2024, MSRV 1.91. O inventário e `cargo info iroh@1.3.0` desta execução confirmaram artefato, licença MIT OR Apache-2.0 e compilador local Rust 1.98; o lock próprio torna a resolução reproduzível. Não atualizar o toolchain global nem as dependências do desktop para o experimento. `default-features = false`, somente `tls-ring`; sem Go ou implantação externa. A ligação ao launcher e distribuição dependem dos gates posteriores.
 
-O primeiro incremento deve seguir o bloqueio real: sem transporte, ponte TCP autenticada para endpoint controlado, com isolamento, limites, cancelamento e contrato UDP testável; com TCP comprovado, avançar para UDP/segurança/conectividade que faltar. Não refazer trabalho existente apenas para obedecer uma sequência documental. A investigação deve fixar uma versão exata; as versões abaixo são apenas as observadas nas fontes em 29/09/2026.
+O construtor lido em `apps/connect-lab/src/transport.rs` usa `presets::Minimal`, limpa IPs/relays/lookup padrão, aplica `RelayMode::Disabled` e registra apenas bind/endereço manual. Relatórios de endereço observado e candidatos remotos de traversal ficam desabilitados. Não existe operador externo aprovado ou custo de relay nesta configuração. Isso é decisão de laboratório, não proibição futura de relay gratuito elegível nem prova de NAT traversal.
+
+Fontes exatas conferidas pelo agente de transporte em 29/09/2026: [release v1.3.0](https://github.com/n0-computer/iroh/releases/tag/v1.3.0), publicada em 28/09 no commit `0072d7d`; [manifest v1.3.0](https://raw.githubusercontent.com/n0-computer/iroh/v1.3.0/iroh/Cargo.toml); [presets da tag](https://github.com/n0-computer/iroh/blob/v1.3.0/iroh/src/endpoint/presets.rs). A API foi conferida no artefato baixado por Cargo, pois a URL docs.rs exata retornou erro de acesso, não prova de inexistência. `N0DisableRelay` não foi usado: ainda configuraria descoberta/publicação externa. O advisory [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html) afeta rustls `>=0.23.13, <0.23.45`; a resolução do lock novo contém 0.23.45. Isso verifica esse aviso identificado, não afirma auditoria completa de todas as transitivas.
+
+O bloqueio real era ausência de ponte autenticada no inventário focal. Iroh entrega identidade de endpoint, streams e DATAGRAM na mesma stack Rust e permite o modo manual sem serviços externos; evita compor a infraestrutura ausente de Quinn ou manter outro runtime. O experimento mede TCP, UDP e isolamento antes de escolher a integração de produto. Dois endpoints sintéticos não homologam voz, Minecraft, redes distintas ou todos os pares.
+
+Contrato único: `requiredCapability` singular por serviço (`reliableStream` ou `datagram`), sessão identificada por ID novo a cada host/run, `serviceRevision` separado da sessão, peer derivado do transporte autenticado e framing UDP de 24 bytes. `sessionEpoch`, lista `requiredCapabilities` e reserva aberta de 32 bytes permanecem somente no histórico alpha.13; não se implementam schemas concorrentes. Lease local com pin, prazo, serviços e revogação não equivale a convite social/Firebase.
+
+Após TCP comprovado, continuar UDP, segurança, limites e outros itens locais independentes. Não encerrar automaticamente na primeira PoC. A comparação abaixo conserva o levantamento histórico de 29/09/2026; versões observadas de alternativas não são dependências instaladas. Resultados realmente executados e limites ficam no task.
 
 Separar identidade/autorização, sinalização, descoberta, transporte, registro de serviços, adaptadores e interface. Não criar framework extensível sem necessidade. Proposta de contrato: convidado pede ID de serviço aprovado; host resolve o destino previamente autorizado. Manifesto não autoriza abertura de porta. Não criar proxy aberto, SOCKS, acesso geral à LAN, RCON/SSH/admin automático ou execução remota.
 
-## Comparação técnica
+## Comparação técnica preservada
 
 | Opção | Capacidades observadas | Trabalho e limitações | Encaminhamento |
 | --- | --- | --- | --- |
@@ -72,4 +80,4 @@ A UI recebe estados reais e separados: transporte autenticado, caminho seleciona
 6. Resultados TCP, UDP, jogo+voz, saturação e matriz de redes com logs redigidos. Brasil–Brasil/Brasil–EUA precisam de hosts autorizados sem custo.
 7. Plano de liberação e rollback: feature experimental desativada por padrão; remover sessões/listeners/mapeamentos e restaurar somente alterações próprias sem apagar divergências.
 
-A aprovação de um incremento não aprova os seguintes. Esta ADR só poderá receber número e estado de decisão aceita no fluxo real do repositório, com evidências e responsáveis. A ausência de relay elegível limita o alcance anunciado, não autoriza cobrança nem infraestrutura própria obrigatória.
+A aprovação do laboratório não aprova produto, os incrementos seguintes ou infraestrutura. Uma futura decisão de integração/distribuição poderá receber número próprio após conferir índice/ownership e anexar evidências. A ausência de relay elegível limita o alcance anunciado, não autoriza cobrança nem infraestrutura própria obrigatória. Rollback do experimento: encerrar agentes/listeners/associações e remover somente a dependência/entrada experimental em diff revisado; nenhum arquivo pessoal é modificado para executar a ponte.

@@ -53,6 +53,8 @@ R1-001 e R1-004 podem tocar módulos Rust próximos; Integration Agent deve sepa
 
 Usar [backlog](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) e [prompt](CODEX_PROMPTS/AUR-R4-CONNECT-V2.md). Pesquisa e PoC local de transporte autorizadas não liberam produto, UI pública ou sincronização antes dos gates. Não refazer recovery/Doctor/Tools já entregues. Um proprietário do domínio Connect, outro da revisão de ameaça/testes; manifests, registro Tauri e monólitos continuam com owner exclusivo. Adaptadores SVC/Plasmo podem ser investigados separadamente, mas qualquer edição compartilhada no Core exige serialização e matriz afetada. A revisão documental paralela de outro chat não autoriza sobrescrever seus arquivos.
 
+Execução atual `codex/aur-r4-connect`: base `5ac2f7e`, worktree exclusiva. Ownership delimitado: transporte em `apps/connect-lab/`; documentação canônica em `docs/engineering/`; coordenador possui scripts, documento operacional e task principal; QA independente revisa sem editar os mesmos arquivos. Os monólitos desktop/Worker e Java permanecem sem owner de edição nesta wave porque não são necessários à ponte de laboratório. [IDs e contratos reconciliados](AURORA_CONNECT_REVIEW.md). Continuar incrementos locais independentes após cada teste/revisão; uma pendência de rede externa não interrompe o restante autorizado.
+
 ## Política de worktrees
 
 Exemplo conceitual (ajustar caminho e baseline, sem copiar cegamente):

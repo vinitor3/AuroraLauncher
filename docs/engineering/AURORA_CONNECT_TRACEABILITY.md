@@ -1,0 +1,74 @@
+# Aurora Connect — requisitos, correspondência e evidências
+
+Data: **29/09/2026**. [Reconciliação de fontes e IDs](AURORA_CONNECT_REVIEW.md), [backlog canônico](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md), [execução atual](../task-aur-r4-connect.md). Este documento liga requisitos a provas, sem transformar testes planejados em resultados.
+
+## Convenções e histórico
+
+- `REQ-V2-01..27` conservam o significado do pacote `docs` em `d6f31db6bd1bd0e9b9e2f8bbc2ebf1a6e653af5d`; esta tabela traduz os IDs de tarefa para o backlog canônico.
+- `EST-01..12`, `DOC-01..03` e `CHG-01..11` continuam registros daquele pacote; consulta integral por `git show d6f31db:docs/engineering/AURORA_CONNECT_TRACEABILITY.md`. Não são execuções desta implementação.
+- `INV-01..06`, `T-*` e `C-*` vêm do pacote `review` em `5ac2f7e`. INV são leituras históricas; T são critérios; C são células candidatas. Nenhum implica teste aprovado por existência.
+- Novas evidências usam IDs canônicos `001..008` e apontam ao task de execução, comando real e ambiente. Cada voz tem evidência independente.
+- Legado `006-SVC` → `006`; legado `006-PV` → `007`; legado `007` robustez → `008`. Evidência histórica ambígua deve incluir pacote/SHA e não recebe novo significado por renumeração.
+
+## Requisito → contrato → tarefa → prova
+
+| Requisito preservado | Contrato canônico | Tarefa | Prova exigida / limite |
+| --- | --- | --- | --- |
+| REQ-V2-01: R0–R5, prioridades, gates, ownership e nove pares | Roadmap; AGENTS; revisão | Todas | T-INV-01, T-REG-01/02; não promover runtime por build |
+| REQ-V2-02: separar requisito, proposta, estática, execução e pendência | Revisão; task de execução | 001 e relatórios | Base/manifests/fonte/data; resultados só após comando executado |
+| REQ-V2-03: público, privado autorizado, dedicado e LAN; capacidades distintas | Spec §§1–3 | 005, 008 | T-MC-01..05; transporte não abre LAN nem comprova auto-join |
+| REQ-V2-04: experiência normal sem VPN/driver/admin/portas manuais; host disponível | Spec §§1, 9 | 004, 005, 008 | T-UX e T-MC; configuração manual serve apenas laboratório |
+| REQ-V2-05: direto preferido e relay gratuito elegível | Dependências; ADR | 001, 004, 008 | T-COST-01..03, T-NET-05/06; aceitar relay permitido |
+| REQ-V2-06: zero cobrança, teste separado de produção | Dependências | 001, 004, 008 | Condições efetivas do operador/plano; contador local não garante fatura |
+| REQ-V2-07: infraestrutura auxiliar, migração e UDP bloqueado | Spec §6; ADR | 004 | T-NET-03..06; caminho real, sem inferir NAT por timeout |
+| REQ-V2-08: serviço aprovado sem IP/porta remoto arbitrário | Spec §3 | 001..003 | T-SEC-02/03; zero abertura indevida ao destino |
+| REQ-V2-09: TCP íntegro, isolado, bidirecional, backpressure/half-close | Spec §4 | 002 | T-TCP-01..05, T-LIFE-01 |
+| REQ-V2-10: UDP preserva fronteiras e retorno correto | Spec §5 | 003 | T-UDP-01/02/08/09; vários peers/sessões/serviços |
+| REQ-V2-11: MTU/overhead, filas, taxa, expiração e limites | Spec §5 | 003, 006, 007 | T-UDP-03..09; oversize recusado inteiro; sem fragmentação implícita |
+| REQ-V2-12: voz fora do stream de jogo e contenção medida | Spec §5 | 003, 006..008 | T-MIX-01..03; filas por perfil; conexão compartilhada é hipótese |
+| REQ-V2-13: mods existentes, versões/APIs reais, sem voz própria | Spec §7; dependências | 001, 006, 007 | T-VOICE-01; JAR/hash/origem/licença; homologação independente |
+| REQ-V2-14: bind/anúncio/ponte, misto e múltiplas instâncias | Spec §7 | 005..007 | T-VOICE-02/05/07; sem anúncio global loopback universal |
+| REQ-V2-15: API oficial/hook mínimo; sem Companion ou alteração de bytes cifrados | Spec §7; ADR-018 | 006, 007 | API versionada, contrato e regressões se Core alterado |
+| REQ-V2-16: config reversível, concorrência, licença/updater | Spec §7; recovery/Tools atuais | 006, 007 | T-CONFIG-01..04; broker JSON não autoriza TOML/properties |
+| REQ-V2-17: stack verificada, Iroh primeiro, pin e alternativas | ADR; dependências | 001 | Artefato/API/MSRV/licença/lock e teste, sem Go automático |
+| REQ-V2-18: e4mc/World Host por mérito, ICE+QUIC demonstrado | ADR; ADR-010 | 001, 004 | Fonte/versionamento/termos; sem deduzir voz do uso de QUIC |
+| REQ-V2-19: chave-peer-sessão-permissões, E2E/replay/revogação | Spec §8 | 001..005 | T-SEC-01..05, T-LIFE-02; lease de laboratório não é convite social |
+| REQ-V2-20: tokens/segredos fora de peer/JVM/log; online-mode/voz preservados | Spec §8 | Todas | Revisão de diff/diagnóstico; T-SEC-05; sem áudio gravado |
+| REQ-V2-21: sinalização mínima, regras, expiração e retenção sem billing | Spec §8; dependências | 005 | T-SIGNAL-01/02; sem jogo/áudio/JAR em Firestore |
+| REQ-V2-22: IP não anônimo, UI backend e evidência por rótulo | Spec §9 | 005, 008 | T-UX-01..04; túnel/status/mundo/voz independentes |
+| REQ-V2-23: incrementos consecutivos, próximo bloqueio real | Prompt; backlog | 001..008 | Teste/correção/revisão/evidência/rollback em cada incremento |
+| REQ-V2-24: redes reais, mods isolados, BR–BR/BR–EUA, métricas | Spec §10; backlog testes | 003, 004, 006..008 | T-NET/T-VOICE/T-MIX; laboratório não prova NAT/áudio |
+| REQ-V2-25: TCP não aprova UDP/voz/relay/R4; experimental desligado | Roadmap; spec | Todas | Gate separado por capability/mod/caminho |
+| REQ-V2-26: prompt autossuficiente, base/code/tests e relatório | Prompt canônico | Todas | Task atual e roteiro executável, sem comandos inventados |
+| REQ-V2-27: fontes oficiais/versões/data e limites | Dependências; ADR | 001 e mudanças | Consultar versão fixada; latest e referências de pesquisa não são pin |
+| REQ-EXEC-01: preservar alpha.14 e reconciliar duas propostas | Revisão; backlog | 001 | Ancestralidade, mapeamento explícito, nenhum schema concorrente |
+| REQ-EXEC-02: continuar trabalho local independente | Prompt | Todas | Pendência externa bloqueia só o ensaio correspondente |
+| REQ-EXEC-03: preparar mínima intervenção humana | Prompt; task atual | 004..008 | Impedimento observado, máquina/conta, passos exatos, resultado/redação e etapa desbloqueada |
+
+## Registro desta reconciliação
+
+### Evidências locais posteriores à preparação
+
+Baseline de 29/09/2026, comandos/saídas/achados no [task de execução](../task-aur-r4-connect.md). Resultados correspondem ao laboratório Windows com Iroh 1.3.0 e não concluem todos os cenários dos critérios normativos abaixo.
+
+| Prova executada | Requisitos/tarefas relacionados | Limite da prova |
+| --- | --- | --- |
+| 24/24 Rust: 4 unitários, 9 adversariais, 11 de transporte; fmt/clippy aprovados | REQ-V2-08..12/19/20; 002/003 e robustez local 008 | Autorização antes do destino, TCP duplex/8 MiB/backpressure/half-close, UDP real com isolamento/MTU/replay/revogação/limites; sem JVM/áudio/NAT |
+| Transporte repetido cinco vezes: 55/55 resultados | REQ-V2-12/23; 002/003 | Após reproduzir e corrigir descarte UDP por esgotamento do bucket agregado sob TCP; reserva de 16 KiB, sem alegar perda zero ou fairness universal |
+| Smoke multiprocesso: dois agentes, 1 MiB TCP por direção, dez UDP/duas origens, 1358 bytes negociados e limpeza aprovada | REQ-V2-09/10/23/26; C-TCP/C-UDP | Direto na mesma máquina; uma amostra debug não mede atraso de voz, RTT puro ou desempenho externo |
+| IPv4/IPv6 loopback reais | REQ-V2-07/24; 004 parcial | Não comprova LAN, firewall, IPv6 público, NAT/CGNAT ou relay; procedimento em dois computadores preparado, não executado |
+| Inspector Node 14/14 e demonstrações sem escrita | REQ-V2-13/14/16; preparação 006/007 | Fixtures/referências oficiais; não instala/executa mod, não aplica configuração, não homologa endereçamento/áudio |
+| Metadata Cargo: 358 pacotes com licença declarada; rustls 0.23.45 conferido no advisory específico | REQ-V2-17/27; 001 | Inventário não comprova obrigações de distribuição; `cargo audit` indisponível, sem varredura completa |
+
+TCP, UDP e direto loopback permanecem **PROTÓTIPO**. Relay está desligado; integração Minecraft, convites sociais e interface não foram implementados. SVC e Plasmo possuem preparação parcial separada, runtime pendente. O limite inicial de retorno UDP 1:1 não constitui condição final de compatibilidade de voz; a política downstream requer incremento próprio. Todas as células reais de Minecraft/mod/rede externa continuam pendentes.
+
+| Decisão | Alteração verificável |
+| --- | --- |
+| Base cumulativa | Mantidos arquivos alpha.14; alterações documentais alpha.13 incorporadas por conteúdo/requisito, sem copiar código antigo |
+| Autoridade única | Backlog e ADR alpha.14 canônicos; proposta alpha.13 preservada em Git, não duplicada como schema ativo |
+| Prompt único | Conteúdo operacional consolidado de d6f31db no arquivo uppercase já rastreado; instrução histórica de parar no primeiro incremento substituída |
+| Contratos reconciliados | Capability singular por serviço, identidade nova por sessão host, revisão de serviço separada e framing único conferido na implementação |
+| Pesquisa cumulativa | Preservadas referências versionadas 1.1.0 e fontes adicionais do primeiro pacote como pesquisa histórica; pin final e rede efetivamente ativada ficam explícitos |
+| Evidência sem promoção | Casos T e placeholders EV permanecem pendentes até teste real; resultado de laboratório não preenche célula de mod/rede |
+
+O task de execução informa arquivos/comandos/resultados/commit e rollback atuais. Revisões documentais antigas e seus SHAs continuam consultáveis; nenhuma evidência histórica foi apagada. R0–R5, a matriz de módulos e configuração pessoal permanecem fora de qualquer autorização implícita desta tabela.

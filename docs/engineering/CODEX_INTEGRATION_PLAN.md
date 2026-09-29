@@ -12,6 +12,8 @@ O Integration Agent não reimplementa features. Ele cria branch limpa a partir d
 - Documentação/rollback incluídos.
 - `git diff --check` limpo.
 
+Para Aurora Connect, usar a [reconciliação de base/contratos/IDs](AURORA_CONNECT_REVIEW.md) antes de atribuir evidência. `apps/connect-lab/` tem manifest/lock próprios e deve receber fmt, clippy e testes próprios; checks do desktop isoladamente não compilam nem validam o laboratório. Não reexecutar a matriz Java quando código/contratos/artefatos Java não mudaram e não houver exigência aplicável. Os gates completos abaixo continuam requisitos da integração de produto, sem converter PoC em liberação. Registro de execução e revisão: [task Connect](../task-aur-r4-connect.md).
+
 ## Ordem Wave 0
 
 1. **AUR-R0-001 Security:** aplicar regra e testes; confirmar que o emulador falha sem o patch e passa com ele.

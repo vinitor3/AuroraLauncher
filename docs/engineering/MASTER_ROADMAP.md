@@ -1,6 +1,6 @@
 # Master Roadmap
 
-Revisão documental de 29/09/2026: **Aurora Connect V2**, sem implementação nesta tarefa. Roadmap canônico lido integralmente; `MASTER_ROADMAP(1).md` não foi fornecido/localizado nos dois workspaces pesquisados. Base reconciliada após a correção do responsável: launcher **0.1.1-alpha.14**, HEAD `6a107b87adc4882bd464909e22650185f862ea5e`, Core **1.1.5**, Skins **0.3.1**. A base inicial alpha.13 não incluía as últimas entregas; a revisão preserva integralmente recuperação manual e cópias de diagnóstico da alpha.14. [Diagnóstico e alterações](../task-aur-r4-connect-v2-review.md).
+Reconciliação de 29/09/2026: **Aurora Connect V2** passa da preparação documental à implementação experimental local, com [estado/evidências próprios](../task-aur-r4-connect.md). Roadmap canônico preservado; `MASTER_ROADMAP(1).md` não foi fornecido/localizado na revisão histórica. Base cumulativa: launcher **0.1.1-alpha.14**, `5ac2f7e` sobre `6a107b8`, Core **1.1.5**, Skins **0.3.1**. Recuperação manual e cópias de diagnóstico permanecem. [Correspondência e autoridade](AURORA_CONNECT_REVIEW.md).
 
 As fases, prioridades, IDs, ordem de waves e gates anteriores permanecem. Estados citados de entregas anteriores são registros documentais, não testes repetidos nesta revisão. Propostas Connect não são funcionalidades prontas. Referência de compatibilidade: [matriz](COMPATIBILITY_MATRIX.md) e `scripts/active-mod-matrix.json`, sem expansão dos nove pares.
 
@@ -83,7 +83,7 @@ A wave antiga de Companion/HUD foi substituída pela [ADR-018](ADR/ADR-018-remov
 
 ### R4 — incrementos identificáveis
 
-Todos os IDs abaixo são novos propostos, sem colisão encontrada nesta base. Detalhes completos de objetivo, arquivos, dependências, risco, testes, aceite, rollback e evidências estão no [backlog](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md). Ordem ajustável ao código real; não refazer implementação comprovada.
+IDs canônicos após [reconciliação explícita](AURORA_CONNECT_REVIEW.md): o `006` conjunto de voz do pacote alpha.13 corresponde a `006` SVC e `007` Plasmo; seu `007` robustez corresponde a `008`. Objetivo, arquivos, dependências, risco, testes, aceite, rollback e evidências estão no [backlog](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md). Ordem ajustável ao bloqueio real; não refazer trabalho comprovado nem parar após TCP quando trabalho independente continuar autorizado.
 
 | ID | Incremento | Evidência que habilita o próximo passo |
 | --- | --- | --- |

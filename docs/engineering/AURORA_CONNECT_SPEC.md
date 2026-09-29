@@ -1,10 +1,10 @@
-# Aurora Connect V2 — especificação candidata
+# Aurora Connect V2 — especificação canônica e escopo experimental
 
-Revisão: 29/09/2026. **HIPÓTESE** arquitetural; capacidade Aurora Connect: **NÃO IMPLEMENTADO** na inspeção limitada. Não é anúncio de suporte. Base documental: alpha.14, `6a107b87adc4882bd464909e22650185f862ea5e`; Core 1.1.5 e Skins 0.3.1. [Diagnóstico, autoridade e rastreabilidade](../task-aur-r4-connect-v2-review.md), [roadmap](MASTER_ROADMAP.md), [ADR proposta](ADR/PROPOSAL-aurora-connect.md), [tarefas e testes](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md), [dependências/custos](AURORA_CONNECT_DEPENDENCIES.md).
+Reconciliação: 29/09/2026, base cumulativa alpha.14 em `5ac2f7e288e77fbb0d5c0d7adbe057f6f76c52a6`; Core 1.1.5 e Skins 0.3.1. O contrato experimental abaixo substitui as propostas anteriores nos pontos divergentes; produto, redes externas e mods sem evidência continuam **HIPÓTESE / PRECISA DE TESTE**. Não é anúncio de suporte. [Reconciliação](AURORA_CONNECT_REVIEW.md), [rastreabilidade](AURORA_CONNECT_TRACEABILITY.md), [execução e estado real](../task-aur-r4-connect.md), [roadmap](MASTER_ROADMAP.md), [ADR](ADR/PROPOSAL-aurora-connect.md), [tarefas e testes](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md), [dependências/custos](AURORA_CONNECT_DEPENDENCIES.md).
 
 ## 1. Escopo e autoridade
 
-“Aurora Connect” é nome de trabalho da conectividade R4. Os requisitos V2 são normativos para esta proposta; campos, limites e módulos abaixo são propostas sujeitas à auditoria do código e à decisão arquitetural. Referências externas demonstram possibilidades upstream, não integração nem homologação do Aurora. Esta entrega altera apenas documentação.
+“Aurora Connect” é nome de trabalho da conectividade R4. Os requisitos V2 são normativos. O incremento local usa um contrato único de laboratório; os fluxos futuros de produto permanecem candidatos e não são liberados por esse experimento. Referências externas demonstram possibilidades upstream, não homologação do Aurora. A solicitação atual autoriza implementar/testar localmente por incrementos consecutivos.
 
 O host compartilha um servidor ou mundo com convidados autorizados; o servidor Minecraft continua autoritativo. P2P descreve o caminho de rede. O computador anfitrião e seu agente precisam permanecer disponíveis; não há hospedagem oficial 24 horas. Não se acessa um servidor privado sem cooperação do responsável.
 
@@ -31,7 +31,7 @@ Separar responsabilidades com módulos pequenos conforme a necessidade demonstra
 6. Adaptadores Minecraft/mods: descobrir serviços e informar destino correto ao cliente.
 7. Interface: consumir eventos reais do backend; não inventar progresso.
 
-Local candidato de implementação, **novo e proposto**: `apps/desktop/src-tauri/src/engine/connect/`. A escolha final deve seguir a organização existente; não criar um framework de plugins genérico. `App.tsx`, `commands.rs` e `apps/edge-proxy/src/index.ts` mantêm proprietário exclusivo por wave. Core não ganha Assistente in-game, HUD ou Companion.
+Local escolhido para o laboratório: `apps/connect-lab/`, crate Rust independente, sem dependência/registro no desktop. Isso permite provar bytes/autorização/TCP/UDP com dois agentes antes de expor qualquer capacidade ao usuário; não cria um sidecar obrigatório do produto nem substitui o IPC local. O antigo caminho candidato `engine/connect/` permanece opção para integração posterior revisada, não segundo transporte ativo. `App.tsx`, `commands.rs` e `apps/edge-proxy/src/index.ts` mantêm proprietário exclusivo por wave. Core não ganha Assistente in-game, HUD ou Companion.
 
 Na alpha.14 já há recovery/CAS restrito, Doctor, Tools confirmadas e cópias de teste. Reutilizar identidade, locks, snapshots e executor quando o escopo for compatível, sem reimplementar esses recursos. O CAS atual não protege automaticamente mundos, `serverconfig` em `saves`, segredos ou todo formato de configuração. Expandir escopo exige contrato e teste próprios; não chamar backup parcial de backup integral.
 
@@ -51,20 +51,21 @@ flowchart LR
 
 Respostas percorrem o fluxo correspondente em sentido inverso até o mesmo convidado/serviço. O transporte autentica e cifra entre os agentes inclusive via relay. A ponte local opera bytes da aplicação, não pacotes TCP/IP de uma VPN.
 
-Contrato lógico v1 **proposto**, não schema/API já existente:
+Contrato lógico v1 reconciliado para o laboratório; nomes serializados finais e valores efetivos devem coincidir com codec e testes no task:
 
 | Campo candidato | Significado/validação |
 | --- | --- |
 | `schemaVersion`, `serviceId` | Versão explícita e ID opaco único na sessão; rejeitar versão desconhecida |
+| `sessionId` | Identidade aleatória nova por execução do host, vinculada à conexão autenticada/lease; não reutilizar após reinício. Substitui o segundo `sessionEpoch` proposto anteriormente |
 | `protocol` | Enum fechado `tcp` ou `udp`; mesmo número de porta não une protocolos |
 | `hostEndpoint` | Endereço literal/porta local aprovados pelo host; fica no host, não é escolhido pelo convidado |
 | `permissions` | Participantes autorizados e ações connect/send; vinculados à sessão |
 | `limits` | Conexões/associações, bytes, taxa, MTU útil e política de filas |
-| `requiredCapability` | Stream confiável ou datagramas; recusar capacidade ausente |
+| `requiredCapability` | Enum singular `reliableStream` ou `datagram`: um serviço tem exatamente um protocolo. Capabilities do peer são negociadas separadamente; recusar capacidade ausente |
 | `adapter` | ID e versão do adaptador homologado, ou endpoint controlado de laboratório |
-| `revision` | Geração da aprovação; mudar destino invalida associações anteriores |
+| `serviceRevision` | Aprovação do destino independente de `sessionId`; alteração exige nova aprovação e invalida recursos anteriores. Hash de config é privado quando aplicável |
 
-Confirmar nomes com os contratos do repositório antes de implementar. Catálogo público ao convidado omite endpoint do host e só revela serviços autorizados. A abertura referencia `(sessionId, serviceId, revision)`; não aceita IP, URL ou porta arbitrários. Host confirma o destino após conferir processo/instância, configuração efetiva e permissão. Manifesto, metadado de mod ou resposta da IA apenas propõem serviços; nunca concedem acesso.
+Catálogo ao convidado omite endpoint do host e só revela serviços autorizados. A abertura referencia a sessão autenticada e `(serviceId, serviceRevision)`; não aceita IP, URL ou porta arbitrários. Host confirma o destino após conferir processo/instância, configuração efetiva e permissão. Manifesto, metadado de mod ou IA apenas propõem serviços; nunca concedem acesso. `requiredCapabilities`, `configurationRevision` e `revision` das propostas antigas não são aliases aceitos silenciosamente; a revisão conserva sua correspondência histórica.
 
 MVP limita destinos a loopback do próprio host. Um bind específico em interface local precisa de confirmação e allowlist de endereços realmente locais; endpoint LAN em outra máquina não entra implicitamente. Não há SOCKS, proxy aberto, encaminhamento geral à LAN, execução remota ou exposição automática de RCON, SSH, banco de dados e painéis. Não resolver nomes controlados pelo convidado, evitando SSRF/DNS rebinding.
 
@@ -84,15 +85,15 @@ Abrir/fechar associação usa controle confiável com autorização e limites. D
 
 Avaliar QUIC DATAGRAM ou equivalente real. RFC 9221 não fornece fragmentação do frame nem flow control por associação; o controle de congestionamento é do transporte. O Aurora deve limitar filas e multiplexar serviços explicitamente. ACK do transporte não demonstra reprodução de voz. [RFC 9221, §§4–5](https://www.rfc-editor.org/rfc/rfc9221.html), consulta 29/09/2026.
 
-Enquadramento binário candidato v1: versão 1 byte, flags 1, service handle 4, association handle 8, geração 4, sequência de observação 4 e comprimento 2: **24 bytes**, todos autenticados pelo transporte. Handles são locais à sessão negociada; números de rede em big-endian; comprimento deve coincidir exatamente. A sequência serve a métricas/janela contra duplicações do envelope e não impõe entrega ordenada. Rejeitar tipo/flags desconhecidos. Confirmar formato somente na decisão de implementação, com testes de serialização/fuzz; não é API upstream.
+Enquadramento binário v1 de laboratório: versão 1 byte, flags 1, service handle 4, association handle 8, geração 4, sequência 4 e comprimento 2: **24 bytes**, todos autenticados pelo transporte. Handles são locais à sessão; números de rede em big-endian; comprimento deve coincidir exatamente. A geração coincide com a revisão aprovada do serviço e a associação não é reutilizada na conexão. A janela de 64 sequências admite reordenação, mas descarta envelope duplicado ou antigo; não impõe ordem nem retransmissão. Rejeitar versão/flags desconhecidos. Peer e sessão vêm da conexão autenticada e lease; identidade declarada pelo convidado não autoriza outra associação. Testes do codec fixam esse formato, que não é API upstream. A reserva antiga de até 32 B foi substituída por este formato único.
 
-Orçamento com unidades explícitas: `B` é o máximo de bytes disponíveis no datagrama útil da biblioteca para o envelope Aurora inteiro; `H = 24` é o cabeçalho proposto; `S` é o teto de bytes de aplicação do serviço. Exigir suporte DATAGRAM e `B >= H` antes de subtrair; então `máximo aplicação = mínimo(S, B − H, 65535)`, respeitando também o máximo UDP da família usada. Ausência de capacidade/limite menor que H é incompatibilidade, nunca underflow. O limite da biblioteca já deve refletir o caminho e overhead de QUIC; não subtrair nem ignorar esse overhead duas vezes. Recalcular quando o caminho mudar. Se a API não expuser garantia suficiente, usar limite conservador demonstrado por teste e declarar o alcance. MTU IP, payload UDP externo, frame DATAGRAM e payload do mod são medidas diferentes.
+Orçamento com unidades explícitas: `B = Connection::max_datagram_size()` é o máximo útil da biblioteca para o envelope Aurora inteiro; `H = 24`; `S` é o teto do serviço. Exigir suporte DATAGRAM e `B >= H` antes de subtrair; o laboratório usa `mínimo(S, B − H, 65507)` conservador para UDP. Ausência de capacidade/limite menor que H é incompatibilidade, nunca underflow. O limite da biblioteca já reflete QUIC/caminho; não subtrair esse overhead novamente. Reconsultar antes de envio, inclusive se o caminho mudar. MTU IP, payload UDP externo, frame DATAGRAM e payload do mod são medidas diferentes.
 
 Recepção local usa buffer capaz de detectar datagrama maior que o teto (até o máximo da família UDP suportada), sem encaminhar prefixo truncado. Oversize gera erro/contador e torna a compatibilidade indisponível; não derruba o jogo. Medir tamanhos do UDP integral dos mods, sem armazenar seu conteúdo. O `mtu_size` documentado no Simple Voice Chat não é prova do tamanho final do pacote encapsulado. Reduzir configuração só após avaliar protocolo/versão com plano/diff e autorização. Não cabe presumir que todo áudio cabe em 1200 bytes.
 
 Primeira PoC não fragmenta. Se necessário para um mod real: decisão separada com ID único por mensagem/geração, limites de fragmentos/total/associações/bytes em remontagem, validação antes de reservar memória, janela/expiração curta, descarte integral em perda/duplicação inconsistente e testes de abuso. Só entregar ao socket local após remontagem completa; fragmentos permanecem autenticados pelo transporte. Sem esse projeto validado, declarar incompatibilidade. Não reimplementar criptografia ou congestionamento.
 
-Limites iniciais de laboratório **propostos**, ajustáveis mediante medidas e nunca SLA:
+Limites de produto abaixo permanecem **propostos**, ajustáveis mediante medidas e nunca SLA. O harness pode começar com tetos menores; valores efetivos impostos pelo código são registrados no [contrato operacional](../aurora-connect.md) e no task. Não afirmar que um teto candidato desta tabela foi implementado sem prova:
 
 | Recurso | Teto inicial | Ao exceder |
 | --- | --- | --- |

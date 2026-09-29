@@ -1,8 +1,21 @@
 # Compatibility Matrix
 
-## Aurora Connect V2 — planejamento de 29/09/2026
+## Aurora Connect V2 — laboratório local de 29/09/2026
 
-Estado do Connect: **NÃO IMPLEMENTADO** no inventário limitado; compatibilidade de transporte/voz: **NÃO VERIFICADO**. A revisão usa alpha.14 (`6a107b8`) e mantém Core 1.1.5, Skins 0.3.1 e os nove pares da matriz ativa. Nenhum caminho TCP/UDP, mod de voz ou relay foi homologado por esta documentação. A [matriz candidata por mod/versão/loader/hospedagem/rede](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) contém os futuros testes, incluindo Simple Voice Chat e Plasmo Voice separados. A matriz abaixo conserva todas as evidências anteriores; não confundir retransmissão Skins com conectividade Connect. [Diagnóstico e base reconciliada](../task-aur-r4-connect-v2-review.md).
+Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, fora do desktop e desligado para usuários. Base cumulativa alpha.14 (`5ac2f7e` sobre `6a107b8`), Core 1.1.5, Skins 0.3.1 e os nove pares preservados. Evidências e comandos no [task de execução](../task-aur-r4-connect.md); roteiro no [laboratório](../aurora-connect.md). A [matriz candidata por mod/versão/loader/hospedagem/rede](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) mantém os gates futuros. A matriz abaixo conserva todas as evidências anteriores; retransmissão Skins e testes sintéticos de transporte não homologam Connect em Minecraft.
+
+| Capacidade | Evidência local | Estado e fronteira |
+| --- | --- | --- |
+| TCP | Bytes reais nos dois sentidos, 8 MiB/contrapressão, half-close, múltiplas conexões, autenticação/autorização, limites, expiração/revogação | **PROTÓTIPO**; não executou protocolo Minecraft |
+| UDP | Fronteiras/retorno, três peers, duas sessões, dois serviços, MTU/oversize, replay/forja, quotas, ciclo de vida e carga TCP simultânea | **PROTÓTIPO**; crédito 1:1 inicial restringe protocolos com recepção maior que envio, sem aprovação de voz |
+| Direto | IPv4 e IPv6 loopback; smoke com dois agentes em processos separados | **PROTÓTIPO** local; LAN, redes distintas, IPv4 público, firewall IPv6, NAT/CGNAT pendentes |
+| Relay/UDP externo bloqueado | Pesquisa de capacidade upstream e termos, sem ativação | **NÃO IMPLEMENTADO** no laboratório; nenhum relay configurado/homologado |
+| Minecraft | Nenhuma JVM/jogo executado pelo laboratório | **NÃO IMPLEMENTADO** como integração; ingresso no mundo pendente |
+| Convites/interface | Pin e lease manual do laboratório | Fluxo social/interface **NÃO IMPLEMENTADO**; não equivale a convite do produto |
+| Simple Voice Chat | Inspector/plano sem escrita; referências oficiais e fixtures | **PARCIAL** somente na preparação; runtime/endereço/áudio **PRECISA DE TESTE** |
+| Plasmo Voice | Inspector/plano sem escrita, independente de SVC | **PARCIAL** somente na preparação; runtime/endereço/áudio **PRECISA DE TESTE** |
+
+Baseline: 24/24 testes Rust (4 unitários, 9 adversariais, 11 de transporte), 55/55 resultados nas cinco repetições da suíte de transporte, fmt/clippy e 14/14 testes do inspector aprovados. Smoke: 1 MiB TCP por direção, dez UDP em duas origens, teto negociado de 1358 bytes e limpeza aprovada. Uma falha intermitente anterior de UDP sob carga TCP foi corrigida reservando 16 KiB do burst para datagramas; o histórico permanece no task. Esses resultados não garantem ausência de perda em UDP, justiça em redes externas ou SLA. Nenhuma linha de mod/loader/hospedagem recebe homologação por esses testes.
 
 ## Doctor, recuperação e cópias de teste — 29/09/2026
 
