@@ -39,6 +39,8 @@ Décimo primeiro incremento: plano separado para restaurar somente chaves própr
 
 Décimo segundo incremento: adaptador exige guard opaco com verificação de qualquer Java padrão no Windows ao adquirir lock, preparar e confirmar, inclusive após snapshot/CAS. Cobre o bloqueio conservador do dedicado `-jar`; não interpreta credenciais e não encerra processo. Caller de produto/UI continua pendente, assim como corrida com início externo e JVM renomeada/embutida. [Contrato](../../aurora-connect-voice.md#verificação-de-processos-no-adaptador--décimo-segundo-incremento).
 
+Décimo terceiro incremento: T-LIFE-01/02 e T-CONFIG-03/04 ganham quatro cenários de entrega/retomada do lock com recibo em RAM, restauração estrita/revisada de ambos os mods e preservação de edições. Sem execução de Java; gates de runtime e recibo durável permanecem. [Evidência](../../task-aur-r4-connect.md#décimo-terceiro-incremento--entrega-e-retomada-do-lock-com-recibo-vivo).
+
 ## 1. Evidência de partida e limites do inventário
 
 Leitura local feita em 29/09/2026, sem build, lançamento do jogo, conexão externa ou teste runtime. A existência de um símbolo ou de um teste no arquivo não equivale à execução desse teste.

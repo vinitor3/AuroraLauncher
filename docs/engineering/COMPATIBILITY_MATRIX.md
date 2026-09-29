@@ -37,6 +37,8 @@ Décimo primeiro incremento: revisão separada de restauração em cópia conser
 
 Décimo segundo incremento: guard de voz exige verificação Windows de processos Java padrão junto ao lock e novamente na confirmação. Qualquer JVM padrão bloqueia; não distingue servidor dedicado de outra aplicação, não detecta renomeados/embutidos e não impede início externo após a consulta. Não modifica o launcher padrão ou cria integração UI. [Escopo](../aurora-connect-voice.md#verificação-de-processos-no-adaptador--décimo-segundo-incremento).
 
+Décimo terceiro incremento: 2/2 testes, quatro cenários de lock real entre aplicar/launch/restaurar para SVC e Plasmo, com probes controlados e JARs fixados. Sem JVM, voz ou mudança nos nove pares; [evidência](../task-aur-r4-connect.md#décimo-terceiro-incremento--entrega-e-retomada-do-lock-com-recibo-vivo).
+
 ## Doctor, recuperação e cópias de teste — 29/09/2026
 
 Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Launcher alpha.14 integra integralmente a recuperação manual de `be3a1c4`, preserva a base alpha.13 com Doctor, Gemini, Assistente e sessões, e acrescenta observações verificadas por tentativa e cópias independentes com aplicação seletiva, proteção e desfazer. Não amplia Minecraft/loaders/Java e conserva Core 1.1.5/Skins 0.3.1. Mundos são excluídos por padrão e nunca transferidos ao aplicar; cópia explícita de mundo serve somente ao teste. Testes automatizados usam dados descartáveis; partida real, skins/capa, multiplayer, autenticação e voz não recebem nova homologação por build. Evidências: [AUR-1167](../task-aur-1167-doctor-lab.md).

@@ -978,3 +978,165 @@ fn voice_confirmation_rechecks_before_executor_and_again_after_snapshot_work() {
     assert!(applied.receipt.prepare_restore(&f.copy, &guard).is_err());
     assert_eq!(fs::read(f.source.root().join(CONFIG)).unwrap(), ORIGINAL);
 }
+
+// Exercises the real OS lock/recovery handoff, not a Minecraft/Java lifecycle.
+// The receipt remains in RAM while distinct guards are acquired and dropped.
+fn exercise_voice_launch_lock_handoff(
+    voice_mod: VoiceMod,
+    jar_name: &str,
+    original: &[u8],
+    reconciled: bool,
+) {
+    use crate::engine::{acquire_instance_mutation_lock, ContentUpdateError};
+
+    let jar = PathBuf::from(
+        std::env::var_os("AURORA_CONNECT_ARTIFACT_DIR")
+            .expect("explicit local artifact directory required"),
+    )
+    .join(jar_name);
+    let f = Fixture::for_mod(Some(&jar), voice_mod, original);
+    let source_options = fs::read(f.source.root().join("options.txt")).ok();
+    let guard = fixture_voice_guard(&f.copy).unwrap();
+    let plan = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
+    let approval = plan.review().digest.clone();
+    let mut applied = plan.confirm(&f.copy, &guard, &approval).unwrap();
+    let announced = f.bytes();
+    assert_ne!(announced, original);
+    assert_eq!(applied.receipt.state(), RestorationState::Ready);
+    assert!(matches!(
+        acquire_instance_mutation_lock(&f.copy),
+        Err(ContentUpdateError::Busy)
+    ));
+    drop(guard);
+
+    // This is the same lock API retained by the launcher for its child process.
+    // No child process is created by this test; config edits are explicit fixtures.
+    let game_lock = acquire_instance_mutation_lock(&f.copy).unwrap();
+    let options = b"renderDistance:19\r\ngamma:0.6\r\n";
+    fs::write(f.copy.root().join("options.txt"), options).unwrap();
+    let (current, expected) = if reconciled {
+        let replace_independent = |bytes: &[u8]| {
+            let text = std::str::from_utf8(bytes).unwrap().replace("\r\n", "\n");
+            let text = match voice_mod {
+                VoiceMod::SimpleVoiceChat => {
+                    assert!(text.contains("mtu_size=1275"));
+                    text.replace("mtu_size=1275", "mtu_size=1200")
+                }
+                VoiceMod::PlasmoVoice => {
+                    assert!(text.contains("mtu_size = 1024"));
+                    text.replace("mtu_size = 1024", "mtu_size = 1000")
+                }
+            };
+            // Deliberately retain this new CRLF plus the current document's LF.
+            format!("# independent comment while launch owns lock\r\n{text}").into_bytes()
+        };
+        (
+            replace_independent(&announced),
+            replace_independent(original),
+        )
+    } else {
+        (announced.clone(), original.to_vec())
+    };
+    fs::write(f.copy.root().join(voice_mod.config()), &current).unwrap();
+    let point_ids = || {
+        recovery::list_points(&f.copy, &game_lock)
+            .unwrap()
+            .points
+            .into_iter()
+            .map(|point| point.id)
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let points_before_refusal = point_ids();
+    let stage = f.copy.root().join(".aurora/connect-voice-stage");
+    assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+    assert!(matches!(
+        fixture_voice_guard(&f.copy),
+        Err(RecoveryError::WrongLock)
+    ));
+    assert_eq!(point_ids(), points_before_refusal);
+    assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+    assert_eq!(f.bytes(), current);
+    assert_eq!(
+        fs::read(f.copy.root().join("options.txt")).unwrap(),
+        options
+    );
+    assert_eq!(applied.receipt.state(), RestorationState::Ready);
+    drop(game_lock);
+
+    // A new opaque guard is required; the receipt cannot retain the old lock or
+    // use its earlier process observation to skip reacquisition.
+    let restore_guard = fixture_voice_guard(&f.copy).unwrap();
+    assert!(matches!(
+        acquire_instance_mutation_lock(&f.copy),
+        Err(ContentUpdateError::Busy)
+    ));
+    let restored = if reconciled {
+        assert!(matches!(
+            applied.receipt.prepare_restore(&f.copy, &restore_guard),
+            Err(RecoveryError::StalePreview)
+        ));
+        applied
+            .receipt
+            .prepare_reconciled_restore(&f.copy, &restore_guard, &digest(&current))
+            .unwrap()
+    } else {
+        applied
+            .receipt
+            .prepare_restore(&f.copy, &restore_guard)
+            .unwrap()
+    };
+    assert_eq!(restored.review().replacement_sha256, digest(&expected));
+    let approval = restored.review().digest.clone();
+    restored
+        .confirm(&f.copy, &restore_guard, &approval)
+        .unwrap();
+    assert_eq!(applied.receipt.state(), RestorationState::Restored);
+    assert_eq!(f.bytes(), expected);
+    assert_eq!(
+        fs::read(f.copy.root().join("options.txt")).unwrap(),
+        options
+    );
+    assert_eq!(
+        fs::read(f.source.root().join(voice_mod.config())).unwrap(),
+        original
+    );
+    assert_eq!(
+        fs::read(f.source.root().join("options.txt")).ok(),
+        source_options
+    );
+    assert!(!recovery::has_pending(&f.copy).unwrap());
+    assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+    assert!(matches!(
+        applied.receipt.prepare_restore(&f.copy, &restore_guard),
+        Err(RecoveryError::StalePreview)
+    ));
+    drop(restore_guard);
+    // Cleanup makes the instance available to a subsequent ordinary launch.
+    drop(acquire_instance_mutation_lock(&f.copy).unwrap());
+}
+
+#[test]
+#[ignore = "requires explicit pinned SVC artifact; real locks with controlled process probes, no Java"]
+fn svc_receipt_survives_voice_launch_lock_handoff() {
+    for reconciled in [false, true] {
+        exercise_voice_launch_lock_handoff(
+            VoiceMod::SimpleVoiceChat,
+            "voicechat-fabric-1.21.1-2.6.22.jar",
+            ORIGINAL,
+            reconciled,
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires explicit pinned Plasmo artifact; real locks with controlled process probes, no Java"]
+fn plasmo_receipt_survives_voice_launch_lock_handoff() {
+    for reconciled in [false, true] {
+        exercise_voice_launch_lock_handoff(
+            VoiceMod::PlasmoVoice,
+            "plasmovoice-fabric-1.21.1-2.1.17.jar",
+            PLASMO_ORIGINAL,
+            reconciled,
+        );
+    }
+}
