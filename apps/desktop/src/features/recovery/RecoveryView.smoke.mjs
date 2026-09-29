@@ -205,6 +205,25 @@ await reject("recovery_preview_undo", "Ponto corrompido. C:\\SyntheticPrivate\\A
 assert.match(container.textContent, /Não foi possível concluir a operação com segurança/);
 assert.doesNotMatch(container.textContent, /SyntheticPrivate/);
 
+// Doctor's verified point ID enters the existing preview and never applies silently.
+overview = { ...overview, points: [point()] };
+await click("Atualizar lista");
+let consumedPointRequests = 0;
+const restoresBeforeShortcut = count("recovery_restore");
+await render({ initialPointId: "point-a", onInitialPointConsumed: () => { consumedPointRequests += 1; } });
+assert.equal(consumedPointRequests, 1);
+assert.equal(pending.find((call) => call.command === "recovery_preview").args.pointId, "point-a");
+await render();
+await resolve("recovery_preview", preview({ id: "doctor-preview" }));
+assert.equal(count("recovery_restore"), restoresBeforeShortcut);
+assert.equal(button("Confirmar restauração").disabled, true);
+await click("Cancelar");
+await click("Restaurar");
+await emitRecovered("instance-a");
+await resolve("recovery_preview", preview({ id: "invalidated-in-flight" }));
+assert.equal(container.querySelector('[role="dialog"]'), null);
+assert.match(container.textContent, /prévia ficou desatualizada/);
+
 // Responses from an earlier instance or unmounted component never leak across.
 deferList = true;
 await click("Atualizar lista");

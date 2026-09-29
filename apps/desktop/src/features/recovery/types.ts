@@ -52,6 +52,7 @@ const PUBLIC_ERRORS = new Set([
   "Um caminho, link ou arquivo não é seguro para recuperação. A operação foi bloqueada.",
   "Os arquivos mudaram durante a operação. Feche programas que alteram a instância e tente novamente.",
   "A prévia ficou desatualizada. Gere uma nova prévia antes de confirmar.",
+  "A instância original mudou desde a criação desta cópia. Crie uma nova cópia para testar o estado atual.",
   "O ponto não pertence a esta instância. Instâncias recriadas não reutilizam pontos antigos.",
   "A versão ou o loader da instância mudou. Este ponto não pode restaurar mods para outro ambiente.",
   "Não há espaço suficiente para proteger o estado anterior e preparar a restauração. Nenhum arquivo foi alterado.",

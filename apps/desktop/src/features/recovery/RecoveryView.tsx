@@ -10,10 +10,12 @@ type Props = {
   running: boolean;
   onOperationChange: (busy: boolean) => void;
   onChanged: () => Promise<void>;
+  initialPointId?: string;
+  onInitialPointConsumed?: () => void;
 };
 
 type Operation = "list" | "create" | "details" | "preview" | "restore" | "delete";
-type Review = { kind: "restore" | "undo"; preview: RecoveryPreview } | { kind: "delete"; point: RecoveryPoint | RecoveryUnavailablePoint };
+type Review = { kind: "restore" | "undo" | "apply"; preview: RecoveryPreview } | { kind: "delete"; point: RecoveryPoint | RecoveryUnavailablePoint };
 const operationLabels: Record<Operation, string> = {
   list: "Verificando pontos e operações interrompidas…",
   create: "Copiando e verificando os arquivos protegidos…",
@@ -58,7 +60,7 @@ function FileTable({ files }: { files: RecoveryPoint["files"] | RecoveryPreview[
   </>;
 }
 
-function ReviewDialog({ review, busy, blocked, onCancel, onConfirm }: {
+export function RecoveryReviewDialog({ review, busy, blocked, onCancel, onConfirm }: {
   review: Review; busy: boolean; blocked: boolean; onCancel: () => void; onConfirm: () => void;
 }) {
   const dialog = useRef<HTMLElement>(null);
@@ -87,15 +89,16 @@ function ReviewDialog({ review, busy, blocked, onCancel, onConfirm }: {
     return () => { window.removeEventListener("keydown", onKeyDown, true); if (previous?.isConnected) previous.focus(); };
   }, []);
   const deleting = review.kind === "delete";
+  const applying = review.kind === "apply";
   const point = review.kind === "delete" ? review.point : review.preview.point;
-  const title = deleting ? "Excluir ponto de restauração" : review.kind === "undo" ? "Revisar desfazer restauração" : "Revisar restauração";
+  const title = deleting ? "Excluir ponto de restauração" : applying ? "Revisar alterações para a instância original" : review.kind === "undo" ? "Revisar desfazer restauração" : "Revisar restauração";
   return <div className="recovery-review-overlay"><section aria-labelledby="recovery-review-title" aria-describedby="recovery-review-description" aria-modal="true" aria-busy={busy} className="recovery-review" ref={dialog} role="dialog" tabIndex={-1}>
     <header><div><p className="eyebrow">RECUPERAÇÃO DA INSTÂNCIA</p><h2 id="recovery-review-title">{title}</h2></div><button aria-label="Fechar revisão de recuperação" className="editor-close" disabled={busy} onClick={onCancel} type="button">×</button></header>
     <div className="recovery-review-body">
       <strong className="recovery-point-description">{"description" in point ? point.description || "Ponto sem descrição" : "Ponto indisponível"}</strong>{"logicalBytes" in point ? <PointMeta point={point} /> : <p>Criado em {recoveryDate(point.createdAt)}. O tamanho e o inventário não puderam ser verificados.</p>}
       {deleting ? <p id="recovery-review-description">Este ponto deixará de estar disponível. Os arquivos atuais da instância e os dados usados por outros pontos serão preservados. O espaço compartilhado pode continuar ocupado após a exclusão.</p>
         : <>
-          <p id="recovery-review-description">{review.kind === "undo" ? "O estado protegido anterior à última restauração será recuperado. Alterações feitas depois também entram na comparação abaixo." : "Os arquivos dentro do escopo voltarão ao estado salvo. Arquivos adicionados depois do ponto serão removidos conforme a lista abaixo."}</p>
+          <p id="recovery-review-description">{applying ? "Somente as mudanças selecionadas abaixo serão transferidas da cópia de teste para a instância original. A origem será verificada novamente e conflitos bloquearão a aplicação." : review.kind === "undo" ? "O estado protegido anterior à última restauração será recuperado. Alterações feitas depois também entram na comparação abaixo." : "Os arquivos dentro do escopo voltarão ao estado salvo. Arquivos adicionados depois do ponto serão removidos conforme a lista abaixo."}</p>
           <div className="recovery-worlds-warning" role="note"><strong>Mundos não serão restaurados.</strong><span>Os mundos e demais caminhos excluídos permanecem intactos.</span></div>
           <Scope scope={review.preview.point.scope} excluded={review.preview.excluded} />
           <div className="recovery-change-counts" aria-label="Resumo das alterações">{(["add", "replace", "remove"] as const).map((action) => <span className={`recovery-action-${action}`} key={action}>{review.preview.changes.filter((change) => change.action === action).length.toLocaleString("pt-BR")} · {actionLabels[action]}</span>)}</div>
@@ -107,14 +110,14 @@ function ReviewDialog({ review, busy, blocked, onCancel, onConfirm }: {
           </details>
           <p className="recovery-managed-note">Módulos Aurora administrados ficam fora da recuperação: Companion não é reinstalado e Core/Skins não são substituídos por versões do ponto antigo. A matriz ativa continua sendo respeitada.</p>
           <p>Antes de alterar a instância, o Aurora verificará novamente os arquivos e protegerá o estado atual para permitir desfazer. Se o estado mudar ou faltar espaço para essa proteção, a operação será bloqueada.</p>
-          <label className="recovery-acknowledge"><input checked={acknowledged} disabled={busy} onChange={(event) => setAcknowledged(event.target.checked)} type="checkbox" /><span>Revisei as alterações e entendo que mundos não serão restaurados.</span></label>
+          <label className="recovery-acknowledge"><input checked={acknowledged} disabled={busy} onChange={(event) => setAcknowledged(event.target.checked)} type="checkbox" /><span>{applying ? "Revisei as mudanças selecionadas e autorizo aplicá-las à instância original com proteção para desfazer. Mundos não serão transferidos." : "Revisei as alterações e entendo que mundos não serão restaurados."}</span></label>
         </>}
     </div>
-    <footer>{busy && <p role="status">{deleting ? "Excluindo ponto…" : "Restaurando com proteção do estado anterior…"} Aguarde a conclusão.</p>}<div><button className="secondary" disabled={busy} onClick={onCancel} type="button">Cancelar</button><button className={deleting ? "danger" : ""} disabled={busy || blocked || (!deleting && !acknowledged)} onClick={onConfirm} type="button">{deleting ? "Confirmar exclusão" : review.kind === "undo" ? "Confirmar desfazer restauração" : "Confirmar restauração"}</button></div></footer>
+    <footer>{busy && <p role="status">{deleting ? "Excluindo ponto…" : applying ? "Protegendo a origem e aplicando mudanças selecionadas…" : "Restaurando com proteção do estado anterior…"} Aguarde a conclusão.</p>}<div><button className="secondary" disabled={busy} onClick={onCancel} type="button">Cancelar</button><button className={deleting ? "danger" : ""} disabled={busy || blocked || (!deleting && !acknowledged)} onClick={onConfirm} type="button">{deleting ? "Confirmar exclusão" : applying ? "Confirmar aplicação à original" : review.kind === "undo" ? "Confirmar desfazer restauração" : "Confirmar restauração"}</button></div></footer>
   </section></div>;
 }
 
-export function RecoveryView({ instanceId, busy, running, onOperationChange, onChanged }: Props) {
+export function RecoveryView({ instanceId, busy, running, onOperationChange, onChanged, initialPointId, onInitialPointConsumed }: Props) {
   const [overview, setOverview] = useState<RecoveryOverview>();
   const [operation, setOperation] = useState<Operation>();
   const [description, setDescription] = useState("");
@@ -127,6 +130,7 @@ export function RecoveryView({ instanceId, busy, running, onOperationChange, onC
   const [error, setError] = useState("");
   const generation = useRef(0);
   const inFlight = useRef(false);
+  const previewEpoch = useRef(0);
   const context = useRef(instanceId);
   context.current = instanceId;
   const callbacks = useRef({ onOperationChange, onChanged });
@@ -168,6 +172,25 @@ export function RecoveryView({ instanceId, busy, running, onOperationChange, onC
     return () => { disposed = true; stopListening?.(); generation.current += 1; inFlight.current = false; callbacks.current.onOperationChange(false); };
   }, [instanceId]);
 
+  useEffect(() => {
+    let disposed = false;
+    const stops: Array<() => void> = [];
+    for (const event of ["aurora-recovery-changed", "aurora-doctor-run", "aurora-ai-tool-changed", "aurora-diagnostic-lab-changed"]) {
+      void listen<{ instanceId: string }>(event, ({ payload }) => {
+        if (!disposed && payload.instanceId === instanceId) { previewEpoch.current += 1; setReview(undefined); }
+      }).then((stop) => { if (disposed) stop(); else stops.push(stop); }).catch(() => undefined);
+    }
+    return () => { disposed = true; stops.forEach((stop) => stop()); };
+  }, [instanceId]);
+
+  useEffect(() => {
+    if (!initialPointId || !overview || disabled) return;
+    const point = overview.points.find((item) => item.id === initialPointId);
+    onInitialPointConsumed?.();
+    if (point) preview(point);
+    else setError("O ponto indicado pelo Doctor não está mais disponível. Atualize a lista e escolha um ponto verificado.");
+  }, [initialPointId, overview, disabled]);
+
   async function refreshOverview(current: () => boolean) {
     try {
       const result = await invoke<RecoveryOverview>("recovery_list", { id: instanceId });
@@ -188,7 +211,11 @@ export function RecoveryView({ instanceId, busy, running, onOperationChange, onC
 
   function preview(point?: RecoveryPoint) {
     if (disabled) return;
-    void perform<RecoveryPreview>("preview", point ? "recovery_preview" : "recovery_preview_undo", point ? { pointId: point.id } : {}, (result) => setReview({ kind: point ? "restore" : "undo", preview: result }));
+    const epoch = previewEpoch.current;
+    void perform<RecoveryPreview>("preview", point ? "recovery_preview" : "recovery_preview_undo", point ? { pointId: point.id } : {}, (result) => {
+      if (previewEpoch.current === epoch) setReview({ kind: point ? "restore" : "undo", preview: result });
+      else setError("A prévia ficou desatualizada. Gere uma nova prévia antes de confirmar.");
+    });
   }
 
   function confirm() {
@@ -235,6 +262,6 @@ export function RecoveryView({ instanceId, busy, running, onOperationChange, onC
     {!!overview?.unavailablePoints.length && <div className="recovery-unavailable"><h3>Pontos indisponíveis ({overview.unavailablePoints.length})</h3><p>Alguns pontos não passaram pela verificação. Os pontos íntegros continuam disponíveis abaixo.</p>{overview.unavailablePoints.map((point) => <article className="recovery-point" key={point.id}><div><h3>Ponto indisponível · {recoveryDate(point.createdAt)}</h3><p>Os dados estão ausentes, corrompidos ou não puderam ser validados. O tamanho e o inventário não estão disponíveis.</p></div><div className="recovery-point-actions"><button className="danger compact" disabled={disabled} onClick={() => setReview({ kind: "delete", point })} type="button">Excluir ponto indisponível</button></div></article>)}</div>}
     {overview && <div className="recovery-points">{overview.points.map((point) => <article className={`recovery-point${selected?.id === point.id ? " selected" : ""}`} key={point.id}><div><h3>{point.description || "Ponto sem descrição"}</h3><PointMeta point={point} /><p className="recovery-point-scope">Escopo: {point.scope.join(" · ")}</p></div><div className="recovery-point-actions"><button className="secondary compact" disabled={disabled} onClick={() => void perform<RecoveryPoint>("details", "recovery_details", { pointId: point.id }, (value) => setSelected(value))} type="button">Detalhes</button><button disabled={disabled} onClick={() => preview(point)} type="button">Restaurar</button><button className="danger compact" disabled={disabled} onClick={() => setReview({ kind: "delete", point })} type="button">Excluir</button></div></article>)}</div>}
     {selected && <details className="recovery-details" open><summary>Detalhes · {selected.description || "Ponto sem descrição"}</summary><PointMeta point={selected} /><Scope scope={selected.scope} excluded={selected.excluded} /><h4>Inventário salvo</h4>{selected.files.length ? <FileTable files={selected.files} key={selected.id} /> : <p>Nenhum arquivo no escopo protegido.</p>}<h4>Campos do perfil salvos</h4><div className="recovery-table-scroll"><table><thead><tr><th>Perfil · campo</th><th>Valor</th></tr></thead><tbody>{Object.entries(selected.profile).flatMap(([file, fields]) => Object.entries(fields).map(([field, value]) => <tr key={`${file}:${field}`}><td><code>{file} · {field}</code></td><td>{value ?? "Não definido"}</td></tr>))}</tbody></table></div></details>}
-    {review && <ReviewDialog blocked={busy || running} busy={!!operation} key={review.kind === "delete" ? review.point.id : review.preview.id} onCancel={() => setReview(undefined)} onConfirm={confirm} review={review} />}
+    {review && <RecoveryReviewDialog blocked={busy || running} busy={!!operation} key={review.kind === "delete" ? review.point.id : review.preview.id} onCancel={() => setReview(undefined)} onConfirm={confirm} review={review} />}
   </section>;
 }

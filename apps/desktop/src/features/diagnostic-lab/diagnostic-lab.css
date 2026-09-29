@@ -1,0 +1,28 @@
+.diagnostic-lab { display: grid; gap: 1rem; color: #e9e2f5; }
+.editor-view-tabs { overflow-x: auto; }
+.editor-view-tabs > button { flex-shrink: 0; }
+.diagnostic-lab p { color: #bfb5cd; font-size: .8rem; line-height: 1.6; }
+.diagnostic-lab small { display: block; color: #a99fb7; font-size: .72rem; line-height: 1.5; overflow-wrap: anywhere; }
+.diagnostic-lab code { overflow-wrap: anywhere; }
+.lab-create, .lab-details > details, .lab-changes, .lab-observations { padding: .9rem; border: 1px solid #c7aaff26; border-radius: 10px; background: #b391ff08; }
+.lab-create { display: grid; gap: .7rem; }
+.lab-create h3, .lab-details h3 { margin: 0; font-size: .9rem; }
+.lab-create > label { display: grid; gap: .4rem; }
+.lab-create .lab-check { display: flex; align-items: center; gap: .6rem; font-size: .8rem; }
+.lab-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.lab-environments, .lab-details { display: grid; gap: .8rem; min-width: 0; }
+.lab-environments details { margin-top: .5rem; }
+.diagnostic-lab summary { color: #d0bcdf; font-size: .78rem; cursor: pointer; }
+.lab-details > header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .75rem; }
+.lab-details > details > .lab-actions { margin: .8rem 0; }
+.lab-mods { max-height: 320px; overflow: auto; }
+.lab-mod, .lab-change { display: flex; align-items: center; gap: .7rem; padding: .65rem .3rem; border-bottom: 1px solid #ffffff12; font-size: .77rem; }
+.lab-mod code, .lab-change > span { min-width: 0; flex: 1; }
+.lab-mod > span { font-size: .7rem; color: #c1a8df; }
+.diagnostic-lab input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; }
+.lab-setting { display: flex; align-items: center; justify-content: space-between; gap: .7rem; padding: .7rem 0; border-bottom: 1px solid #ffffff12; }
+.lab-setting label { display: grid; gap: .35rem; min-width: 0; font-size: .8rem; }
+.lab-setting input, .lab-setting select { max-width: 220px; }
+.lab-changes > button { margin-top: .9rem; }
+.diagnostic-lab progress { width: min(100%, 380px); margin-top: .5rem; accent-color: #c6a8ff; }
+@media (max-width: 680px) { .lab-setting { flex-wrap: wrap; } .lab-environments .recovery-point { flex-direction: column; } }

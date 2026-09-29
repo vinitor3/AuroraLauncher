@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aurora_launcher_core::engine::{canonical_launch_failure, DoctorRun};
+use aurora_launcher_core::engine::{
+    canonical_launch_failure, recovery, DoctorRun, InstanceId, InstanceLayout,
+};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 
@@ -16,6 +18,8 @@ const STORAGE_ERROR: &str = "Não foi possível acessar o registro local do diag
 struct StoredRun {
     owner: String,
     instance_created_at_ns: Option<u64>,
+    #[serde(default)]
+    filesystem_identity: Option<String>,
     run: DoctorRun,
 }
 
@@ -79,6 +83,25 @@ fn instance_creation(directory: &Path, instance_id: &str) -> Result<Option<u64>,
         .and_then(|duration| u64::try_from(duration.as_nanos()).ok()))
 }
 
+fn verified_identity(directory: &Path, instance_id: &str) -> Result<Option<String>, String> {
+    let id = InstanceId::parse(instance_id).map_err(|_| STORAGE_ERROR.to_owned())?;
+    let data = directory.parent().ok_or(STORAGE_ERROR)?;
+    let instance = InstanceLayout::new(data).open(id);
+    if !instance.root().exists() {
+        return Ok(None);
+    }
+    recovery::filesystem_identity(&instance)
+        .map(Some)
+        .map_err(|_| STORAGE_ERROR.to_owned())
+}
+
+fn record_key(instance_id: &str, identity: &Option<String>) -> String {
+    identity
+        .as_ref()
+        .map(|id| format!("identity:{id}"))
+        .unwrap_or_else(|| instance_id.to_owned())
+}
+
 fn record_path(directory: &Path, instance_id: &str) -> PathBuf {
     // Opaque filename: instance names never become filesystem instructions.
     directory.join(format!("{:x}.json", Sha1::digest(instance_id.as_bytes())))
@@ -131,41 +154,61 @@ impl DoctorRuns {
     }
 
     pub fn read(&self, directory: &Path, instance_id: &str) -> Result<Option<DoctorRun>, String> {
+        let identity = verified_identity(directory, instance_id)?;
+        let key = record_key(instance_id, &identity);
+        let created = instance_creation(directory, instance_id)?;
         let mut records = self.records.lock().map_err(|_| STORAGE_ERROR.to_owned())?;
-        if !records.contains_key(instance_id) {
+        if !records.contains_key(&key) {
             let mut memory_only = self
                 .memory_only
                 .lock()
                 .map_err(|_| STORAGE_ERROR.to_owned())?;
-            if memory_only.contains(instance_id) {
+            if memory_only.contains(&key) {
                 return Ok(None);
             }
-            match Self::read_disk(directory, instance_id) {
-                Ok(Some(stored)) => {
-                    records.insert(instance_id.to_owned(), stored);
+            let candidate = (|| {
+                if let Some(stored) = Self::read_disk(directory, &key)? {
+                    return Ok(Some(stored));
+                }
+                // Legacy diagnosis records remain readable when their original
+                // directory creation stamp matches. They do not create an audit
+                // snapshot or a recovery-point association.
+                if identity.is_some() {
+                    if let Some(stored) = records.get(instance_id) {
+                        return Ok(Some(stored.clone()));
+                    }
+                    return Self::read_disk(directory, instance_id);
+                }
+                Ok(None)
+            })();
+            match candidate {
+                Ok(Some(mut stored)) => {
+                    if stored.filesystem_identity.is_none() && identity.is_some() {
+                        if created.is_none() || stored.instance_created_at_ns != created {
+                            return Ok(None);
+                        }
+                        stored.filesystem_identity = identity.clone();
+                    }
+                    records.insert(key.clone(), stored);
                 }
                 Ok(None) => return Ok(None),
                 Err(_) => {
-                    // Diagnostics must not prevent a healthy instance from
-                    // launching. Keep an unreadable/unsafe journal untouched for
-                    // the entire session; subsequent tracking stays in memory.
-                    memory_only.insert(instance_id.to_owned());
+                    // An unsafe/corrupt journal is never overwritten. Continue
+                    // tracking in memory without blocking a healthy launch.
+                    memory_only.insert(key.clone());
                     return Ok(None);
                 }
             }
         }
-        let created = instance_creation(directory, instance_id)?;
-        if records
-            .get(instance_id)
-            .is_some_and(|stored| stored.instance_created_at_ns != created)
-        {
-            // Recreating a deleted instance under the same name is a new identity.
-            records.remove(instance_id);
+        if records.get(&key).is_some_and(|stored| {
+            stored.filesystem_identity != identity
+                || (identity.is_none() && stored.instance_created_at_ns != created)
+        }) {
+            records.remove(&key);
             return Ok(None);
         }
-        Ok(records.get(instance_id).map(|stored| {
+        Ok(records.get(&key).map(|stored| {
             let mut run = stored.run.clone();
-            // Minecraft can outlive the launcher. A lost observer is not a crash.
             if stored.owner != self.owner && matches!(run.outcome.as_str(), "preparing" | "running")
             {
                 run.outcome = "unknown".into();
@@ -191,15 +234,17 @@ impl DoctorRuns {
         run: DoctorRun,
         starting: bool,
     ) -> Result<(), String> {
+        let identity = verified_identity(directory, instance_id)?;
+        let key = record_key(instance_id, &identity);
         let mut records = self.records.lock().map_err(|_| STORAGE_ERROR.to_owned())?;
         if !starting
             && records
-                .get(instance_id)
+                .get(&key)
                 .is_none_or(|current| current.run.run_id != run.run_id)
         {
             return Err("A tentativa de inicialização já foi substituída.".into());
         }
-        if let Some(current) = records.get(instance_id) {
+        if let Some(current) = records.get(&key) {
             if current.owner == self.owner {
                 if starting && matches!(current.run.outcome.as_str(), "preparing" | "running") {
                     return Err("Uma inicialização desta instância já está em andamento.".into());
@@ -213,10 +258,11 @@ impl DoctorRuns {
         let stored = StoredRun {
             owner: self.owner.clone(),
             instance_created_at_ns: instance_creation(directory, instance_id)?,
+            filesystem_identity: identity,
             run,
         };
-        self.persist(directory, instance_id, &stored)?;
-        records.insert(instance_id.to_owned(), stored);
+        self.persist(directory, &key, &stored)?;
+        records.insert(key, stored);
         Ok(())
     }
 
@@ -283,9 +329,11 @@ impl DoctorRuns {
     ) -> Result<DoctorRun, String> {
         // Populate from disk before taking the mutation lock; recheck under it.
         self.read(directory, instance_id)?;
+        let identity = verified_identity(directory, instance_id)?;
+        let key = record_key(instance_id, &identity);
         let mut records = self.records.lock().map_err(|_| STORAGE_ERROR.to_owned())?;
         let stored = records
-            .get_mut(instance_id)
+            .get_mut(&key)
             .ok_or("Execução não encontrada para diagnóstico.")?;
         if stored.run.run_id != run_id {
             return Err(
@@ -303,11 +351,12 @@ impl DoctorRuns {
         let next = StoredRun {
             owner: self.owner.clone(),
             instance_created_at_ns: stored.instance_created_at_ns,
+            filesystem_identity: stored.filesystem_identity.clone(),
             run: run.clone(),
         };
         // Keep a observed outcome available in memory even if persistence fails.
         *stored = next;
-        self.persist(directory, instance_id, stored)?;
+        self.persist(directory, &key, stored)?;
         Ok(run)
     }
 }
@@ -502,6 +551,91 @@ mod tests {
             .read(&directory, "fixture")
             .unwrap()
             .is_none());
+        fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn verified_run_survives_rename_and_recovery_storage_failure() {
+        use aurora_launcher_core::engine::{acquire_instance_mutation_lock, recovery};
+        let data =
+            std::env::temp_dir().join(format!("aurora-doctor-identity-{}", uuid::Uuid::new_v4()));
+        let instance = InstanceLayout::new(&data).open(InstanceId::parse("fixture").unwrap());
+        instance.ensure_layout().unwrap();
+        let directory = data.join("doctor-runs");
+        let registry = DoctorRuns::default();
+        let attempt = run();
+        registry
+            .start(&directory, "fixture", attempt.clone())
+            .unwrap();
+        let guard = acquire_instance_mutation_lock(&instance).unwrap();
+        recovery::capture_observation(&instance, &guard).unwrap();
+        drop(guard);
+        fs::write(
+            data.join(".aurora/recovery/index.sqlite3"),
+            b"corrupt recovery storage",
+        )
+        .unwrap();
+        registry
+            .finish(
+                &directory,
+                "fixture",
+                &attempt.run_id,
+                "failed",
+                Some(1),
+                None,
+            )
+            .unwrap();
+        fs::rename(instance.root(), data.join("instances/renamed")).unwrap();
+        let restored = DoctorRuns::default()
+            .read(&directory, "renamed")
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.run_id, attempt.run_id);
+        assert_eq!(restored.outcome, "failed");
+        assert!(registry.read(&directory, "fixture").unwrap().is_none());
+        assert_eq!(data.parent(), Some(std::env::temp_dir().as_path()));
+        fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn legacy_diagnosis_stays_readable_when_recovery_identity_is_initialized() {
+        use aurora_launcher_core::engine::{acquire_instance_mutation_lock, recovery};
+        let data =
+            std::env::temp_dir().join(format!("aurora-doctor-identity-{}", uuid::Uuid::new_v4()));
+        let instance = InstanceLayout::new(&data).open(InstanceId::parse("fixture").unwrap());
+        instance.ensure_layout().unwrap();
+        let directory = data.join("doctor-runs");
+        let mut attempt = run();
+        attempt.outcome = "failed".into();
+        let stored = StoredRun {
+            owner: uuid::Uuid::new_v4().to_string(),
+            instance_created_at_ns: instance_creation(&directory, "fixture").unwrap(),
+            filesystem_identity: None,
+            run: attempt.clone(),
+        };
+        DoctorRuns::persist_to_disk(&directory, "fixture", &stored).unwrap();
+        let original = fs::read(record_path(&directory, "fixture")).unwrap();
+        let guard = acquire_instance_mutation_lock(&instance).unwrap();
+        recovery::capture_observation(&instance, &guard).unwrap();
+        drop(guard);
+        let registry = DoctorRuns::default();
+        assert_eq!(
+            registry
+                .read(&directory, "fixture")
+                .unwrap()
+                .unwrap()
+                .run_id,
+            attempt.run_id
+        );
+        assert_eq!(
+            fs::read(record_path(&directory, "fixture")).unwrap(),
+            original,
+            "reading preserves the existing diagnosis journal"
+        );
+        fs::rename(instance.root(), data.join("old-instance")).unwrap();
+        instance.ensure_layout().unwrap();
+        assert!(registry.read(&directory, "fixture").unwrap().is_none());
+        assert_eq!(data.parent(), Some(std::env::temp_dir().as_path()));
         fs::remove_dir_all(data).unwrap();
     }
 

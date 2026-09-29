@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import type { DoctorExplanation, DoctorIssue, DoctorReport, DoctorRun } from "./types";
 import { GeminiAdvice } from "./GeminiAdvice";
+import { DoctorRecovery } from "./DoctorRecovery";
 import { AiToolSuggestions } from "../ai-tools/AiToolSuggestions";
 import { AiToolProposalList } from "../ai-tools/AiToolProposalList";
 import type { AiToolAdviceRequest } from "../ai-tools/types";
@@ -16,7 +17,8 @@ type Props = {
   onExplain?: DoctorExplanation;
   onSuggest?: AiToolAdviceRequest;
   onSelectRun: (runId?: string) => void;
-  onRecovery?: () => void;
+  onRecovery?: (pointId?: string) => void;
+  onDiagnosticLab?: () => void;
 };
 
 type Analysis = {
@@ -68,7 +70,7 @@ function IssueDetails({ issue }: { issue: DoctorIssue }) {
   );
 }
 
-export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRun, onExplain, onSuggest, onRecovery }: Props) {
+export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRun, onExplain, onSuggest, onRecovery, onDiagnosticLab }: Props) {
   // Reports are tied to the exact inputs as well as a request generation. Changing
   // instance, Java or run never makes an earlier response visible in a new context.
   const context = JSON.stringify([instanceId, javaExecutable, runId ?? null]);
@@ -108,6 +110,9 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
       if (disposed) unlisten(); else stopListening.push(unlisten);
     }).catch(() => undefined);
     void listen<{ instanceId: string }>("aurora-recovery-changed", invalidate).then((unlisten) => {
+      if (disposed) unlisten(); else stopListening.push(unlisten);
+    }).catch(() => undefined);
+    void listen<{ instanceId: string }>("aurora-diagnostic-lab-changed", invalidate).then((unlisten) => {
       if (disposed) unlisten(); else stopListening.push(unlisten);
     }).catch(() => undefined);
     void invoke<DoctorRun | null>("read_latest_doctor_run", { id: instanceId }).then((run) => {
@@ -181,7 +186,8 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
         {runId ? <button className="text-button" onClick={() => onSelectRun(undefined)} type="button">Voltar ao estado atual</button>
           : latest?.outcome === "failed" && <button className="text-button" onClick={() => onSelectRun(latest.runId)} type="button">Analisar a última execução com falha</button>}
       </div>
-      {onRecovery && <div className="doctor-scope"><span>Tem um ponto salvo? Revise os arquivos em Recuperação. Restaurar não garante corrigir a falha.</span><button className="text-button" disabled={busy} onClick={onRecovery} type="button">Abrir Recuperação</button></div>}
+      {onRecovery && <DoctorRecovery instanceId={instanceId} runId={runId} busy={busy} onReview={onRecovery} />}
+      {onDiagnosticLab && <div className="doctor-scope"><span>Teste mudanças numa cópia independente da instância, sem incluir mundos por padrão.</span><button className="text-button" disabled={busy} onClick={onDiagnosticLab} type="button">Abrir ambiente de teste</button></div>}
       {loading ? <div className="doctor-state" role="status"><span className="doctor-spinner" aria-hidden="true" /><strong>Analisando os dados locais…</strong><p>A leitura dos logs é limitada. Você pode continuar usando o launcher.</p></div>
         : current?.phase === "error" ? <div className="doctor-state doctor-state-error" role="alert"><strong>Não foi possível concluir a análise</strong><p>Os dados podem estar indisponíveis ou a execução selecionada já não estar acessível. Tente novamente ou analise o estado atual.</p></div>
         : !report ? <div className="doctor-state"><span aria-hidden="true" className="doctor-state-icon">⌕</span><strong>Entenda o que aconteceu</strong><p>Clique em “Analisar instância” para obter evidências, grau de confiança e próximos passos. Nenhum log será enviado a serviços externos.</p></div>

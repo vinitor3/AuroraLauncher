@@ -2,6 +2,8 @@
 
 pub mod ai_history;
 pub mod ai_tools;
+pub mod diagnostic_lab;
+pub mod doctor_recovery;
 pub mod recovery;
 
 mod companion_migration;

@@ -17,6 +17,7 @@ use aurora_launcher_core::engine::{
     analyze_instance as analyze_doctor, canonical_launch_failure, snapshot_logs, DoctorContext,
     DoctorReport, DoctorRun,
 };
+use aurora_launcher_core::engine::{diagnostic_lab, doctor_recovery, recovery};
 use aurora_launcher_core::{
     auth::{offline_uuid_for_nickname, validate_nickname},
     engine::{
@@ -433,6 +434,251 @@ where
     .map_err(|_| "A operação de recuperação foi interrompida. Abra Recuperação novamente para verificar o estado seguro da instância.".to_owned())?
 }
 
+/// Run local diagnostic work off the UI thread while sharing the existing
+/// recovery/game lock and repairing any interrupted restoration first.
+async fn run_diagnostic_lab<T, F>(app: AppHandle, id: String, operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(
+            &AppHandle,
+            &aurora_launcher_core::engine::Instance,
+            &InstanceMutationGuard,
+        ) -> Result<T, String>
+        + Send
+        + 'static,
+{
+    let parsed = InstanceId::parse(id).map_err(|_| "Identificador de instância inválido.")?;
+    let instance = layout(&app)?.open(parsed);
+    tauri::async_runtime::spawn_blocking(move || {
+        if !instance.root().is_dir() {
+            return Err("A instância não existe mais.".into());
+        }
+        if instance_is_running(&app.state::<RunningInstances>(), instance.id().as_str())? {
+            return Err("Feche o Minecraft antes de alterar a cópia de teste ou sua origem.".into());
+        }
+        let _ = app.emit("aurora-diagnostic-lab-progress", serde_json::json!({
+            "instanceId": instance.id().as_str(), "phase": "Verificando a instância e operações interrompidas…",
+            "completedBytes": 0, "totalBytes": 0
+        }));
+        let guard = acquire_idle_recovery(&instance, ensure_recovery_processes_idle)?;
+        recovery::recover_pending(&instance, &guard).map_err(|e| e.to_string())?;
+        let result = operation(&app, &instance, &guard);
+        let _ = app.emit("aurora-diagnostic-lab-progress", serde_json::json!({
+            "instanceId": instance.id().as_str(),
+            "phase": if result.is_ok() { "Operação concluída." } else { "Operação interrompida; consulte a mensagem." },
+            "completedBytes": 0, "totalBytes": 0
+        }));
+        result
+    }).await.map_err(|_| "A operação foi interrompida. Reabra as cópias de teste para verificar o estado.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn diagnostic_lab_list(
+    app: AppHandle,
+    id: String,
+) -> Result<Vec<diagnostic_lab::LabEnvironment>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let parsed = InstanceId::parse(id).map_err(|_| "Identificador de instância inválido.")?;
+        let instance = layout(&app)?.open(parsed);
+        let entries = diagnostic_lab::list(&data_directory(&app)?).map_err(|e| e.to_string())?;
+        if diagnostic_lab::is_lab_candidate(&instance) {
+            return Ok(entries
+                .into_iter()
+                .filter(|entry| entry.id == instance.id().as_str())
+                .collect());
+        }
+        let uuid = recovery::identity_lookup(&instance).map_err(|e| e.to_string())?;
+        Ok(entries
+            .into_iter()
+            .filter(|entry| {
+                entry.origin_uuid.is_empty() || Some(&entry.origin_uuid) == uuid.as_ref()
+            })
+            .collect())
+    })
+    .await
+    .map_err(|_| "Não foi possível consultar as cópias de teste.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn diagnostic_lab_create(
+    app: AppHandle,
+    id: String,
+    selected_world: Option<String>,
+) -> Result<diagnostic_lab::LabEnvironment, String> {
+    run_diagnostic_lab(app, id, move |app, instance, guard| {
+        diagnostic_lab::create(instance, guard, selected_world.as_deref(), |progress| {
+            let _ = app.emit(
+                "aurora-diagnostic-lab-progress",
+                serde_json::json!({
+                    "instanceId": instance.id().as_str(), "phase": progress.phase,
+                    "completedBytes": progress.completed_bytes, "totalBytes": progress.total_bytes
+                }),
+            );
+        })
+        .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn diagnostic_lab_worlds(app: AppHandle, id: String) -> Result<Vec<String>, String> {
+    run_diagnostic_lab(app, id, |_, instance, guard| {
+        diagnostic_lab::worlds(instance, guard).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn diagnostic_lab_details(
+    app: AppHandle,
+    id: String,
+) -> Result<diagnostic_lab::LabDetails, String> {
+    run_diagnostic_lab(app, id, |_, instance, guard| {
+        diagnostic_lab::inspect(instance, guard).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn diagnostic_lab_toggle_mod(
+    app: AppHandle,
+    id: String,
+    path: String,
+    enabled: bool,
+) -> Result<diagnostic_lab::LabDetails, String> {
+    run_diagnostic_lab(app, id, move |app, instance, guard| {
+        let result = diagnostic_lab::toggle_mod(instance, guard, &path, enabled)
+            .map_err(|e| e.to_string())?;
+        let _ = app.emit(
+            "aurora-diagnostic-lab-changed",
+            serde_json::json!({"instanceId": instance.id().as_str()}),
+        );
+        Ok(result)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn diagnostic_lab_set_setting(
+    app: AppHandle,
+    id: String,
+    path: String,
+    pointer: String,
+    value: serde_json::Value,
+) -> Result<diagnostic_lab::LabDetails, String> {
+    run_diagnostic_lab(app, id, move |app, instance, guard| {
+        let result = diagnostic_lab::set_setting(instance, guard, &path, &pointer, value)
+            .map_err(|e| e.to_string())?;
+        let _ = app.emit(
+            "aurora-diagnostic-lab-changed",
+            serde_json::json!({"instanceId": instance.id().as_str()}),
+        );
+        Ok(result)
+    })
+    .await
+}
+
+fn lab_origin_guard(
+    app: &AppHandle,
+    test: &aurora_launcher_core::engine::Instance,
+) -> Result<
+    (
+        aurora_launcher_core::engine::Instance,
+        InstanceMutationGuard,
+    ),
+    String,
+> {
+    let source =
+        diagnostic_lab::origin_instance(&data_directory(app)?, test).map_err(|e| e.to_string())?;
+    if instance_is_running(&app.state::<RunningInstances>(), source.id().as_str())? {
+        return Err(
+            "Feche o Minecraft da instância original antes de revisar ou aplicar alterações."
+                .into(),
+        );
+    }
+    let guard = acquire_idle_recovery(&source, ensure_recovery_processes_idle)?;
+    recovery::recover_pending(&source, &guard).map_err(|e| e.to_string())?;
+    Ok((source, guard))
+}
+
+#[tauri::command]
+pub async fn diagnostic_lab_preview_apply(
+    app: AppHandle,
+    id: String,
+    selected: Vec<String>,
+) -> Result<recovery::RecoveryPreview, String> {
+    run_diagnostic_lab(app, id, move |app, test, test_guard| {
+        let (source, guard) = lab_origin_guard(app, test)?;
+        diagnostic_lab::preview_apply(&source, &guard, test, test_guard, &selected)
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LabApplyResult {
+    #[serde(flatten)]
+    result: recovery::RecoveryResult,
+    origin_instance_id: String,
+}
+
+#[tauri::command]
+pub async fn diagnostic_lab_apply(
+    app: AppHandle,
+    id: String,
+    preview_id: String,
+) -> Result<LabApplyResult, String> {
+    run_diagnostic_lab(app, id, move |app, test, test_guard| {
+        let (source, guard) = lab_origin_guard(app, test)?;
+        let result = diagnostic_lab::apply(&source, &guard, test, test_guard, &preview_id)
+            .map_err(|e| e.to_string())?;
+        let _ = app.emit(
+            "aurora-recovery-changed",
+            serde_json::json!({"instanceId": source.id().as_str()}),
+        );
+        Ok(LabApplyResult {
+            result,
+            origin_instance_id: source.id().as_str().to_owned(),
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn diagnostic_lab_delete(app: AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let parsed = InstanceId::parse(id).map_err(|_| "Identificador de instância inválido.")?;
+        let instance = layout(&app)?.open(parsed);
+        if diagnostic_lab::finish_deleted(&data_directory(&app)?, instance.id().as_str())
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(());
+        }
+        if instance_is_running(&app.state::<RunningInstances>(), instance.id().as_str())? {
+            return Err("Feche o Minecraft antes de excluir esta cópia de teste.".into());
+        }
+        let guard = acquire_idle_recovery(&instance, ensure_recovery_processes_idle)?;
+        // Deletion has its own durable ownership/tombstone checks and may
+        // remove an incomplete copy; it must not manufacture a missing identity.
+        diagnostic_lab::delete(&instance, &guard).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|_| "A exclusão foi interrompida. Atualize a lista e tente novamente.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn doctor_recovery_overview(
+    app: AppHandle,
+    id: String,
+    run_id: Option<String>,
+) -> Result<doctor_recovery::DoctorRecoveryOverview, String> {
+    run_diagnostic_lab(app, id, move |_, instance, guard| {
+        doctor_recovery::overview(instance, guard, run_id.as_deref())
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn recovery_list(
     app: AppHandle,
@@ -685,6 +931,12 @@ pub fn list_instances(app: AppHandle) -> Result<Vec<InstanceSummary>, String> {
         if InstanceId::parse(id.clone()).is_err() {
             continue;
         }
+        let instance = layout.open(InstanceId::parse(&id).map_err(|_| "Identificador inválido.")?);
+        if diagnostic_lab::is_lab_candidate(&instance)
+            && diagnostic_lab::ensure_launchable(&instance).is_err()
+        {
+            continue;
+        }
         instances.push(summarize_instance(id, entry.path()));
     }
     instances.sort_by(|left, right| left.id.cmp(&right.id));
@@ -694,6 +946,12 @@ pub fn list_instances(app: AppHandle) -> Result<Vec<InstanceSummary>, String> {
 #[tauri::command]
 pub fn create_instance(app: AppHandle, id: String) -> Result<InstanceSummary, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if id.as_str().starts_with("aurora-test-") {
+        return Err(
+            "Este identificador é reservado para cópias de teste. Use a área Cópias de teste."
+                .into(),
+        );
+    }
     let instance = layout(&app)?.open(id);
     fs::create_dir_all(instance.root())
         .map_err(|_| "Não foi possível criar a pasta da instância.".to_owned())?;
@@ -722,6 +980,13 @@ pub fn rename_instance(
     }
     let layout = layout(&app)?;
     let source = layout.path_for(&id);
+    if diagnostic_lab::is_lab_candidate(&layout.open(id.clone()))
+        || new_id.as_str().starts_with("aurora-test-")
+    {
+        return Err(
+            "O identificador da cópia de teste é preservado. Use seu nome de apresentação.".into(),
+        );
+    }
     if !source.is_dir() {
         return Err("a instância não existe mais".to_owned());
     }
@@ -823,6 +1088,9 @@ pub fn delete_instance(
     let _mutation_lock = acquire_idle_instance(&instance)?;
     #[cfg(windows)]
     ensure_no_external_instance_game(instance.root())?;
+    if diagnostic_lab::is_lab_candidate(&instance) {
+        return diagnostic_lab::delete(&instance, &_mutation_lock).map_err(|e| e.to_string());
+    }
     fs::remove_dir_all(instance.root())
         .map_err(|error| format!("não foi possível excluir a instância: {error}"))
 }
@@ -2061,6 +2329,11 @@ fn doctor_directory(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn emit_doctor_run(app: &AppHandle, id: &str, run_id: &str, outcome: &str) {
+    if let Ok(layout) = layout(app) {
+        if let Ok(parsed) = InstanceId::parse(id) {
+            let _ = doctor_recovery::record_outcome(&layout.open(parsed), run_id, outcome);
+        }
+    }
     let _ = app.emit(
         "aurora-doctor-run",
         DoctorRunEvent {
@@ -2072,7 +2345,15 @@ fn emit_doctor_run(app: &AppHandle, id: &str, run_id: &str, outcome: &str) {
 }
 
 #[tauri::command]
-pub fn begin_instance_launch(
+pub async fn begin_instance_launch(app: AppHandle, id: String) -> Result<DoctorRunEvent, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        begin_instance_launch_inner(app.clone(), app.state::<RunningInstances>(), id)
+    })
+    .await
+    .map_err(|_| "Não foi possível preparar a tentativa de inicialização.".to_owned())?
+}
+
+fn begin_instance_launch_inner(
     app: AppHandle,
     running: tauri::State<RunningInstances>,
     id: String,
@@ -2085,6 +2366,7 @@ pub fn begin_instance_launch(
     // A second launcher must not replace the Doctor record of an active game.
     // Install/launch commands acquire their own guard after this preparation ends.
     let _mutation_lock = acquire_idle_instance(&instance)?;
+    diagnostic_lab::ensure_launchable(&instance).map_err(|e| e.to_string())?;
     // The UI may install a loader after this command, before launch_instance.
     // Reject an orphaned Minecraft before either that install or Doctor writes.
     #[cfg(windows)]
@@ -2118,6 +2400,8 @@ pub fn begin_instance_launch(
         run_id: run.run_id.clone(),
         outcome: run.outcome.clone(),
     };
+    let _ =
+        doctor_recovery::record_observation(&instance, &_mutation_lock, &event.run_id, "preparing");
     records.start(&directory, &id, run)?;
     emit_doctor_run(&app, &id, &event.run_id, "preparing");
     Ok(event)
@@ -2398,7 +2682,42 @@ pub async fn ai_record_advice(
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn launch_instance(
+pub async fn launch_instance(
+    app: AppHandle,
+    id: String,
+    version_id: String,
+    minecraft_version: String,
+    java_executable: String,
+    nickname: String,
+    skin_url: Option<String>,
+    skin_file: Option<String>,
+    cape_url: Option<String>,
+    skin_model: Option<String>,
+    run_id: Option<String>,
+) -> Result<LaunchSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        launch_instance_inner(
+            app.clone(),
+            app.state::<IpcSessions>(),
+            app.state::<RunningInstances>(),
+            id,
+            version_id,
+            minecraft_version,
+            java_executable,
+            nickname,
+            skin_url,
+            skin_file,
+            cape_url,
+            skin_model,
+            run_id,
+        )
+    })
+    .await
+    .map_err(|_| "Não foi possível concluir a inicialização do jogo.".to_owned())?
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_instance_inner(
     app: AppHandle,
     sessions: tauri::State<IpcSessions>,
     running: tauri::State<RunningInstances>,
@@ -2415,7 +2734,7 @@ pub fn launch_instance(
 ) -> Result<LaunchSummary, String> {
     let run_id = match run_id {
         Some(run_id) => run_id,
-        None => begin_instance_launch(app.clone(), running.clone(), id.clone())?.run_id,
+        None => begin_instance_launch_inner(app.clone(), running.clone(), id.clone())?.run_id,
     };
     let directory = doctor_directory(&app)?;
     let records = app.state::<DoctorRuns>();
@@ -2494,6 +2813,7 @@ fn launch_instance_tracked(
     let instance = layout(&app)?.open(id);
     let mutation_lock =
         acquire_instance_mutation_lock(&instance).map_err(|error| error.to_string())?;
+    diagnostic_lab::ensure_launchable(&instance).map_err(|e| e.to_string())?;
     // The mutation lock belongs to the launcher process, but its Minecraft can
     // survive that process. Check the game directory before replacing any JAR.
     #[cfg(windows)]
@@ -2570,6 +2890,12 @@ fn launch_instance_tracked(
     let prepared = LauncherEngine
         .prepare_launch(&instance, &java, &identity, &spec, 4_096)
         .map_err(|error| error.to_string())?;
+    let _ = doctor_recovery::record_observation(
+        &instance,
+        &mutation_lock,
+        &doctor_run.run_id,
+        "launch",
+    );
     let mut child = prepared.spawn().map_err(|error| error.to_string())?;
     let process_id = child.id();
     if let Some(server) = ipc_server {

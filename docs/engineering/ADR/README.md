@@ -26,5 +26,6 @@
 | [025](ADR-025-confirmed-local-ai-tools.md) | Compartilhar Gemini e broker local de ações estreitas com revisão, confirmação, histórico canônico e restauração | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 | [026](ADR-026-bounded-gemini-failover.md) | Limitar failover de chaves Gemini e oferecer Flash-Lite opcional dentro do prazo e orçamento compartilhados | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 | [027](ADR-027-manual-instance-recovery.md) | Pontos manuais de instância em CAS, prévia confirmada e restauração reversível | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| [028](ADR-028-doctor-recovery-lab.md) | Evidência verificável do Doctor e cópias de diagnóstico com aplicação seletiva transacional | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 
 Estados mudam somente por novo ADR que substitua o anterior ou por revisão explícita deste arquivo.

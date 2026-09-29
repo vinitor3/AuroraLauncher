@@ -47,6 +47,7 @@ import { ContentUpdatesView } from "./features/content-updates/ContentUpdatesVie
 import { UpdateReviewDialog } from "./features/content-updates/UpdateReviewDialog";
 import { DoctorView } from "./features/doctor/DoctorView";
 import { RecoveryView } from "./features/recovery/RecoveryView";
+import { DiagnosticLabView } from "./features/diagnostic-lab/DiagnosticLabView";
 import type { DoctorReport, DoctorRun } from "./features/doctor/types";
 import { publicAiError } from "../../../shared/aiErrors";
 import type { AiToolAdvice, AiToolContext } from "../../../shared/aiTools";
@@ -126,7 +127,7 @@ type ModrinthContent = {
   dateModified: string;
 };
 type ContentType = "mod" | "shader" | "resourcepack";
-type EditorView = "installed" | "updates" | "discover" | "doctor" | "recovery";
+type EditorView = "installed" | "updates" | "discover" | "doctor" | "recovery" | "diagnostic-lab";
 type ContentSort = "popular" | "relevance" | "updated";
 type CatalogContent = ModrinthContent & {
   source: CatalogSource;
@@ -261,7 +262,7 @@ const DEFAULT_FORGE_VERSION: Record<string, string> = {
   "1.21.1": "52.0.57",
 };
 const UPDATE_CONTENT_TYPES: ContentType[] = ["mod", "shader", "resourcepack"];
-const EDITOR_VIEWS: EditorView[] = ["installed", "updates", "discover", "doctor", "recovery"];
+const EDITOR_VIEWS: EditorView[] = ["installed", "updates", "discover", "doctor", "recovery", "diagnostic-lab"];
 
 function formatBytes(value?: number) {
   if (!value || value < 1) return "0 B";
@@ -991,6 +992,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [contentType, setContentType] = useState<ContentType>("mod");
   const [editorView, setEditorView] = useState<EditorView>("installed");
   const [doctorRunId, setDoctorRunId] = useState<string>();
+  const [doctorRecoveryPointId, setDoctorRecoveryPointId] = useState<string>();
   const [doctorFailure, setDoctorFailure] = useState<{ instanceId: string; runId?: string }>();
   const [installedContentFilter, setInstalledContentFilter] = useState("");
   const [contentArtwork, setContentArtwork] = useState<Record<string, ContentArtworkEntry>>({});
@@ -1971,6 +1973,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     setRenameDraft(id);
     setEditorView(initialView);
     setDoctorRunId(runId);
+    setDoctorRecoveryPointId(undefined);
     setSelectedContentNames([]);
     setInstalledContentFilter("");
     setContentQuery("");
@@ -3762,6 +3765,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "discover"} className={editorView === "discover" ? "active" : ""} id="editor-view-tab-discover" onClick={() => activateEditorView("discover")} onKeyDown={(event) => handleEditorViewKeyDown(event, "discover")} role="tab" tabIndex={editorView === "discover" ? 0 : -1} type="button">＋ Adicionar</button>
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "doctor"} className={editorView === "doctor" ? "active" : ""} id="editor-view-tab-doctor" onClick={() => activateEditorView("doctor")} onKeyDown={(event) => handleEditorViewKeyDown(event, "doctor")} role="tab" tabIndex={editorView === "doctor" ? 0 : -1} type="button">Diagnóstico</button>
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "recovery"} className={editorView === "recovery" ? "active" : ""} id="editor-view-tab-recovery" onClick={() => activateEditorView("recovery")} onKeyDown={(event) => handleEditorViewKeyDown(event, "recovery")} role="tab" tabIndex={editorView === "recovery" ? 0 : -1} type="button">Recuperação</button>
+                <button aria-controls="editor-view-panel" aria-selected={editorView === "diagnostic-lab"} className={editorView === "diagnostic-lab" ? "active" : ""} id="editor-view-tab-diagnostic-lab" onClick={() => activateEditorView("diagnostic-lab")} onKeyDown={(event) => handleEditorViewKeyDown(event, "diagnostic-lab")} role="tab" tabIndex={editorView === "diagnostic-lab" ? 0 : -1} type="button">Ambiente de teste</button>
               </div>
               <div aria-labelledby={`editor-view-tab-${editorView}`} className="editor-body" id="editor-view-panel" role="tabpanel" tabIndex={0}>
                 {editorView === "doctor" ? (
@@ -3773,7 +3777,8 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                     onExplain={explainDoctorReport}
                     onSuggest={requestInstanceAdvice}
                     onSelectRun={setDoctorRunId}
-                    onRecovery={() => activateEditorView("recovery")}
+                    onRecovery={(pointId) => { setDoctorRecoveryPointId(pointId); activateEditorView("recovery"); }}
+                    onDiagnosticLab={() => activateEditorView("diagnostic-lab")}
                     runId={doctorRunId}
                   />
                 ) : editorView === "recovery" ? (
@@ -3784,6 +3789,21 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                     onChanged={refreshAfterRecovery}
                     onOperationChange={setRecoveryOperation}
                     running={editingInstanceIsRunning}
+                    initialPointId={doctorRecoveryPointId}
+                    onInitialPointConsumed={() => setDoctorRecoveryPointId(undefined)}
+                  />
+                ) : editorView === "diagnostic-lab" ? (
+                  <DiagnosticLabView
+                    busy={launcherBusy || updatesScanning || updatesApplying}
+                    instanceId={editingInstance}
+                    key={editingInstance}
+                    javaExecutable={javaPath}
+                    runningIds={runningInstances.map((running) => running.instanceId)}
+                    onChanged={refreshAfterRecovery}
+                    onOperationChange={setRecoveryOperation}
+                    onLaunch={launchMinecraft}
+                    onExplain={explainDoctorReport}
+                    onRecovery={(id, pointId) => { void openEditor(id, "recovery").then(() => { if (activeInstanceRef.current.editingInstance === id) setDoctorRecoveryPointId(pointId); }); }}
                   />
                 ) : editorView === "installed" ? (
                   <>

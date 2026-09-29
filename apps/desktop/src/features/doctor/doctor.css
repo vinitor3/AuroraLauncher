@@ -94,3 +94,15 @@
   .doctor-issue-kind { margin-left: auto; }
 }
 @media (prefers-reduced-motion: reduce) { .doctor-spinner { animation: none; } .doctor-chevron { transition: none; } }
+.doctor-recovery { display: grid; gap: .6rem; padding: .85rem; border: 1px solid #c7aaff26; border-radius: 10px; background: #b391ff08; font-size: .78rem; }
+.doctor-recovery > header, .doctor-recovery-points article { display: flex; justify-content: space-between; align-items: flex-start; gap: .8rem; }
+.doctor-recovery p { margin: .3rem 0; color: #bfb5cd; line-height: 1.5; }
+.doctor-recovery small { display: block; margin-top: .3rem; color: #a99fb7; }
+.doctor-recovery summary { color: #d0bcdf; cursor: pointer; }
+.doctor-recovery ul { padding-left: 1.2rem; color: #bfb5cd; line-height: 1.6; }
+.doctor-recovery-changes ul { max-height: 200px; overflow: auto; }
+.doctor-recovery-changes li > span { margin-right: .6rem; }
+.doctor-recovery code { overflow-wrap: anywhere; }
+.doctor-recovery-points { display: grid; gap: .5rem; }
+.doctor-recovery-points article { border-top: 1px solid #ffffff12; padding-top: .65rem; }
+@media (max-width: 680px) { .doctor-recovery > header, .doctor-recovery-points article { flex-wrap: wrap; } }

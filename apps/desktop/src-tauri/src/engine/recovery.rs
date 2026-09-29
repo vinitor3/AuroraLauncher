@@ -56,6 +56,8 @@ pub enum RecoveryError {
     Changed,
     #[error("A prévia ficou desatualizada. Gere uma nova prévia antes de confirmar.")]
     StalePreview,
+    #[error("A instância original mudou desde a criação desta cópia. Crie uma nova cópia para testar o estado atual.")]
+    OriginChanged,
     #[error("O ponto não pertence a esta instância. Instâncias recriadas não reutilizam pontos antigos.")]
     Identity,
     #[error("A versão ou o loader da instância mudou. Este ponto não pode restaurar mods para outro ambiente.")]
@@ -244,7 +246,7 @@ fn parse<T: for<'de> Deserialize<'de>>(b: &[u8]) -> Result<T> {
 fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
-fn valid_id(s: &str) -> Result<()> {
+pub(crate) fn valid_id(s: &str) -> Result<()> {
     if Uuid::parse_str(s).is_ok_and(|id| id.to_string() == s) {
         Ok(())
     } else {
@@ -256,7 +258,7 @@ fn valid_hash(s: &str) -> bool {
         && s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn valid_relative(s: &str) -> Result<()> {
+pub(crate) fn valid_relative(s: &str) -> Result<()> {
     if s.is_empty() || s.len() > 1024 || s.contains(['\\', ':', '\0']) {
         return Err(RecoveryError::UnsafePath);
     }
@@ -293,13 +295,13 @@ fn secure_root(root: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn path(root: &Path, rel: &str) -> Result<PathBuf> {
+pub(crate) fn path(root: &Path, rel: &str) -> Result<PathBuf> {
     valid_relative(rel)?;
     secure_root(root)?;
     ensure_no_symlink_components(root, rel).map_err(|_| RecoveryError::UnsafePath)?;
     Ok(root.join(rel))
 }
-fn check_guard(instance: &Instance, guard: &InstanceMutationGuard) -> Result<Vec<File>> {
+pub(crate) fn check_guard(instance: &Instance, guard: &InstanceMutationGuard) -> Result<Vec<File>> {
     secure_root(instance.root())?;
     if guard.root != instance.root().canonicalize()? {
         return Err(RecoveryError::WrongLock);
@@ -316,7 +318,7 @@ fn check_guard(instance: &Instance, guard: &InstanceMutationGuard) -> Result<Vec
 
 /// Hold every existing directory involved in the operation against replacement
 /// on Windows. New directories must be pinned by the caller after creation.
-fn pin_directory(root: &Path) -> Result<Vec<File>> {
+pub(crate) fn pin_directory(root: &Path) -> Result<Vec<File>> {
     secure_root(root)?;
     #[cfg(windows)]
     {
@@ -342,7 +344,7 @@ fn pin_directory(root: &Path) -> Result<Vec<File>> {
     }
 }
 
-fn pin_tree(root: &Path, handles: &mut Vec<File>, depth: usize) -> Result<()> {
+pub(crate) fn pin_tree(root: &Path, handles: &mut Vec<File>, depth: usize) -> Result<()> {
     if depth > 35 || handles.len() > MAX_FILES.saturating_mul(40) {
         return Err(RecoveryError::Limit);
     }
@@ -446,7 +448,7 @@ fn secure_open(p: &Path) -> Result<SecureFile> {
     })
 }
 
-fn shared_file(p: &Path) -> Result<File> {
+pub(crate) fn shared_file(p: &Path) -> Result<File> {
     let metadata = fs::symlink_metadata(p)?;
     if !metadata.is_file() || metadata_is_link(&metadata) {
         return Err(RecoveryError::UnsafePath);
@@ -474,7 +476,7 @@ fn shared_file(p: &Path) -> Result<File> {
     }
     Ok(file)
 }
-fn read_bounded(p: &Path, max: u64) -> Result<Vec<u8>> {
+pub(crate) fn read_bounded(p: &Path, max: u64) -> Result<Vec<u8>> {
     let mut f = secure_open(p)?;
     if f.metadata()?.len() > max {
         return Err(RecoveryError::Limit);
@@ -486,7 +488,7 @@ fn read_bounded(p: &Path, max: u64) -> Result<Vec<u8>> {
     }
     Ok(b)
 }
-fn write_new(p: &Path, b: &[u8]) -> Result<()> {
+pub(crate) fn write_new(p: &Path, b: &[u8]) -> Result<()> {
     let _directories = pin_directory(p.parent().ok_or(RecoveryError::UnsafePath)?)?;
     let mut f = OpenOptions::new().write(true).create_new(true).open(p)?;
     f.write_all(b)?;
@@ -503,7 +505,7 @@ fn sync_parent(p: &Path) -> Result<()> {
     let _ = p;
     Ok(())
 }
-fn durable_rename(source: &Path, destination: &Path) -> Result<()> {
+pub(crate) fn durable_rename(source: &Path, destination: &Path) -> Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -532,7 +534,7 @@ fn durable_rename(source: &Path, destination: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn hash_file(p: &Path) -> Result<(String, u64)> {
+pub(crate) fn hash_file(p: &Path) -> Result<(String, u64)> {
     let mut f = secure_open(p)?;
     if f.metadata()?.len() > MAX_BYTES {
         return Err(RecoveryError::Limit);
@@ -544,7 +546,7 @@ fn hash_file(p: &Path) -> Result<(String, u64)> {
     }
     Ok((format!("{:x}", h.finalize()), n))
 }
-fn verify(p: &Path, file: &RecoveryFile) -> Result<()> {
+pub(crate) fn verify(p: &Path, file: &RecoveryFile) -> Result<()> {
     if hash_file(p)? != (file.sha256.clone(), file.size) {
         return Err(RecoveryError::Integrity);
     }
@@ -870,7 +872,7 @@ fn validate_manifest(m: &Manifest, uuid: &str) -> Result<()> {
     }
     Ok(())
 }
-fn managed_mod(p: &Path, rel: &str) -> Result<bool> {
+pub(crate) fn managed_mod(p: &Path, rel: &str) -> Result<bool> {
     let lower = rel.to_lowercase();
     if [
         "aurora-core",
@@ -930,7 +932,7 @@ fn managed_mod(p: &Path, rel: &str) -> Result<bool> {
     }
     Ok(false)
 }
-fn sensitive_config(p: &Path, rel: &str) -> Result<bool> {
+pub(crate) fn sensitive_config(p: &Path, rel: &str) -> Result<bool> {
     let lower = rel.to_lowercase();
     if [
         "token",
@@ -1201,7 +1203,7 @@ fn capture(
     store.publish(&m)?;
     Ok(m)
 }
-fn ensure_space(root: &Path, required: u64) -> Result<()> {
+pub(crate) fn ensure_space(root: &Path, required: u64) -> Result<()> {
     #[cfg(test)]
     if FAULT.with(|f| f.get() == Fault::NoSpace) {
         return Err(RecoveryError::NoSpace);
@@ -1210,6 +1212,174 @@ fn ensure_space(root: &Path, required: u64) -> Result<()> {
         return Err(RecoveryError::NoSpace);
     }
     Ok(())
+}
+
+/// Verified local state shared by Doctor and disposable diagnostic copies.
+/// It records hashes only; credentials and excluded file contents never enter it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecoveryObservation {
+    pub instance_uuid: String,
+    pub fingerprint: String,
+    pub files: Vec<RecoveryFile>,
+    pub profile: BTreeMap<String, BTreeMap<String, Option<String>>>,
+    pub runtime: BTreeMap<String, String>,
+}
+
+pub fn filesystem_identity(instance: &Instance) -> Result<String> {
+    super::ai_tools::instance_identity(instance).map_err(|_| RecoveryError::Identity)
+}
+
+pub fn identity_lookup(instance: &Instance) -> Result<Option<String>> {
+    let Some(id) = identity(instance, false)? else {
+        return Ok(None);
+    };
+    let data = instance
+        .root()
+        .parent()
+        .and_then(Path::parent)
+        .ok_or(RecoveryError::UnsafePath)?;
+    let database = path(data, ".aurora/recovery/index.sqlite3")?;
+    if !database.exists() {
+        return Err(RecoveryError::Identity);
+    }
+    let _directories = pin_directory(database.parent().ok_or(RecoveryError::UnsafePath)?)?;
+    let _file = shared_file(&database)?;
+    let db = Connection::open_with_flags(
+        database,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    let owner: Option<String> = db
+        .query_row(
+            "SELECT instance_uuid FROM instances WHERE filesystem_identity=?1",
+            [&id.filesystem_identity],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if owner.as_deref() != Some(id.uuid.as_str()) {
+        return Err(RecoveryError::Identity);
+    }
+    Ok(Some(id.uuid))
+}
+
+pub fn capture_observation(
+    instance: &Instance,
+    guard: &InstanceMutationGuard,
+) -> Result<RecoveryObservation> {
+    let _directories = check_guard(instance, guard)?;
+    let store = Store::open(instance)?;
+    reject_pending(&store)?;
+    let before = inventory(instance)?;
+    let hash = fingerprint(&before)?;
+    if fingerprint(&inventory(instance)?)? != hash {
+        return Err(RecoveryError::Changed);
+    }
+    Ok(RecoveryObservation {
+        instance_uuid: store.uuid,
+        fingerprint: hash,
+        files: before.files,
+        profile: before.profile,
+        runtime: before.runtime,
+    })
+}
+
+/// Builds a narrowly selected target in the existing CAS, then uses the same
+/// persisted preview, protection capture, transaction journal and undo executor.
+/// Callers must additionally validate the supported operation (mod toggle or
+/// allowlisted setting) before supplying these replacement paths.
+#[derive(Clone)]
+pub(crate) struct SelectedFile {
+    pub source: PathBuf,
+    pub sha256: String,
+    pub size: u64,
+}
+
+pub(crate) fn preview_selected_files(
+    instance: &Instance,
+    guard: &InstanceMutationGuard,
+    expected_fingerprint: &str,
+    replacements: &BTreeMap<String, Option<SelectedFile>>,
+    description: &str,
+) -> Result<RecoveryPreview> {
+    let _directories = check_guard(instance, guard)?;
+    let mut store = Store::open(instance)?;
+    reject_pending(&store)?;
+    let current = inventory(instance)?;
+    if fingerprint(&current)? != expected_fingerprint {
+        return Err(RecoveryError::StalePreview);
+    }
+    if replacements.is_empty() || replacements.len() > MAX_FILES {
+        return Err(RecoveryError::Integrity);
+    }
+    let mut files: BTreeMap<_, _> = current
+        .files
+        .iter()
+        .cloned()
+        .map(|f| (f.path.clone(), f))
+        .collect();
+    for (rel, replacement) in replacements {
+        valid_relative(rel)?;
+        if !protected(rel) || current.excluded.keys().any(|p| p.eq_ignore_ascii_case(rel)) {
+            return Err(RecoveryError::UnsafePath);
+        }
+        if let Some(replacement) = replacement {
+            let source = &replacement.source;
+            let sha256 = replacement.sha256.clone();
+            let size = replacement.size;
+            let expected = RecoveryFile {
+                path: rel.clone(),
+                sha256: sha256.clone(),
+                size,
+            };
+            verify(source, &expected)?;
+            if (rel.starts_with("mods/") && managed_mod(source, rel)?)
+                || (!rel.starts_with("mods/") && sensitive_config(source, rel)?)
+            {
+                return Err(RecoveryError::UnsafePath);
+            }
+            let file = RecoveryFile {
+                path: rel.clone(),
+                sha256,
+                size,
+            };
+            ensure_space(&store.root, size.saturating_add(1024 * 1024))?;
+            store.put(source, &file)?;
+            files.insert(rel.clone(), file);
+        } else {
+            files.remove(rel);
+        }
+    }
+    // Existing unchanged files belong to the target too; persist their verified
+    // contents so restoring this preview can never silently omit protection.
+    for file in &current.files {
+        store.put(&path(instance.root(), &file.path)?, file)?;
+    }
+    let files: Vec<_> = files.into_values().collect();
+    let manifest = Manifest {
+        schema_version: VERSION,
+        instance_uuid: store.uuid.clone(),
+        runtime: current.runtime.clone(),
+        profile_files: current.profile_files.clone(),
+        excluded_paths: current.excluded.keys().cloned().collect(),
+        point: RecoveryPoint {
+            id: Uuid::new_v4().to_string(),
+            created_at: now(),
+            description: description.into(),
+            scope: scope(),
+            logical_bytes: files.iter().map(|f| f.size).sum(),
+            file_count: files.len(),
+            kind: "manual".into(),
+            excluded: exclusions(),
+            profile: current.profile.clone(),
+            files,
+        },
+    };
+    compatible(&manifest, &current)?;
+    if fingerprint(&inventory(instance)?)? != expected_fingerprint {
+        return Err(RecoveryError::Changed);
+    }
+    store.publish(&manifest)?;
+    preview_restore(instance, guard, &manifest.point.id)
 }
 
 pub fn create_point(
@@ -1741,7 +1911,7 @@ fn cleanup_stage(stage: &Path, journal: &Journal) {
         }
     }
 }
-fn stage_copy(source: &Path, dest: &Path, file: &RecoveryFile) -> Result<()> {
+pub(crate) fn stage_copy(source: &Path, dest: &Path, file: &RecoveryFile) -> Result<()> {
     #[cfg(test)]
     if FAULT.with(|f| f.get() == Fault::StageWrite) {
         return Err(RecoveryError::Io);

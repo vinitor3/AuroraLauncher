@@ -1,5 +1,9 @@
 # Compatibility Matrix
 
+## Doctor, recuperação e cópias de teste — 29/09/2026
+
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Launcher alpha.14 integra integralmente a recuperação manual de `be3a1c4`, preserva a base alpha.13 com Doctor, Gemini, Assistente e sessões, e acrescenta observações verificadas por tentativa e cópias independentes com aplicação seletiva, proteção e desfazer. Não amplia Minecraft/loaders/Java e conserva Core 1.1.5/Skins 0.3.1. Mundos são excluídos por padrão e nunca transferidos ao aplicar; cópia explícita de mundo serve somente ao teste. Testes automatizados usam dados descartáveis; partida real, skins/capa, multiplayer, autenticação e voz não recebem nova homologação por build. Evidências: [AUR-1167](../task-aur-1167-doctor-lab.md).
+
 ## Recuperação manual de instâncias — 29/09/2026
 
 Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Base `dc2ec5a`, launcher alpha.13, Core 1.1.5 e Skins 0.3.1 preservados. Pontos manuais protegem o escopo local declarado com prévia, confirmação e desfazer, sem mundos, contas ou instalação compartilhada. Core/Skins administrados ficam fora da reposição de artefatos antigos; Companion não é reinstalado. Não amplia Minecraft/loaders/Java nem altera os 18 JARs. Os testes de filesystem e interface não homologam runtime Minecraft ou a UI nativa autenticada. Contrato e evidência: [AUR-1166](../task-aur-1166-instance-recovery.md).
