@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 import { artifactPins, EULA_URL, SERVER_PROPERTIES } from './pins.mjs';
 import { hash } from './files.mjs';
 import { planDigest } from './runtime.mjs';
+import { runtimeFiles } from './play-profile.mjs';
 import { withOwnedProcess } from './owned-process.mjs';
 import { verifyPreparedFiles, withPreparedEula, runPlanDigest, runServer, requireOwnedBind, waitForStop, main } from './server.mjs';
 
@@ -20,7 +21,7 @@ const trueEula = Buffer.from(`# ${EULA_URL}\neula=true\n`);
 const json = value => `${JSON.stringify(value, null, 2)}\n`;
 const approved = 'a'.repeat(64);
 async function exists(file) { try { await lstat(file); return true; } catch (e) { if (e.code === 'ENOENT') return false; throw e; } }
-async function fixture(t) {
+async function fixture(t, profile = 'status') {
   const metadata = await lstat(parent);
   assert.ok(metadata.isDirectory() && !metadata.isSymbolicLink());
   const root = await mkdtemp(join(parent, 'prepared-')); const basename = root.slice(parent.length + 1);
@@ -42,14 +43,13 @@ async function fixture(t) {
     await writeFile(join(root, pin.file), bytes, { flag: 'wx' });
   }
   const baseline = { schemaVersion: 1, purpose: 'synthetic_test_only', artifacts,
-    files: { 'server.properties': SERVER_PROPERTIES, 'eula.txt': falseEula.toString() } };
+    files: runtimeFiles(profile) };
   const baselineHash = planDigest(baseline);
   const ready = { planSha256: baselineHash, verified, javaExecuted: false, runtimeHomologated: false };
   await writeFile(join(root, 'plan.json'), json(baseline), { flag: 'wx' });
   await writeFile(join(root, 'consent.json'), json({ planSha256: baselineHash, downloadEulaAccepted: true, javaExecuted: false }), { flag: 'wx' });
   await writeFile(join(root, 'ready.json'), json(ready), { flag: 'wx' });
-  await writeFile(join(root, 'server.properties'), SERVER_PROPERTIES, { flag: 'wx' });
-  await writeFile(join(root, 'eula.txt'), falseEula, { flag: 'wx' });
+  for (const [file, content] of Object.entries(baseline.files)) await writeFile(join(root, file), content, { flag: 'wx' });
   return { root, basename, baseline, ready };
 }
 async function expectCode(promise, code) { await assert.rejects(promise, error => error.message === code); }
@@ -64,6 +64,19 @@ test('verifier accepts complete synthetic stage, both published algorithms and o
   assert.deepEqual(await readdir(f.root), before); assert.deepEqual(await readFile(join(f.root, 'eula.txt')), falseEula);
   assert.equal(runPlanDigest({ a: 1 }), runPlanDigest({ a: 1 }));
   assert.notEqual(runPlanDigest({ diff: { after: 'eula=true' } }), runPlanDigest({ diff: { after: 'eula=false' } }));
+});
+
+test('explicit play stage verifies whitelist bytes and rejects changed identities before execution', async t => {
+  const f = await fixture(t, 'play');
+  await verifyPreparedFiles(f.basename, f.baseline);
+  const original = await readFile(join(f.root, 'whitelist.json'));
+  await writeFile(join(f.root, 'whitelist.json'), '[]\n');
+  await expectCode(verifyPreparedFiles(f.basename, f.baseline), 'server_config_changed');
+  assert.deepEqual(await readFile(join(f.root, 'eula.txt')), falseEula);
+  assert.equal(await exists(join(f.root, 'run-used.json')), false);
+  await writeFile(join(f.root, 'whitelist.json'), original);
+  f.baseline.files['unexpected.conf'] = 'data';
+  await expectCode(verifyPreparedFiles(f.basename, f.baseline), 'server_baseline');
 });
 
 test('prepared name syntax refuses paths, UNC, aliases and unrelated names before filesystem access', async () => {

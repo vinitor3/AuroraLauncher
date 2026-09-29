@@ -6,11 +6,11 @@ Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, desligado 
 
 | Capacidade | Evidência local | Estado e fronteira |
 | --- | --- | --- |
-| TCP | Bytes reais nos dois sentidos, 8 MiB/contrapressão, half-close, múltiplas conexões, autenticação/autorização, limites, expiração/revogação | **PROTÓTIPO**; consulta STATUS contra fixture de protocolo, sem JVM |
+| TCP | Bytes reais nos dois sentidos, 8 MiB/contrapressão, half-close, múltiplas conexões, autenticação/autorização, limites, expiração/revogação; protocolo Minecraft real | **PROTÓTIPO**; STATUS e dois clientes sintéticos até pacotes de mundo em loopback |
 | UDP | Fronteiras/retorno, três peers, duas sessões, dois serviços, MTU/oversize, replay/forja, quotas, ciclo de vida e carga TCP simultânea; downstream autorizado por plano/hash local e orçamento por peer/serviço | **PROTÓTIPO**; `host` mantém 1:1 e `host-plan` permite perfil explícito; nenhum mod/áudio homologado |
 | Direto | IPv4 e IPv6 loopback; smoke com dois agentes em processos separados | **PROTÓTIPO** local; LAN, redes distintas, IPv4 público, firewall IPv6, NAT/CGNAT pendentes |
 | Relay/UDP externo bloqueado | Pesquisa de capacidade upstream e termos, sem ativação | **NÃO IMPLEMENTADO** no laboratório; nenhum relay configurado/homologado |
-| Minecraft | Servidor real 1.21.1/Fabric 0.16.14/Java 21, bind próprio loopback e STATUS/pong por dois agentes; stop normal | **PROTÓTIPO** de laboratório; integração desktop/login/LAN/ingresso no mundo e clientes mistos **PRECISA DE TESTE**; sem mods |
+| Minecraft | Servidor real 1.21.1/Fabric 0.16.14/Java 21; dois clientes sintéticos observam LOGIN/CONFIGURATION/PLAY, chunks/presença recíproca; contagem 2→0 e stop normal em três ensaios | **PROTÓTIPO**; dois pares Host/Guest independentes. Desktop, clientes gráficos/mistos, LAN, Core/Skins e voz **PRECISA DE TESTE** |
 | Convites/interface | Pin e lease manual do laboratório | Fluxo social/interface **NÃO IMPLEMENTADO**; não equivale a convite do produto |
 | Simple Voice Chat | Inspector/JAR verificado e adaptador nativo de configuração em cópia; aprovação, conflito e undo testados | **PARCIAL**, opt-in sem UI; runtime/endereço/áudio **PRECISA DE TESTE** |
 | Plasmo Voice | Inspector/JAR verificado; adaptador nativo em cópia altera/adiciona anúncio no caminho confirmado, com aprovação/undo testados | **PARCIAL**, opt-in sem UI; runtime/endereço/áudio **PRECISA DE TESTE** |

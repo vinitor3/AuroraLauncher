@@ -2,6 +2,8 @@
 
 Estado: **PROTÓTIPO**, fora do desktop e desativado para usuários. Base alpha.14, Core 1.1.5/Skins 0.3.1 preservados. [Execução/evidências](task-aur-r4-connect.md), [contrato canônico](engineering/AURORA_CONNECT_SPEC.md), [voz](aurora-connect-voice.md).
 
+Incremento20: três ensaios com Minecraft 1.21.1/Fabric real e dois clientes sintéticos passaram LOGIN/CONFIGURATION/PLAY, posição/chunks e presença recíproca. Cada ensaio usa quatro agentes em dois pares independentes, contagem 2→0 e encerramento normal; somente loopback, sem mods/GUI/contas. [Procedimento e limites](aurora-connect-runtime.md#dois-clientes-de-protocolo--vigésimo-incremento). Não homologa redes externas, clientes mistos ou R4.
+
 ## O que este executável faz
 
 Dois agentes autenticam as chaves públicas esperadas usando Iroh 1.3.0 e QUIC cifrado. O host concede uma lease de laboratório ao peer convidado, sessão e serviços explícitos, com prazo e revogação. `guest` pede IDs `game` (TCP) e `aux` (UDP), revisão 1; `guest-tcp` pede somente `game`, anunciando apenas `reliableStream`. Os destinos aprovados são literais loopback do host; o convidado não escolhe IP/porta do destino.

@@ -73,9 +73,13 @@ export class FrameGuard extends Transform {
     if (this.#pending) {
       this.#blocked = false;
       this.#drain();
-    } else {
-      super._read(size);
     }
+    // Completing our pending transform can make Transform retain its own
+    // writable callback while the previously pushed large frame is still in
+    // the readable buffer. Release that callback on this same read request;
+    // otherwise no new push clears Readable's reading flag and an open input
+    // stream can stall forever after one frame, even after the buffer drains.
+    super._read(size);
   }
 
   #drain() {

@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { artifactPins, EULA_URL, SERVER_PROPERTIES } from './pins.mjs';
 import { hash, readLocal, downloadVerified } from './files.mjs';
 import { makePlan, planDigest, stageRuntime, main } from './runtime.mjs';
+import { PLAY_NAMES, offlineUuid, runtimeFiles } from './play-profile.mjs';
 
 // Every executable/JAR below is synthetic data. No Java process, production
 // fetch, Minecraft download or persistent consent is part of these tests.
@@ -102,6 +103,29 @@ test('fixed pins are complete, independent copies and agree with reviewed metada
   pins[0].digest = 'mutated fixture'; pins.pop();
   assert.equal(artifactPins().length, 9);
   assert.equal(artifactPins()[0].digest, '59353fb40c36d304f2035d51e7d6e6baa98dc05c');
+});
+
+test('play profile is explicit, two fixed offline identities, no compression and a different approval', async t => {
+  const root = await fixture(t); const home = await fakeJdk(root);
+  const status = await makePlan(home);
+  const play = await makePlan(home, 'play');
+  assert.equal(status.files['whitelist.json'], undefined);
+  assert.notEqual(planDigest(play), planDigest(status));
+  assert.deepEqual(play.artifacts, status.artifacts);
+  const whitelist = JSON.parse(play.files['whitelist.json']);
+  assert.deepEqual(whitelist.map(row => row.name), [...PLAY_NAMES]);
+  assert.equal(new Set(whitelist.map(row => row.uuid)).size, 2);
+  for (const row of whitelist) {
+    assert.equal(row.uuid, offlineUuid(row.name));
+    assert.match(row.uuid, /^[a-f0-9]{8}-[a-f0-9]{4}-3[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+  }
+  assert.ok(play.files['server.properties'].includes('network-compression-threshold=-1\n'));
+  assert.ok(play.files['server.properties'].includes('white-list=true\n'));
+  assert.equal(play.files['eula.txt'], status.files['eula.txt']);
+  await assert.rejects(stageRuntime(home, planDigest(status), true, 'play'), /runtime_plan_approval/);
+  await assert.rejects(main(['stage-play', home, planDigest(play)]), /runtime_eula_acceptance_required/);
+  assert.throws(() => runtimeFiles('arbitrary'), /runtime_profile/);
+  assert.throws(() => offlineUuid('arbitrary'), /runtime_play_identity/);
 });
 
 test('plan reads synthetic JDK bytes without executing and deterministically binds the review', { skip: process.platform !== 'win32' }, async t => {

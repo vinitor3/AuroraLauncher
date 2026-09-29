@@ -50,7 +50,7 @@ Prazo global padrão 60 s (máximo uma hora), stop padrão/máximo 5 s, saída s
 
 ## Consentimento recebido e execução — décimo oitavo incremento
 
-Preparação posterior19: cliente de protocolo em pacote privado separado, dependências fixadas/auditadas e FrameGuard real com limites/backpressure. Ainda exige integração contra compressão inesperada e ensaio de jogadores; não altera a evidência de STATUS abaixo. [Fontes, vulnerabilidade corrigida e limites](engineering/AURORA_CONNECT_DEPENDENCIES.md#cliente-de-protocolo-somente-para-laboratório--incremento-19).
+Preparação posterior19: cliente de protocolo em pacote privado separado, dependências fixadas/auditadas e FrameGuard real com limites/backpressure. O incremento20 integra o cliente restrito descrito abaixo; a evidência histórica de STATUS permanece separada. [Fontes, vulnerabilidade corrigida e limites](engineering/AURORA_CONNECT_DEPENDENCIES.md#cliente-de-protocolo-somente-para-laboratório--incremento-19).
 
 O usuário declarou ter lido e aceitado a [EULA oficial](https://www.minecraft.net/en-us/eula) e o [Microsoft Services Agreement](https://www.microsoft.com/servicesagreement), autorizando download/execução e testes locais. O impedimento do incremento 14 está resolvido. O agente executa os comandos; não precisa de credenciais ou de nova aceitação. Dois computadores, clientes reais e cada mod de voz mantêm provas próprias.
 
@@ -65,3 +65,23 @@ Limites: readiness 180 s, vida total 300 s, stop 5 s, stdout+stderr 4 MiB drenad
 O smoke de dois agentes é uma operação separada enquanto o servidor está pronto; não encerrar seu PowerShell pai para simular cleanup dos agentes. Após o smoke, enviar `stop`, aguardar `server_stopped`, conferir EULA, porta livre e processos. As suites que comparam conteúdo da raiz de staging devem executar com `--test-concurrency=1`: fixtures paralelas na mesma raiz interferem nessa observação. [Resultados e comandos exatos](task-aur-r4-connect.md).
 
 Execução real aprovada em `prepared-0QnAmb`, plano `1bae08c9e734e9c1b0d839402f2db35d23e1d9e7cfc913f3d98d5b342684f877`: `server_ready`, smoke PASS com dois agentes/protocolo 767/zero jogadores e stop exit 0, sem kill, EULA original restaurada. Conferência posterior observou zero listeners 43001, Java e agentes; configuração offline/whitelist/loopback preservada. Reuso foi recusado. O estágio anterior `prepared-KekiXy` permanece como evidência da recusa pré-Java por AppData. Esses diretórios não servem para nova execução; criar outro estágio e revisar seu plano. Mundo/logs do laboratório permanecem ignorados e não devem ser publicados.
+
+## Dois clientes de protocolo — vigésimo incremento
+
+O perfil separado `play` conserva online-mode=false, bind127.0.0.1:43001 e whitelist ativa. Acrescenta somente duas identidades sintéticas fixas, desliga compressão e exigência de perfil assinado na pasta nova. Não usa login Microsoft/Mojang, tokens ou cache de conta. Essas identidades não comprovam contas originais ou clientes gráficos mistos; a autenticação Connect continua obrigatória.
+
+`runtime.mjs plan-play/stage-play` e `server.mjs run-plan-play/run-play` usam a mesma sintaxe dos comandos STATUS, com hashes próprios. Um hash do perfil anterior não autoriza play. O run-plan explicita readiness180s, consulta de bind10s, STATUS6s, vida300s e stop5s. A CLI aceita a autorização de termos já recebida; não é necessário perguntá-la novamente. Criar estágio novo para cada execução Java e revisar o plano atual; não copiar hashes de stages usados.
+
+Quando o servidor emitir server_ready, executar em outro terminal local:
+
+~~~powershell
+node --max-old-space-size=512 apps/connect-client-lab/smoke.mjs --offline-lab
+~~~
+
+O processo cria quatro agentes: dois pares Host/Guest independentes, com sessões/leases distintas e somente game/tcp, até o mesmo servidor descartável. Não é prova de um único Host com dois peers. Cada cliente conecta somente a seu listener loopback. O helper verifica hash do binário Connect, eventos, plano e autorização; pins ficam em RAM/stdin. SIGINT/prazo/falha encerram recursos próprios. O servidor permanece sob seu supervisor: enviar stop e aguardar server_stopped/EULA restaurada; nunca matar Java por nome.
+
+PASS exige, nos dois clientes, identidade offline prevista, LOGIN, término de CONFIGURATION, PLAY, posição com confirmação de teleport, chunk e batch reconhecidos, informação e spawn do outro participante. Consulta independente deve observar 2 jogadores durante e 0 após desconexão. Só então encerra os quatro agentes com eventos stopped/exit0 e nenhum kill. O relatório contém somente estados/contagens, sem nomes, UUIDs, coordenadas, chunks ou texto do servidor. Isso é prova de protocolo e pacotes de mundo, não renderização, movimentação humana, Core/Skins ou voz.
+
+GuardedClient instala FrameGuard antes do splitter e recusa compressão, criptografia inesperada, transferência de destino, recursos externos, aceitação automática de novos termos e reconfiguração. O parser deve consumir o frame integral, sem ignorar partialReadError; exceções síncronas dos handlers viram erro fixo. Não flexibiliza limites para aceitar pacote malformado. Máximos por cliente: frame21bits, fio32MiB,65536pacotes,60s. O limite Node512MiB é de old-space, não de toda alocação nativa. O guard não valida sozinho NBT/schema/CPU; este cliente não deve ser usado como implementação de produto ou com servidores arbitrários.
+
+Encerramento fecha serializer→framer→socket e verifica close; prazo1s excedido permanece falha. A causa inicial e a observação parcial sobrevivem a falha adicional de cleanup. O ensaio real encontrou um travamento do FrameGuard ao completar frame grande com entrada aberta; regressão determinística confirmou callback interno de Transform retido. A correção chama super._read após drenar o frame. Testes anteriores que encerravam a entrada cedo não cobriam esse caso.

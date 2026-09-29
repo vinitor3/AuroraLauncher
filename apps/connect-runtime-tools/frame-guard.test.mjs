@@ -130,6 +130,70 @@ test('backpressure pauses within a coalesced input chunk instead of accumulating
   assert.equal(count, wire.length); assert.equal(writeDone, true); assert.equal(guard.stats.forwardedFrames, 200);
 });
 
+test('a large frame resumes its writable callback after draining while input stays open', async () => {
+  // The next frame is sent only after the previous write has completed. Ending
+  // the source early masks this regression because Transform skips its own
+  // readable-side backpressure once the writable side is ending.
+  const expected = frame(Buffer.alloc(65536, 0x39));
+  const guard = new FrameGuard({ signal: AbortSignal.timeout(1000) });
+  let count = 0;
+  const destination = new Writable({ write(chunk, _encoding, callback) {
+    assert.deepEqual(chunk, expected); count++; callback();
+  } });
+  const written = new Promise((resolve, reject) => {
+    assert.equal(guard.write(expected, error => error ? reject(error) : resolve()), false);
+  });
+  const drained = pipeline(guard, destination);
+  // Attach rejection handlers before yielding so cancellation cannot leave an
+  // unobserved pipeline or write callback when the regression is present.
+  const completed = Promise.all([written, drained]);
+  try {
+    await written;
+    assert.equal(guard.writableEnded, false);
+    for (let i = 0; i < 15; i++) {
+      await new Promise((resolve, reject) => {
+        guard.write(expected, error => error ? reject(error) : resolve());
+      });
+    }
+    guard.end();
+  } catch (error) {
+    guard.destroy(error);
+  }
+  await completed;
+  assert.equal(count, 16);
+  assert.equal(guard.stats.forwardedFrames, 16);
+  assert.equal(guard.stats.pendingInputBytes, 0);
+});
+
+test('open input crosses readable thresholds repeatedly with coalesced frames and a slow consumer', async () => {
+  const frames = [1024, 16382, 16384, 65536, 1].map((length, i) => frame(Buffer.alloc(length, i)));
+  const expected = Array.from({ length: 12 }, () => frames).flat();
+  const guard = new FrameGuard({ signal: AbortSignal.timeout(2000) });
+  let count = 0;
+  const drained = pipeline(guard, new Writable({ highWaterMark: 1024, write(chunk, _encoding, callback) {
+    assert.deepEqual(chunk, expected[count++]); setImmediate(callback);
+  } }));
+  const produce = async () => {
+    for (let i = 0; i < 12; i++) {
+      const wire = Buffer.concat(frames);
+      // Split within a large frame as well as at the end of a coalesced group.
+      for (const chunk of [wire.subarray(0, 48000), wire.subarray(48000)]) {
+        await new Promise((resolve, reject) => {
+          guard.write(chunk, error => error ? reject(error) : resolve());
+        });
+        assert.equal(guard.writableEnded, false);
+        assert.ok(guard.readableLength <= 16384 + 65539);
+      }
+    }
+    guard.end();
+  };
+  await Promise.all([produce(), drained]);
+  assert.equal(count, expected.length);
+  assert.equal(guard.stats.forwardedFrames, expected.length);
+  assert.equal(guard.stats.pendingInputBytes, 0);
+  assert.equal(guard.stats.frameAllocation, 0);
+});
+
 test('many concurrent partial streams each allocate only their configured frame', async () => {
   const controllers = Array.from({ length: 24 }, () => new AbortController());
   const guards = controllers.map(controller => new FrameGuard({ maxFrameBytes: 4096, signal: controller.signal }));

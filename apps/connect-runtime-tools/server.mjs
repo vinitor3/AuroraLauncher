@@ -39,7 +39,11 @@ async function exactEntries(directory, expected) {
 export async function verifyPreparedFiles(basename, baseline) {
   const root = await preparedDirectory(basename);
   await absent(join(root, 'run-used.json'));
-  await exactEntries(root, ['plan.json', 'consent.json', 'ready.json', 'server.properties', 'eula.txt', 'server.jar', 'libraries']);
+  const files = baseline?.files;
+  if (!files || Object.keys(files).some(file => !['server.properties', 'eula.txt', 'whitelist.json'].includes(file))
+    || typeof files['server.properties'] !== 'string' || files['eula.txt'] !== FALSE_EULA.toString()
+    || Object.values(files).some(value => typeof value !== 'string')) fail('server_baseline');
+  await exactEntries(root, ['plan.json', 'consent.json', 'ready.json', ...Object.keys(files), 'server.jar', 'libraries']);
   const libraries = join(root, 'libraries');
   const libraryMetadata = await lstat(libraries);
   if (!libraryMetadata.isDirectory() || libraryMetadata.isSymbolicLink()) fail('server_unsafe_directory');
@@ -53,7 +57,9 @@ export async function verifyPreparedFiles(basename, baseline) {
   const baselineHash = planDigest(baseline);
   same(await readLocal(join(root, 'plan.json'), 64 * 1024), json(baseline), 'server_baseline_changed');
   same(await readLocal(join(root, 'consent.json'), 4096), json({ planSha256: baselineHash, downloadEulaAccepted: true, javaExecuted: false }), 'server_stage_consent');
-  same(await readLocal(join(root, 'server.properties'), 64 * 1024), baseline.files['server.properties'], 'server_config_changed');
+  for (const [file, content] of Object.entries(files)) {
+    if (file !== 'eula.txt') same(await readLocal(join(root, file), 64 * 1024), content, 'server_config_changed');
+  }
   same(await readLocal(join(root, 'eula.txt'), 4096), FALSE_EULA, 'server_eula_changed');
   const verified = [];
   for (const pin of baseline.artifacts) {
@@ -110,8 +116,8 @@ async function hashReadonlyTool(file, maximum) {
   } finally { await handle.close(); }
 }
 export const runPlanDigest = plan => hash(json(plan));
-export async function makeRunPlan(javaHome, basename) {
-  const baseline = await makePlan(javaHome);
+export async function makeRunPlan(javaHome, basename, profile = 'status') {
+  const baseline = await makePlan(javaHome, profile);
   const stage = await verifyPreparedFiles(basename, baseline);
   const tools = await toolHashes();
   return {
@@ -122,13 +128,16 @@ export async function makeRunPlan(javaHome, basename) {
     diff: { file: 'eula.txt', beforeSha256: hash(FALSE_EULA), afterSha256: hash(TRUE_EULA),
       before: 'eula=false', after: 'eula=true', restore: 'exact_applied_bytes_only' },
     propertiesSha256: hash(baseline.files['server.properties']),
+    ...(profile === 'play' ? { profile: 'play', whitelistSha256: hash(baseline.files['whitelist.json']),
+      clientLimits: 'two_synthetic_offline_players_no_compression_or_secure_profile' } : {}),
     launch: { executable: baseline.launch.executable,
       args: ['-Djava.io.tmpdir=.connect-run-temp', '-Duser.home=.connect-run-temp', '-XX:-UsePerfData', ...baseline.launch.args],
       cwd: basename, environment: 'minimal_windows_and_owned_temp_only' },
     evidence: { endpoint: 'loopback_43001', protocol: 767, ownProcessBindRequired: true,
       statusAndPongOnly: true, twoAgentSmoke: 'separate_caller_operation', runtimeHomologated: false,
       worldJoined: false, voice: 'not_tested', accountAuthentication: 'not_tested' },
-    limits: { lifetimeSeconds: 300, stopSeconds: 5, outputBytes: 4 * 1024 * 1024,
+    limits: { lifetimeSeconds: 300, readinessSeconds: 180, bindProbeSeconds: 10, statusProbeSeconds: 6,
+      stopSeconds: 5, outputBytes: 4 * 1024 * 1024,
       reuse: false, personalInstanceAccess: false, relay: false, mods: false },
   };
 }
@@ -200,14 +209,16 @@ async function finiteCommand(executable, args, { cwd, env, signal, timeout = 500
   return new Promise((resolvePromise, reject) => {
     execFile(executable, args, { cwd, env, windowsHide: true, shell: false, timeout, maxBuffer: 16384, signal },
       (error, stdout) => {
-        if (error) reject(new Error('server_probe_failed'));
+        if (error) reject(new Error(signal?.aborted ? 'server_cancelled'
+          : error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'server_probe_output_limit'
+          : error.killed ? 'server_probe_deadline' : 'server_probe_failed'));
         else resolvePromise(stdout);
       });
   });
 }
 async function listeners(root, probeHome, signal) {
   const output = await finiteCommand(powershellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', BIND_QUERY],
-    { cwd: root, env: minimalEnvironment(probeHome), signal });
+    { cwd: root, env: minimalEnvironment(probeHome), signal, timeout: 10000 });
   let result;
   try { result = JSON.parse(output); } catch { fail('server_bind_probe_invalid'); }
   if (!Array.isArray(result) || result.length > 16 || result.some(row => !row || typeof row !== 'object'
@@ -221,8 +232,10 @@ export function requireOwnedBind(rows, ownsProcessId) {
     || typeof ownsProcessId !== 'function' || !ownsProcessId(rows[0].OwningProcess)) fail('server_bind_not_owned');
 }
 async function ready(root, probeHome, signal, ownsProcessId) {
-  const deadline = Date.now() + 180000;
-  while (Date.now() < deadline) {
+  const deadline = AbortSignal.timeout(180000);
+  const parentSignal = signal;
+  signal = AbortSignal.any([parentSignal, deadline]);
+  try { while (true) {
     signal.throwIfAborted();
     const rows = await listeners(root, probeHome, signal);
     if (rows.length) {
@@ -236,11 +249,14 @@ async function ready(root, probeHome, signal, ownsProcessId) {
       if (status.event !== 'minecraft_status_received' || status.summary?.reportedProtocol !== 767
         || status.summary?.protocolMatchesRequested !== true) fail('server_status_invalid');
       requireOwnedBind(await listeners(root, probeHome, signal), ownsProcessId);
+      signal.throwIfAborted();
       return { protocol: 767, statusAndMatchingPong: true, ownLoopbackBind: true };
     }
     await delay(250, undefined, { signal });
+  } } catch (error) {
+    if (deadline.aborted && !parentSignal.aborted) fail('server_readiness_deadline');
+    throw error;
   }
-  fail('server_readiness_deadline');
 }
 
 // EOF or one exact `stop` line is enough; other input fails closed. The listener
@@ -271,10 +287,10 @@ export async function waitForStop(input, signal) {
   });
 }
 
-export async function runServer(javaHome, basename, approval, acceptedEula, { signal, onReady } = {}) {
+export async function runServer(javaHome, basename, approval, acceptedEula, { signal, onReady, profile = 'status' } = {}) {
   if (acceptedEula !== true) fail('server_eula_acceptance_required');
   if (typeof approval !== 'string' || !digestPattern.test(approval)) fail('server_run_approval');
-  const plan = await makeRunPlan(javaHome, basename);
+  const plan = await makeRunPlan(javaHome, basename, profile);
   if (approval !== runPlanDigest(plan)) fail('server_run_approval');
   signal?.throwIfAborted();
   const root = await preparedDirectory(basename);
@@ -285,36 +301,41 @@ export async function runServer(javaHome, basename, approval, acceptedEula, { si
   const probeHome = await mkdtemp(join(PARENT, 'probe-'));
   if ((await listeners(root, probeHome, signal)).length !== 0) fail('server_port_in_use');
   // Rebuild after the preflight OS query, before marker/snapshot/EULA mutation.
-  if (runPlanDigest(await makeRunPlan(javaHome, basename)) !== approval) fail('server_run_plan_changed');
+  if (runPlanDigest(await makeRunPlan(javaHome, basename, profile)) !== approval) fail('server_run_plan_changed');
   signal?.throwIfAborted();
+  let readinessFailure;
   const transaction = await withPreparedEula(basename, approval, async ownedRoot => {
     const temp = join(ownedRoot, '.connect-run-temp'); await mkdir(temp);
     return withOwnedProcess({ executable: plan.launch.executable, args: plan.launch.args, cwd: ownedRoot,
       env: minimalEnvironment(temp), signal, timeoutMs: 300000, stopTimeoutMs: 5000, outputLimitBytes: 4 * 1024 * 1024 },
     async ({ signal: childSignal, ownsProcessId }) => {
-      const evidence = await ready(ownedRoot, probeHome, childSignal, ownsProcessId);
+      const evidence = await ready(ownedRoot, probeHome, childSignal, ownsProcessId).catch(error => {
+        if (['server_probe_failed', 'server_probe_deadline', 'server_probe_output_limit', 'server_bind_probe_invalid', 'server_bind_not_owned',
+          'server_status_invalid', 'server_readiness_deadline'].includes(error?.message)) readinessFailure = error.message;
+        throw error;
+      });
       if (onReady) await onReady({ signal: childSignal, evidence, runPlanSha256: approval });
       return evidence;
     });
-  });
+  }).catch(error => { if (readinessFailure) error.readinessFailure = readinessFailure; throw error; });
   return { event: 'server_stopped', runPlanSha256: approval, evidence: transaction.value.value,
     process: transaction.value.process, eulaRestored: transaction.eulaRestored, reusePermitted: false,
     runtimeHomologated: false, worldJoined: false, voice: 'not_tested', accountAuthentication: 'not_tested' };
 }
 
 export async function main(args, { input = process.stdin, emit = value => process.stdout.write(json(value)), signal } = {}) {
-  if (args.length === 3 && args[0] === 'run-plan') {
-    const plan = await makeRunPlan(args[1], args[2]);
+  if (args.length === 3 && ['run-plan', 'run-plan-play'].includes(args[0])) {
+    const plan = await makeRunPlan(args[1], args[2], args[0] === 'run-plan-play' ? 'play' : 'status');
     return { event: 'server_run_plan', runPlanSha256: runPlanDigest(plan), plan };
   }
-  if (args.length === 5 && args[0] === 'run' && args[4] === '--user-accepted-minecraft-eula') {
-    return runServer(args[1], args[2], args[3], true, { signal,
+  if (args.length === 5 && ['run', 'run-play'].includes(args[0]) && args[4] === '--user-accepted-minecraft-eula') {
+    return runServer(args[1], args[2], args[3], true, { signal, profile: args[0] === 'run-play' ? 'play' : 'status',
       onReady: async ({ signal: childSignal, evidence, runPlanSha256 }) => {
         emit({ event: 'server_ready', runPlanSha256, evidence, runtimeHomologated: false, worldJoined: false, voice: 'not_tested' });
         await waitForStop(input, childSignal);
       } });
   }
-  if (args[0] === 'run') fail('server_eula_acceptance_required');
+  if (['run', 'run-play'].includes(args[0])) fail('server_eula_acceptance_required');
   fail('server_usage');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
@@ -323,6 +344,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try { process.stdout.write(json(await main(process.argv.slice(2), { signal: controller.signal }))); }
   catch (error) {
     const code = /^(server|owned_process|runtime)_[a-z_]+$/.test(error.message) ? error.message : 'server_io_or_process_failed';
-    process.stdout.write(json({ event: 'failed', code })); process.exitCode = 1;
+    process.stdout.write(json({ event: 'failed', code, readinessFailure: error.readinessFailure })); process.exitCode = 1;
   } finally { process.off('SIGINT', interrupt); process.off('SIGTERM', interrupt); }
 }

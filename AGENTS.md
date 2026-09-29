@@ -29,6 +29,8 @@ O laboratório descartável `apps/connect-runtime-tools` já executou Minecraft 
 
 ## Mapa do repositório
 
+Incremento20: dois clientes de protocolo sintéticos observaram LOGIN/CONFIGURATION/PLAY, chunks e presença recíproca por dois pares Host/Guest independentes, em três ensaios reais aprovados. Não são clientes gráficos ou contas originais/offline mistas homologadas. `apps/connect-client-lab/smoke.mjs --offline-lab` exige perfil play descartável já pronto; conferir `docs/aurora-connect-runtime.md`. O ensaio corrigiu deadlock do FrameGuard com entrada aberta; preservar as duas regressões e o flush serializer→framer→socket no encerramento. Não promover esse resultado a Core/Skins/voz/R4.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

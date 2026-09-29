@@ -1,7 +1,8 @@
 import { mkdir, lstat, mkdtemp, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { artifactPins, EULA_URL, SERVER_PROPERTIES } from './pins.mjs';
+import { artifactPins, EULA_URL } from './pins.mjs';
+import { runtimeFiles } from './play-profile.mjs';
 import { hash, fail, readLocal, absent, downloadVerified } from './files.mjs';
 import { rejectLinkedParents, resolveExplicitLocalPath } from '../connect-voice-tools/local-path.mjs';
 
@@ -9,7 +10,8 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const json = value => `${JSON.stringify(value, null, 2)}\n`;
 export const planDigest = plan => hash(json(plan));
 
-export async function makePlan(javaHome) {
+export async function makePlan(javaHome, profile = 'status') {
+  const files = runtimeFiles(profile);
   if (process.platform !== 'win32') fail('runtime_windows_only');
   const home = resolveExplicitLocalPath(javaHome);
   const release = await readLocal(join(home, 'release'), 64 * 1024);
@@ -27,11 +29,11 @@ export async function makePlan(javaHome) {
   if (binary.length < 2 || binary.toString('ascii', 0, 2) !== 'MZ') fail('runtime_java_binary');
   const artifacts = artifactPins();
   return {
-    schemaVersion: 1, purpose: 'aurora_connect_disposable_status_lab',
+    schemaVersion: 1, purpose: `aurora_connect_disposable_${profile}_lab`,
     target: { minecraft: '1.21.1', loader: 'fabric', loaderVersion: '0.16.14', javaMajor: 21, protocol: 767 },
     java: { home, executable, version, releaseSha256: hash(release), executableSha256: hash(binary) },
     artifacts, downloadBytes: artifacts.reduce((sum, item) => sum + item.bytes, 0),
-    files: { 'server.properties': SERVER_PROPERTIES, 'eula.txt': `# ${EULA_URL}\neula=false\n` },
+    files,
     launch: { executable, args: ['-Xms256M', '-Xmx1536M', '-Dfabric.gameJarPath=server.jar', '-cp',
       artifacts.filter(item => item.file.startsWith('libraries/')).map(item => item.file).join(';'),
       'net.fabricmc.loader.impl.launch.knot.KnotServer', 'nogui'],
@@ -52,9 +54,9 @@ async function ensurePlainDirectory(path) {
 
 // The only production entry accepts a fresh plan derived from fixed code and the
 // explicitly selected JDK. Never load URLs, paths or commands from a plan file.
-export async function stageRuntime(javaHome, approval, acceptedEula) {
+export async function stageRuntime(javaHome, approval, acceptedEula, profile = 'status') {
   if (acceptedEula !== true) fail('runtime_eula_acceptance_required');
-  const plan = await makePlan(javaHome);
+  const plan = await makePlan(javaHome, profile);
   if (typeof approval !== 'string' || !/^[a-f0-9]{64}$/.test(approval) || approval !== planDigest(plan)) fail('runtime_plan_approval');
   const aurora = resolveExplicitLocalPath(join(REPO, '.aurora'));
   await ensurePlainDirectory(aurora);
@@ -73,7 +75,7 @@ export async function stageRuntime(javaHome, approval, acceptedEula) {
       verified.push(await downloadVerified(pin, join(root, pin.file), { signal: controller.signal }));
     }
     // Recheck the selected files before declaring the staging complete.
-    if (planDigest(await makePlan(javaHome)) !== approval) fail('runtime_java_changed');
+    if (planDigest(await makePlan(javaHome, profile)) !== approval) fail('runtime_java_changed');
     controller.signal.throwIfAborted();
     for (const [file, bytes] of Object.entries(plan.files)) await writeNew(file, bytes);
     await writeNew('ready.json', json({ planSha256: approval, verified, javaExecuted: false, runtimeHomologated: false }));
@@ -87,14 +89,14 @@ export async function stageRuntime(javaHome, approval, acceptedEula) {
 }
 
 export async function main(args) {
-  if (args.length === 2 && args[0] === 'plan') {
-    const plan = await makePlan(args[1]);
+  if (args.length === 2 && ['plan', 'plan-play'].includes(args[0])) {
+    const plan = await makePlan(args[1], args[0] === 'plan-play' ? 'play' : 'status');
     return { event: 'runtime_plan', planSha256: planDigest(plan), plan };
   }
-  if (args.length === 4 && args[0] === 'stage' && args[3] === '--user-accepted-minecraft-eula') {
-    return stageRuntime(args[1], args[2], true);
+  if (args.length === 4 && ['stage', 'stage-play'].includes(args[0]) && args[3] === '--user-accepted-minecraft-eula') {
+    return stageRuntime(args[1], args[2], true, args[0] === 'stage-play' ? 'play' : 'status');
   }
-  if (args.length === 3 && args[0] === 'stage') fail('runtime_eula_acceptance_required');
+  if (args.length === 3 && ['stage', 'stage-play'].includes(args[0])) fail('runtime_eula_acceptance_required');
   fail('runtime_usage');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
