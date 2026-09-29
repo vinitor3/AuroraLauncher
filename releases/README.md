@@ -3,7 +3,17 @@
 Os artefatos desta pasta são imutáveis. Um nome de versão já publicado nunca
 deve ser sobrescrito nem removido.
 
-## Release atual — 0.1.1-alpha.12
+## Release atual — 0.1.1-alpha.14
+
+[Instalador Windows alpha.14](<Aurora Smart Launcher_0.1.1-alpha.14_x64-setup.exe>), gerado em 29/09/2026. Integra recuperação manual, histórico verificável no Doctor e cópias de diagnóstico com aplicação seletiva, proteção e desfazer. Preserva a base alpha.13, Assistente desktop, Gemini, sessões, Core 1.1.5 e Skins 0.3.1. Matriz oficial 18/18 conferida; instalador não executado nem publicado automaticamente.
+
+SHA-256: `06ec491a62b050d2551d55ed5fba025e5272b3bdd9e40457a4520e5d815b0cfc`. Manifesto ao lado do instalador e [evidências da entrega](../docs/task-aur-1167-doctor-lab.md). Testes automatizados aprovados; homologação completa em Minecraft e assinatura Authenticode: **NÃO VERIFICADO**.
+
+## Release anterior — 0.1.1-alpha.13
+
+[Instalador Windows alpha.13](<Aurora Smart Launcher_0.1.1-alpha.13_x64-setup.exe>), preservado com seu SHA-256 e manifesto. Inclui Gemini compartilhado, ações locais confirmadas e histórico; a atualização posterior de failover do Worker também é preservada na base alpha.14.
+
+## Release anterior — 0.1.1-alpha.12
 
 [Instalador Windows alpha.12](<Aurora Smart Launcher_0.1.1-alpha.12_x64-setup.exe>), gerado em 23/09/2026 e conferido em 28/09/2026. Integra o Doctor com identificação ampliada e explicação Gemini curta, preservando as entregas anteriores, sessões independentes, Core 1.1.5 e Skins 0.3.1. Matriz 18/18 JARs conferida pelo build oficial.
 
