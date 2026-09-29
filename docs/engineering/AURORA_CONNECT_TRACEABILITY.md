@@ -53,6 +53,7 @@ Baseline de 29/09/2026, comandos/saídas/achados no [task de execução](../task
 
 | Prova executada | Requisitos/tarefas relacionados | Limite da prova |
 | --- | --- | --- |
+| Décimo quarto incremento: plano/staging limitado com pins oficiais e gate de termos; 17 testes Node com HTTP local e JDK sintético | T-MC-01 preparação; T-SEC/T-CONFIG; 005/008 | Nenhum download Minecraft/JVM real. Consentimento de fixture não é aceitação do usuário. MZ/hash não valida todo JDK; runtime aguarda autorização |
 | Décimo terceiro incremento: quatro cenários de entrega/retomada do lock com recibo vivo, restauração estrita/revisada SVC/Plasmo e preservação de edições | T-LIFE-01/02; T-CONFIG-03/04; 006/007/008 | Locks/CAS reais com probes controlados; não executa JVM/writer, não torna recibo durável nem automatiza encerramento |
 | Décimo segundo incremento: guard opaco/verificações de processos em aquisição, preparação e confirmação da mutação de voz | T-CONFIG-01/03/04; T-LIFE-01/02; 006/007/008 | Política Windows conservadora para java/javaw; sem runtime de mod, UI, proteção contra início externo ou JVM renomeada/embutida |
 | Décimo primeiro incremento: restauração revisada das próprias chaves sobre arquivo atual, hash/aprovação novos, preservação de edições e conflito recusado | T-CONFIG-03/04; 006/007/008 | Somente cópia e recibo em RAM; não comprova roundtrip JVM, encerramento automático, UI ou voz |
