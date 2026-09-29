@@ -12,6 +12,8 @@ import { hash, readLocal, downloadVerified } from './files.mjs';
 import { makePlan, planDigest, stageRuntime, main } from './runtime.mjs';
 import { PLAY_NAMES, offlineUuid, runtimeFiles, runtimeArtifacts } from './play-profile.mjs';
 import { SVC_ARTIFACT, SVC_CONFIG_PATH, SVC_BASELINE_BYTES, validateSvcConfig } from './svc-profile.mjs';
+import { PLASMO_ARTIFACT, FABRIC_API_ARTIFACT, PLASMO_CONFIG_PATH, PLASMO_BASELINE_BYTES,
+  validatePlasmoConfig } from './plasmo-profile.mjs';
 
 // Every executable/JAR below is synthetic data. No Java process, production
 // fetch, Minecraft download or persistent consent is part of these tests.
@@ -192,6 +194,69 @@ test('SVC CLI and explicit profile keep approval and EULA gates before any netwo
   assert.deepEqual(await stagingSnapshot(), before);
 });
 
+test('Plasmo profile pins eleven artifacts and isolated flags without importing another voice profile', async t => {
+  const root = await fixture(t); const home = await fakeJdk(root); const before = await stagingSnapshot();
+  const status = await makePlan(home, 'status'); const play = await makePlan(home, 'play');
+  const svc = await makePlan(home, 'svc'); const plasmo = await makePlan(home, 'plasmo');
+  assert.deepEqual(await makePlan(home, 'plasmo'), plasmo);
+  assert.equal(new Set([status, play, svc, plasmo].map(planDigest)).size, 4);
+  assert.equal(plasmo.purpose, 'aurora_connect_disposable_plasmo_lab');
+  assert.deepEqual(plasmo.voiceMod, { id: 'plasmovoice', version: '2.1.17', fabricApi: '0.116.10+1.21.1' });
+  assert.equal(plasmo.limits.voiceMods, true);
+  for (const key of ['personalInstanceAccess', 'relay', 'coreSkins', 'runtimeHomologated']) assert.equal(plasmo.limits[key], false);
+  assert.deepEqual(plasmo.target, status.target);
+  assert.deepEqual(plasmo.artifacts.slice(0, 9), status.artifacts);
+  assert.deepEqual(plasmo.artifacts.slice(9), [PLASMO_ARTIFACT, FABRIC_API_ARTIFACT]);
+  assert.equal(plasmo.artifacts.length, 11); assert.equal(plasmo.downloadBytes, 70_374_585);
+  assert.deepEqual(runtimeArtifacts('plasmo'), plasmo.artifacts);
+  const mutated = runtimeArtifacts('plasmo');
+  mutated[9].url = 'https://example.invalid/'; mutated[10].digest = '0'.repeat(64); mutated.pop();
+  assert.deepEqual(runtimeArtifacts('plasmo').slice(9), [PLASMO_ARTIFACT, FABRIC_API_ARTIFACT]);
+  assert.deepEqual(Object.keys(plasmo.files).sort(), ['server.properties', 'eula.txt', PLASMO_CONFIG_PATH].sort());
+  assert.equal(plasmo.files['server.properties'], SERVER_PROPERTIES);
+  assert.equal(plasmo.files['eula.txt'], `# ${EULA_URL}\neula=false\n`);
+  assert.deepEqual(Buffer.from(plasmo.files[PLASMO_CONFIG_PATH]), PLASMO_BASELINE_BYTES);
+  assert.deepEqual(validatePlasmoConfig(Buffer.from(plasmo.files[PLASMO_CONFIG_PATH])), {
+    sha256: hash(PLASMO_BASELINE_BYTES), size: PLASMO_BASELINE_BYTES.length, bindLoopback: true,
+    port: 43003, announcementAbsent: true, keyCount: 5, updateChecks: false, translationsDownload: false,
+  });
+  assert.equal(plasmo.files[SVC_CONFIG_PATH], undefined);
+  for (const other of [status, play, svc]) {
+    assert.equal(other.files[PLASMO_CONFIG_PATH], undefined);
+    assert.equal(other.artifacts.some(pin => pin.file === PLASMO_ARTIFACT.file || pin.file === FABRIC_API_ARTIFACT.file), false);
+  }
+  assert.equal(plasmo.launch.args[plasmo.launch.args.indexOf('-cp') + 1].split(';').length, 8);
+  assert.ok(!plasmo.launch.args.some(value => value.includes('plasmovoice') || value.includes('fabric-api')));
+  assert.deepEqual(await stagingSnapshot(), before);
+});
+
+test('Plasmo approval cannot be exchanged with status, play or SVC and CLI gates precede writes', async t => {
+  const root = await fixture(t); const home = await fakeJdk(root); const before = await stagingSnapshot();
+  const plasmo = await makePlan(home, 'plasmo');
+  const originalFetch = globalThis.fetch; let fetched = 0;
+  globalThis.fetch = () => { fetched++; throw new Error('test_network_forbidden'); };
+  try {
+    const result = await main(['plan-plasmo', home]);
+    assert.equal(result.event, 'runtime_plan'); assert.equal(result.planSha256, planDigest(plasmo));
+    assert.deepEqual(result.plan, plasmo);
+    for (const otherProfile of ['status', 'play', 'svc']) {
+      const other = await makePlan(home, otherProfile);
+      await assert.rejects(stageRuntime(home, planDigest(other), true, 'plasmo'), /runtime_plan_approval/);
+      await assert.rejects(stageRuntime(home, planDigest(plasmo), true, otherProfile), /runtime_plan_approval/);
+    }
+    await assert.rejects(stageRuntime(home, planDigest(plasmo), false, 'plasmo'), /runtime_eula_acceptance_required/);
+    await assert.rejects(main(['stage-plasmo', home, planDigest(plasmo)]), /runtime_eula_acceptance_required/);
+    await assert.rejects(main(['stage-plasmo', home, '0'.repeat(64), '--user-accepted-minecraft-eula']), /runtime_plan_approval/);
+  } finally { globalThis.fetch = originalFetch; }
+  const planned = await childCli(['plan-plasmo', home]);
+  assert.equal(planned.code, 0); assert.equal(planned.stderr, '');
+  assert.equal(JSON.parse(planned.stdout).planSha256, planDigest(plasmo));
+  const blocked = await childCli(['stage-plasmo', home, planDigest(plasmo)]);
+  assert.equal(blocked.code, 1); assert.equal(blocked.stderr, '');
+  assert.deepEqual(JSON.parse(blocked.stdout), { event: 'failed', code: 'runtime_eula_acceptance_required' });
+  assert.equal(fetched, 0); assert.deepEqual(await stagingSnapshot(), before);
+});
+
 test('plan reads synthetic JDK bytes without executing and deterministically binds the review', { skip: process.platform !== 'win32' }, async t => {
   const root = await fixture(t); const home = await fakeJdk(root);
   const before = await stagingSnapshot();
@@ -354,6 +419,33 @@ test('Modrinth admits only the exact SVC pin before filesystem or fetch and neve
   assert.equal((await lstat(`${destination}.part`)).size, 0);
 });
 
+for (const pin of [PLASMO_ARTIFACT, FABRIC_API_ARTIFACT]) test(`Modrinth restricts every field of ${pin.file} before filesystem access`, async t => {
+  const root = await fixture(t); let fetched = 0;
+  const fetcher = (url, options) => {
+    fetched++; assert.equal(url, pin.url);
+    assert.equal(options.redirect, 'error'); assert.equal(options.credentials, 'omit');
+    assert.equal(options.headers['Accept-Encoding'], 'identity');
+    throw new Error('fixture_modrinth_fetch_denied');
+  };
+  const destination = join(root, 'must-not-exist', 'rejected.jar');
+  for (const fields of [{ file: 'mods/extra.jar' }, { file: pin.file.split('/').at(-1) },
+    { bytes: pin.bytes + 1 }, { digest: '0'.repeat(64) }, { algorithm: 'sha1', digest: '0'.repeat(40) },
+    { url: pin.url + '?download=1' }, { url: pin.url + '#fragment' },
+    { url: pin.url.replace('/versions/', '/different/') },
+    { url: pin.url.replace('cdn.modrinth.com', 'api.modrinth.com') },
+    { url: 'https://maven.fabricmc.net/fixture/attempted-replacement.jar' }]) {
+    await assert.rejects(downloadVerified({ ...pin, ...fields }, destination, { fetcher }),
+      error => /^runtime_download_(?:origin|pin)$/.test(error.message));
+  }
+  const other = pin === PLASMO_ARTIFACT ? FABRIC_API_ARTIFACT : PLASMO_ARTIFACT;
+  await assert.rejects(downloadVerified({ ...pin, url: other.url }, destination, { fetcher }), /runtime_download_origin/);
+  assert.equal(fetched, 0); assert.deepEqual(await readdir(root), []);
+  const admitted = join(root, 'admitted-fixture-attempt.jar');
+  await assert.rejects(downloadVerified(pin, admitted, { fetcher }), { message: 'fixture_modrinth_fetch_denied' });
+  assert.equal(fetched, 1); assert.equal(await exists(admitted), false);
+  assert.equal((await lstat(`${admitted}.part`)).size, 0);
+});
+
 test('real local HTTP verifies SHA-1 and SHA-256 and publishes exact bytes only after completion', async t => {
   const root = await fixture(t);
   let release; const releaseBody = new Promise(resolve => { release = resolve; });
@@ -491,7 +583,7 @@ test('cancellation while syncing verified bytes still prevents final publication
   assert.deepEqual(await readFile(`${destination}.part`), payload);
 });
 
-for (const profile of ['status', 'svc']) test(`stage failure after synthetic approval preserves only its new unready directory (${profile})`, { skip: process.platform !== 'win32' }, async t => {
+for (const profile of ['status', 'svc', 'plasmo']) test(`stage failure after synthetic approval preserves only its new unready directory (${profile})`, { skip: process.platform !== 'win32' }, async t => {
   const root = await fixture(t); const home = await fakeJdk(root);
   const plan = await makePlan(home, profile); const approval = planDigest(plan);
   const before = await stagingSnapshot() ?? [];
@@ -525,7 +617,7 @@ for (const profile of ['status', 'svc']) test(`stage failure after synthetic app
   assert.equal(planDigest(savedPlan), approval);
   ownedDirectory = candidate;
   assert.deepEqual((await readdir(candidate)).sort(), ['consent.json', 'failed.json', 'libraries', 'plan.json', 'server.jar.part',
-    ...(profile === 'svc' ? ['config', 'mods'] : [])].sort());
+    ...(['svc', 'plasmo'].includes(profile) ? ['config', 'mods'] : [])].sort());
   assert.deepEqual(JSON.parse(await readFile(join(candidate, 'consent.json'), 'utf8')), {
     planSha256: approval, downloadEulaAccepted: true, javaExecuted: false,
   });
@@ -538,6 +630,15 @@ for (const profile of ['status', 'svc']) test(`stage failure after synthetic app
     assert.deepEqual(await readdir(join(candidate, 'config/voicechat')), []);
     assert.equal(await exists(join(candidate, SVC_CONFIG_PATH)), false);
     assert.equal(await exists(join(candidate, SVC_ARTIFACT.file)), false);
+  }
+  if (profile === 'plasmo') {
+    assert.deepEqual(await readdir(join(candidate, 'mods')), []);
+    assert.deepEqual(await readdir(join(candidate, 'config')), ['plasmovoice']);
+    assert.deepEqual(await readdir(join(candidate, 'config/plasmovoice')), ['server']);
+    assert.deepEqual(await readdir(join(candidate, 'config/plasmovoice/server')), []);
+    for (const file of [PLASMO_CONFIG_PATH, PLASMO_ARTIFACT.file, FABRIC_API_ARTIFACT.file]) {
+      assert.equal(await exists(join(candidate, file)), false);
+    }
   }
   for (const file of ['ready.json', 'eula.txt', 'server.properties', 'server.jar']) assert.equal(await exists(join(candidate, file)), false);
   assert.ok(before.every(name => after.includes(name)), 'previous staging entries remain');

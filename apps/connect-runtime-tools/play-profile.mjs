@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { artifactPins, EULA_URL, SERVER_PROPERTIES } from './pins.mjs';
 import { SVC_ARTIFACT, SVC_CONFIG_PATH, SVC_BASELINE_BYTES } from './svc-profile.mjs';
+import { PLASMO_ARTIFACT, FABRIC_API_ARTIFACT, PLASMO_CONFIG_PATH, PLASMO_BASELINE_BYTES } from './plasmo-profile.mjs';
 
 // Fixed synthetic identities, never a Microsoft/Mojang account assertion. MD5
 // here reproduces Minecraft's offline UUID naming, not transport cryptography.
@@ -14,7 +15,7 @@ export function offlineUuid(name) {
   return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join('-');
 }
 export function runtimeFiles(profile) {
-  if (!['status', 'play', 'svc'].includes(profile)) throw new Error('runtime_profile');
+  if (!['status', 'play', 'svc', 'plasmo'].includes(profile)) throw new Error('runtime_profile');
   const files = { 'server.properties': SERVER_PROPERTIES, 'eula.txt': `# ${EULA_URL}\neula=false\n` };
   if (profile === 'play') {
     // Separate reviewed plan. Keep whitelist active; no personal instance,
@@ -23,9 +24,11 @@ export function runtimeFiles(profile) {
     files['whitelist.json'] = `${JSON.stringify(PLAY_NAMES.map(name => ({ uuid: offlineUuid(name), name })), null, 2)}\n`;
   }
   if (profile === 'svc') files[SVC_CONFIG_PATH] = SVC_BASELINE_BYTES.toString('utf8');
+  if (profile === 'plasmo') files[PLASMO_CONFIG_PATH] = PLASMO_BASELINE_BYTES.toString('utf8');
   return files;
 }
 export function runtimeArtifacts(profile) {
-  if (!['status', 'play', 'svc'].includes(profile)) throw new Error('runtime_profile');
-  return [...artifactPins(), ...(profile === 'svc' ? [{ ...SVC_ARTIFACT }] : [])];
+  if (!['status', 'play', 'svc', 'plasmo'].includes(profile)) throw new Error('runtime_profile');
+  return [...artifactPins(), ...(profile === 'svc' ? [{ ...SVC_ARTIFACT }] : []),
+    ...(profile === 'plasmo' ? [{ ...PLASMO_ARTIFACT }, { ...FABRIC_API_ARTIFACT }] : [])];
 }

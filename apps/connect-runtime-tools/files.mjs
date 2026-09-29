@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { lstat, open, realpath, rename } from 'node:fs/promises';
 import { rejectLinkedParents, resolveExplicitLocalPath } from '../connect-voice-tools/local-path.mjs';
 import { SVC_ARTIFACT } from './svc-profile.mjs';
+import { PLASMO_ARTIFACT, FABRIC_API_ARTIFACT } from './plasmo-profile.mjs';
 
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 export const fail = code => { throw new Error(code); };
@@ -51,9 +52,11 @@ async function writeAll(handle, bytes) {
 // fetch in tests provides real bounded HTTP streams, never a production override.
 export async function downloadVerified(pin, destination, { fetcher = fetch, timeoutMs = 90000, signal } = {}) {
   const url = new URL(pin.url);
-  const svcPin = Object.keys(SVC_ARTIFACT).every(key => pin[key] === SVC_ARTIFACT[key]);
-  if ((pin.file === SVC_ARTIFACT.file && !svcPin) || url.protocol !== 'https:' || url.username || url.password || url.port || url.hash
-    || (!['piston-data.mojang.com', 'maven.fabricmc.net'].includes(url.hostname) && !svcPin)) fail('runtime_download_origin');
+  const modPins = [SVC_ARTIFACT, PLASMO_ARTIFACT, FABRIC_API_ARTIFACT];
+  const exactModPin = modPins.some(known => Object.keys(known).every(key => pin[key] === known[key]));
+  if ((modPins.some(known => pin.file === known.file) && !exactModPin)
+    || url.protocol !== 'https:' || url.username || url.password || url.port || url.hash
+    || (!['piston-data.mojang.com', 'maven.fabricmc.net'].includes(url.hostname) && !exactModPin)) fail('runtime_download_origin');
   if (!Number.isSafeInteger(pin.bytes) || pin.bytes < 1 || pin.bytes > 64 * 1024 * 1024
     || !['sha1', 'sha256'].includes(pin.algorithm)
     || !(pin.algorithm === 'sha1' ? /^[0-9a-f]{40}$/ : /^[0-9a-f]{64}$/).test(pin.digest)) fail('runtime_download_pin');

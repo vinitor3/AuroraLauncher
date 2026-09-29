@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { EULA_URL } from './pins.mjs';
 import { runtimeFiles, runtimeArtifacts } from './play-profile.mjs';
 import { SVC_ARTIFACT, SVC_CONFIG_PATH, SVC_BASELINE_BYTES, validateSvcConfig } from './svc-profile.mjs';
+import { PLASMO_ARTIFACT, PLASMO_CONFIG_PATH, PLASMO_BASELINE_BYTES, validatePlasmoConfig } from './plasmo-profile.mjs';
 import { makePlan, planDigest } from './runtime.mjs';
 import { absent, hash, readLocal } from './files.mjs';
 import { withOwnedProcess } from './owned-process.mjs';
@@ -80,6 +81,7 @@ export async function verifyPreparedFiles(basename, baseline, profile = 'status'
     if (file !== 'eula.txt') same(await readLocal(join(root, file), 64 * 1024), content, 'server_config_changed');
   }
   if (profile === 'svc') validateSvcConfig(Buffer.from(files[SVC_CONFIG_PATH]));
+  if (profile === 'plasmo') validatePlasmoConfig(Buffer.from(files[PLASMO_CONFIG_PATH]));
   same(await readLocal(join(root, 'eula.txt'), 4096), FALSE_EULA, 'server_eula_changed');
   const verified = [];
   for (const pin of baseline.artifacts) {
@@ -155,6 +157,12 @@ export async function makeRunPlan(javaHome, basename, profile = 'status') {
         beforeFirstBoot: 'explicit_loopback_bind_43002_empty_announcement', writerMayReserialize: true,
         acceptedOsBindForms: ['127.0.0.1', '::ffff:127.0.0.1'] },
       voiceEvidence: 'owned_udp_loopback_bind_and_generated_config_only_no_client_or_audio' } : {}),
+    ...(profile === 'plasmo' ? { profile: 'plasmo', voiceMod: { ...baseline.voiceMod, artifactSha256: PLASMO_ARTIFACT.digest },
+      voiceConfig: { path: PLASMO_CONFIG_PATH, sha256: hash(baseline.files[PLASMO_CONFIG_PATH]),
+        beforeFirstBoot: 'explicit_loopback_bind_43003_no_public_announcement', writerMayReserialize: true,
+        updateChecks: false, translationsDownload: false,
+        acceptedOsBindForms: ['127.0.0.1', '::ffff:127.0.0.1'] },
+      voiceEvidence: 'owned_udp_loopback_bind_and_generated_config_only_no_client_or_audio' } : {}),
     launch: { executable: baseline.launch.executable,
       args: ['-Djava.io.tmpdir=.connect-run-temp', '-Duser.home=.connect-run-temp', '-XX:-UsePerfData', ...baseline.launch.args],
       cwd: basename, environment: 'minimal_windows_and_owned_temp_only' },
@@ -163,7 +171,7 @@ export async function makeRunPlan(javaHome, basename, profile = 'status') {
       worldJoined: false, voice: 'not_tested', accountAuthentication: 'not_tested' },
     limits: { lifetimeSeconds: 300, readinessSeconds: 180, bindProbeSeconds: 10, statusProbeSeconds: 6,
       stopSeconds: 5, outputBytes: 4 * 1024 * 1024,
-      reuse: false, personalInstanceAccess: false, relay: false, mods: profile === 'svc' },
+      reuse: false, personalInstanceAccess: false, relay: false, mods: ['svc', 'plasmo'].includes(profile) },
   };
 }
 
@@ -231,6 +239,7 @@ export async function withPreparedEula(basename, approval, operation) {
 // name search, mutation or PID-based termination. Raw addresses/PIDs stay local.
 const BIND_QUERY = "$ErrorActionPreference='Stop';try{$a=@(Get-NetTCPConnection -State Listen -LocalPort 43001 -ErrorAction Stop)}catch{if($_.CategoryInfo.Category -eq 'ObjectNotFound'){$a=@()}else{exit 3}};ConvertTo-Json -InputObject @($a|Select-Object LocalAddress,OwningProcess) -Compress";
 const VOICE_BIND_QUERY = "$ErrorActionPreference='Stop';try{$a=@(Get-NetUDPEndpoint -LocalPort 43002 -ErrorAction Stop)}catch{if($_.CategoryInfo.Category -eq 'ObjectNotFound'){$a=@()}else{exit 3}};ConvertTo-Json -InputObject @($a|Select-Object LocalAddress,OwningProcess) -Compress";
+const PLASMO_BIND_QUERY = "$ErrorActionPreference='Stop';try{$a=@(Get-NetUDPEndpoint -LocalPort 43003 -ErrorAction Stop)}catch{if($_.CategoryInfo.Category -eq 'ObjectNotFound'){$a=@()}else{exit 3}};ConvertTo-Json -InputObject @($a|Select-Object LocalAddress,OwningProcess) -Compress";
 async function finiteCommand(executable, args, { cwd, env, signal, timeout = 5000 }) {
   return new Promise((resolvePromise, reject) => {
     execFile(executable, args, { cwd, env, windowsHide: true, shell: false, timeout, maxBuffer: 16384, signal },
@@ -242,8 +251,11 @@ async function finiteCommand(executable, args, { cwd, env, signal, timeout = 500
       });
   });
 }
-async function listeners(root, probeHome, signal, voice = false) {
-  const output = await finiteCommand(powershellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', voice ? VOICE_BIND_QUERY : BIND_QUERY],
+async function listeners(root, probeHome, signal, voice) {
+  // Only compiled profile identifiers select compiled queries; no port, path or
+  // user-controlled string is interpolated into PowerShell source.
+  const query = voice === 'svc' ? VOICE_BIND_QUERY : voice === 'plasmo' ? PLASMO_BIND_QUERY : BIND_QUERY;
+  const output = await finiteCommand(powershellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', query],
     { cwd: root, env: minimalEnvironment(probeHome), signal, timeout: 10000 });
   let result;
   try { result = JSON.parse(output); } catch { fail('server_bind_probe_invalid'); }
@@ -291,14 +303,16 @@ async function ready(root, probeHome, signal, ownsProcessId, profile) {
         if (status.event !== 'minecraft_status_received' || status.summary?.reportedProtocol !== 767
           || status.summary?.protocolMatchesRequested !== true) fail('server_status_invalid');
         requireOwnedBind(await listeners(root, probeHome, signal), ownsProcessId);
-        if (profile === 'svc') {
-          const voiceRows = await listeners(root, probeHome, signal, true);
+        if (['svc', 'plasmo'].includes(profile)) {
+          const voiceRows = await listeners(root, probeHome, signal, profile);
           if (!voiceRows.length) { await delay(250, undefined, { signal }); continue; }
           requireOwnedBind(voiceRows, ownsProcessId, { allowIpv4MappedLoopback: true });
         }
         signal.throwIfAborted();
         return { protocol: 767, statusAndMatchingPong: true, ownLoopbackBind: true,
           ...(profile === 'svc' ? { svcOwnUdpLoopbackBind: true, voicePort: 43002,
+            voiceAuthentication: 'not_tested', voiceAudio: 'not_tested' } : {}),
+          ...(profile === 'plasmo' ? { plasmoOwnUdpLoopbackBind: true, voicePort: 43003,
             voiceAuthentication: 'not_tested', voiceAudio: 'not_tested' } : {}) };
       }
       await delay(250, undefined, { signal });
@@ -350,7 +364,7 @@ export async function runServer(javaHome, basename, approval, acceptedEula, { si
   await rejectLinkedParents(PARENT);
   const probeHome = await mkdtemp(join(PARENT, 'probe-'));
   if ((await listeners(root, probeHome, signal)).length !== 0) fail('server_port_in_use');
-  if (profile === 'svc' && (await listeners(root, probeHome, signal, true)).length !== 0) fail('server_voice_port_in_use');
+  if (['svc', 'plasmo'].includes(profile) && (await listeners(root, probeHome, signal, profile)).length !== 0) fail('server_voice_port_in_use');
   // Rebuild after the preflight OS query, before marker/snapshot/EULA mutation.
   if (runPlanDigest(await makeRunPlan(javaHome, basename, profile)) !== approval) fail('server_run_plan_changed');
   signal?.throwIfAborted();
@@ -381,25 +395,30 @@ export async function runServer(javaHome, basename, approval, acceptedEula, { si
     voiceConfig = validateSvcConfig(await readLocal(join(root, SVC_CONFIG_PATH), 256 * 1024));
     if (voiceConfig.sha256 === hash(SVC_BASELINE_BYTES) || voiceConfig.keyCount <= 3) fail('runtime_svc_writer_not_observed');
   }
+  if (profile === 'plasmo') {
+    voiceConfig = validatePlasmoConfig(await readLocal(join(root, PLASMO_CONFIG_PATH), 256 * 1024));
+    if (voiceConfig.sha256 === hash(PLASMO_BASELINE_BYTES) || voiceConfig.keyCount <= 5) fail('runtime_plasmo_writer_not_observed');
+  }
   return { event: 'server_stopped', runPlanSha256: approval, evidence: transaction.value.value,
     process: transaction.value.process, eulaRestored: transaction.eulaRestored, reusePermitted: false,
-    runtimeHomologated: false, worldJoined: false, voice: profile === 'svc' ? 'svc_boot_and_writer_only' : 'not_tested',
+    runtimeHomologated: false, worldJoined: false,
+    voice: ['svc', 'plasmo'].includes(profile) ? `${profile}_boot_and_writer_only` : 'not_tested',
     ...(voiceConfig ? { voiceConfig, voiceTransport: 'not_tested', voiceAudio: 'not_tested' } : {}), accountAuthentication: 'not_tested' };
 }
 
 export async function main(args, { input = process.stdin, emit = value => process.stdout.write(json(value)), signal } = {}) {
-  if (args.length === 3 && ['run-plan', 'run-plan-play', 'run-plan-svc'].includes(args[0])) {
+  if (args.length === 3 && ['run-plan', 'run-plan-play', 'run-plan-svc', 'run-plan-plasmo'].includes(args[0])) {
     const plan = await makeRunPlan(args[1], args[2], args[0] === 'run-plan' ? 'status' : args[0].slice(9));
     return { event: 'server_run_plan', runPlanSha256: runPlanDigest(plan), plan };
   }
-  if (args.length === 5 && ['run', 'run-play', 'run-svc'].includes(args[0]) && args[4] === '--user-accepted-minecraft-eula') {
+  if (args.length === 5 && ['run', 'run-play', 'run-svc', 'run-plasmo'].includes(args[0]) && args[4] === '--user-accepted-minecraft-eula') {
     return runServer(args[1], args[2], args[3], true, { signal, profile: args[0] === 'run' ? 'status' : args[0].slice(4),
       onReady: async ({ signal: childSignal, evidence, runPlanSha256 }) => {
         emit({ event: 'server_ready', runPlanSha256, evidence, runtimeHomologated: false, worldJoined: false, voice: 'not_tested' });
         await waitForStop(input, childSignal);
       } });
   }
-  if (['run', 'run-play', 'run-svc'].includes(args[0])) fail('server_eula_acceptance_required');
+  if (['run', 'run-play', 'run-svc', 'run-plasmo'].includes(args[0])) fail('server_eula_acceptance_required');
   fail('server_usage');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

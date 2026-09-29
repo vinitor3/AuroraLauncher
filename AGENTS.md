@@ -33,6 +33,8 @@ Incremento20: dois clientes de protocolo sintéticos observaram LOGIN/CONFIGURAT
 
 Incremento21: perfil `svc` executou boot e writer SVC2.6.22, UDP43002 pertencente ao Java criado e stop normal. Windows usa a forma exata `::ffff:127.0.0.1` nesse bind; ela é aceita somente no gate UDP explicitamente selecionado e registrado no plano. Não há prova de handshake/anúncio/áudio nem roundtrip do adaptador com JVM viva. Manter perfil separado, pinModrinth exato e conferência de árvore/configuração.
 
+Incremento22: perfil `plasmo` executou Plasmo2.1.17/Fabric API0.116.10+1.21.1 em stage novo, UDP43003 próprio, writer22chaves, STATUS pela ponte e stop normal/EULA restaurada. Update/tradução/debug permanecem false; host.public ausente. Resultado cobre boot/writer e mantém handshake/endereço/áudio/restore com writer vivo pendentes. Não misturar os perfis de voz ou publicar configuração gerada/server_id.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

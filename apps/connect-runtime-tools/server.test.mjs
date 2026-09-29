@@ -10,6 +10,7 @@ import { hash } from './files.mjs';
 import { planDigest } from './runtime.mjs';
 import { runtimeFiles, runtimeArtifacts } from './play-profile.mjs';
 import { SVC_ARTIFACT, SVC_CONFIG_PATH, SVC_BASELINE_BYTES } from './svc-profile.mjs';
+import { PLASMO_ARTIFACT, FABRIC_API_ARTIFACT, PLASMO_CONFIG_PATH, PLASMO_BASELINE_BYTES } from './plasmo-profile.mjs';
 import { withOwnedProcess } from './owned-process.mjs';
 import { verifyPreparedFiles, withPreparedEula, runPlanDigest, runServer, requireOwnedBind, waitForStop, main } from './server.mjs';
 
@@ -33,7 +34,9 @@ async function fixture(t, profile = 'status') {
     if ((await lstat(root)).isSymbolicLink()) await unlink(root);
     else await rm(root, { recursive: true, force: true });
   });
-  for (const directory of ['libraries', ...(profile === 'svc' ? ['mods', 'config', 'config/voicechat'] : [])]) {
+  const voiceDirectories = profile === 'svc' ? ['mods', 'config', 'config/voicechat']
+    : profile === 'plasmo' ? ['mods', 'config', 'config/plasmovoice', 'config/plasmovoice/server'] : [];
+  for (const directory of ['libraries', ...voiceDirectories]) {
     await mkdir(join(root, directory));
   }
   const artifacts = [];
@@ -191,6 +194,122 @@ test('SVC config hardlinks and linked config/mod directories are refused without
       assert.equal(await exists(join(f.root, 'run-used.json')), false);
     } finally { await unlink(directory); }
   }
+});
+
+test('Plasmo stage requires its exact eleven artifact paths, three-level config tree and explicit profile', async t => {
+  const f = await fixture(t, 'plasmo');
+  const result = await verifyPreparedFiles(f.basename, f.baseline, 'plasmo');
+  assert.equal(result.verified.length, 11);
+  assert.deepEqual(result.verified.map(pin => pin.file), runtimeArtifacts('plasmo').map(pin => pin.file));
+  assert.deepEqual(result.verified.slice(9).map(pin => pin.file), [PLASMO_ARTIFACT.file, FABRIC_API_ARTIFACT.file]);
+  assert.deepEqual(await readFile(join(f.root, PLASMO_CONFIG_PATH)), PLASMO_BASELINE_BYTES);
+  assert.deepEqual((await readdir(join(f.root, 'mods'))).sort(), [PLASMO_ARTIFACT.file, FABRIC_API_ARTIFACT.file].map(file => file.split('/').at(-1)).sort());
+  assert.deepEqual(await readdir(join(f.root, 'config')), ['plasmovoice']);
+  assert.deepEqual(await readdir(join(f.root, 'config/plasmovoice')), ['server']);
+  assert.deepEqual(await readdir(join(f.root, 'config/plasmovoice/server')), ['config.toml']);
+  assert.deepEqual(await readFile(join(f.root, 'eula.txt')), falseEula);
+  assert.equal(await exists(join(f.root, 'run-used.json')), false);
+  for (const otherProfile of ['status', 'play', 'svc']) {
+    await assert.rejects(verifyPreparedFiles(f.basename, f.baseline, otherProfile));
+    const other = await fixture(t, otherProfile);
+    await assert.rejects(verifyPreparedFiles(other.basename, other.baseline, 'plasmo'));
+    assert.deepEqual(await readFile(join(other.root, 'eula.txt')), falseEula);
+  }
+});
+
+test('Plasmo known tree refuses additional JARs, alternate config locations and nested executables', async t => {
+  for (const file of ['mods/extra.jar', SVC_ARTIFACT.file, 'config/extra.properties',
+    'config/plasmovoice/config.toml', 'config/plasmovoice/server.toml',
+    'config/plasmovoice/server/extra.toml', 'config/plasmovoice/server/PRIVATE.exe']) {
+    const f = await fixture(t, 'plasmo');
+    await writeFile(join(f.root, file), 'SYNTHETIC_EXTRA_NOT_EXECUTABLE');
+    await assert.rejects(verifyPreparedFiles(f.basename, f.baseline, 'plasmo'));
+    assert.deepEqual(await readFile(join(f.root, 'eula.txt')), falseEula);
+    assert.equal(await exists(join(f.root, 'run-used.json')), false);
+    assert.equal(await exists(join(f.root, 'run-eula-before.txt')), false);
+  }
+});
+
+test('Plasmo config and both mod artifacts reject mutations before EULA or process use', async t => {
+  for (const [before, after] of [['debug = false', 'debug = true'],
+    ['check_for_updates = false', 'check_for_updates = true'],
+    ['use_crowdin_translations = false', 'use_crowdin_translations = true'],
+    ['127.0.0.1', '0.0.0.0'], ['port = 43003', 'port = 0']]) {
+    const f = await fixture(t, 'plasmo');
+    await writeFile(join(f.root, PLASMO_CONFIG_PATH), PLASMO_BASELINE_BYTES.toString().replace(before, after));
+    await expectCode(verifyPreparedFiles(f.basename, f.baseline, 'plasmo'), 'server_config_changed');
+    assert.deepEqual(await readFile(join(f.root, 'eula.txt')), falseEula);
+    assert.equal(await exists(join(f.root, 'run-used.json')), false);
+  }
+  for (const pin of [PLASMO_ARTIFACT, FABRIC_API_ARTIFACT]) {
+    const f = await fixture(t, 'plasmo');
+    const bytes = await readFile(join(f.root, pin.file));
+    await writeFile(join(f.root, pin.file), Buffer.alloc(bytes.length, 42));
+    await assert.rejects(verifyPreparedFiles(f.basename, f.baseline, 'plasmo'));
+    assert.deepEqual(await readFile(join(f.root, 'eula.txt')), falseEula);
+    assert.equal(await exists(join(f.root, 'run-used.json')), false);
+  }
+});
+
+test('matching synthetic Plasmo review hashes still cannot enable remote checks or unsafe endpoints', async t => {
+  const base = PLASMO_BASELINE_BYTES.toString();
+  for (const [config, code] of [
+    [base.replace('debug = false', 'debug = true'), 'runtime_plasmo_flags_invalid'],
+    [base.replace('check_for_updates = false', 'check_for_updates = true'), 'runtime_plasmo_flags_invalid'],
+    [base.replace('use_crowdin_translations = false', 'use_crowdin_translations = true'), 'runtime_plasmo_flags_invalid'],
+    [base.replace('127.0.0.1', '0.0.0.0'), 'runtime_plasmo_bind_invalid'],
+    [base.replace('43003', '43003.0'), 'runtime_plasmo_port_invalid'],
+    [base + '[host.public]\n', 'runtime_plasmo_announcement_invalid'],
+  ]) {
+    const f = await fixture(t, 'plasmo'); f.baseline.files[PLASMO_CONFIG_PATH] = config;
+    const changedHash = planDigest(f.baseline); f.ready.planSha256 = changedHash;
+    await writeFile(join(f.root, PLASMO_CONFIG_PATH), config);
+    await writeFile(join(f.root, 'plan.json'), json(f.baseline));
+    await writeFile(join(f.root, 'consent.json'), json({ planSha256: changedHash, downloadEulaAccepted: true, javaExecuted: false }));
+    await writeFile(join(f.root, 'ready.json'), json(f.ready));
+    await expectCode(verifyPreparedFiles(f.basename, f.baseline, 'plasmo'), code);
+    assert.deepEqual(await readFile(join(f.root, 'eula.txt')), falseEula);
+    assert.equal(await exists(join(f.root, 'run-used.json')), false);
+  }
+});
+
+test('Plasmo baseline rejects missing dependencies, wrong artifact order and unknown config keys', async t => {
+  for (const variation of ['missingApi', 'missingPlasmo', 'reordered', 'wrongApiPath', 'missingConfig', 'extraConfig']) {
+    const f = await fixture(t, 'plasmo');
+    if (variation === 'missingApi') f.baseline.artifacts.pop();
+    if (variation === 'missingPlasmo') f.baseline.artifacts.splice(9, 1);
+    if (variation === 'reordered') [f.baseline.artifacts[9], f.baseline.artifacts[10]] = [f.baseline.artifacts[10], f.baseline.artifacts[9]];
+    if (variation === 'wrongApiPath') f.baseline.artifacts[10].file = 'mods/unreviewed-fabric-api.jar';
+    if (variation === 'missingConfig') delete f.baseline.files[PLASMO_CONFIG_PATH];
+    if (variation === 'extraConfig') f.baseline.files['config/plasmovoice/config.toml'] = 'fixture';
+    await assert.rejects(verifyPreparedFiles(f.basename, f.baseline, 'plasmo'));
+    assert.deepEqual(await readFile(join(f.root, 'eula.txt')), falseEula);
+    assert.equal(await exists(join(f.root, 'run-used.json')), false);
+  }
+});
+
+test('Plasmo files and every new config ancestor refuse links without traversing foreign content', async t => {
+  const target = await fixture(t, 'plasmo');
+  for (const file of [PLASMO_CONFIG_PATH, PLASMO_ARTIFACT.file, FABRIC_API_ARTIFACT.file]) {
+    const f = await fixture(t, 'plasmo'); const path = join(f.root, file);
+    await unlink(path); await link(join(target.root, file), path);
+    try {
+      await assert.rejects(verifyPreparedFiles(f.basename, f.baseline, 'plasmo'));
+      assert.deepEqual(await readFile(join(f.root, 'eula.txt')), falseEula);
+    } finally { await unlink(path); }
+  }
+  for (const relative of ['config/plasmovoice', 'config/plasmovoice/server', 'mods']) {
+    const f = await fixture(t, 'plasmo'); const directory = resolve(f.root, relative);
+    assert.ok(directory.startsWith(resolve(f.root) + sep));
+    await rm(directory, { recursive: true });
+    await symlink(join(target.root, relative), directory, process.platform === 'win32' ? 'junction' : 'dir');
+    try {
+      await assert.rejects(verifyPreparedFiles(f.basename, f.baseline, 'plasmo'));
+      assert.deepEqual(await readFile(join(f.root, 'eula.txt')), falseEula);
+      assert.equal(await exists(join(f.root, 'run-used.json')), false);
+    } finally { await unlink(directory); }
+  }
+  assert.deepEqual(await readFile(join(target.root, PLASMO_CONFIG_PATH)), PLASMO_BASELINE_BYTES);
 });
 
 test('prepared name syntax refuses paths, UNC, aliases and unrelated names before filesystem access', async () => {
@@ -352,6 +471,8 @@ test('CLI EULA gate and usage refuse before any selected JDK, stage or process a
   await expectCode(runServer('PRIVATE_JDK_DOES_NOT_EXIST', 'prepared-Abc123', 'unapproved', true), 'server_run_approval');
   await expectCode(runServer('PRIVATE_JDK_DOES_NOT_EXIST', 'prepared-Abc123', approved, false, { profile: 'svc' }), 'server_eula_acceptance_required');
   await expectCode(main(['run-svc', 'PRIVATE_JDK_DOES_NOT_EXIST', 'prepared-Abc123', approved]), 'server_eula_acceptance_required');
+  await expectCode(runServer('PRIVATE_JDK_DOES_NOT_EXIST', 'prepared-Abc123', approved, false, { profile: 'plasmo' }), 'server_eula_acceptance_required');
+  await expectCode(main(['run-plasmo', 'PRIVATE_JDK_DOES_NOT_EXIST', 'prepared-Abc123', approved]), 'server_eula_acceptance_required');
 });
 
 test('wrong approval or changed pre-apply EULA cannot create a marker or invoke operation', async t => {

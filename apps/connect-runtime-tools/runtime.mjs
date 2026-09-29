@@ -32,6 +32,7 @@ export async function makePlan(javaHome, profile = 'status') {
     schemaVersion: 1, purpose: `aurora_connect_disposable_${profile}_lab`,
     target: { minecraft: '1.21.1', loader: 'fabric', loaderVersion: '0.16.14', javaMajor: 21, protocol: 767 },
     ...(profile === 'svc' ? { voiceMod: { id: 'voicechat', version: '2.6.22' } } : {}),
+    ...(profile === 'plasmo' ? { voiceMod: { id: 'plasmovoice', version: '2.1.17', fabricApi: '0.116.10+1.21.1' } } : {}),
     java: { home, executable, version, releaseSha256: hash(release), executableSha256: hash(binary) },
     artifacts, downloadBytes: artifacts.reduce((sum, item) => sum + item.bytes, 0),
     files,
@@ -42,7 +43,7 @@ export async function makePlan(javaHome, profile = 'status') {
       executableNotRunByThisTool: true },
     consent: { minecraftEula: EULA_URL, downloadRequiresUserAcceptance: true, eulaFileRemainsFalse: true },
     limits: { totalDownloadSeconds: 180, perArtifactSeconds: 90, retries: 0, redirects: false,
-      personalInstanceAccess: false, relay: false, voiceMods: profile === 'svc', coreSkins: false, runtimeHomologated: false },
+      personalInstanceAccess: false, relay: false, voiceMods: ['svc', 'plasmo'].includes(profile), coreSkins: false, runtimeHomologated: false },
   };
 }
 
@@ -72,6 +73,10 @@ export async function stageRuntime(javaHome, approval, acceptedEula, profile = '
     if (profile === 'svc') {
       await mkdir(join(root, 'mods')); await mkdir(join(root, 'config')); await mkdir(join(root, 'config/voicechat'));
     }
+    if (profile === 'plasmo') {
+      await mkdir(join(root, 'mods')); await mkdir(join(root, 'config'));
+      await mkdir(join(root, 'config/plasmovoice')); await mkdir(join(root, 'config/plasmovoice/server'));
+    }
     await writeNew('plan.json', json(plan));
     await writeNew('consent.json', json({ planSha256: approval, downloadEulaAccepted: true, javaExecuted: false }));
     const verified = [];
@@ -93,14 +98,14 @@ export async function stageRuntime(javaHome, approval, acceptedEula, profile = '
 }
 
 export async function main(args) {
-  if (args.length === 2 && ['plan', 'plan-play', 'plan-svc'].includes(args[0])) {
+  if (args.length === 2 && ['plan', 'plan-play', 'plan-svc', 'plan-plasmo'].includes(args[0])) {
     const plan = await makePlan(args[1], args[0] === 'plan' ? 'status' : args[0].slice(5));
     return { event: 'runtime_plan', planSha256: planDigest(plan), plan };
   }
-  if (args.length === 4 && ['stage', 'stage-play', 'stage-svc'].includes(args[0]) && args[3] === '--user-accepted-minecraft-eula') {
+  if (args.length === 4 && ['stage', 'stage-play', 'stage-svc', 'stage-plasmo'].includes(args[0]) && args[3] === '--user-accepted-minecraft-eula') {
     return stageRuntime(args[1], args[2], true, args[0] === 'stage' ? 'status' : args[0].slice(6));
   }
-  if (args.length === 3 && ['stage', 'stage-play', 'stage-svc'].includes(args[0])) fail('runtime_eula_acceptance_required');
+  if (args.length === 3 && ['stage', 'stage-play', 'stage-svc', 'stage-plasmo'].includes(args[0])) fail('runtime_eula_acceptance_required');
   fail('runtime_usage');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

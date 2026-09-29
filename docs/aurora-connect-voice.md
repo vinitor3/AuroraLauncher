@@ -1,6 +1,6 @@
 # Aurora Connect — preparação dos mods de voz
 
-Data: 29/09/2026. Estado do utilitário local: **PROTÓTIPO**. Integração runtime do transporte/endereço de voz Simple Voice Chat e Plasmo Voice: **NÃO IMPLEMENTADO**; homologação individual: **PRECISA DE TESTE**. SVC já tem prova isolada de boot/bind UDP/writer, descrita abaixo, sem cliente/áudio. Ambos possuem adaptadores nativos experimentais de configuração em cópias de diagnóstico, compilados apenas com `connect-voice-lab`. Este documento complementa a especificação canônica em `engineering/AURORA_CONNECT_SPEC.md`; não cria um segundo contrato de transporte. Não existe comando Tauri/interface ou voz habilitada para usuários.
+Data: 29/09/2026. Estado do utilitário local: **PROTÓTIPO**. Integração runtime do transporte/endereço de voz Simple Voice Chat e Plasmo Voice: **NÃO IMPLEMENTADO**; homologação individual: **PRECISA DE TESTE**. Ambos já têm provas isoladas de boot/bind UDP/writer, sem cliente/áudio. Possuem adaptadores nativos experimentais de configuração em cópias de diagnóstico, compilados apenas com `connect-voice-lab`. Este documento complementa a especificação canônica em `engineering/AURORA_CONNECT_SPEC.md`; não cria um segundo contrato de transporte. Não existe comando Tauri/interface ou voz habilitada para usuários.
 
 ## Incremento executado
 
@@ -185,8 +185,8 @@ Pesquisa de boot em 29/09/2026: SVC fixado já embute seis módulos Fabric API e
 | Verificação | SVC | Plasmo |
 | --- | --- | --- |
 | Inspector de configuração e plano sintético | **PROTÓTIPO**, testado | **PROTÓTIPO**, testado |
-| Artefato local/hash/metadados/licença exatos | **CONCLUÍDO** para Fabric 1.21.1/2.6.22; boot isolado posterior21 | **CONCLUÍDO** para Fabric 1.21.1/2.1.17; sem execução |
-| Boot, bind próprio e arquivo gerado pelo writer | **PROTÓTIPO**, Java21/Fabric0.16.14, UDP43002 loopback próprio,19chaves e stop normal; sem áudio | **PRECISA DE TESTE**, Fabric API exato ainda deve integrar o plano |
+| Artefato local/hash/metadados/licença exatos | **CONCLUÍDO** para Fabric 1.21.1/2.6.22; boot isolado posterior21 | **CONCLUÍDO** para Fabric 1.21.1/2.1.17; Fabric API0.116.10 fixado e boot22 |
+| Boot, bind próprio e arquivo gerado pelo writer | **PROTÓTIPO**, Java21/Fabric0.16.14, UDP43002 loopback próprio,19chaves e stop normal; sem áudio | **PROTÓTIPO**, Java21/Fabric0.16.14, UDP43003 loopback próprio,22chaves e stop normal; sem áudio |
 | Transporte UDP real do mod, autenticação e retorno | **PRECISA DE TESTE** | **PRECISA DE TESTE** |
 | Endereçamento de dedicado só Aurora | Adaptador nativo restrito a cópia; aplicação/undo em fixture, runtime pendente | Adaptador nativo restrito a cópia; alteração/adição do anúncio e undo em fixture, runtime pendente |
 | LAN | **NÃO VERIFICADO**, sem override | **NÃO VERIFICADO**, sem override |
