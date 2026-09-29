@@ -56,6 +56,7 @@ Data: 29/09/2026. Base original: `dc2ec5ac36a88f54b1130bac4789f8ecd56641d2`. [Di
 | CHG-08 | CODEX_PARALLEL_PLAN.md | Remove instrução residual de iniciar HUD, por conflito com ADR-018, e marca baseline histórico. Preserva ownership, waves e integração. |
 | CHG-09 | CODEX_PROMPTS/AUR-R4-connect-v2.md; CODEX_PROMPTS/README.md | Prompt completo para execução posterior: inventário, refinamento e implementação efetiva mínima, sem gates falsos, push/publicação/billing/reset. |
 | CHG-10 | AURORA_CONNECT_TRACEABILITY.md; README.md; ../task-aurora-connect-v2-docs.md | Liga requisito, contrato, tarefa e prova, organiza leitura e registra arquivos/validação/rollback sem criar outra cópia de roadmap. |
+| CHG-11 | CODEX_PROMPTS/AUR-R4-connect-v2.md; este registro; ../task-aurora-connect-v2-docs.md | Pedido posterior do usuário: consolidar o anexo de implementação e orientar execução autônoma por incrementos consecutivos, com ações humanas mínimas e reproduzíveis. Reconsulta oficial em 29/09/2026 e descoberta de revisão paralela sobre alpha.14 exigem reconciliação de base, IDs e schemas antes de implementar. Não fixa Iroh 1.1.0 por antiguidade, não aprova 1.3.0 por `latest` e não modifica o código ou integra branches nesta revisão. |
 
 ## Pendências que não viraram “concluídas”
 
@@ -64,3 +65,5 @@ Seleção final de biblioteca/toolchain/API; autorização de relay para testes 
 ## Regra para revisões futuras
 
 Antes de alterar requisito/estado, registre fonte, motivação e escopo; preserve IDs e histórico de evidências. Um resultado só preenche a célula exata de mod/versão/loader/host/caminho testada. Revalide termos e conta antes de habilitar infraestrutura e não apresente contador local como garantia financeira. Se nova implementação já resolver uma tarefa, audite-a e atualize a evidência em vez de impor retrabalho pela sequência deste backlog.
+
+Adendo de 29/09/2026: o prompt consolidado substitui a limitação operacional de terminar após um único incremento. Os estados da entrega documental e os IDs locais acima continuam históricos, sem aprovação de runtime. A revisão paralela `codex/aur-r4-connect-v2-review` usa outra divisão de `006/007/008` e outro contrato proposto; o prompt exige mapeamento semântico explícito antes de reunir evidências. Nenhuma tarefa foi renumerada nem marcada concluída por esse adendo. Requisitos adicionais de continuidade, reconciliação e intervenção humana ficam rastreados em CHG-11 e na seção “Consolidação posterior” do task file.
