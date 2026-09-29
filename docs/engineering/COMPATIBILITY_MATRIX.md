@@ -29,9 +29,11 @@ Sexto incremento: adaptador Plasmo separado, mesmo gate opt-in; 12/12 focados co
 
 Oitavo incremento: recibo em memória restaura somente a própria configuração ainda inalterada, preparando a seleção no inventário atual para preservar outras edições. Recusa outra identidade/runtime, aprovação incorreta e alterações posteriores; falha do executor bloqueia retry. Provas próprias SVC/Plasmo e correção de limite da saída SVC, sem JVM/áudio. Restauração seletiva após reinício continua pendente. [Contrato e limites](../aurora-connect-voice.md#restauração-seletiva-do-anúncio--oitavo-incremento).
 
-Nono incremento: fixtures completas equivalentes aos defaults (sem JVM) exercitam os parsers e filtro recovery, incluindo preservação do bloqueio de configuração sensível. Plasmo salva o documento ao carregar; uma reserialização semanticamente igual altera o hash e o recibo recusa restaurar. Roundtrip real e mescla explícita permanecem gates antes de prometer limpeza após jogar. Proveniência de fonte da tag divergente corrigida, sem mudar o pin do JAR. [Detalhes](../aurora-connect-voice.md#defaults-completos-e-reserialização--nono-incremento).
+Nono incremento: fixtures completas equivalentes aos defaults (sem JVM) exercitam os parsers e filtro recovery, incluindo preservação do bloqueio de configuração sensível. Plasmo salva o documento ao carregar; uma reserialização semanticamente igual altera o hash e a restauração estrita recusa. Roundtrip real permanece gate antes de prometer limpeza após jogar. Proveniência de fonte da tag divergente corrigida, sem mudar o pin do JAR. [Detalhes](../aurora-connect-voice.md#defaults-completos-e-reserialização--nono-incremento).
 
 Décimo incremento: `minecraft-status` separa resposta de protocolo/pong de login, mundo e voz. O teste por TCP usa a ponte autenticada até uma fixture independente; essa consulta não prova propriedade de um listener local arbitrário nem runtime real. Protocolo 767 é entrada explícita da fixture/roteiro 1.21.1, sem nova versão na matriz ou detecção automática de compatibilidade. [Contrato](AURORA_CONNECT_SPEC.md#91-produtor-experimental-de-status-tcp).
+
+Décimo primeiro incremento: revisão separada de restauração em cópia conserva outras edições no próprio arquivo, recusa valores de anúncio alterados e exige nova aprovação. SVC e Plasmo têm tratamento próprio; nenhuma JVM, UI ou limpeza automática foi validada. [Limites](../aurora-connect-voice.md#restauração-revisada-de-arquivo-regravado--décimo-primeiro-incremento).
 
 ## Doctor, recuperação e cópias de teste — 29/09/2026
 

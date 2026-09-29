@@ -6,6 +6,10 @@ use serde::Deserialize;
 use std::{collections::BTreeSet, ops::Range};
 use toml::{Spanned, Value};
 
+#[path = "connect_voice_plasmo_restore.rs"]
+mod restoration;
+pub(super) use restoration::reconcile;
+
 #[derive(Deserialize)]
 struct Document {
     host: Host,
@@ -26,6 +30,9 @@ struct Shape {
     public: bool,
     ip: Option<Range<usize>>,
     port: Option<Range<usize>>,
+    public_header: Option<Range<usize>>,
+    ip_code: Option<Range<usize>>,
+    port_code: Option<Range<usize>>,
 }
 
 fn bare_key(key: &str) -> bool {
@@ -120,6 +127,9 @@ fn inspect_shape(text: &str) -> Result<Shape> {
             offset += raw.len();
             continue;
         }
+        let code_start = code.len() - code.trim_start_matches([' ', '\t']).len();
+        let code_end = code.trim_end_matches([' ', '\t']).len();
+        let code_span = offset + code_start..offset + code_end;
         if trimmed.starts_with('[') {
             let name = trimmed
                 .strip_prefix('[')
@@ -141,6 +151,7 @@ fn inspect_shape(text: &str) -> Result<Shape> {
             table = name.to_owned();
             if name == "host.public" {
                 shape.public = true;
+                shape.public_header = Some(code_span);
             }
         } else {
             let equals = code.find('=').ok_or(RecoveryError::Integrity)?;
@@ -160,8 +171,14 @@ fn inspect_shape(text: &str) -> Result<Shape> {
             if table == "host.public" {
                 let span = Some(offset + start..offset + end);
                 match key {
-                    "ip" => shape.ip = span,
-                    "port" => shape.port = span,
+                    "ip" => {
+                        shape.ip = span;
+                        shape.ip_code = Some(code_span);
+                    }
+                    "port" => {
+                        shape.port = span;
+                        shape.port_code = Some(code_span);
+                    }
                     _ => return Err(RecoveryError::Integrity),
                 }
             }
@@ -176,6 +193,38 @@ fn inspect_shape(text: &str) -> Result<Shape> {
     Ok(shape)
 }
 
+fn raw_public<'a>(text: &'a str, shape: &Shape, public: &Public) -> Result<(&'a str, &'a str)> {
+    if !shape.public
+        || shape.ip.as_ref() != Some(&public.ip.span())
+        || shape.port.as_ref() != Some(&public.port.span())
+        || !(0..=65535).contains(public.port.get_ref())
+    {
+        return Err(RecoveryError::Integrity);
+    }
+    let raw_ip = text.get(public.ip.span()).ok_or(RecoveryError::Integrity)?;
+    let raw_port = text
+        .get(public.port.span())
+        .ok_or(RecoveryError::Integrity)?;
+    let quote = raw_ip
+        .as_bytes()
+        .first()
+        .copied()
+        .ok_or(RecoveryError::Integrity)?;
+    if !matches!(quote, b'\'' | b'"')
+        || raw_ip.len() < 2
+        || raw_ip.as_bytes().last() != Some(&quote)
+        || raw_ip[1..raw_ip.len() - 1] != *public.ip.get_ref()
+        || public.ip.get_ref().is_empty()
+        || public.ip.get_ref().len() > 255
+        || !public.ip.get_ref().bytes().all(|c| c.is_ascii_graphic())
+        || raw_port.is_empty()
+        || !raw_port.bytes().all(|c| c.is_ascii_digit())
+    {
+        return Err(RecoveryError::Integrity);
+    }
+    Ok((raw_ip, raw_port))
+}
+
 pub(super) fn render(bytes: &[u8], port: u16) -> Result<(Vec<u8>, String, String)> {
     if port == 0 {
         return Err(RecoveryError::Integrity);
@@ -186,36 +235,10 @@ pub(super) fn render(bytes: &[u8], port: u16) -> Result<(Vec<u8>, String, String
     let document: Document = toml::from_str(text).map_err(|_| RecoveryError::Integrity)?;
     let mut rendered = bytes.to_vec();
     let (before, after) = if let Some(public) = document.host.public {
-        if !shape.public
-            || shape.ip.as_ref() != Some(&public.ip.span())
-            || shape.port.as_ref() != Some(&public.port.span())
-            || !(0..=65535).contains(public.port.get_ref())
-        {
-            return Err(RecoveryError::Integrity);
-        }
+        let (raw_ip, raw_port) = raw_public(text, &shape, &public)?;
         let ip_span = public.ip.span();
         let port_span = public.port.span();
-        let raw_ip = text.get(ip_span.clone()).ok_or(RecoveryError::Integrity)?;
-        let raw_port = text
-            .get(port_span.clone())
-            .ok_or(RecoveryError::Integrity)?;
-        let quote = raw_ip
-            .as_bytes()
-            .first()
-            .copied()
-            .ok_or(RecoveryError::Integrity)?;
-        if !matches!(quote, b'\'' | b'"')
-            || raw_ip.len() < 2
-            || raw_ip.as_bytes().last() != Some(&quote)
-            || raw_ip[1..raw_ip.len() - 1] != *public.ip.get_ref()
-            || public.ip.get_ref().is_empty()
-            || public.ip.get_ref().len() > 255
-            || !public.ip.get_ref().bytes().all(|c| c.is_ascii_graphic())
-            || raw_port.is_empty()
-            || !raw_port.bytes().all(|c| c.is_ascii_digit())
-        {
-            return Err(RecoveryError::Integrity);
-        }
+        let quote = raw_ip.as_bytes()[0];
         if public.ip.get_ref() == "127.0.0.1" && *public.port.get_ref() == i64::from(port) {
             return Err(RecoveryError::Integrity);
         }

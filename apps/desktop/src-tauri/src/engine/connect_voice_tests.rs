@@ -654,3 +654,189 @@ fn equivalent_plasmo_reserialization_requires_review_instead_of_trusting_new_has
         PLASMO_DEFAULTS
     );
 }
+
+fn exercise_reconciled_restoration(voice_mod: VoiceMod, jar_name: &str, original: &[u8]) {
+    let jar = PathBuf::from(
+        std::env::var_os("AURORA_CONNECT_ARTIFACT_DIR")
+            .expect("explicit local artifact directory required"),
+    )
+    .join(jar_name);
+    let f = Fixture::for_mod(Some(&jar), voice_mod, original);
+    let guard = acquire_instance_recovery_lock(&f.copy).unwrap();
+    let config = f.copy.root().join(voice_mod.config());
+    let plan = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
+    let apply_approval = plan.review().digest.clone();
+    let mut applied = plan.confirm(&f.copy, &guard, &apply_approval).unwrap();
+    let strict = applied.receipt.prepare_restore(&f.copy, &guard).unwrap();
+    let strict_approval = strict.review().digest.clone();
+    drop(strict);
+    let announced = String::from_utf8(f.bytes()).unwrap();
+    let current = match voice_mod {
+        VoiceMod::SimpleVoiceChat => format!(
+            "# later user comment\n{}",
+            announced.replace("mtu_size=1275", "mtu_size=1200")
+        ),
+        VoiceMod::PlasmoVoice => format!(
+            "# later user comment\n{}",
+            announced
+                .replace("mtu_size = 1024", "mtu_size = 1000")
+                .replace("[host.public]", "[host.public] # retained header")
+        ),
+    };
+    fs::write(&config, &current).unwrap();
+    fs::write(f.copy.root().join("options.txt"), b"renderDistance:23\n").unwrap();
+    let current_hash = digest(current.as_bytes());
+    let points = || recovery::list_points(&f.copy, &guard).unwrap().points.len();
+    let before_points = points();
+    assert!(matches!(
+        applied.receipt.prepare_restore(&f.copy, &guard),
+        Err(RecoveryError::StalePreview)
+    ));
+    for wrong_hash in ["invalid", &digest(announced.as_bytes())] {
+        assert!(applied
+            .receipt
+            .prepare_reconciled_restore(&f.copy, &guard, wrong_hash)
+            .is_err());
+    }
+    let cancelled = applied
+        .receipt
+        .prepare_reconciled_restore(&f.copy, &guard, &current_hash)
+        .unwrap();
+    assert!(matches!(
+        cancelled.review().action,
+        AnnouncementAction::RestoreReconciled { .. }
+    ));
+    assert_eq!(cancelled.review().source_sha256, current_hash);
+    let cancelled_id = cancelled.review().plan_id.clone();
+    let cancelled_digest = cancelled.review().digest.clone();
+    drop(cancelled);
+    assert_eq!(points(), before_points);
+    assert_eq!(applied.receipt.state(), RestorationState::Ready);
+    assert!(matches!(
+        recovery::restore(&f.copy, &guard, &cancelled_id),
+        Err(RecoveryError::StalePreview)
+    ));
+    for wrong_approval in [
+        &apply_approval,
+        &strict_approval,
+        &cancelled_digest,
+        &current_hash,
+    ] {
+        let plan = applied
+            .receipt
+            .prepare_reconciled_restore(&f.copy, &guard, &current_hash)
+            .unwrap();
+        assert!(matches!(
+            plan.confirm(&f.copy, &guard, wrong_approval),
+            Err(RecoveryError::StalePreview)
+        ));
+        assert_eq!(applied.receipt.state(), RestorationState::Ready);
+    }
+    assert_eq!(points(), before_points);
+    assert_eq!(f.bytes(), current.as_bytes());
+
+    let stale = applied
+        .receipt
+        .prepare_reconciled_restore(&f.copy, &guard, &current_hash)
+        .unwrap();
+    let approval = stale.review().digest.clone();
+    fs::write(f.copy.root().join("options.txt"), b"renderDistance:25\n").unwrap();
+    assert!(matches!(
+        stale.confirm(&f.copy, &guard, &approval),
+        Err(RecoveryError::StalePreview)
+    ));
+    assert_eq!(applied.receipt.state(), RestorationState::Ready);
+    let stale = applied
+        .receipt
+        .prepare_reconciled_restore(&f.copy, &guard, &current_hash)
+        .unwrap();
+    let approval = stale.review().digest.clone();
+    let changed = current.replace("35554", "35555");
+    fs::write(&config, &changed).unwrap();
+    assert!(matches!(
+        stale.confirm(&f.copy, &guard, &approval),
+        Err(RecoveryError::StalePreview)
+    ));
+    assert!(applied
+        .receipt
+        .prepare_reconciled_restore(&f.copy, &guard, &digest(changed.as_bytes()))
+        .is_err());
+    assert_eq!(f.bytes(), changed.as_bytes());
+    // Sensitive additions are still excluded by the existing inventory filter.
+    let sensitive = format!("{current}\n# token=fixture-only\n");
+    fs::write(&config, &sensitive).unwrap();
+    assert!(matches!(
+        applied
+            .receipt
+            .prepare_reconciled_restore(&f.copy, &guard, &digest(sensitive.as_bytes())),
+        Err(RecoveryError::UnsafePath)
+    ));
+    fs::write(&config, &current).unwrap();
+
+    let expected = match voice_mod {
+        VoiceMod::SimpleVoiceChat => current
+            .replace("127.0.0.1:35554", "old.example.invalid:24454")
+            .into_bytes(),
+        VoiceMod::PlasmoVoice => {
+            plasmo::reconcile(original, announced.as_bytes(), current.as_bytes())
+                .unwrap()
+                .0
+        }
+    };
+    let plan = applied
+        .receipt
+        .prepare_reconciled_restore(&f.copy, &guard, &current_hash)
+        .unwrap();
+    assert_eq!(plan.review().replacement_sha256, digest(&expected));
+    let approval = plan.review().digest.clone();
+    plan.confirm(&f.copy, &guard, &approval).unwrap();
+    assert_eq!(applied.receipt.state(), RestorationState::Restored);
+    assert_eq!(f.bytes(), expected);
+    assert_ne!(
+        f.bytes(),
+        original,
+        "current independent edits must survive"
+    );
+    assert_eq!(
+        fs::read(f.copy.root().join("options.txt")).unwrap(),
+        b"renderDistance:25\n"
+    );
+    assert_eq!(
+        fs::read(f.source.root().join(voice_mod.config())).unwrap(),
+        original
+    );
+    assert!(applied
+        .receipt
+        .prepare_reconciled_restore(&f.copy, &guard, &digest(&f.bytes()))
+        .is_err());
+}
+
+#[test]
+#[ignore = "requires explicit pinned local SVC artifact; no download or Java"]
+fn svc_reconciliation_requires_new_approval_and_preserves_current_independent_edits() {
+    exercise_reconciled_restoration(
+        VoiceMod::SimpleVoiceChat,
+        "voicechat-fabric-1.21.1-2.6.22.jar",
+        ORIGINAL,
+    );
+}
+
+#[test]
+#[ignore = "requires explicit pinned local Plasmo artifact; no download or Java"]
+fn plasmo_reconciliation_requires_new_approval_with_existing_public_table() {
+    exercise_reconciled_restoration(
+        VoiceMod::PlasmoVoice,
+        "plasmovoice-fabric-1.21.1-2.1.17.jar",
+        PLASMO_ORIGINAL,
+    );
+}
+
+#[test]
+#[ignore = "requires explicit pinned local Plasmo artifact; no download or Java"]
+fn plasmo_reconciliation_removes_own_public_table_and_preserves_comments() {
+    exercise_reconciled_restoration(
+        VoiceMod::PlasmoVoice,
+        "plasmovoice-fabric-1.21.1-2.1.17.jar",
+        PLASMO_DEFAULTS,
+    );
+}

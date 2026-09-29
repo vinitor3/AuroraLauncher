@@ -14,7 +14,7 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 | 002 TCP | **PROTÓTIPO** real autenticado: duplex, 8 MiB/contrapressão, half-close, concorrência, autorização e encerramento testados | Minecraft e redes externas; não concluir tarefa de produto |
 | 003 UDP | **PROTÓTIPO** real: retorno isolado por peer/sessão/serviço, framing, MTU, abuso, expiração e carga TCP; downstream autorizado na biblioteca e CLI por plano/hash local | Integrar política apropriada ao adaptador, medir mod real e comprovar silêncio/keepalive/endereço; comando `host` convencional permanece 1:1 |
 | 004 caminhos | Direto IPv4/IPv6 **loopback** testado; roteiro de dois computadores preparado | LAN, NAT/CGNAT, redes distintas, relay elegível e UDP bloqueado |
-| 005 Minecraft/convites/UI | **NÃO IMPLEMENTADO**; lease/pin manual é mecanismo de laboratório | Adaptadores, sinalização autorizada, fluxo social e estados reais |
+| 005 Minecraft/convites/UI | **PROTÓTIPO** de consulta STATUS/pong; lease/pin manual é mecanismo de laboratório | Servidor/JVM real, login/mundo, adaptadores, sinalização autorizada, fluxo social e estados reais |
 | 006 Simple Voice Chat | **PARCIAL**: inspector/JAR Fabric 1.21.1/2.6.22 conferido; adaptador nativo de anúncio em cópia, confirmação e undo testados | Integração do caller com jogo encerrado/ponte, endereçamento efetivo, transporte/runtime e áudio próprios |
 | 007 Plasmo Voice | **PARCIAL**: inspector/JAR Fabric 1.21.1/2.1.17 conferido; caminho resolvido e adaptador nativo em cópia com alteração/adição/undo testados | Gates separados de SVC, incluindo integração com ponte, lifecycle, dedicado/LAN e áudio |
 | 008 robustez/liberação | Testes locais adversariais e rollback do laboratório | Matriz real, saturação prolongada, produto e todos os gates anteriores |
@@ -31,7 +31,11 @@ Sexto incremento: caminho do Plasmo fixado resolvido em tag/JAR; adaptador TOML 
 
 Oitavo incremento: restauração seletiva do anúncio por recibo privado da aplicação, com nova aprovação e inventário atual. Preserva arquivos alheios modificados após aplicação, aceita limpeza após desabilitar o mod e recusa editar arquivo próprio divergente. Cancelar não publica ponto; erro após iniciar executor exige inspeção pela Recuperação. Recibo não sobrevive ao processo. Testes e limite de saída SVC no [domínio de voz](../../aurora-connect-voice.md#restauração-seletiva-do-anúncio--oitavo-incremento); não fecha os gates de crash/runtime/UI de T-CONFIG.
 
-Nono incremento: defaults completos equivalentes reconstruídos das fontes, guardas de elegibilidade e recusa de hash alterado por reserialização TOML. T-CONFIG-03 continua parcial: Plasmo salva novamente o arquivo ao carregar; a limpeza pode exigir mescla explícita ainda não implementada. Uma fixture com a mesma árvore não é roundtrip da JVM. Corrigida a fonte de defaults da tag divergente para branch fixada compatível com os campos do artefato, sem alegar build reproduzível.
+Nono incremento: defaults completos equivalentes reconstruídos das fontes, guardas de elegibilidade e recusa de hash alterado por reserialização TOML. Plasmo salva novamente o arquivo ao carregar; a limpeza pode exigir mescla explícita. Uma fixture com a mesma árvore não é roundtrip da JVM. Corrigida a fonte de defaults da tag divergente para branch fixada compatível com os campos do artefato, sem alegar build reproduzível.
+
+Décimo incremento: consulta STATUS/pong limitada, com fixture independente através da ponte e CLI real; 56/56 testes Rust do laboratório passaram, incluindo onze novos. Não comprova servidor/JVM, login, mundo ou voz. Procedimento runtime permanece preparado e não executado.
+
+Décimo primeiro incremento: plano separado para restaurar somente chaves próprias em arquivo regravado, com hash atual explícito e aprovação nova. SVC/Plasmo recusam conflito nas chaves; Plasmo valida árvore e preserva comentários ao retirar bloco criado. T-CONFIG-03 ganha provas locais de revisão/concorrência, mantendo pendentes caller com jogo parado, UI, roundtrip JVM, crash físico e recibo durável. Não amplia 006/007 a LAN/misto nem encerra os gates de voz. [Contrato](../../aurora-connect-voice.md#restauração-revisada-de-arquivo-regravado--décimo-primeiro-incremento).
 
 ## 1. Evidência de partida e limites do inventário
 

@@ -40,6 +40,7 @@ pub struct AppliedAnnouncement {
 pub enum AnnouncementAction {
     SetAnnouncement,
     RestoreOriginal { receipt_id: String },
+    RestoreReconciled { receipt_id: String },
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -170,6 +171,9 @@ impl PreparedAnnouncement {
                 AnnouncementAction::RestoreOriginal { .. } => {
                     "Restaurar anúncio de voz da cópia de teste"
                 }
+                AnnouncementAction::RestoreReconciled { .. } => {
+                    "Restaurar somente as chaves de anúncio revisadas na cópia de teste"
+                }
             },
         );
         // Only our unique staging file; approved CAS/preview remains for audit/undo.
@@ -194,8 +198,8 @@ fn digest(bytes: &[u8]) -> String {
 
 /// Render only an existing, unambiguous voice_host property. Preserve every
 /// other byte, comments and line endings. This is not a general properties writer.
-fn render_svc(bytes: &[u8], port: u16) -> Result<(Vec<u8>, String, String)> {
-    if port == 0 || bytes.len() > MAX_CONFIG as usize {
+fn svc_value_span(bytes: &[u8]) -> Result<std::ops::Range<usize>> {
+    if bytes.len() > MAX_CONFIG as usize {
         return Err(RecoveryError::Integrity);
     }
     let text = std::str::from_utf8(bytes).map_err(|_| RecoveryError::Integrity)?;
@@ -242,6 +246,16 @@ fn render_svc(bytes: &[u8], port: u16) -> Result<(Vec<u8>, String, String)> {
         at += raw.len();
     }
     let (start, end) = span.ok_or(RecoveryError::Integrity)?;
+    Ok(start..end)
+}
+
+fn render_svc(bytes: &[u8], port: u16) -> Result<(Vec<u8>, String, String)> {
+    if port == 0 {
+        return Err(RecoveryError::Integrity);
+    }
+    let span = svc_value_span(bytes)?;
+    let (start, end) = (span.start, span.end);
+    let text = std::str::from_utf8(bytes).map_err(|_| RecoveryError::Integrity)?;
     let before = text[start..end].to_owned();
     let after = format!("127.0.0.1:{port}");
     if before == after {
@@ -360,6 +374,7 @@ fn prepare_change(
     let warning = match &action {
         AnnouncementAction::SetAnnouncement => "Experimental, somente cópia dedicada Aurora. Todos os participantes precisam de ponte local; transporte, Java, instância e áudio não foram homologados. Não aplicar à origem por este adaptador.",
         AnnouncementAction::RestoreOriginal { .. } => "Restauração experimental de um único arquivo na cópia de teste. Exige que ele ainda tenha os bytes aplicados; outras mudanças anteriores a este plano serão preservadas. O recibo não sobrevive ao encerramento do processo.",
+        AnnouncementAction::RestoreReconciled { .. } => "Restauração experimental somente das chaves de anúncio, com nova revisão e aprovação do arquivo atual. As chaves precisam continuar com os valores aplicados; os demais bytes atuais serão preservados. Não é restauração integral do arquivo original nem limpeza automática. O recibo existe somente neste processo.",
     };
     let mut review = AnnouncementReview {
         action,

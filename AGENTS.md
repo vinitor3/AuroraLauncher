@@ -21,6 +21,8 @@ Use exatamente: `CONCLUÍDO`, `PARCIAL`, `PROTÓTIPO`, `IMPLEMENTADO MAS NÃO HO
 
 Incrementos Connect posteriores acrescentaram adaptadores nativos SVC/Plasmo sob `connect-voice-lab`, desligada por padrão, somente para cópias de diagnóstico verificadas. Aplicação confirmada e restauração seletiva reutilizam recovery; recibo de restauração é apenas de memória. Não há comando Tauri/UI nem homologação de jogo/voz. Preservar esses limites e consultar `docs/aurora-connect-voice.md` antes de integrar o caller/processos.
 
+Arquivo de voz regravado pode usar revisão separada `prepare_reconciled_restore`: exige hash atual, valores próprios ainda aplicados e aprovação nova; preserva outras edições. Não chamar automaticamente após falha da restauração estrita. `Restored` nessa via significa chaves restauradas, não hash integral original. Consulta Minecraft `minecraft-status` no laboratório comprova somente STATUS/pong; não promove login/mundo/voz.
+
 ## Mapa do repositório
 
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
