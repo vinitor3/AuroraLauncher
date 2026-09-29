@@ -31,6 +31,8 @@ Sexto incremento: caminho do Plasmo fixado resolvido em tag/JAR; adaptador TOML 
 
 Oitavo incremento: restauração seletiva do anúncio por recibo privado da aplicação, com nova aprovação e inventário atual. Preserva arquivos alheios modificados após aplicação, aceita limpeza após desabilitar o mod e recusa editar arquivo próprio divergente. Cancelar não publica ponto; erro após iniciar executor exige inspeção pela Recuperação. Recibo não sobrevive ao processo. Testes e limite de saída SVC no [domínio de voz](../../aurora-connect-voice.md#restauração-seletiva-do-anúncio--oitavo-incremento); não fecha os gates de crash/runtime/UI de T-CONFIG.
 
+Nono incremento: defaults completos equivalentes reconstruídos das fontes, guardas de elegibilidade e recusa de hash alterado por reserialização TOML. T-CONFIG-03 continua parcial: Plasmo salva novamente o arquivo ao carregar; a limpeza pode exigir mescla explícita ainda não implementada. Uma fixture com a mesma árvore não é roundtrip da JVM. Corrigida a fonte de defaults da tag divergente para branch fixada compatível com os campos do artefato, sem alegar build reproduzível.
+
 ## 1. Evidência de partida e limites do inventário
 
 Leitura local feita em 29/09/2026, sem build, lançamento do jogo, conexão externa ou teste runtime. A existência de um símbolo ou de um teste no arquivo não equivale à execução desse teste.

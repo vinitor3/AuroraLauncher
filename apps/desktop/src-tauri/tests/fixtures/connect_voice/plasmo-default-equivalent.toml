@@ -1,0 +1,46 @@
+# Synthetic equivalent of the pinned server defaults; not a JVM capture.
+# The identifier below is a constant fixture value, never a player's identifier.
+server_id = "00000000-0000-4000-8000-000000000001"
+default_language = "en_us"
+# forced_language = "ja_jp"
+debug = false
+use_crowdin_translations = true
+check_for_updates = true
+
+[host]
+ip = "0.0.0.0"
+port = 0
+# [host.public]
+# ip = "127.0.0.1"
+# port = 0
+
+[voice]
+max_extra_audio_broadcast_distance = 16
+sample_rate = 48000
+keep_alive_timeout_ms = 15000
+mtu_size = 1024
+client_mod_required = false
+client_mod_required_check_timeout_ms = 3000
+client_mod_min_version = "2.0.0"
+
+[voice.proximity]
+distances = [8, 16, 32]
+default_distance = 16
+
+[voice.opus]
+mode = "VOIP"
+bitrate = -1000
+
+[voice.player_icon]
+visibility = []
+y_offset = 0.0
+
+[voice.weights]
+# [voice.weights.activations]
+# groups = 0
+# [voice.weights.source_lines]
+# groups = 0
+
+[notifications]
+muted = true
+unmuted = true

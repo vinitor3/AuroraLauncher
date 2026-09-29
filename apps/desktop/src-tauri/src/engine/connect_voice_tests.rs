@@ -4,6 +4,10 @@ use std::path::{Path, PathBuf};
 
 const ORIGINAL: &[u8] =
     b"# User comment\r\nport=24454\r\nvoice_host=old.example.invalid:24454\r\nmtu_size=1275\r\n";
+const SVC_DEFAULTS: &[u8] =
+    include_bytes!("../../tests/fixtures/connect_voice/svc-default-equivalent.properties");
+const PLASMO_DEFAULTS: &[u8] =
+    include_bytes!("../../tests/fixtures/connect_voice/plasmo-default-equivalent.toml");
 
 struct Fixture {
     root: PathBuf,
@@ -132,6 +136,53 @@ fn renderer_refuses_ambiguous_properties_unknown_syntax_and_missing_field() {
         "voice_host=\u{2003}a",
     ] {
         assert!(render_svc(text.as_bytes(), 35554).is_err());
+    }
+}
+
+#[test]
+fn complete_default_equivalents_are_eligible_without_weakening_sensitive_filters() {
+    for (voice_mod, original) in [
+        (VoiceMod::SimpleVoiceChat, SVC_DEFAULTS),
+        (VoiceMod::PlasmoVoice, PLASMO_DEFAULTS),
+    ] {
+        let f = Fixture::for_mod(None, voice_mod, original);
+        let config = f.copy.root().join(voice_mod.config());
+        assert!(!recovery::sensitive_config(&config, voice_mod.config()).unwrap());
+        let guard = acquire_instance_recovery_lock(&f.copy).unwrap();
+        let observation = recovery::capture_observation(&f.copy, &guard).unwrap();
+        assert!(observation
+            .files
+            .iter()
+            .any(|file| { file.path == voice_mod.config() && file.sha256 == digest(original) }));
+        let output = match voice_mod {
+            VoiceMod::SimpleVoiceChat => {
+                let output = render_svc(original, 35554).unwrap().0;
+                let expected = std::str::from_utf8(original)
+                    .unwrap()
+                    .replace("voice_host=", "voice_host=127.0.0.1:35554");
+                assert_eq!(output, expected.as_bytes());
+                output
+            }
+            VoiceMod::PlasmoVoice => {
+                let output = plasmo::render(original, 35554).unwrap().0;
+                assert!(output.starts_with(original));
+                output
+            }
+        };
+        assert!(output.len() < MAX_CONFIG as usize);
+        assert_eq!(f.bytes(), original, "rendering must not mutate the fixture");
+        // Full configs do not bypass the artifact gate.
+        assert!(matches!(
+            prepare_announcement(&f.copy, &guard, f.request()),
+            Err(RecoveryError::Compatibility)
+        ));
+        fs::write(&config, [original, b"\n# token=fixture-only\n"].concat()).unwrap();
+        assert!(recovery::sensitive_config(&config, voice_mod.config()).unwrap());
+        assert!(!recovery::capture_observation(&f.copy, &guard)
+            .unwrap()
+            .files
+            .iter()
+            .any(|file| file.path == voice_mod.config()));
     }
 }
 
@@ -549,7 +600,7 @@ fn svc_selective_restoration_preserves_later_unrelated_edits_and_refuses_target_
     exercise_selective_restoration(
         VoiceMod::SimpleVoiceChat,
         "voicechat-fabric-1.21.1-2.6.22.jar",
-        ORIGINAL,
+        SVC_DEFAULTS,
     );
 }
 
@@ -559,6 +610,47 @@ fn plasmo_selective_restoration_removes_only_its_appended_block_and_preserves_la
     exercise_selective_restoration(
         VoiceMod::PlasmoVoice,
         "plasmovoice-fabric-1.21.1-2.1.17.jar",
-        b"[host]\nip = '127.0.0.1'\nport = 25565\n[voice]\nmtu_size = 1024",
+        PLASMO_DEFAULTS,
+    );
+}
+
+#[test]
+#[ignore = "requires explicit local pinned Plasmo artifact; no download or Java execution"]
+fn equivalent_plasmo_reserialization_requires_review_instead_of_trusting_new_hash() {
+    let jar = PathBuf::from(
+        std::env::var_os("AURORA_CONNECT_ARTIFACT_DIR")
+            .expect("explicit local artifact directory required"),
+    )
+    .join("plasmovoice-fabric-1.21.1-2.1.17.jar");
+    let f = Fixture::for_mod(Some(&jar), VoiceMod::PlasmoVoice, PLASMO_DEFAULTS);
+    let guard = acquire_instance_recovery_lock(&f.copy).unwrap();
+    let prepared = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
+    let approval = prepared.review().digest.clone();
+    let mut applied = prepared.confirm(&f.copy, &guard, &approval).unwrap();
+    let announced = String::from_utf8(f.bytes()).unwrap();
+    let (prefix, public) = announced.rsplit_once("[host.public]").unwrap();
+    let voice_start = prefix.find("[voice]").unwrap();
+    // Model the writer moving a table beside its parent. This is intentionally
+    // not called a captured mod roundtrip: no Java runs in this test.
+    let rewritten = format!(
+        "{}[host.public]{public}\n{}",
+        &prefix[..voice_start],
+        &prefix[voice_start..]
+    );
+    assert_ne!(digest(announced.as_bytes()), digest(rewritten.as_bytes()));
+    assert_eq!(
+        toml::from_str::<toml::Value>(&announced).unwrap(),
+        toml::from_str::<toml::Value>(&rewritten).unwrap()
+    );
+    fs::write(f.copy.root().join(PLASMO_CONFIG), &rewritten).unwrap();
+    assert!(matches!(
+        applied.receipt.prepare_restore(&f.copy, &guard),
+        Err(RecoveryError::StalePreview)
+    ));
+    assert_eq!(applied.receipt.state(), RestorationState::Ready);
+    assert_eq!(f.bytes(), rewritten.as_bytes());
+    assert_eq!(
+        fs::read(f.source.root().join(PLASMO_CONFIG)).unwrap(),
+        PLASMO_DEFAULTS
     );
 }
