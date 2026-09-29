@@ -46,6 +46,7 @@ import { OnlineSkinSearch } from "./features/skins/OnlineSkinSearch";
 import { ContentUpdatesView } from "./features/content-updates/ContentUpdatesView";
 import { UpdateReviewDialog } from "./features/content-updates/UpdateReviewDialog";
 import { DoctorView } from "./features/doctor/DoctorView";
+import { RecoveryView } from "./features/recovery/RecoveryView";
 import type { DoctorReport, DoctorRun } from "./features/doctor/types";
 import { publicAiError } from "../../../shared/aiErrors";
 import type { AiToolAdvice, AiToolContext } from "../../../shared/aiTools";
@@ -125,7 +126,7 @@ type ModrinthContent = {
   dateModified: string;
 };
 type ContentType = "mod" | "shader" | "resourcepack";
-type EditorView = "installed" | "updates" | "discover" | "doctor";
+type EditorView = "installed" | "updates" | "discover" | "doctor" | "recovery";
 type ContentSort = "popular" | "relevance" | "updated";
 type CatalogContent = ModrinthContent & {
   source: CatalogSource;
@@ -260,7 +261,7 @@ const DEFAULT_FORGE_VERSION: Record<string, string> = {
   "1.21.1": "52.0.57",
 };
 const UPDATE_CONTENT_TYPES: ContentType[] = ["mod", "shader", "resourcepack"];
-const EDITOR_VIEWS: EditorView[] = ["installed", "updates", "discover", "doctor"];
+const EDITOR_VIEWS: EditorView[] = ["installed", "updates", "discover", "doctor", "recovery"];
 
 function formatBytes(value?: number) {
   if (!value || value < 1) return "0 B";
@@ -663,7 +664,7 @@ function AssistantPanel({ services, username, accountId, instance, requestToolAd
     if (!instance?.id) return;
     let disposed = false;
     const stops: Array<() => void> = [];
-    for (const name of ["aurora-doctor-run", "aurora-ai-tool-changed"]) {
+    for (const name of ["aurora-doctor-run", "aurora-ai-tool-changed", "aurora-recovery-changed"]) {
       void listen<{ instanceId: string }>(name, (event) => {
         if (disposed || event.payload.instanceId !== instance.id) return;
         requestGeneration.current += 1;
@@ -1057,7 +1058,10 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [instanceLog, setInstanceLog] = useState<{ id: string; log: InstanceLog }>();
   const [runningInstances, setRunningInstances] = useState<RunningInstance[]>([]);
   const [renameDraft, setRenameDraft] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [launcherBusy, setBusy] = useState(false);
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const recoveryBusyRef = useRef(false);
+  const busy = launcherBusy || recoveryBusy;
   const avatarMigrationRef = useRef("");
   const localAvatarMigrationRef = useRef("");
   const appearanceMigrationPending = useRef<Promise<void>>(Promise.resolve());
@@ -1096,10 +1100,32 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     clearContentUpdatePlan();
   }
   function closeInstanceEditor() {
+    if (recoveryBusyRef.current) return;
     editorOpenRequestRef.current = { generation: editorOpenRequestRef.current.generation + 1, id: "" };
     invalidateContentUpdatePlan();
     activeInstanceRef.current = { ...activeInstanceRef.current, editingInstance: "" };
     setEditingInstance("");
+  }
+  function setRecoveryOperation(active: boolean) {
+    recoveryBusyRef.current = active;
+    setRecoveryBusy(active);
+  }
+  async function refreshAfterRecovery() {
+    const id = editingInstance;
+    const generation = editorOpenRequestRef.current.generation;
+    const [content, saved, nextInstances] = await Promise.all([
+      invoke<InstanceContent>("list_instance_content", { id }),
+      invoke<InstanceLaunchProfile>("read_instance_launch_profile", { id }),
+      invoke<Instance[]>("list_instances"),
+    ]);
+    if (activeInstanceRef.current.editingInstance !== id || editorOpenRequestRef.current.generation !== generation) return;
+    invalidateContentUpdatePlan();
+    setSelectedContentNames([]);
+    setInstanceContent(content);
+    setInstances(nextInstances);
+    setInstalledVersionId(saved.versionId ?? "");
+    setInstalledMinecraftVersion(saved.minecraftVersion ?? "");
+    if (saved.minecraftVersion) setMinecraftVersion(saved.minecraftVersion);
   }
   useEffect(() => {
     if (!editingInstance) return undefined;
@@ -1933,6 +1959,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     return mergedArtwork;
   }
   async function openEditor(id: string, initialView: EditorView = "installed", runId?: string) {
+    if (recoveryBusyRef.current) return;
     const editorRequest = { generation: editorOpenRequestRef.current.generation + 1, id };
     editorOpenRequestRef.current = editorRequest;
     const editorIsCurrent = () => editorOpenRequestRef.current.generation === editorRequest.generation
@@ -2066,6 +2093,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       : [...current, filename]);
   }
   function selectContentType(nextType: ContentType) {
+    if (recoveryBusyRef.current) return;
     setContentType(nextType);
     setSelectedContentNames([]);
     setSelectedUpdateFilenames([]);
@@ -2078,6 +2106,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     if (editorView === "discover") void loadContentCatalog({ type: nextType, query: "", category: "", sort: "popular" });
   }
   async function selectInstance(id: string, stillCurrent: () => boolean = () => true) {
+    if (recoveryBusyRef.current) return;
     activeInstanceRef.current = { ...activeInstanceRef.current, targetInstance: id };
     setTargetInstance(id);
     try {
@@ -2397,11 +2426,13 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     if (Object.keys(contentUpdateScans).length === 0) void scanAllContentUpdates();
   }
   function activateEditorView(view: EditorView) {
+    if (recoveryBusyRef.current) return;
     if (view === "updates") showContentUpdates();
     else if (view === "discover") showContentCatalog();
     else setEditorView(view);
   }
   function handleEditorViewKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, view: EditorView) {
+    if (recoveryBusyRef.current) return;
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const currentIndex = EDITOR_VIEWS.indexOf(view);
@@ -3717,19 +3748,20 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                 </div>
                 <div className="editor-heading-actions">
                   <button className="secondary compact" disabled={busy || updatesApplying} onClick={() => void openInstanceFolder(editingInstance)} type="button">Abrir pasta</button>
-                  <button aria-label="Fechar editor" className="editor-close" disabled={updatesApplying} onClick={closeInstanceEditor} type="button">×</button>
+                  <button aria-label="Fechar editor" className="editor-close" disabled={updatesApplying || recoveryBusy} onClick={closeInstanceEditor} type="button">×</button>
                 </div>
               </div>
-              <div className="content-tabs">
+              <div className="content-tabs" inert={recoveryBusy}>
                 <button aria-label={`Mods: ${instanceContent.mods.length} instalados, ${updateCountFor("mod")} atualizações`} className={contentType === "mod" ? "selected compact" : "secondary compact"} onClick={() => selectContentType("mod")} type="button">Mods <span>{instanceContent.mods.length}</span>{updateCountFor("mod") > 0 && <em>{updateCountFor("mod")} ↑</em>}</button>
                 <button aria-label={`Shaders: ${instanceContent.shaderpacks.length} instalados, ${updateCountFor("shader")} atualizações`} className={contentType === "shader" ? "selected compact" : "secondary compact"} onClick={() => selectContentType("shader")} type="button">Shaders <span>{instanceContent.shaderpacks.length}</span>{updateCountFor("shader") > 0 && <em>{updateCountFor("shader")} ↑</em>}</button>
                 <button aria-label={`Pacotes de recursos: ${instanceContent.resourcepacks.length} instalados, ${updateCountFor("resourcepack")} atualizações`} className={contentType === "resourcepack" ? "selected compact" : "secondary compact"} onClick={() => selectContentType("resourcepack")} type="button">Pacotes de recursos <span>{instanceContent.resourcepacks.length}</span>{updateCountFor("resourcepack") > 0 && <em>{updateCountFor("resourcepack")} ↑</em>}</button>
               </div>
-              <div className="editor-view-tabs" role="tablist" aria-label="Conteúdo da instância">
+              <div className="editor-view-tabs" role="tablist" aria-label="Conteúdo da instância" inert={recoveryBusy}>
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "installed"} className={editorView === "installed" ? "active" : ""} id="editor-view-tab-installed" onClick={() => activateEditorView("installed")} onKeyDown={(event) => handleEditorViewKeyDown(event, "installed")} role="tab" tabIndex={editorView === "installed" ? 0 : -1} type="button">Instalados</button>
                 <button aria-controls="editor-view-panel" aria-label={updateTabLabel} aria-selected={editorView === "updates"} className={editorView === "updates" ? "active" : ""} id="editor-view-tab-updates" onClick={() => activateEditorView("updates")} onKeyDown={(event) => handleEditorViewKeyDown(event, "updates")} role="tab" tabIndex={editorView === "updates" ? 0 : -1} type="button">Atualizações{updateTabBadge && <span aria-hidden="true" className={`tab-count ${updatesScanning ? "scanning" : updateScanIssueCount > 0 || (totalAvailableUpdates === 0 && totalUpdateAttention > 0) ? "attention" : ""}`}>{updateTabBadge}</span>}</button>
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "discover"} className={editorView === "discover" ? "active" : ""} id="editor-view-tab-discover" onClick={() => activateEditorView("discover")} onKeyDown={(event) => handleEditorViewKeyDown(event, "discover")} role="tab" tabIndex={editorView === "discover" ? 0 : -1} type="button">＋ Adicionar</button>
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "doctor"} className={editorView === "doctor" ? "active" : ""} id="editor-view-tab-doctor" onClick={() => activateEditorView("doctor")} onKeyDown={(event) => handleEditorViewKeyDown(event, "doctor")} role="tab" tabIndex={editorView === "doctor" ? 0 : -1} type="button">Diagnóstico</button>
+                <button aria-controls="editor-view-panel" aria-selected={editorView === "recovery"} className={editorView === "recovery" ? "active" : ""} id="editor-view-tab-recovery" onClick={() => activateEditorView("recovery")} onKeyDown={(event) => handleEditorViewKeyDown(event, "recovery")} role="tab" tabIndex={editorView === "recovery" ? 0 : -1} type="button">Recuperação</button>
               </div>
               <div aria-labelledby={`editor-view-tab-${editorView}`} className="editor-body" id="editor-view-panel" role="tabpanel" tabIndex={0}>
                 {editorView === "doctor" ? (
@@ -3741,7 +3773,17 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                     onExplain={explainDoctorReport}
                     onSuggest={requestInstanceAdvice}
                     onSelectRun={setDoctorRunId}
+                    onRecovery={() => activateEditorView("recovery")}
                     runId={doctorRunId}
+                  />
+                ) : editorView === "recovery" ? (
+                  <RecoveryView
+                    busy={launcherBusy || updatesScanning || updatesApplying}
+                    instanceId={editingInstance}
+                    key={editingInstance}
+                    onChanged={refreshAfterRecovery}
+                    onOperationChange={setRecoveryOperation}
+                    running={editingInstanceIsRunning}
                   />
                 ) : editorView === "installed" ? (
                   <>

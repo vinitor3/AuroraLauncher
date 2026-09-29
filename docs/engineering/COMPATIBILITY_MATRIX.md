@@ -1,5 +1,9 @@
 # Compatibility Matrix
 
+## Recuperação manual de instâncias — 29/09/2026
+
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Base `dc2ec5a`, launcher alpha.13, Core 1.1.5 e Skins 0.3.1 preservados. Pontos manuais protegem o escopo local declarado com prévia, confirmação e desfazer, sem mundos, contas ou instalação compartilhada. Core/Skins administrados ficam fora da reposição de artefatos antigos; Companion não é reinstalado. Não amplia Minecraft/loaders/Java nem altera os 18 JARs. Os testes de filesystem e interface não homologam runtime Minecraft ou a UI nativa autenticada. Contrato e evidência: [AUR-1166](../task-aur-1166-instance-recovery.md).
+
 ## Failover Gemini no Worker — 29/09/2026
 
 Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Base `a3325b5`, cliente alpha.13 existente, Core 1.1.5 e Skins 0.3.1 preservados. O Worker limita tentativas entre chaves e oferece Flash-Lite explicitamente autorizado como último recurso, com prazo e orçamento compartilhados. Tradução usa o mesmo transporte; contratos desktop e confirmação local permanecem iguais. Não exige novo instalador nem altera os 18 JARs ou a matriz Minecraft/loader/Java. Publicado na revisão `2026-09-29-gemini-key-failover-v1`, com saúde e proteção de sessão verificadas. Preview respondeu com Gemini real; chamada autenticada em produção permanece **NÃO VERIFICADO**, pois Firebase recusou sessão anônima de teste. Evidências em [task-gemini-failover.md](../task-gemini-failover.md).

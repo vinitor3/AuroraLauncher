@@ -2,6 +2,7 @@
 
 pub mod ai_history;
 pub mod ai_tools;
+pub mod recovery;
 
 mod companion_migration;
 mod content_updates;
@@ -24,7 +25,7 @@ mod version;
 
 pub use companion_migration::{companion_migration_required, migrate_managed_companion};
 pub use content_updates::{
-    acquire_instance_mutation_lock, apply_content_updates,
+    acquire_instance_mutation_lock, acquire_instance_recovery_lock, apply_content_updates,
     apply_modrinth_modpack_update_with_progress, apply_remote_content_updates,
     rollback_last_content_update, scan_content_updates, scan_modrinth_modpack_update,
     AppliedContentUpdate, ContentUpdateApplySummary, ContentUpdateError, ContentUpdateItem,

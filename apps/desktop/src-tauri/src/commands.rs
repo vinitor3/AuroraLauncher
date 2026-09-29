@@ -354,6 +354,201 @@ fn acquire_idle_instance(
     })
 }
 
+fn ensure_recovery_processes_idle(root: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    return ensure_no_external_instance_game(root);
+    #[cfg(not(windows))]
+    {
+        let _ = root;
+        Err("A Recuperação requer a verificação de processos disponível no Windows.".into())
+    }
+}
+
+fn acquire_idle_recovery(
+    instance: &aurora_launcher_core::engine::Instance,
+    probe: impl Fn(&Path) -> Result<(), String>,
+) -> Result<InstanceMutationGuard, String> {
+    probe(instance.root())?;
+    let guard = aurora_launcher_core::engine::acquire_instance_recovery_lock(instance)
+        .map_err(|error| match error {
+            aurora_launcher_core::engine::ContentUpdateError::Busy =>
+                "Esta instância está em uso. Aguarde o jogo, a instalação ou a ação do Assistente terminar.".to_owned(),
+            _ => "Não foi possível bloquear a instância com segurança. Verifique suas permissões e tente novamente.".to_owned(),
+        })?;
+    // Close the check/acquire race for games started by another launcher.
+    probe(instance.root())?;
+    Ok(guard)
+}
+
+/// The same OS lock used by launch, installers and confirmed Assistant actions
+/// guards recovery. The bypass only allows us to repair an interrupted journal;
+/// it never bypasses a live game's lock or the external JVM probe.
+async fn run_recovery<T, F>(
+    app: AppHandle,
+    id: String,
+    phase: &'static str,
+    operation: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(
+            &aurora_launcher_core::engine::Instance,
+            &InstanceMutationGuard,
+        ) -> Result<T, aurora_launcher_core::engine::recovery::RecoveryError>
+        + Send
+        + 'static,
+{
+    let id =
+        InstanceId::parse(id).map_err(|_| "Identificador de instância inválido.".to_owned())?;
+    let instance = layout(&app)?.open(id);
+    tauri::async_runtime::spawn_blocking(move || {
+        use aurora_launcher_core::engine::recovery;
+        if !instance.root().is_dir() {
+            return Err("A instância não existe mais.".into());
+        }
+        if instance_is_running(&app.state::<RunningInstances>(), instance.id().as_str())? {
+            return Err("Feche o Minecraft antes de usar a Recuperação desta instância.".into());
+        }
+        let emit_phase = |phase: &str| {
+            let _ = app.emit("aurora-recovery-progress", serde_json::json!({
+                "instanceId": instance.id().as_str(), "phase": phase
+            }));
+        };
+        emit_phase("Verificando se a instância está livre…");
+        {
+            let guard = acquire_idle_recovery(&instance, ensure_recovery_processes_idle)?;
+            emit_phase("Verificando operações interrompidas…");
+            if recovery::recover_pending(&instance, &guard).map_err(|error| error.to_string())? {
+                let _ = app.emit("aurora-recovery-changed", serde_json::json!({
+                    "instanceId": instance.id().as_str(), "recoveredInterrupted": true
+                }));
+            }
+            emit_phase(phase);
+            let result = operation(&instance, &guard).map_err(|error| error.to_string());
+            emit_phase(if result.is_ok() { "Operação concluída." } else { "Operação interrompida. Consulte a mensagem na Recuperação." });
+            result
+        }
+    })
+    .await
+    .map_err(|_| "A operação de recuperação foi interrompida. Abra Recuperação novamente para verificar o estado seguro da instância.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn recovery_list(
+    app: AppHandle,
+    id: String,
+) -> Result<aurora_launcher_core::engine::recovery::RecoveryOverview, String> {
+    run_recovery(
+        app,
+        id,
+        "Consultando pontos de restauração…",
+        aurora_launcher_core::engine::recovery::list_points,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn recovery_create(
+    app: AppHandle,
+    id: String,
+    description: Option<String>,
+) -> Result<aurora_launcher_core::engine::recovery::RecoveryPoint, String> {
+    run_recovery(
+        app,
+        id,
+        "Capturando e verificando os arquivos protegidos…",
+        move |instance, guard| {
+            aurora_launcher_core::engine::recovery::create_point(instance, guard, description)
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn recovery_details(
+    app: AppHandle,
+    id: String,
+    point_id: String,
+) -> Result<aurora_launcher_core::engine::recovery::RecoveryPoint, String> {
+    run_recovery(
+        app,
+        id,
+        "Verificando o ponto de restauração…",
+        move |instance, guard| {
+            aurora_launcher_core::engine::recovery::point_details(instance, guard, &point_id)
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn recovery_delete(app: AppHandle, id: String, point_id: String) -> Result<(), String> {
+    run_recovery(
+        app,
+        id,
+        "Excluindo o ponto de restauração…",
+        move |instance, guard| {
+            aurora_launcher_core::engine::recovery::delete_point(instance, guard, &point_id)
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn recovery_preview(
+    app: AppHandle,
+    id: String,
+    point_id: String,
+) -> Result<aurora_launcher_core::engine::recovery::RecoveryPreview, String> {
+    run_recovery(
+        app,
+        id,
+        "Comparando o ponto com os arquivos atuais…",
+        move |instance, guard| {
+            aurora_launcher_core::engine::recovery::preview_restore(instance, guard, &point_id)
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn recovery_preview_undo(
+    app: AppHandle,
+    id: String,
+) -> Result<aurora_launcher_core::engine::recovery::RecoveryPreview, String> {
+    run_recovery(
+        app,
+        id,
+        "Preparando a prévia para desfazer a restauração…",
+        aurora_launcher_core::engine::recovery::preview_undo,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn recovery_restore(
+    app: AppHandle,
+    id: String,
+    preview_id: String,
+) -> Result<aurora_launcher_core::engine::recovery::RecoveryResult, String> {
+    let event_app = app.clone();
+    let instance_id = id.clone();
+    let result = run_recovery(
+        app,
+        id,
+        "Protegendo o estado atual e restaurando os arquivos…",
+        move |instance, guard| {
+            aurora_launcher_core::engine::recovery::restore(instance, guard, &preview_id)
+        },
+    )
+    .await?;
+    let _ = event_app.emit(
+        "aurora-recovery-changed",
+        serde_json::json!({ "instanceId": instance_id }),
+    );
+    Ok(result)
+}
+
 fn firebase_config_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(data_directory(app)?.join("firebase-public-config.json"))
 }
@@ -500,6 +695,9 @@ pub fn list_instances(app: AppHandle) -> Result<Vec<InstanceSummary>, String> {
 pub fn create_instance(app: AppHandle, id: String) -> Result<InstanceSummary, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
     let instance = layout(&app)?.open(id);
+    fs::create_dir_all(instance.root())
+        .map_err(|_| "Não foi possível criar a pasta da instância.".to_owned())?;
+    let _mutation_lock = acquire_idle_instance(&instance)?;
     instance
         .ensure_layout()
         .map_err(|error| error.to_string())?;
@@ -545,11 +743,15 @@ pub fn rename_instance(
 #[tauri::command]
 pub fn set_instance_presentation(
     app: AppHandle,
+    running: tauri::State<RunningInstances>,
     id: String,
     display_name: String,
     icon_url: Option<String>,
 ) -> Result<InstanceSummary, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
+    if instance_is_running(&running, id.as_str())? {
+        return Err("Feche o Minecraft antes de alterar o perfil da instância.".into());
+    }
     let display_name = display_name.trim();
     if display_name.is_empty()
         || display_name.len() > 160
@@ -570,6 +772,9 @@ pub fn set_instance_presentation(
     if !instance.root().is_dir() {
         return Err("a instância não existe mais".to_owned());
     }
+    let _mutation_lock = acquire_idle_instance(&instance)?;
+    #[cfg(windows)]
+    ensure_no_external_instance_game(instance.root())?;
     let marker_path = instance.root().join("aurora-modpack.json");
     let mut document = fs::read(&marker_path)
         .ok()
@@ -1588,9 +1793,9 @@ fn unique_content_filenames(filenames: Vec<String>) -> Result<Vec<String>, Strin
 pub fn open_instance_folder(app: AppHandle, id: String) -> Result<(), String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
     let instance = layout(&app)?.open(id);
-    instance
-        .ensure_layout()
-        .map_err(|error| error.to_string())?;
+    if !instance.root().is_dir() {
+        return Err("A instância não existe mais.".into());
+    }
     Command::new("explorer.exe")
         .arg(instance.root())
         .spawn()
@@ -1777,7 +1982,12 @@ $games = Get-CimInstance Win32_Process -Filter "Name='java.exe' OR Name='javaw.e
 foreach ($game in $games) {
   if ([string]::IsNullOrEmpty($game.CommandLine)) { Write-Output 'UNKNOWN'; exit 0 }
   $match = [regex]::Match($game.CommandLine, '(?i)(?:^|\s)--gameDir(?:\s+|=)(?:"([^"]*)"|(\S+))')
-  if (!$match.Success) { continue }
+  if (!$match.Success) {
+    # A manually launched Minecraft can default to its working directory. CIM
+    # cannot establish that directory, so do not claim it is safe to mutate.
+    if ($game.CommandLine -match '(?i)(?:^|\s)"?(?:net\.minecraft\.|net\.fabricmc\.loader\.|cpw\.mods\.(?:modlauncher|bootstraplauncher)\.)') { Write-Output 'UNKNOWN'; exit 0 }
+    continue
+  }
   $gamePath = if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
   if (![IO.Path]::IsPathRooted($gamePath)) { Write-Output 'UNKNOWN'; exit 0 }
   $gamePath = [IO.Path]::GetFullPath($gamePath).TrimEnd([char[]]'\/')
@@ -2862,12 +3072,83 @@ mod tests {
         assert!(!error.contains("migração"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn process_probe_refuses_unlocated_minecraft_but_allows_unrelated_java() {
+        let script = super::INSTANCE_GAME_PROBE.replace(
+            "Get-CimInstance Win32_Process -Filter \"Name='java.exe' OR Name='javaw.exe'\"",
+            "ConvertFrom-Json $env:AURORA_QA_GAMES",
+        );
+        let root = std::path::Path::new(r"C:\Aurora QA\instances\fixture");
+        for main_class in [
+            "net.minecraft.client.main.Main",
+            "net.minecraft.launchwrapper.Launch",
+            "net.fabricmc.loader.impl.launch.knot.KnotClient",
+            "cpw.mods.bootstraplauncher.BootstrapLauncher",
+        ] {
+            let fixture = serde_json::json!([{ "CommandLine": format!("java.exe -cp fixture {main_class}") }]).to_string();
+            assert_eq!(
+                super::run_instance_game_probe(&script, root, Some(&fixture)).unwrap_err(),
+                super::INSTANCE_GAME_UNAVAILABLE
+            );
+        }
+        let fixture =
+            serde_json::json!([{ "CommandLine": "java.exe -jar synthetic-build-tool.jar" }])
+                .to_string();
+        assert!(super::run_instance_game_probe(&script, root, Some(&fixture)).is_ok());
+    }
+
     use std::fs;
 
     use super::{
         finalize_manual_download, is_curseforge_host, java_property_path, png_dimensions,
         unique_content_filenames, validate_content_filename,
     };
+
+    #[test]
+    fn recovery_gate_probes_again_under_the_shared_game_lock() {
+        use aurora_launcher_core::engine::{ContentUpdateError, InstanceId, InstanceLayout};
+        let directory =
+            std::env::temp_dir().join(format!("aurora-recovery-gate-{}", uuid::Uuid::new_v4()));
+        let instance =
+            InstanceLayout::new(&directory).open(InstanceId::parse("synthetic").unwrap());
+        instance.ensure_layout().unwrap();
+        let probes = std::cell::Cell::new(0);
+        let guard = super::acquire_idle_recovery(&instance, |_| {
+            probes.set(probes.get() + 1);
+            if probes.get() == 2 {
+                assert!(matches!(
+                    super::acquire_instance_mutation_lock(&instance),
+                    Err(ContentUpdateError::Busy)
+                ));
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(probes.get(), 2);
+        assert!(super::acquire_idle_recovery(&instance, |_| Ok(())).is_err());
+        drop(guard);
+        let rejected =
+            super::acquire_idle_recovery(&instance, |_| Err(super::INSTANCE_GAME_RUNNING.into()));
+        assert!(matches!(rejected, Err(error) if error == super::INSTANCE_GAME_RUNNING));
+        assert!(!instance
+            .root()
+            .join(".aurora/recovery-identity.json")
+            .exists());
+        // A second-probe failure must also release the shared OS lock.
+        let probes = std::cell::Cell::new(0);
+        assert!(super::acquire_idle_recovery(&instance, |_| {
+            probes.set(probes.get() + 1);
+            if probes.get() == 2 {
+                Err(super::INSTANCE_GAME_RUNNING.into())
+            } else {
+                Ok(())
+            }
+        })
+        .is_err());
+        drop(super::acquire_instance_mutation_lock(&instance).unwrap());
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn game_tracking_keeps_mutations_locked_until_process_cleanup() {

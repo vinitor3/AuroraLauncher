@@ -2,7 +2,7 @@
 
 ## Contexto
 
-Downloads já validam hashes, mas updates/snapshots/rollback não existem. Cópias completas desperdiçam disco e GC incorreto pode destruir instâncias.
+Na proposta original, downloads já validavam hashes, mas updates/snapshots/rollback ainda não existiam. Atualizações, migração de Companion e ações do Assistente passaram a ter mecanismos próprios de journal/rollback. Cópias completas desperdiçam disco e GC incorreto pode destruir instâncias.
 
 ## Opções avaliadas
 
@@ -24,9 +24,12 @@ Power loss, blob corrompido, hardlink incompatível, GC de objeto vivo e crescim
 
 ## Consequências
 
-Update/Doctor/Tools usam o mesmo executor transacional. Mundos/configs mutáveis não viram CAS integral por padrão.
+A unificação de Update/Doctor/Tools num executor transacional permanece uma direção, não uma descrição do código atual. Mundos/configs mutáveis não viram CAS integral por padrão.
+
+## Adoção limitada em 29/09/2026
+
+A [ADR-027](ADR-027-manual-instance-recovery.md) aplica CAS SHA-256, manifestos versionados e índice transacional aos pontos manuais de Recuperação. Os backups, snapshots e journals existentes não são migrados nesta entrega. Configurações locais só entram no escopo explícito de um ponto solicitado pelo jogador; mundos continuam excluídos. A exclusão de pontos não executa coleta de blobs: conteúdo sem referências permanece conservado até haver uma coleta verificável. O formato efetivo e os limites estão em [Recuperação de instâncias](../../instance-recovery.md).
 
 ## Reversibilidade
 
 Alta: materializar manifesto em diretório convencional; índice pode ser reconstruído dos manifests/blobs.
-

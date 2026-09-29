@@ -76,6 +76,8 @@ pub enum ContentUpdateError {
     CommitRolledBack(String),
     #[error("a troca falhou e o rollback também precisa de atenção: {0}")]
     RollbackFailed(String),
+    #[error("Há uma recuperação interrompida. Abra Recuperação com o jogo fechado para concluir a proteção da instância.")]
+    RecoveryPending,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2516,6 +2518,18 @@ fn restore_snapshot_file(
 }
 
 pub fn acquire_instance_mutation_lock(
+    instance: &Instance,
+) -> Result<InstanceMutationGuard, ContentUpdateError> {
+    let guard = acquire_instance_recovery_lock(instance)?;
+    if super::recovery::has_pending(instance).map_err(|_| ContentUpdateError::RecoveryPending)? {
+        return Err(ContentUpdateError::RecoveryPending);
+    }
+    Ok(guard)
+}
+
+/// Only the recovery command may bypass a pending journal, after checking both
+/// tracked and external game processes. The same OS lock is still mandatory.
+pub fn acquire_instance_recovery_lock(
     instance: &Instance,
 ) -> Result<InstanceMutationGuard, ContentUpdateError> {
     ensure_instance_root_secure(instance)?;
