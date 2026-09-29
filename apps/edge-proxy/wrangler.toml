@@ -6,3 +6,8 @@ compatibility_date = "2026-08-27"
 # adicionadas depois como secrets no painel/CLI do Cloudflare.
 [vars]
 FIREBASE_PROJECT_ID = "auroralauncher"
+# Updated slot 1 returned a real Gemini answer; slot 3 returned PERMISSION_DENIED.
+# Re-enable slot 3 here only after fixing its authorization and validating it.
+GEMINI_KEY_ORDER = "1,2"
+# Explicitly authorized by the user for temporary Flash unavailability.
+GEMINI_FALLBACK_MODEL = "gemini-flash-lite-latest"

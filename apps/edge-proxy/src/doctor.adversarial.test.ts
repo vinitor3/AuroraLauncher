@@ -168,14 +168,14 @@ test("real authenticated route sends only reduced contract with fixed instructio
   assert.equal(calls, 1);
 });
 
-test("provider quota/error body never leaks and no automatic retry occurs", async () => {
+test("provider bodies never leak; only temporary server failures can retry", async () => {
   for (const status of [429, 500, 403]) {
     let calls = 0;
     mockProvider(() => { calls++; return new Response("PRIVATE_PROVIDER_TOKEN", { status }); });
     const response = await worker.fetch(await request(), env);
     assert.ok(response.status >= 400);
     assert.doesNotMatch(await response.text(), /PRIVATE_PROVIDER_TOKEN/);
-    assert.equal(calls, 1);
+    assert.equal(calls, status === 500 ? 2 : 1);
   }
 });
 

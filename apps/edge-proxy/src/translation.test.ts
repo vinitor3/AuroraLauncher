@@ -204,14 +204,122 @@ test("cancelamento impede iniciar ou continuar fallback e credencial negada não
   assert.equal(calls, 2);
 });
 
-test("resposta excessiva e configuração recusada têm fallback limitado", async () => {
-  for (const firstResponse of [
-    () => new Response("x".repeat(256001)),
-    () => new Response(null, { status: 400 }),
-  ]) {
+test("resposta excessiva permite um fallback semântico e configuração recusada não provoca retry", async () => {
+  let calls = 0;
+  mockGemini(() => ++calls === 1 ? new Response("x".repeat(256001), { headers: { "Content-Type": "application/json" } })
+    : geminiResponse([{ id: 0, text: "Baixe" }, { id: 1, text: "este mod" }]));
+  assert.equal((await handleProjectTranslation(request(), env)).status, 200);
+  assert.equal(calls, 2);
+  calls = 0;
+  mockGemini(() => { calls++; return new Response(null, { status: 400 }); });
+  assert.equal((await handleProjectTranslation(request(), env)).status, 503);
+  assert.equal(calls, 1);
+});
+
+test("tradução mantém o limite próprio para respostas válidas maiores que o chat", async () => {
+  const segments = ["x".repeat(3_000), "y".repeat(3_000)];
+  const translations = segments.map((_text, id) => ({ id, text: "Descrição em português. ".repeat(300) }));
+  assert.ok(JSON.stringify({ translations }).length > 12_000);
+  mockGemini(() => geminiResponse(translations));
+  const response = await handleProjectTranslation(request({ ...valid, segments }), env);
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json() as { translations: unknown }).translations,
+    translations.map(({ id, text }) => ({ id, text: text.trim() })));
+});
+
+test("cancelamento do corpo de entrada não deixa consulta pendente nem chama Gemini", async () => {
+  let cancelled = false;
+  let calls = 0;
+  const controller = new AbortController();
+  mockGemini(() => { calls++; return geminiResponse([]); });
+  const streamed = new Request("https://aurora.test/v1/translate", {
+    method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json" },
+    body: new ReadableStream({ cancel() { cancelled = true; } }), duplex: "half",
+  } as RequestInit & { duplex: "half" });
+  const timer = setTimeout(() => controller.abort(), 10);
+  try {
+    const response = await handleProjectTranslation(streamed, env);
+    assert.equal(response.status, 503);
+    assert.equal(cancelled, true);
+    assert.equal(calls, 0);
+  } finally { clearTimeout(timer); }
+});
+
+test("cancelamento após headers interrompe corpo Gemini travado e impede fallback", async () => {
+  let cancelled = false;
+  let calls = 0;
+  const controller = new AbortController();
+  mockGemini(() => {
+    calls++;
+    return new Response(new ReadableStream({ cancel() { cancelled = true; } }), { headers: { "Content-Type": "application/json" } });
+  });
+  const timer = setTimeout(() => controller.abort(), 10);
+  try {
+    assert.equal((await handleProjectTranslation(request(valid, true, controller.signal), env)).status, 503);
+    assert.equal(cancelled, true);
+    assert.equal(calls, 1);
+  } finally { clearTimeout(timer); }
+});
+
+test("tradução usa chave secundária após indisponibilidade e aceita configuração somente secundária", async () => {
+  const usedKeys: string[] = [];
+  const configured = { GEMINI_API_KEY: "synthetic-primary", GEMINI_API_KEY_2: "synthetic-secondary", GEMINI_API_KEY_3: "synthetic-third" };
+  mockGemini((_url, init) => {
+    usedKeys.push(new Headers(init?.headers).get("x-goog-api-key") ?? "");
+    return usedKeys.length === 1 ? Response.json({ error: { status: "UNAVAILABLE" } }, { status: 503 })
+      : geminiResponse([{ id: 0, text: "Baixe" }, { id: 1, text: "este mod" }]);
+  });
+  assert.equal((await handleProjectTranslation(request(), configured)).status, 200);
+  assert.deepEqual(usedKeys, ["synthetic-primary", "synthetic-secondary"]);
+  usedKeys.length = 0;
+  mockGemini((_url, init) => {
+    usedKeys.push(new Headers(init?.headers).get("x-goog-api-key") ?? "");
+    return geminiResponse([{ id: 0, text: "Baixe" }, { id: 1, text: "este mod" }]);
+  });
+  assert.equal((await handleProjectTranslation(request(), { GEMINI_API_KEY_2: " synthetic-secondary " })).status, 200);
+  assert.deepEqual(usedKeys, ["synthetic-secondary"]);
+});
+
+test("quota e autorização ou configuração recusadas nunca trocam de chave ou modelo", async () => {
+  const configured = { GEMINI_API_KEY: "synthetic-primary", GEMINI_API_KEY_2: "synthetic-secondary", GEMINI_API_KEY_3: "synthetic-third" };
+  for (const status of [400, 401, 403, 429]) {
     let calls = 0;
-    mockGemini(() => ++calls === 1 ? firstResponse() : geminiResponse([{ id: 0, text: "Baixe" }, { id: 1, text: "este mod" }]));
-    assert.equal((await handleProjectTranslation(request(), env)).status, 200);
-    assert.equal(calls, 2);
+    mockGemini(() => { calls++; return Response.json({ error: { message: "synthetic-private-provider-detail" } }, { status }); });
+    const response = await handleProjectTranslation(request(), configured);
+    assert.equal(response.status, status === 429 ? 429 : 503);
+    assert.doesNotMatch(await response.text(), /synthetic|private-provider-detail/);
+    assert.equal(calls, 1);
   }
+});
+
+test("fallback de chaves e duas respostas inválidas compartilham no máximo quatro chamadas", async () => {
+  const configured = { GEMINI_API_KEY: "synthetic-primary", GEMINI_API_KEY_2: "synthetic-secondary", GEMINI_API_KEY_3: "synthetic-third" };
+  const models: string[] = [];
+  mockGemini((url) => {
+    models.push(url.pathname);
+    return models.length % 2 === 1 ? Response.json({ error: { status: "UNAVAILABLE" } }, { status: 503 }) : geminiResponse([]);
+  });
+  assert.equal((await handleProjectTranslation(request(), configured)).status, 503);
+  assert.equal(models.length, 4);
+  assert.match(models[0], /gemini-flash-latest:generateContent$/);
+  assert.match(models[2], /gemini-3\.8-flash:generateContent$/);
+});
+
+test("prazo total inclui corpo de entrada antes de consultar qualquer chave", async (t) => {
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  const durations: number[] = [];
+  t.mock.method(AbortSignal, "timeout", (duration: number) => { durations.push(duration); return timeout(10); });
+  let cancelled = false;
+  mockGemini(() => { assert.fail("An expired request body must not reach the provider"); });
+  const streamed = new Request("https://aurora.test/v1/translate", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: new ReadableStream({ cancel() { cancelled = true; } }), duplex: "half",
+  } as RequestInit & { duplex: "half" });
+  // AbortSignal.timeout uses an unreferenced timer; keep this synthetic stream alive.
+  const keepAlive = setTimeout(() => undefined, 1_000);
+  try {
+    assert.equal((await handleProjectTranslation(streamed, env)).status, 503);
+    assert.equal(cancelled, true);
+    assert.deepEqual(durations, [35_000]);
+  } finally { clearTimeout(keepAlive); }
 });

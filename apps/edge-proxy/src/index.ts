@@ -10,7 +10,11 @@ import { readDoctorJson, withDoctorAbort } from "../../../shared/doctorTransport
 
 export interface Env extends PlayerSkinEnv {
   FIREBASE_PROJECT_ID: string;
-  GEMINI_API_KEY: string;
+  GEMINI_API_KEY?: string;
+  GEMINI_API_KEY_2?: string;
+  GEMINI_API_KEY_3?: string;
+  GEMINI_KEY_ORDER?: string;
+  GEMINI_FALLBACK_MODEL?: string;
   CURSEFORGE_API_KEY: string;
   mcstat_API_KEY?: string;
   MCSTAT_API_KEY?: string;
@@ -47,7 +51,7 @@ const curseForgeApiBase = "https://api.curseforge.com/v1";
 const mcstatApiBase = "https://mcstat.org/api/v1";
 const supabaseBase = "https://pgbzkinjfwbncifurirb.supabase.co";
 const appearanceBucket = "aurora-appearance";
-const auroraApiRevision = "2026-09-28-gemini-tools-v1";
+const auroraApiRevision = "2026-09-29-gemini-key-failover-v1";
 const minecraftGameId = 432;
 const curseForgeClassIds = { mod: 6, modpack: 4471, resourcepack: 12, shader: 6552 } as const;
 const curseForgeLoaderIds = { forge: 1, fabric: 4 } as const;
@@ -2220,7 +2224,7 @@ export default {
     }
     if (request.method === "GET" && url.pathname.startsWith("/v1/skins/catalog/")) return skinCatalogAsset(url.pathname);
     if (request.method !== "POST") return error("Rota não encontrada.", 404);
-    const doctorDeadline = ["/v1/doctor/advice", "/v1/assistant", "/v1/ai/tools"].includes(url.pathname)
+    const doctorDeadline = ["/v1/doctor/advice", "/v1/assistant", "/v1/ai/tools", "/v1/translate"].includes(url.pathname)
       ? AbortSignal.any([request.signal, AbortSignal.timeout(35_000)]) : undefined;
     try {
       if (doctorDeadline && (request.headers.get("Authorization")?.length ?? 0) > 16_384) {
@@ -2245,7 +2249,7 @@ export default {
       }
       if (url.pathname === "/v1/doctor/advice") return await handleDoctorAdvice(request, env, doctorDeadline);
       if (url.pathname === "/v1/ai/tools") return await handleAiTools(request, env, doctorDeadline!);
-      if (url.pathname === "/v1/translate") return await handleProjectTranslation(request, env);
+      if (url.pathname === "/v1/translate") return await handleProjectTranslation(request, env, doctorDeadline);
       if (url.pathname === "/v1/assistant") return await handleAssistant(request, env, doctorDeadline!);
       if (url.pathname === "/v1/curseforge") return await curseForgeCatalog(request, env, userId);
       if (url.pathname === "/v1/appearance") return await uploadAppearance(request, env, userId);

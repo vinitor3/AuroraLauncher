@@ -3,9 +3,9 @@ import {
   parseDoctorAdvice, parseDoctorAdviceInput, type DoctorAdviceInput,
 } from "../../../shared/doctorAdvice.ts";
 import { readDoctorJson } from "../../../shared/doctorTransport.ts";
-import { aiFailureResponse, generateGemini, GEMINI_THINKING, GeminiFailure } from "./gemini.ts";
+import { aiFailureResponse, generateGemini, GEMINI_THINKING, GeminiFailure, type GeminiEnvironment } from "./gemini.ts";
 
-type DoctorEnvironment = { GEMINI_API_KEY?: string };
+type DoctorEnvironment = GeminiEnvironment;
 function json(body: unknown, status = 200) {
   return Response.json(body, { status, headers: { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" } });
 }

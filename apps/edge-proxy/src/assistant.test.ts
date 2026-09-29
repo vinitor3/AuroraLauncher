@@ -110,7 +110,7 @@ test("a quota Gemini retorna erro legível sem repetir a consulta", async () => 
   assert.equal(calls, 1);
 });
 
-test("rede indisponível não repete a consulta e mantém erro público", async () => {
+test("rede indisponível tem uma repetição limitada e mantém erro público", async () => {
   let calls = 0;
   mockGemini(() => {
     calls += 1;
@@ -119,7 +119,7 @@ test("rede indisponível não repete a consulta e mantém erro público", async 
   const response = await worker.fetch(assistantRequest({ message: "Olá", mode: "launcher" }), env);
   assert.equal(response.status, 503);
   assert.equal((await response.json() as { code: string }).code, "provider_unavailable");
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 });
 
 test("resposta vazia e chave sem autorização permanecem falhas tratadas", async () => {

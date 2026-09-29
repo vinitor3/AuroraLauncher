@@ -1,5 +1,9 @@
 # Compatibility Matrix
 
+## Failover Gemini no Worker — 29/09/2026
+
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Base `a3325b5`, cliente alpha.13 existente, Core 1.1.5 e Skins 0.3.1 preservados. O Worker limita tentativas entre chaves e oferece Flash-Lite explicitamente autorizado como último recurso, com prazo e orçamento compartilhados. Tradução usa o mesmo transporte; contratos desktop e confirmação local permanecem iguais. Não exige novo instalador nem altera os 18 JARs ou a matriz Minecraft/loader/Java. Provas pontuais de preview não demonstram estabilidade; publicação e validação do fluxo final estão registradas como pendentes em [task-gemini-failover.md](../task-gemini-failover.md).
+
 ## Gemini e ações locais confirmadas — 28/09/2026
 
 Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. O incremento parte de `ab1e1b5`, launcher alpha.12, Core 1.1.5 e Skins 0.3.1; o instalador alpha.13 foi gerado e o Worker foi publicado. A matriz ativa e as versões dos módulos permanecem iguais, com os 18 JARs reconstruídos e verificados. Assistente e Doctor compartilham transporte Gemini e revisão de remoção reversível de mod/ajuste de opções JSON permitidas, com histórico e restauração locais. Assistente e respostas estruturadas Doctor/Tools foram comprovados em preview com Gemini real e entradas sintéticas; também houve 503 intermitente. Testes de broker, DOM e Worker não homologam os pares Minecraft/loader abaixo. Evidências em [task-ai-tools.md](../task-ai-tools.md).
