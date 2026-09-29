@@ -209,6 +209,21 @@ Há divergência editorial upstream: uma seção de segurança chama relay-only 
 
 O [backlog](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) deve registrar, por dependência habilitada, versão/hash, configuração permitida, fonte/data, decisão teste/produção, evidência de custo, teste de falha/quota e responsável. Recursos que continuarem sem prova ficam experimentais e desativados. A ausência de um serviço elegível não autoriza enfraquecer autenticação, expor portas indiscriminadamente nem contratar infraestrutura.
 
+## Auditoria desktop e correção pontual TLS — sétimo incremento
+
+O lock desktop tem escopo diferente do lock `apps/connect-lab`. A auditoria com Cargo Audit 0.22.2/DB `f23b768236fe2880e4cfa167da662cad8ca79240` encontrou `rustls 0.23.43`/RUSTSEC-2026-0285 preexistente na alpha.14. [Aviso oficial](https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc) e [release corrigida 0.23.45](https://github.com/rustls/rustls/releases/tag/v/0.23.45) conferidos em 29/09/2026. A falha aceita mensagens TLS 1.3 em nível de criptografia indevido; o transcript continua autenticado, portanto não equivale a prova de interceptação arbitrária. Corrigida nesta branch com `cargo update --offline --manifest-path apps/desktop/src-tauri/Cargo.toml -p rustls@0.23.43 --precise 0.23.45`: apenas versão/checksum do pacote mudaram. Sem alteração de features, API pública, toolchain ou atualização ampla de dependências. `cargo info rustls@0.23.45 --offline`: Apache-2.0 OR ISC OR MIT, MSRV 1.71.
+
+Nova auditoria `--no-fetch --json`: **exit 0, zero vulnerabilidades conhecidas, 546 dependências**, oito warnings mantidos sem ignore. Relatórios locais `.aurora/connect-validation/desktop-audit-20260929.json` (antes) e `desktop-audit-fixed-20260929.json` (depois). Lock final SHA-256 `74fc67f016a01c82c4b3cac885914e7f4e722cb5273e1333755f3b643a4d3784`. Nenhum resultado promove segurança absoluta ou distribuição multiplataforma.
+
+| Aviso remanescente | Alcance verificado | Gate preservado |
+| --- | --- | --- |
+| Cinco crates `unic-* 0.9.0`, unmaintained | Presentes no alvo Windows via `unic-ucd-ident → urlpattern → tauri-utils → Tauri` | Manutenção/upstream da stack, sem trocar toda a árvore nesta correção |
+| `proc-macro-error 1.0.4`, RUSTSEC-2024-0370 | Ausente no Windows atual; `--target all`: `glib-macros`/`gtk3-macros` | Cadeia GTK de Linux/BSD, não liberada por teste Windows |
+| `glib 0.18.5`, RUSTSEC-2024-0429, unsound | Ausente no Windows atual; GTK/WebKitGTK/Wry/Tauri em Linux/BSD | Exige atualização compatível e testes nesses alvos antes de distribuição |
+| `chacha20 0.10.1`, yanked | Ausente nas features atuais, inclusive `--target all`; lock liga a rand/Quinn opcional de HTTP/3 do reqwest | Reavaliar antes de habilitar HTTP/3; yanked sozinho não declara vulnerabilidade |
+
+Cadeias conferidas por `cargo tree --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -i PACOTE`, repetido com `--target all` para os ausentes, e manifestos locais Tauri/Wry/reqwest. `rustls` corrigido está no Windows via reqwest/hyper-rustls e edge-tts-rust/tokio-tungstenite. Teste HTTPS público de catálogo e suites nativas estão registrados no task; nenhum login, credencial, relay ou cobrança foi usado. R0 continua aberto para avisos/targets e gates restantes.
+
 ## Registros complementares preservados do pacote alpha.13
 
 Dependência local do sexto incremento: `toml =0.9.12`, resolvido `0.9.12+spec-1.1.0`, MIT OR Apache-2.0, MSRV 1.76; já presente no lock desktop, agora aresta direta opcional de `connect-voice-lab`, features parse/serde/std sem defaults. Fonte/Cargo.toml local e [API versionada](https://docs.rs/toml/0.9.12%2Bspec-1.1.0/toml/) conferidos em 29/09/2026. Finalidade: spans e validação do anúncio Plasmo, sem serializer geral, serviço remoto, conta, quota ou custo. Falha de parsing recusa plano e conserva arquivo. O lock desktop foi auditado separadamente e registrou rustls 0.23.43/RUSTSEC-2026-0285 preexistente; a correção pontual 0.23.45 e os warnings são registrados no task, sem confundir com o lock independente Connect.
