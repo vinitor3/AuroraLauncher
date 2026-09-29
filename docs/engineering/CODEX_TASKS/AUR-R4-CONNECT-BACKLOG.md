@@ -47,6 +47,8 @@ Décimo quinto incremento: 002/005/008 ganham guest-tcp e plano somente game, se
 
 Décimo sexto incremento: T-LIFE-01/02/008 têm supervisor funcional de filho próprio, 18 testes de saída/prazo/cancelamento/cleanup e ambiente mínimo. Não aprova artefato/termos/readiness nem executa Java; [contrato](../../aurora-connect-runtime.md#supervisor-de-processo-próprio--décimo-sexto-incremento).
 
+Décimo sétimo incremento: prova Java 21 próprio + três consultas reais do probe nativo passou STOPPED→RUNNING→STOPPED. Minecraft ainda pendente, mas autorização EULA/MSA foi recebida; próxima preparação usará online-mode=false conforme preferência explicitada. [Evidência](../../task-aur-r4-connect.md#décimo-sétimo-incremento--probe-de-produção-com-java-próprio-real).
+
 ## 1. Evidência de partida e limites do inventário
 
 Leitura local feita em 29/09/2026, sem build, lançamento do jogo, conexão externa ou teste runtime. A existência de um símbolo ou de um teste no arquivo não equivale à execução desse teste.

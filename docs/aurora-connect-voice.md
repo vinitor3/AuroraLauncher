@@ -133,6 +133,8 @@ Após a aprovação, o mesmo executor recovery captura proteção e usa CAS/jour
 
 ## Verificação de processos no adaptador — décimo segundo incremento
 
+O décimo sétimo incremento acrescentou prova com Java 21 próprio real: probe de produção observou STOPPED→RUNNING→STOPPED, supervisor encerrou normalmente e fonte temporária foi removida. **1/1 teste opt-in aprovado**, sem Minecraft/mod. A consulta continua baseada em nome e sujeita a processo externo concorrente; [execução e limites](task-aur-r4-connect.md#décimo-sétimo-incremento--probe-de-produção-com-java-próprio-real).
+
 O décimo terceiro incremento verificou a entrega do lock entre aplicação, launch e restauração: quatro cenários SVC/Plasmo × estrita/revisada, com recibo vivo e aquisição de guard novo. Lock ocupado recusa sem alterar bytes/CAS; restauração preserva outras edições e libera o próximo launch. Os testes usam o lock real e probes privados controlados, sem JVM; [comandos e limites](task-aur-r4-connect.md#décimo-terceiro-incremento--entrega-e-retomada-do-lock-com-recibo-vivo).
 
 As APIs nativas passam a exigir `VoiceMutationGuard`, opaco e sem construtor público arbitrário. `acquire_voice_mutation_guard` consulta a presença de `java.exe`/`javaw.exe`, adquire o mesmo lock de mutação da instância e consulta novamente. Preparar qualquer plano repete a verificação. Confirmar verifica antes do inventário, depois do inventário antes de iniciar o executor e depois da preparação do snapshot/CAS antes da transação do arquivo. Assim, ausência observada durante a preparação não vale automaticamente por cinco minutos. O prazo do plano também é conferido depois das consultas, antes de iniciar o executor.
