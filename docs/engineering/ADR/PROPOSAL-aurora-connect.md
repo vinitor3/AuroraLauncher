@@ -76,6 +76,8 @@ Priorizar configuração reversível ou API/add-on oficial. Hook mínimo no Core
 
 A UI recebe estados reais e separados: transporte autenticado, caminho selecionado, jogo acessível, jogador no mundo e voz validada. Cada um exige sua evidência própria. Falha de voz não encerra jogo automaticamente. Timeout isolado não diagnostica CGNAT. [Contrato detalhado e testes](../AURORA_CONNECT_SPEC.md).
 
+Decisão limitada do quinto incremento: feature `connect-voice-lab` no núcleo, sem dependência nova/default/comando/UI, apenas cópia de diagnóstico verificada. O adaptador SVC 2.6.22/Fabric 1.21.1 renderiza exclusivamente `voice_host` existente; plano/diff/capability ficam em memória até confirmação válida por hash, prazo, UUID e fingerprint. Persistir preview antes da autorização foi rejeitado na revisão porque recovery genérico poderia reaplicá-lo após cancelamento. Depois da confirmação, usa o executor CAS/preview/proteção/journal/undo da alpha.14, sem outro mecanismo de escrita. Sintaxe estrita preserva bytes fora do campo; configuração ambígua é recusada. Instâncias primárias, LAN e misto ficam fora do adaptador; o caller deverá verificar processos antes/depois do lock. Testes locais não liberam voz ou R4. [Evidência](../../aurora-connect-voice.md#adaptador-nativo-svc-em-cópia-de-diagnóstico--quinto-incremento).
+
 ## Decisões pendentes e condições de aceitação
 
 1. Inventário real e versão fixada: compilador, runtime, dependências transitivas, código já existente e gate R4. Não promover pesquisa a implementação.

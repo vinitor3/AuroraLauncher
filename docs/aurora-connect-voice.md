@@ -1,6 +1,6 @@
 # Aurora Connect — preparação dos mods de voz
 
-Data: 29/09/2026. Estado do utilitário local: **PROTÓTIPO**. Integração de voz Simple Voice Chat e Plasmo Voice: **NÃO IMPLEMENTADO**; homologação individual: **PRECISA DE TESTE**. Este documento complementa a especificação canônica em `engineering/AURORA_CONNECT_SPEC.md`; não cria um segundo contrato de transporte. O código não está conectado ao desktop nem habilita voz para usuários.
+Data: 29/09/2026. Estado do utilitário local: **PROTÓTIPO**. Integração runtime de voz Simple Voice Chat e Plasmo Voice: **NÃO IMPLEMENTADO**; homologação individual: **PRECISA DE TESTE**. O SVC possui adaptador nativo experimental de configuração em cópias de diagnóstico, descrito abaixo, compilado apenas com `connect-voice-lab`. Este documento complementa a especificação canônica em `engineering/AURORA_CONNECT_SPEC.md`; não cria um segundo contrato de transporte. Não existe comando Tauri/interface ou voz habilitada para usuários.
 
 ## Incremento executado
 
@@ -69,6 +69,30 @@ Inspeção estática de `engine/ai_tools.rs` confirma que `SetSetting` usa `serd
 
 Próximo executor de voz deve integrar identidade física da instância, jogo encerrado, lock comum, plano e diff locais, autorização específica, revalidação do SHA-256, snapshot antes da escrita, journal durável, retomada após crash e restauração que recuse sobrescrever edição posterior. Não ampliar snapshots para `saves/**/serverconfig`, mundos, segredos ou módulos administrados. O utilitário atual não chama recovery e não promete rollback de algo que não alterou.
 
+## Adaptador nativo SVC em cópia de diagnóstico — quinto incremento
+
+`engine/connect_voice.rs` no núcleo desktop fica fora da compilação padrão. Não adiciona dependências nem altera Core/Skins, comandos Tauri ou UI. Só aceita cópia de diagnóstico com proveniência/identidade física/estado pronto verificados, runtime declarado Fabric 1.21.1 e exatamente uma ocorrência habilitada do JAR SVC fixado por tamanho/SHA-256. Presença do arquivo não comprova carregamento pelo mod loader, compatibilidade dos demais mods ou servidor ativo.
+
+A API Rust `prepare_announcement` recebe modo `DedicatedAuroraOnly`, porta local e SHA-256 da configuração revisada. O único alvo é `config/voicechat/voicechat-server.properties`, já existente e elegível no recovery. Renderiza apenas o valor existente de `voice_host`, preservando todos os demais bytes. Comentários e quebras de linha permanecem; sintaxe ambígua, escapes, duplicações, whitespace Unicode nas posições sintáticas, UTF-8 inválido, porta zero e arquivo maior que 256 KiB são recusados. Não altera bind, porta do servidor, autenticação ou MTU. Todos os clientes, inclusive o anfitrião, precisam de ponte local na mesma porta anunciada; LAN/misto não são modos disponíveis.
+
+O plano/diff e bytes preparados ficam **somente em memória**, com UUID próprio, hash vinculado à identidade/fingerprint e prazo monotônico de cinco minutos. Cancelar é descartar o objeto; não deixa um ponto/preview aplicável pela Recuperação. Confirmar consome o objeto, verifica hash aprovado, prazo, cópia e estado completo novamente, então reutiliza `preview_selected_files`/`restore`: CAS, proteção anterior, journal e undo da alpha.14. Só depois de aprovação pode existir um ponto persistido; ele segue o fluxo normal de recuperação. O chamador nativo ainda deve provar jogo encerrado antes/depois de obter o lock comum. Isso é pré-condição de integração, não detecção de processo implementada neste módulo.
+
+Testes executados em fixtures temporárias com bytes do JAR oficial: mudança/undo exatos, origem intacta, cancelamento sem preview reutilizável, rejeição pelo executor genérico, prazo expirado, hash de aprovação/origem incorretos, outra identidade e edição posterior. O adaptador não torna a mudança de voz aplicável à origem pelo fluxo genérico de Cópias de teste. A suíte geral também reexecutou os testes de falha injetada e journal do recovery; queda física de energia e configuração/mod/JVM reais continuam pendentes.
+
+```powershell
+$env:AURORA_CONNECT_ARTIFACT_DIR = (Join-Path (Get-Location) '.aurora/connect-voice-artifacts')
+cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --features connect-voice-lab --lib connect_voice::tests -- --include-ignored
+cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --features connect-voice-lab
+cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check
+cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --features connect-voice-lab --all-targets -- -D warnings
+cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+```
+
+Quatro testes focados passaram; a configuração padrão passou com 258 testes e cinco opt-in ignorados. A suíte com a feature passou, deixando o caso de JAR real opt-in (executado separadamente) e testes externos ignorados. Não use `--include-ignored` na suíte inteira: também ativa testes antigos de serviços externos e exige uma instância pessoal explícita no Doctor. O ensaio focado não baixa nem executa Java. Fixtures próprias são removidas após o teste, sem remover o cache de JARs ou outras instâncias.
+
+Revisão independente encontrou e corrigiu dois defeitos antes do commit: publicar preview antes da aprovação deixava uma via genérica de aplicação após cancelar/expirar; `trim()` Unicode não correspondia à sintaxe Java Properties. Testes negativos acompanham ambas as correções. Nenhuma configuração pessoal foi usada.
+
 ## Demonstração reproduzida e testes
 
 Diretório: `C:/Users/usuario/Desktop/AuroraLauncher-worktrees/codex-aur-r4-connect`. Windows, Node `v24.8.0`. Comandos realmente executados:
@@ -111,10 +135,10 @@ Cobertura: separação de endereços, herança explícita de porta, config incom
 | Inspector de configuração e plano sintético | **PROTÓTIPO**, testado | **PROTÓTIPO**, testado |
 | Artefato local/hash/metadados/licença exatos | **CONCLUÍDO** para Fabric 1.21.1/2.6.22; sem execução | **CONCLUÍDO** para Fabric 1.21.1/2.1.17; sem execução |
 | Transporte UDP real do mod, autenticação e retorno | **PRECISA DE TESTE** | **PRECISA DE TESTE** |
-| Endereçamento de dedicado só Aurora | Rascunho global, sem aplicação/runtime | Rascunho global, sem aplicação/runtime |
+| Endereçamento de dedicado só Aurora | Adaptador nativo restrito a cópia; aplicação/undo em fixture, runtime pendente | Rascunho global, sem aplicação/runtime |
 | LAN | **NÃO VERIFICADO**, sem override | **NÃO VERIFICADO**, sem override |
 | Misto direto/Aurora e várias instâncias | **NÃO IMPLEMENTADO**, requer adaptador | **NÃO IMPLEMENTADO**, requer adaptador |
-| Mutação confirmada, restauração concorrente e crash | **NÃO IMPLEMENTADO** neste adaptador | **NÃO IMPLEMENTADO** neste adaptador |
+| Mutação confirmada, restauração concorrente e crash | **PROTÓTIPO** em cópia, confirmação/undo/conflito testados; journal reutilizado, crash físico pendente | **NÃO IMPLEMENTADO** neste adaptador |
 | Voz audível consentida, sem gravação, sob carga do jogo | **PRECISA DE TESTE** | **PRECISA DE TESTE** |
 
 O ensaio audível futuro executa cada mod em separado: anfitrião com dedicado descartável, convidado com cliente descartável do mesmo artefato/par, autenticação oficial, serviço UDP autorizado e ponte loopback em cada participante. Registrar handshake próprio do mod e confirmação humana bidirecional, sem gravar áudio; repetir sob carga, porta ocupada, desconexão, revogação e encerramento. Status TCP ou echo UDP não demonstram voz. Os artefatos candidatos já estão fixados; o procedimento com comandos de jogo e ponte ainda depende de preparar o runtime e o adaptador, sem comandos fictícios nesta documentação.

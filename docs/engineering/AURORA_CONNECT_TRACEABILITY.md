@@ -53,6 +53,7 @@ Baseline de 29/09/2026, comandos/saídas/achados no [task de execução](../task
 
 | Prova executada | Requisitos/tarefas relacionados | Limite da prova |
 | --- | --- | --- |
+| Quinto incremento: adaptador nativo SVC opt-in em cópia, quatro testes focados com JAR real, suites padrão/feature e fmt/clippy aprovados | REQ-V2-14/16/19/23/25; 006 e 008 | Configuração existente somente, confirmação em memória antes de CAS/preview/restore; cancelamento sem ponto reaplicável, identidade/hash/concorrência/undo. Padrão 258 PASS/cinco opt-in ignorados. Caller ainda deve provar jogo parado; sem comando/UI, runtime/mod/áudio/crash físico não homologados |
 | 24/24 Rust: 4 unitários, 9 adversariais, 11 de transporte; fmt/clippy aprovados | REQ-V2-08..12/19/20; 002/003 e robustez local 008 | Autorização antes do destino, TCP duplex/8 MiB/backpressure/half-close, UDP real com isolamento/MTU/replay/revogação/limites; sem JVM/áudio/NAT |
 | Transporte repetido cinco vezes: 55/55 resultados | REQ-V2-12/23; 002/003 | Após reproduzir e corrigir descarte UDP por esgotamento do bucket agregado sob TCP; reserva de 16 KiB, sem alegar perda zero ou fairness universal |
 | Smoke multiprocesso: dois agentes, 1 MiB TCP por direção, dez UDP/duas origens, 1358 bytes negociados e limpeza aprovada | REQ-V2-09/10/23/26; C-TCP/C-UDP | Direto na mesma máquina; uma amostra debug não mede atraso de voz, RTT puro ou desempenho externo |

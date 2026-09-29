@@ -2,6 +2,8 @@
 
 pub mod ai_history;
 pub mod ai_tools;
+#[cfg(feature = "connect-voice-lab")]
+pub mod connect_voice;
 pub mod diagnostic_lab;
 pub mod doctor_recovery;
 pub mod recovery;

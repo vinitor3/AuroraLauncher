@@ -2,7 +2,7 @@
 
 ## Aurora Connect V2 — laboratório local de 29/09/2026
 
-Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, fora do desktop e desligado para usuários. Base cumulativa alpha.14 (`5ac2f7e` sobre `6a107b8`), Core 1.1.5, Skins 0.3.1 e os nove pares preservados. Evidências e comandos no [task de execução](../task-aur-r4-connect.md); roteiro no [laboratório](../aurora-connect.md). A [matriz candidata por mod/versão/loader/hospedagem/rede](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) mantém os gates futuros. A matriz abaixo conserva todas as evidências anteriores; retransmissão Skins e testes sintéticos de transporte não homologam Connect em Minecraft.
+Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, desligado para usuários. O núcleo desktop tem um adaptador de configuração SVC apenas opt-in/cópia de diagnóstico, sem comando ou interface. Base cumulativa alpha.14 (`5ac2f7e` sobre `6a107b8`), Core 1.1.5, Skins 0.3.1 e os nove pares preservados. Evidências e comandos no [task de execução](../task-aur-r4-connect.md); roteiro no [laboratório](../aurora-connect.md). A [matriz candidata por mod/versão/loader/hospedagem/rede](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) mantém os gates futuros. A matriz abaixo conserva todas as evidências anteriores; retransmissão Skins e testes sintéticos de transporte não homologam Connect em Minecraft.
 
 | Capacidade | Evidência local | Estado e fronteira |
 | --- | --- | --- |
@@ -12,7 +12,7 @@ Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, fora do de
 | Relay/UDP externo bloqueado | Pesquisa de capacidade upstream e termos, sem ativação | **NÃO IMPLEMENTADO** no laboratório; nenhum relay configurado/homologado |
 | Minecraft | Nenhuma JVM/jogo executado pelo laboratório | **NÃO IMPLEMENTADO** como integração; ingresso no mundo pendente |
 | Convites/interface | Pin e lease manual do laboratório | Fluxo social/interface **NÃO IMPLEMENTADO**; não equivale a convite do produto |
-| Simple Voice Chat | Inspector/plano sem escrita; referências oficiais e fixtures | **PARCIAL** somente na preparação; runtime/endereço/áudio **PRECISA DE TESTE** |
+| Simple Voice Chat | Inspector/JAR verificado e adaptador nativo de configuração em cópia; aprovação, conflito e undo testados | **PARCIAL**, opt-in sem UI; runtime/endereço/áudio **PRECISA DE TESTE** |
 | Plasmo Voice | Inspector/plano sem escrita, independente de SVC | **PARCIAL** somente na preparação; runtime/endereço/áudio **PRECISA DE TESTE** |
 
 Baseline: 24/24 testes Rust (4 unitários, 9 adversariais, 11 de transporte), 55/55 resultados nas cinco repetições da suíte de transporte, fmt/clippy e 14/14 testes do inspector aprovados. Smoke: 1 MiB TCP por direção, dez UDP em duas origens, teto negociado de 1358 bytes e limpeza aprovada. Uma falha intermitente anterior de UDP sob carga TCP foi corrigida reservando 16 KiB do burst para datagramas; o histórico permanece no task. Esses resultados não garantem ausência de perda em UDP, justiça em redes externas ou SLA. Nenhuma linha de mod/loader/hospedagem recebe homologação por esses testes.
@@ -22,6 +22,8 @@ Incremento posterior de retorno UDP: 34/34 Rust (os 24 anteriores + 6 casos down
 Terceiro incremento: 45/45 Rust, fmt/clippy e dois smokes aprovados, com onze casos de plano local estrito/aprovação por hash/leitura limitada. Smoke padrão: dez UDP, 3138 bytes por direção. Smoke downstream: 2 bytes enviados, 8192 recebidos, 16 respostas em duas origens. Ambos transferiram 1 MiB TCP por direção e encerraram os processos próprios. Negociação observou 1358 bytes anteriormente e 1390 na última amostra: valor dinâmico, sem aprovação de MTU de mod. Nenhum JAR/Minecraft/áudio integra essas provas.
 
 O quarto incremento Connect acrescentou inspeção dos JARs oficiais Fabric 1.21.1 de Simple Voice Chat 2.6.22 e Plasmo Voice 2.1.17, com 31/31 testes Node, incluindo os dois artefatos reais. Hash, metadata e assinaturas relevantes foram conferidos sem carregar JVM. O plano deriva versão do artefato; não prova instalação, anúncio efetivo, áudio ou transporte do mod. [Hashes, métodos e comandos](../aurora-connect-voice.md). Isso não amplia os nove pares nem promove qualquer célula de homologação.
+
+Quinto incremento: quatro testes focados SVC com fixture/JAR real, suíte nativa com feature e padrão aprovadas; padrão 258 PASS/cinco opt-in ignorados. Fmt/clippy nas duas configurações passaram. Reutiliza CAS/lock/identidade/journal/undo existentes, com alvo só persistido após aprovação; não amplia allowlist para aplicar à origem nem comprova jogo, áudio ou crash físico. [Escopo e comandos](../aurora-connect-voice.md#adaptador-nativo-svc-em-cópia-de-diagnóstico--quinto-incremento).
 
 ## Doctor, recuperação e cópias de teste — 29/09/2026
 
