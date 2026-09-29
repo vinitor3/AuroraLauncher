@@ -1,8 +1,8 @@
 import { mkdir, lstat, mkdtemp, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { artifactPins, EULA_URL } from './pins.mjs';
-import { runtimeFiles } from './play-profile.mjs';
+import { EULA_URL } from './pins.mjs';
+import { runtimeFiles, runtimeArtifacts } from './play-profile.mjs';
 import { hash, fail, readLocal, absent, downloadVerified } from './files.mjs';
 import { rejectLinkedParents, resolveExplicitLocalPath } from '../connect-voice-tools/local-path.mjs';
 
@@ -27,10 +27,11 @@ export async function makePlan(javaHome, profile = 'status') {
   const executable = join(home, 'bin', 'java.exe');
   const binary = await readLocal(executable, 4 * 1024 * 1024);
   if (binary.length < 2 || binary.toString('ascii', 0, 2) !== 'MZ') fail('runtime_java_binary');
-  const artifacts = artifactPins();
+  const artifacts = runtimeArtifacts(profile);
   return {
     schemaVersion: 1, purpose: `aurora_connect_disposable_${profile}_lab`,
     target: { minecraft: '1.21.1', loader: 'fabric', loaderVersion: '0.16.14', javaMajor: 21, protocol: 767 },
+    ...(profile === 'svc' ? { voiceMod: { id: 'voicechat', version: '2.6.22' } } : {}),
     java: { home, executable, version, releaseSha256: hash(release), executableSha256: hash(binary) },
     artifacts, downloadBytes: artifacts.reduce((sum, item) => sum + item.bytes, 0),
     files,
@@ -41,7 +42,7 @@ export async function makePlan(javaHome, profile = 'status') {
       executableNotRunByThisTool: true },
     consent: { minecraftEula: EULA_URL, downloadRequiresUserAcceptance: true, eulaFileRemainsFalse: true },
     limits: { totalDownloadSeconds: 180, perArtifactSeconds: 90, retries: 0, redirects: false,
-      personalInstanceAccess: false, relay: false, voiceMods: false, coreSkins: false, runtimeHomologated: false },
+      personalInstanceAccess: false, relay: false, voiceMods: profile === 'svc', coreSkins: false, runtimeHomologated: false },
   };
 }
 
@@ -68,6 +69,9 @@ export async function stageRuntime(javaHome, approval, acceptedEula, profile = '
   const writeNew = async (file, value) => { await absent(join(root, file)); await writeFile(join(root, file), value, { flag: 'wx' }); };
   try {
     await mkdir(join(root, 'libraries'));
+    if (profile === 'svc') {
+      await mkdir(join(root, 'mods')); await mkdir(join(root, 'config')); await mkdir(join(root, 'config/voicechat'));
+    }
     await writeNew('plan.json', json(plan));
     await writeNew('consent.json', json({ planSha256: approval, downloadEulaAccepted: true, javaExecuted: false }));
     const verified = [];
@@ -89,14 +93,14 @@ export async function stageRuntime(javaHome, approval, acceptedEula, profile = '
 }
 
 export async function main(args) {
-  if (args.length === 2 && ['plan', 'plan-play'].includes(args[0])) {
-    const plan = await makePlan(args[1], args[0] === 'plan-play' ? 'play' : 'status');
+  if (args.length === 2 && ['plan', 'plan-play', 'plan-svc'].includes(args[0])) {
+    const plan = await makePlan(args[1], args[0] === 'plan' ? 'status' : args[0].slice(5));
     return { event: 'runtime_plan', planSha256: planDigest(plan), plan };
   }
-  if (args.length === 4 && ['stage', 'stage-play'].includes(args[0]) && args[3] === '--user-accepted-minecraft-eula') {
-    return stageRuntime(args[1], args[2], true, args[0] === 'stage-play' ? 'play' : 'status');
+  if (args.length === 4 && ['stage', 'stage-play', 'stage-svc'].includes(args[0]) && args[3] === '--user-accepted-minecraft-eula') {
+    return stageRuntime(args[1], args[2], true, args[0] === 'stage' ? 'status' : args[0].slice(6));
   }
-  if (args.length === 3 && ['stage', 'stage-play'].includes(args[0])) fail('runtime_eula_acceptance_required');
+  if (args.length === 3 && ['stage', 'stage-play', 'stage-svc'].includes(args[0])) fail('runtime_eula_acceptance_required');
   fail('runtime_usage');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

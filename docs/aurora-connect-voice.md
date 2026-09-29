@@ -1,6 +1,6 @@
 # Aurora Connect — preparação dos mods de voz
 
-Data: 29/09/2026. Estado do utilitário local: **PROTÓTIPO**. Integração runtime de voz Simple Voice Chat e Plasmo Voice: **NÃO IMPLEMENTADO**; homologação individual: **PRECISA DE TESTE**. Ambos possuem adaptadores nativos experimentais de configuração em cópias de diagnóstico, descritos abaixo, compilados apenas com `connect-voice-lab`. Este documento complementa a especificação canônica em `engineering/AURORA_CONNECT_SPEC.md`; não cria um segundo contrato de transporte. Não existe comando Tauri/interface ou voz habilitada para usuários.
+Data: 29/09/2026. Estado do utilitário local: **PROTÓTIPO**. Integração runtime do transporte/endereço de voz Simple Voice Chat e Plasmo Voice: **NÃO IMPLEMENTADO**; homologação individual: **PRECISA DE TESTE**. SVC já tem prova isolada de boot/bind UDP/writer, descrita abaixo, sem cliente/áudio. Ambos possuem adaptadores nativos experimentais de configuração em cópias de diagnóstico, compilados apenas com `connect-voice-lab`. Este documento complementa a especificação canônica em `engineering/AURORA_CONNECT_SPEC.md`; não cria um segundo contrato de transporte. Não existe comando Tauri/interface ou voz habilitada para usuários.
 
 ## Incremento executado
 
@@ -47,7 +47,7 @@ A assinatura `UdpClient.getSecret()` também está presente; apenas seu descrito
 
 ### Simple Voice Chat
 
-O arquivo documentado para Fabric/Forge é `config/voicechat/voicechat-server.properties`. `port`, `bind_address` e `voice_host` são opções documentadas do dedicado. `port=-1` depende da porta Minecraft efetiva; o inspector só a resolve se recebê-la explicitamente. `bind_address` vazio depende de `server-ip`, igualmente não inventado. `voice_host` é anúncio para o cliente, não bind. A referência `mtu_size=1275` corresponde a áudio e não comprova tamanho integral do UDP. [Configuração oficial](https://modrepo.de/minecraft/voicechat/wiki/server_config)
+O arquivo documentado para Fabric/Forge é `config/voicechat/voicechat-server.properties`. `port`, `bind_address` e `voice_host` são opções documentadas do dedicado. `port=-1` depende da porta Minecraft efetiva; o inspector só a resolve se recebê-la explicitamente. `bind_address` vazio consulta `server-ip`, mas o código fixado converte loopback em wildcard nesse fallback: laboratório deve definir `bind_address=127.0.0.1` explicitamente e observar o socket real. `voice_host` é anúncio para o cliente, não bind. A referência `mtu_size=1275` corresponde a áudio e não comprova tamanho integral do UDP. [Configuração oficial](https://modrepo.de/minecraft/voicechat/wiki/server_config), [Server.java fixado](https://github.com/henkelmax/simple-voice-chat/blob/7d4317264596736e935cb5a5fbcf899376aa8b34/common/src/main/java/de/maxhenkel/voicechat/voice/server/Server.java).
 
 O guia de proxy genérico exige anúncio para o proxy. Plugins Velocity/Bungee têm regras próprias que não transformam o agente Aurora em proxy Minecraft. [Guia oficial](https://modrepo.de/minecraft/voicechat/wiki/proxy_setup)
 
@@ -180,10 +180,13 @@ Cobertura: separação de endereços, herança explícita de porta, config incom
 
 ## Gates restantes, por mod
 
+Pesquisa de boot em 29/09/2026: SVC fixado já embute seis módulos Fabric API e sua API, sem exigir o Fabric API completo no metadata. ConfigBuilder2.1.0 usa `saveAfterBuild=true` e pode regravar comentários/ordem/EOL; precisa de prova própria de writer/restauração. Plasmo fixado declara dependência `fabric:*`, embute somente Fabric Permissions API e requer acrescentar Fabric API aprovado ao plano. Seus defaults `check_for_updates`/`use_crowdin_translations` são true e devem ser explicitamente false no laboratório; `[host] ip` também deve ser loopback explícito. Nenhuma dessas observações estáticas comprova bind ou voz. [ConfigBuilder fixado](https://github.com/henkelmax/config-builder/blob/ea725c2d747c190865fb398d5b39a661fa3b3af9/src/main/java/de/maxhenkel/configbuilder/ConfigBuilder.java), [configuração Plasmo fixada](https://github.com/plasmoapp/plasmo-voice/blob/4c717b85c4bbfa286c7809a4018137142798986b/server/common/src/main/java/su/plo/voice/server/config/VoiceServerConfig.java).
+
 | Verificação | SVC | Plasmo |
 | --- | --- | --- |
 | Inspector de configuração e plano sintético | **PROTÓTIPO**, testado | **PROTÓTIPO**, testado |
-| Artefato local/hash/metadados/licença exatos | **CONCLUÍDO** para Fabric 1.21.1/2.6.22; sem execução | **CONCLUÍDO** para Fabric 1.21.1/2.1.17; sem execução |
+| Artefato local/hash/metadados/licença exatos | **CONCLUÍDO** para Fabric 1.21.1/2.6.22; boot isolado posterior21 | **CONCLUÍDO** para Fabric 1.21.1/2.1.17; sem execução |
+| Boot, bind próprio e arquivo gerado pelo writer | **PROTÓTIPO**, Java21/Fabric0.16.14, UDP43002 loopback próprio,19chaves e stop normal; sem áudio | **PRECISA DE TESTE**, Fabric API exato ainda deve integrar o plano |
 | Transporte UDP real do mod, autenticação e retorno | **PRECISA DE TESTE** | **PRECISA DE TESTE** |
 | Endereçamento de dedicado só Aurora | Adaptador nativo restrito a cópia; aplicação/undo em fixture, runtime pendente | Adaptador nativo restrito a cópia; alteração/adição do anúncio e undo em fixture, runtime pendente |
 | LAN | **NÃO VERIFICADO**, sem override | **NÃO VERIFICADO**, sem override |

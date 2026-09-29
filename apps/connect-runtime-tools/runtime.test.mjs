@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { artifactPins, EULA_URL, SERVER_PROPERTIES } from './pins.mjs';
 import { hash, readLocal, downloadVerified } from './files.mjs';
 import { makePlan, planDigest, stageRuntime, main } from './runtime.mjs';
-import { PLAY_NAMES, offlineUuid, runtimeFiles } from './play-profile.mjs';
+import { PLAY_NAMES, offlineUuid, runtimeFiles, runtimeArtifacts } from './play-profile.mjs';
+import { SVC_ARTIFACT, SVC_CONFIG_PATH, SVC_BASELINE_BYTES, validateSvcConfig } from './svc-profile.mjs';
 
 // Every executable/JAR below is synthetic data. No Java process, production
 // fetch, Minecraft download or persistent consent is part of these tests.
@@ -126,6 +127,69 @@ test('play profile is explicit, two fixed offline identities, no compression and
   await assert.rejects(main(['stage-play', home, planDigest(play)]), /runtime_eula_acceptance_required/);
   assert.throws(() => runtimeFiles('arbitrary'), /runtime_profile/);
   assert.throws(() => offlineUuid('arbitrary'), /runtime_play_identity/);
+});
+
+test('SVC profile has one exact voice artifact and isolated files without changing status or play', async t => {
+  const root = await fixture(t); const home = await fakeJdk(root);
+  const before = await stagingSnapshot();
+  const status = await makePlan(home, 'status');
+  const play = await makePlan(home, 'play');
+  const svc = await makePlan(home, 'svc');
+  assert.deepEqual(await makePlan(home, 'svc'), svc);
+  assert.equal(new Set([status, play, svc].map(planDigest)).size, 3);
+  assert.equal(svc.purpose, 'aurora_connect_disposable_svc_lab');
+  assert.deepEqual(svc.voiceMod, { id: 'voicechat', version: '2.6.22' });
+  assert.equal(status.voiceMod, undefined); assert.equal(play.voiceMod, undefined);
+  assert.equal(svc.limits.voiceMods, true);
+  assert.equal(status.limits.voiceMods, false); assert.equal(play.limits.voiceMods, false);
+  for (const key of ['personalInstanceAccess', 'relay', 'coreSkins', 'runtimeHomologated']) assert.equal(svc.limits[key], false);
+  assert.deepEqual(svc.target, status.target);
+  assert.deepEqual(svc.artifacts.slice(0, 9), status.artifacts);
+  assert.deepEqual(svc.artifacts[9], SVC_ARTIFACT);
+  assert.equal(svc.artifacts.length, 10);
+  assert.equal(svc.downloadBytes, 60_952_106);
+  assert.deepEqual(runtimeArtifacts('svc'), svc.artifacts);
+  assert.deepEqual(runtimeArtifacts('status'), artifactPins());
+  assert.deepEqual(runtimeArtifacts('play'), artifactPins());
+  const mutatedPins = runtimeArtifacts('svc');
+  mutatedPins[9].digest = '0'.repeat(64); mutatedPins.pop();
+  assert.deepEqual(runtimeArtifacts('svc').at(-1), SVC_ARTIFACT);
+  assert.throws(() => runtimeArtifacts('arbitrary'), /runtime_profile/);
+  assert.deepEqual(Object.keys(svc.files).sort(), ['server.properties', 'eula.txt', SVC_CONFIG_PATH].sort());
+  assert.equal(svc.files['server.properties'], SERVER_PROPERTIES);
+  assert.equal(svc.files['eula.txt'], `# ${EULA_URL}\neula=false\n`);
+  assert.deepEqual(Buffer.from(svc.files[SVC_CONFIG_PATH]), SVC_BASELINE_BYTES);
+  assert.equal(validateSvcConfig(Buffer.from(svc.files[SVC_CONFIG_PATH])).keyCount, 3);
+  assert.equal(status.files[SVC_CONFIG_PATH], undefined); assert.equal(play.files[SVC_CONFIG_PATH], undefined);
+  assert.equal(svc.launch.args[svc.launch.args.indexOf('-cp') + 1].split(';').length, 8);
+  assert.ok(!svc.launch.args.some(value => value.includes('voicechat')));
+  assert.deepEqual(await stagingSnapshot(), before);
+});
+
+test('SVC CLI and explicit profile keep approval and EULA gates before any networking or staging', async t => {
+  const root = await fixture(t); const home = await fakeJdk(root);
+  const before = await stagingSnapshot(); const originalFetch = globalThis.fetch; let fetched = 0;
+  const svc = await makePlan(home, 'svc'); const status = await makePlan(home);
+  globalThis.fetch = () => { fetched++; throw new Error('test_network_forbidden'); };
+  try {
+    const result = await main(['plan-svc', home]);
+    assert.equal(result.event, 'runtime_plan');
+    assert.equal(result.planSha256, planDigest(svc));
+    assert.deepEqual(result.plan, svc);
+    await assert.rejects(stageRuntime(home, planDigest(status), true, 'svc'), /runtime_plan_approval/);
+    await assert.rejects(stageRuntime(home, planDigest(svc), true, 'status'), /runtime_plan_approval/);
+    await assert.rejects(stageRuntime(home, planDigest(svc), false, 'svc'), /runtime_eula_acceptance_required/);
+    await assert.rejects(main(['stage-svc', home, planDigest(svc)]), /runtime_eula_acceptance_required/);
+    await assert.rejects(main(['stage-svc', home, planDigest(status), '--user-accepted-minecraft-eula']), /runtime_plan_approval/);
+  } finally { globalThis.fetch = originalFetch; }
+  const planned = await childCli(['plan-svc', home]);
+  assert.equal(planned.code, 0); assert.equal(planned.stderr, '');
+  assert.equal(JSON.parse(planned.stdout).planSha256, planDigest(svc));
+  const blocked = await childCli(['stage-svc', home, planDigest(svc)]);
+  assert.equal(blocked.code, 1); assert.equal(blocked.stderr, '');
+  assert.deepEqual(JSON.parse(blocked.stdout), { event: 'failed', code: 'runtime_eula_acceptance_required' });
+  assert.equal(fetched, 0);
+  assert.deepEqual(await stagingSnapshot(), before);
 });
 
 test('plan reads synthetic JDK bytes without executing and deterministically binds the review', { skip: process.platform !== 'win32' }, async t => {
@@ -256,6 +320,38 @@ test('download pin, origin and timeout validation precede filesystem and fetch',
     await assert.rejects(downloadVerified(pinFor(), destination, { fetcher, timeoutMs }), { message: 'runtime_download_timeout' });
   }
   assert.equal(fetched, 0); assert.deepEqual(await readdir(root), []);
+});
+
+test('Modrinth admits only the exact SVC pin before filesystem or fetch and never downloads in this fixture', async t => {
+  const root = await fixture(t); let fetched = 0;
+  const fetcher = (url, options) => {
+    fetched++;
+    assert.equal(url, SVC_ARTIFACT.url);
+    assert.equal(options.redirect, 'error'); assert.equal(options.credentials, 'omit');
+    assert.equal(options.headers['Accept-Encoding'], 'identity');
+    throw new Error('fixture_modrinth_fetch_denied');
+  };
+  // The missing destination parent makes an accidental filesystem call fail
+  // differently. Each mutated pin must be rejected before that access.
+  const absentParentDestination = join(root, 'must-not-exist', 'rejected.jar');
+  for (const fields of [
+    { file: 'mods/extra.jar' }, { file: 'voicechat-fabric-1.21.1-2.6.22.jar' },
+    { bytes: SVC_ARTIFACT.bytes + 1 }, { digest: '0'.repeat(64) },
+    { algorithm: 'sha1', digest: '0'.repeat(40) },
+    { url: SVC_ARTIFACT.url + '?download=1' }, { url: SVC_ARTIFACT.url + '#fragment' },
+    { url: SVC_ARTIFACT.url.replace('VS5X7jZd', 'another-release') },
+    { url: SVC_ARTIFACT.url.replace('cdn.modrinth.com', 'api.modrinth.com') },
+    { url: 'https://maven.fabricmc.net/fixture/attempted-svc-replacement.jar' },
+  ]) {
+    await assert.rejects(downloadVerified({ ...SVC_ARTIFACT, ...fields }, absentParentDestination, { fetcher }),
+      error => /^runtime_download_(?:origin|pin)$/.test(error.message));
+  }
+  assert.equal(fetched, 0); assert.deepEqual(await readdir(root), []);
+  const destination = join(root, 'approved-synthetic-attempt.jar');
+  await assert.rejects(downloadVerified(SVC_ARTIFACT, destination, { fetcher }), { message: 'fixture_modrinth_fetch_denied' });
+  assert.equal(fetched, 1);
+  assert.equal(await exists(destination), false);
+  assert.equal((await lstat(`${destination}.part`)).size, 0);
 });
 
 test('real local HTTP verifies SHA-1 and SHA-256 and publishes exact bytes only after completion', async t => {
@@ -395,9 +491,9 @@ test('cancellation while syncing verified bytes still prevents final publication
   assert.deepEqual(await readFile(`${destination}.part`), payload);
 });
 
-test('stage failure after synthetic approval preserves only its new unready directory', { skip: process.platform !== 'win32' }, async t => {
+for (const profile of ['status', 'svc']) test(`stage failure after synthetic approval preserves only its new unready directory (${profile})`, { skip: process.platform !== 'win32' }, async t => {
   const root = await fixture(t); const home = await fakeJdk(root);
-  const plan = await makePlan(home); const approval = planDigest(plan);
+  const plan = await makePlan(home, profile); const approval = planDigest(plan);
   const before = await stagingSnapshot() ?? [];
   let ownedDirectory;
   t.after(async () => {
@@ -416,7 +512,7 @@ test('stage failure after synthetic approval preserves only its new unready dire
   try {
     // Simulated consent for this fake JDK only. There is no HTTP request or
     // Minecraft download, and the fixture consent record is removed on cleanup.
-    await assert.rejects(stageRuntime(home, approval, true), { message: 'fixture_network_refused' });
+    await assert.rejects(stageRuntime(home, approval, true, profile), { message: 'fixture_network_refused' });
   } finally { globalThis.fetch = originalFetch; }
   assert.deepEqual(requested, [artifactPins()[0].url]);
   const after = await stagingSnapshot();
@@ -428,13 +524,21 @@ test('stage failure after synthetic approval preserves only its new unready dire
   assert.equal(savedPlan.java.home, resolve(home));
   assert.equal(planDigest(savedPlan), approval);
   ownedDirectory = candidate;
-  assert.deepEqual((await readdir(candidate)).sort(), ['consent.json', 'failed.json', 'libraries', 'plan.json', 'server.jar.part']);
+  assert.deepEqual((await readdir(candidate)).sort(), ['consent.json', 'failed.json', 'libraries', 'plan.json', 'server.jar.part',
+    ...(profile === 'svc' ? ['config', 'mods'] : [])].sort());
   assert.deepEqual(JSON.parse(await readFile(join(candidate, 'consent.json'), 'utf8')), {
     planSha256: approval, downloadEulaAccepted: true, javaExecuted: false,
   });
   assert.deepEqual(JSON.parse(await readFile(join(candidate, 'failed.json'), 'utf8')), { event: 'runtime_staging_failed', ready: false });
   assert.equal((await lstat(join(candidate, 'server.jar.part'))).size, 0);
   assert.deepEqual(await readdir(join(candidate, 'libraries')), []);
+  if (profile === 'svc') {
+    assert.deepEqual(await readdir(join(candidate, 'mods')), []);
+    assert.deepEqual(await readdir(join(candidate, 'config')), ['voicechat']);
+    assert.deepEqual(await readdir(join(candidate, 'config/voicechat')), []);
+    assert.equal(await exists(join(candidate, SVC_CONFIG_PATH)), false);
+    assert.equal(await exists(join(candidate, SVC_ARTIFACT.file)), false);
+  }
   for (const file of ['ready.json', 'eula.txt', 'server.properties', 'server.jar']) assert.equal(await exists(join(candidate, file)), false);
   assert.ok(before.every(name => after.includes(name)), 'previous staging entries remain');
 });

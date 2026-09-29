@@ -31,6 +31,8 @@ O laboratório descartável `apps/connect-runtime-tools` já executou Minecraft 
 
 Incremento20: dois clientes de protocolo sintéticos observaram LOGIN/CONFIGURATION/PLAY, chunks e presença recíproca por dois pares Host/Guest independentes, em três ensaios reais aprovados. Não são clientes gráficos ou contas originais/offline mistas homologadas. `apps/connect-client-lab/smoke.mjs --offline-lab` exige perfil play descartável já pronto; conferir `docs/aurora-connect-runtime.md`. O ensaio corrigiu deadlock do FrameGuard com entrada aberta; preservar as duas regressões e o flush serializer→framer→socket no encerramento. Não promover esse resultado a Core/Skins/voz/R4.
 
+Incremento21: perfil `svc` executou boot e writer SVC2.6.22, UDP43002 pertencente ao Java criado e stop normal. Windows usa a forma exata `::ffff:127.0.0.1` nesse bind; ela é aceita somente no gate UDP explicitamente selecionado e registrado no plano. Não há prova de handshake/anúncio/áudio nem roundtrip do adaptador com JVM viva. Manter perfil separado, pinModrinth exato e conferência de árvore/configuração.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

@@ -4,6 +4,8 @@ Reconciliação: 29/09/2026, base alpha.14 `5ac2f7e` sobre `6a107b8`, Core 1.1.5
 
 ## Política e gate de habilitação
 
+Evidência posterior21: SVC Fabric1.21.1/2.6.22 fixado foi executado em servidor descartável, com bindUDP próprio e writer reais; não foi redistribuído. O perfil acrescenta5.369.475B aos nove artefatos existentes, downloadpúblico sem conta/cobrança. Allowlist Modrinth é limitada ao pin completo; nenhuma descoberta automática de mod ou mudança de licença. [Resultados, fonte do fallback de bind e limites](../aurora-connect-runtime.md#boot-simple-voice-chat--vigésimo-primeiro-incremento). Esta prova não libera relay, anúncio, autenticaçãoUDP ou áudio.
+
 Caminho direto é preferido; relay gratuito é permitido quando as condições do uso pretendido forem verificadas. Não há regra de rejeitar todo candidato relayed ou de falhar obrigatoriamente quando o direto não estiver disponível. O fallback somente utiliza dependência elegível. Nenhum relay gratuito sustentável de produção foi aprovado nesta revisão.
 
 Um serviço não se torna elegível por funcionar tecnicamente, ter software livre, oferecer trial/crédito, não pedir cartão hoje ou possuir alerta de orçamento. Serviço que cobre excedentes permanece desabilitado sem bloqueio efetivo e comprovado de cobrança; um limite local é proteção de recursos, não garantia de fatura. Não habilitar faturamento. Não exigir VPS/relay do usuário, rotacionar contas, contornar quotas nem escolher relay público aleatório.
