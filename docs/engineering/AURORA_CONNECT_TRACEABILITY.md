@@ -53,6 +53,7 @@ Baseline de 29/09/2026, comandos/saídas/achados no [task de execução](../task
 
 | Prova executada | Requisitos/tarefas relacionados | Limite da prova |
 | --- | --- | --- |
+| Décimo quinto incremento: guest-tcp/plano game obrigatório e aux opcional; CLI e smoke com dois agentes, STATUS/pong por fixture independente | T-MC-01 parcial; T-UX-02/04; 002/005/008 | 59 Rust e dois smokes Node aprovados; zero JVM. QUIC ainda usa UDP. guest_ready é listener; acesso efetivo exerce autorização |
 | Décimo quarto incremento: plano/staging limitado com pins oficiais e gate de termos; 17 testes Node com HTTP local e JDK sintético | T-MC-01 preparação; T-SEC/T-CONFIG; 005/008 | Nenhum download Minecraft/JVM real. Consentimento de fixture não é aceitação do usuário. MZ/hash não valida todo JDK; runtime aguarda autorização |
 | Décimo terceiro incremento: quatro cenários de entrega/retomada do lock com recibo vivo, restauração estrita/revisada SVC/Plasmo e preservação de edições | T-LIFE-01/02; T-CONFIG-03/04; 006/007/008 | Locks/CAS reais com probes controlados; não executa JVM/writer, não torna recibo durável nem automatiza encerramento |
 | Décimo segundo incremento: guard opaco/verificações de processos em aquisição, preparação e confirmação da mutação de voz | T-CONFIG-01/03/04; T-LIFE-01/02; 006/007/008 | Política Windows conservadora para java/javaw; sem runtime de mod, UI, proteção contra início externo ou JVM renomeada/embutida |

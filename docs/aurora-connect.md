@@ -4,7 +4,7 @@ Estado: **PROTÓTIPO**, fora do desktop e desativado para usuários. Base alpha.
 
 ## O que este executável faz
 
-Dois agentes autenticam as chaves públicas esperadas usando Iroh 1.3.0 e QUIC cifrado. O host concede uma lease de laboratório ao peer convidado, sessão e serviços explícitos, com prazo e revogação. O convidado pede apenas IDs `game` (TCP) e `aux` (UDP), revisão 1. Os destinos aprovados são literais loopback do host; o convidado não escolhe IP/porta do destino.
+Dois agentes autenticam as chaves públicas esperadas usando Iroh 1.3.0 e QUIC cifrado. O host concede uma lease de laboratório ao peer convidado, sessão e serviços explícitos, com prazo e revogação. `guest` pede IDs `game` (TCP) e `aux` (UDP), revisão 1; `guest-tcp` pede somente `game`, anunciando apenas `reliableStream`. Os destinos aprovados são literais loopback do host; o convidado não escolhe IP/porta do destino.
 
 Cada TCP usa stream próprio, buffers limitados, backpressure e half-close. UDP usa DATAGRAM autenticado com cabeçalho de 24 bytes e socket host exclusivo por associação; o retorno fica vinculado à conexão autenticada, serviço, associação e geração. IDs não são autorização. O conteúdo é opaco; não há voz própria, captura de áudio ou bypass de autenticação Minecraft/mod.
 
@@ -46,9 +46,13 @@ Referências de wire consultadas em 29/09/2026: [MCProtocolLib fixado para 1.21/
 
 ## Plano explícito de serviços do laboratório
 
+Para um destino Minecraft já autorizado, existe o roteiro `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/connect-minecraft-status-smoke.ps1 -GamePort 43001`. Ele inicia os dois agentes ocultos, cria/revisa por hash um plano próprio com apenas `game/tcp`, troca pins por stdin e executa `minecraft-status` por `guest-tcp`. Não inicia ou encerra o servidor de destino; a vida desse processo pertence ao caller. Protocolo esperado 767; divergência é falha. Saída redigida só após status/pong e encerramento normal de ambos os agentes, com `runtimeHomologated=false`. Eventos limitados a 16 KiB/30 s e cleanup de filhos próprios em `finally`. `-SkipBuild` requer binário já compilado. Foi testado com uma fixture de protocolo independente, **não com Minecraft**, conforme [task](task-aur-r4-connect.md) e [preparo runtime](aurora-connect-runtime.md).
+
+`guest-tcp <host-public-id> <host-direct-address> <session-id> <local-tcp> <seconds>` conserva pin/sessão/lease/revisão e a confirmação `ready` por stdin. `guest_ready` informa somente listener TCP; a autorização de `game` é exercida na conexão/probe subsequente. O transporte QUIC continua usando UDP; não confundir ausência de serviço UDP de aplicação com TCP externo capaz de atravessar uma rede que bloqueia QUIC.
+
 O comando convencional `host` mantém `ReplyBudget`. Para autorizar o perfil assimétrico, `plan` lê um JSON local de até 16 KiB, apresenta o estado antes/depois e seu SHA-256. `host-plan` exige esse hash, relê os bytes e recusa qualquer diferença antes de abrir transporte. A revisão é dos bytes exatos, incluindo BOM/espaços. Depois do hash, ainda é obrigatório autorizar o peer público mostrado pelo convidado. Chaves privadas e a sessão são novas a cada execução.
 
-O [exemplo](../apps/connect-lab/examples/host-downstream.json) usa somente loopback e portas de ensaio: transporte 42000, TCP 42001, UDP 42002, 600 segundos, downstream 100.000 bytes/s e 100 datagramas/s. São valores de laboratório, não configuração recomendada de mod. Exatamente `game`/TCP e `aux`/UDP, revisão 1, são aceitos pela CLI atual; não é catálogo genérico, manifesto de mod ou novo contrato remoto. Campos desconhecidos e destinos não loopback são recusados. Escolher uma porta de transporte concreta; zero não é aceito nesta CLI.
+O [exemplo](../apps/connect-lab/examples/host-downstream.json) usa somente loopback e portas de ensaio: transporte 42000, TCP 42001, UDP 42002, 600 segundos, downstream 100.000 bytes/s e 100 datagramas/s. São valores de laboratório, não configuração recomendada de mod. A CLI aceita `game`/TCP obrigatório e `aux`/UDP opcional, revisão 1; não é catálogo genérico, manifesto de mod ou novo contrato remoto. Acrescentar `aux` altera o hash e exige nova revisão. Plano vazio, somente `aux`, IDs repetidos/desconhecidos e destinos não loopback são recusados. Escolher uma porta de transporte concreta; zero não é aceito nesta CLI.
 
 Com o endpoint `echo-downstream` rodando em outro terminal, revisar o plano:
 

@@ -203,16 +203,23 @@ async fn run_host(
     Ok(())
 }
 
-async fn guest(args: &[String]) -> Result<()> {
-    if args.len() != 6 {
+async fn guest(args: &[String], tcp_only: bool) -> Result<()> {
+    if args.len() != if tcp_only { 5 } else { 6 } {
         return Err("guest_args".into());
     }
     let peer: EndpointId = args[0].parse()?;
     let address: SocketAddr = args[1].parse()?;
     let session_id = args[2].clone();
     let tcp: SocketAddr = args[3].parse()?;
-    let udp: SocketAddr = args[4].parse()?;
-    let seconds = duration(&args[5])?;
+    let udp: Option<SocketAddr> = if tcp_only {
+        None
+    } else {
+        Some(args[4].parse()?)
+    };
+    let seconds = duration(&args[if tcp_only { 4 } else { 5 }])?;
+    if !tcp.ip().is_loopback() || udp.is_some_and(|bind| !bind.ip().is_loopback()) {
+        return Err(aurora_connect_lab::Error::Configuration.into());
+    }
     let secret_key = generate_key();
     event(
         json!({"event":"guest_identity", "peer":secret_key.public().to_string(), "next":"authorize this public peer at host, then enter ready"}),
@@ -230,18 +237,47 @@ async fn guest(args: &[String]) -> Result<()> {
         host: EndpointAddr::new(peer).with_ip_addr(address),
         session_id,
         lease_id: "manual-lab".into(),
-        capabilities: vec![Capability::ReliableStream, Capability::Datagram],
+        capabilities: if tcp_only {
+            vec![Capability::ReliableStream]
+        } else {
+            vec![Capability::ReliableStream, Capability::Datagram]
+        },
         limits: Limits::default(),
     })
     .await?;
-    let tcp_bridge = guest.tcp_bridge("game", 1, tcp).await?;
-    let udp_bridge = guest.udp_bridge("aux", 1, udp).await?;
-    event(
-        json!({"event":"guest_ready", "tcp":tcp_bridge.local_addr().to_string(), "udp":udp_bridge.local_addr().to_string(), "maxDatagramPayload":udp_bridge.max_payload(), "experimental":true, "next":"enter stop to close"}),
-    );
+    let tcp_bridge = match guest.tcp_bridge("game", 1, tcp).await {
+        Ok(bridge) => bridge,
+        Err(error) => {
+            guest.shutdown().await;
+            return Err(error.into());
+        }
+    };
+    let udp_bridge = if let Some(bind) = udp {
+        match guest.udp_bridge("aux", 1, bind).await {
+            Ok(bridge) => Some(bridge),
+            Err(error) => {
+                tcp_bridge.shutdown().await;
+                guest.shutdown().await;
+                return Err(error.into());
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(bridge) = &udp_bridge {
+        event(
+            json!({"event":"guest_ready", "tcp":tcp_bridge.local_addr().to_string(), "udp":bridge.local_addr().to_string(), "maxDatagramPayload":bridge.max_payload(), "experimental":true, "next":"enter stop to close"}),
+        );
+    } else {
+        event(
+            json!({"event":"guest_ready", "tcp":tcp_bridge.local_addr().to_string(), "mode":"tcp", "experimental":true, "next":"enter stop to close"}),
+        );
+    }
     until_stop(seconds).await;
     guest.shutdown().await;
-    udp_bridge.shutdown().await;
+    if let Some(bridge) = udp_bridge {
+        bridge.shutdown().await;
+    }
     tcp_bridge.shutdown().await;
     event(json!({"event":"guest_stopped"}));
     Ok(())
@@ -408,7 +444,8 @@ async fn main() {
         Some("host") => host(&args[1..]).await,
         Some("plan") => plan(&args[1..]),
         Some("host-plan") => host_plan(&args[1..]).await,
-        Some("guest") => guest(&args[1..]).await,
+        Some("guest") => guest(&args[1..], false).await,
+        Some("guest-tcp") => guest(&args[1..], true).await,
         Some("minecraft-status") => minecraft_status(&args[1..]).await,
         Some("echo") => echo(&args[1..], false).await,
         Some("echo-downstream") => echo(&args[1..], true).await,
@@ -425,7 +462,7 @@ async fn main() {
         }
         _ => {
             println!(
-                "EXPERIMENTAL - no launcher integration, keys only in memory\nhost <quic-bind> <approved-tcp-target> <approved-udp-target> <seconds>\nplan <local-service-plan.json>\nhost-plan <local-service-plan.json> <approved-sha256>\nguest <host-public-id> <host-direct-address> <session-id> <local-tcp> <local-udp> <seconds>\necho <loopback-tcp> <loopback-udp> <seconds>\nprobe <loopback-tcp> <loopback-udp>\nminecraft-status <loopback-tcp-bridge> <handshake-host> <handshake-port> <protocol-number>\necho-downstream / probe-downstream: same arguments, controlled asymmetric UDP test only\nUse stop on stdin or Ctrl+C to end. See docs/aurora-connect.md."
+                "EXPERIMENTAL - no launcher integration, keys only in memory\nhost <quic-bind> <approved-tcp-target> <approved-udp-target> <seconds>\nplan <local-service-plan.json>\nhost-plan <local-service-plan.json> <approved-sha256>\nguest <host-public-id> <host-direct-address> <session-id> <local-tcp> <local-udp> <seconds>\nguest-tcp <host-public-id> <host-direct-address> <session-id> <local-tcp> <seconds>\necho <loopback-tcp> <loopback-udp> <seconds>\nprobe <loopback-tcp> <loopback-udp>\nminecraft-status <loopback-tcp-bridge> <handshake-host> <handshake-port> <protocol-number>\necho-downstream / probe-downstream: same arguments, controlled asymmetric UDP test only\nUse stop on stdin or Ctrl+C to end. See docs/aurora-connect.md."
             );
             Ok(())
         }

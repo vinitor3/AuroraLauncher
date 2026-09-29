@@ -43,6 +43,8 @@ Décimo terceiro incremento: T-LIFE-01/02 e T-CONFIG-03/04 ganham quatro cenári
 
 Décimo quarto incremento: 005/008 têm helper funcional de plano/staging com nove pins oficiais, termos explícitos e downloads limitados testados contra HTTP local. Nenhuma JVM/Minecraft foi baixada ou executada; autorização de termos não foi inferida. Preparação não fecha T-MC-01; [procedimento](../../aurora-connect-runtime.md).
 
+Décimo quinto incremento: 002/005/008 ganham guest-tcp e plano somente game, sem autorizar aux desnecessário. Smoke com dois processos atravessa STATUS/pong independente e recusa protocolo divergente; 59 Rust/dois Node aprovados. Contrato do plano canônico registra aux opcional; integração de runtime segue pendente. [Roteiro](../../aurora-connect.md#plano-explícito-de-serviços-do-laboratório).
+
 ## 1. Evidência de partida e limites do inventário
 
 Leitura local feita em 29/09/2026, sem build, lançamento do jogo, conexão externa ou teste runtime. A existência de um símbolo ou de um teste no arquivo não equivale à execução desse teste.

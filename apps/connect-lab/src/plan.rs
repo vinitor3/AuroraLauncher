@@ -323,7 +323,7 @@ fn is_link(metadata: &Metadata) -> bool {
 fn validate(plan: ServicePlan, hash: String) -> Result<ValidatedPlan, PlanError> {
     if plan.schema_version != SCHEMA_VERSION
         || !(10..=3600).contains(&plan.duration_seconds)
-        || plan.services.len() != 2
+        || !(1..=2).contains(&plan.services.len())
         || plan.bind.port() == 0
         || plan.bind.ip().is_multicast()
         || (plan.bind.is_ipv4() && plan.bind.ip() == std::net::Ipv4Addr::BROADCAST)
@@ -382,7 +382,7 @@ fn validate(plan: ServicePlan, hash: String) -> Result<ValidatedPlan, PlanError>
             udp_return_policy: policy,
         });
     }
-    if !seen_game || !seen_aux {
+    if !seen_game {
         return Err(PlanError::InvalidPlan);
     }
     Ok(ValidatedPlan {

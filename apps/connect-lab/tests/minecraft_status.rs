@@ -22,6 +22,105 @@ const PORT: u16 = 25565;
 const PROTOCOL: i32 = 767;
 const STATUS: &[u8] = br#"{"version":{"name":"PRIVATE_VERSION","protocol":767},"players":{"max":20,"online":2,"sample":[{"name":"PRIVATE_PLAYER","id":"ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb"}]},"description":{"text":"PRIVATE_MOTD","clickEvent":{"action":"open_url","value":"https://private.fixture.invalid"}},"favicon":"data:image/png;base64,PRIVATE_ICON","enforcesSecureChat":true}"#;
 
+// Owns only the child created here. Bounded event reads never print peer IDs or
+// raw child output on assertion failures; Drop reaps the child even on panic.
+struct CliChild {
+    child: std::process::Child,
+    events: std::sync::mpsc::Receiver<serde_json::Value>,
+    reader: Option<std::thread::JoinHandle<()>>,
+}
+impl CliChild {
+    fn start(args: &[String]) -> Self {
+        use std::io::{BufRead, Read};
+        use std::process::{Command, Stdio};
+        let mut command = Command::new(env!("CARGO_BIN_EXE_aurora-connect-lab"));
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let mut child = command
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (tx, events) = std::sync::mpsc::sync_channel(8);
+        let reader = std::thread::spawn(move || {
+            let mut input = std::io::BufReader::new(stdout);
+            loop {
+                let mut line = Vec::new();
+                let Ok(n) = input.by_ref().take(16385).read_until(b'\n', &mut line) else {
+                    break;
+                };
+                if n == 0 || n > 16384 || !line.ends_with(b"\n") {
+                    break;
+                }
+                let Ok(event) = serde_json::from_slice(&line) else {
+                    break;
+                };
+                // No blocking send can outlive the process teardown.
+                if tx.try_send(event).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            child,
+            events,
+            reader: Some(reader),
+        }
+    }
+    fn send(&mut self, text: &str) {
+        use std::io::Write;
+        let stdin = self.child.stdin.as_mut().unwrap();
+        writeln!(stdin, "{text}").unwrap();
+        stdin.flush().unwrap();
+    }
+    async fn event(&self, expected: &str) -> serde_json::Value {
+        timeout(Duration::from_secs(10), async {
+            loop {
+                match self.events.try_recv() {
+                    Ok(value) => {
+                        assert!(value["event"] == expected, "unexpected CLI event");
+                        return value;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        sleep(Duration::from_millis(5)).await
+                    }
+                    Err(_) => panic!("CLI event stream closed"),
+                }
+            }
+        })
+        .await
+        .expect("CLI event deadline")
+    }
+    async fn exited(&mut self, success: bool) {
+        timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(status) = self.child.try_wait().unwrap() {
+                    assert_eq!(status.success(), success);
+                    return;
+                }
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("CLI exit deadline");
+    }
+}
+impl Drop for CliChild {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+    }
+}
+
 fn local() -> SocketAddr {
     "127.0.0.1:0".parse().unwrap()
 }
@@ -642,4 +741,90 @@ async fn actual_cli_prints_only_redacted_protocol_evidence() {
         assert!(!text.contains(private));
     }
     f.finish().await;
+}
+
+#[tokio::test]
+async fn tcp_only_guest_cli_carries_status_without_authorizing_or_opening_udp() {
+    let f = fixture(exchange(STATUS, Pong::Echo)).await;
+    let host_key = generate_key();
+    let reservation = std::net::UdpSocket::bind(local()).unwrap();
+    let bind = reservation.local_addr().unwrap();
+    drop(reservation);
+    let mut cli = CliChild::start(&[
+        "guest-tcp".into(),
+        host_key.public().to_string(),
+        bind.to_string(),
+        "cli-tcp".into(),
+        "127.0.0.1:0".into(),
+        "30".into(),
+    ]);
+    let identity = cli.event("guest_identity").await;
+    let host = Host::start(HostConfig {
+        secret_key: host_key,
+        bind_addr: bind,
+        session_id: "cli-tcp".into(),
+        services: vec![Service {
+            service_id: "game".into(),
+            protocol: Protocol::Tcp,
+            endpoint: f.address,
+            revision: 1,
+            max_datagram_bytes: 1400,
+            required_capability: Capability::ReliableStream,
+            udp_return_policy: UdpReturnPolicy::ReplyBudget,
+        }],
+        leases: vec![Lease {
+            lease_id: "manual-lab".into(),
+            peer: identity["peer"].as_str().unwrap().parse().unwrap(),
+            expires_at_unix_ms: unix_millis() + 30_000,
+            services: BTreeSet::from(["game".into()]),
+        }],
+        limits: Limits::default(),
+    })
+    .await
+    .unwrap();
+    cli.send("ready");
+    let ready = cli.event("guest_ready").await;
+    assert_eq!(ready["mode"], "tcp");
+    assert!(ready.get("udp").is_none());
+    assert!(ready.get("maxDatagramPayload").is_none());
+    let address: SocketAddr = ready["tcp"].as_str().unwrap().parse().unwrap();
+    let result = probe_minecraft_status(request(address)).await.unwrap();
+    assert!(result.protocol_matches_requested);
+    assert_eq!(host.metrics().destination_tcp_connects, 1);
+    assert_eq!(host.metrics().udp_associations_opened, 0);
+    assert_eq!(host.metrics().denied, 0);
+    f.finish().await;
+    cli.send("stop");
+    cli.event("guest_stopped").await;
+    cli.exited(true).await;
+    assert!(TcpStream::connect(address).await.is_err());
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn tcp_only_guest_cli_rejects_bad_arity_public_bind_and_lifetime_before_identity() {
+    let peer = generate_key().public().to_string();
+    for args in [
+        vec!["guest-tcp".into()],
+        vec![
+            "guest-tcp".into(),
+            peer.clone(),
+            "127.0.0.1:42000".into(),
+            "cli-tcp".into(),
+            "0.0.0.0:0".into(),
+            "30".into(),
+        ],
+        vec![
+            "guest-tcp".into(),
+            peer,
+            "127.0.0.1:42000".into(),
+            "cli-tcp".into(),
+            "127.0.0.1:0".into(),
+            "3601".into(),
+        ],
+    ] {
+        let mut cli = CliChild::start(&args);
+        cli.event("failed").await;
+        cli.exited(false).await;
+    }
 }

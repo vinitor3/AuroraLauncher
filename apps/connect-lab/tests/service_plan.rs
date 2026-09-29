@@ -99,6 +99,38 @@ fn explicit_downstream_is_local_host_configuration_with_exact_limits() {
 }
 
 #[test]
+fn tcp_only_plan_authorizes_exactly_game_and_adding_udp_requires_new_approval() {
+    let fixture = Fixture::new();
+    let mut value = valid();
+    value["services"].as_array_mut().unwrap().pop();
+    fixture.json(&value);
+    let plan = load_plan(&fixture.path, None).unwrap();
+    assert_eq!(plan.services.len(), 1);
+    assert_eq!(plan.services[0].service_id, "game");
+    assert_eq!(plan.services[0].protocol, aurora_connect_lab::Protocol::Tcp);
+    assert_eq!(
+        plan.preview()["after"]["services"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(load_plan(&fixture.path, Some(&plan.hash)).is_ok());
+    fixture.json(&valid());
+    assert!(matches!(
+        load_plan(&fixture.path, Some(&plan.hash)),
+        Err(PlanError::Changed)
+    ));
+    let mut aux_only = valid();
+    aux_only["services"].as_array_mut().unwrap().remove(0);
+    fixture.json(&aux_only);
+    assert!(matches!(
+        load_plan(&fixture.path, None),
+        Err(PlanError::InvalidPlan)
+    ));
+}
+
+#[test]
 fn every_change_including_whitespace_invalidates_exact_byte_approval() {
     let fixture = Fixture::new();
     fixture.json(&valid());
@@ -182,7 +214,7 @@ fn invalid_schema_duration_service_set_protocol_and_revision_fail_closed() {
         );
     }
     let mut value = valid();
-    value["services"].as_array_mut().unwrap().pop();
+    value["services"].as_array_mut().unwrap().clear();
     fixture.json(&value);
     assert!(matches!(
         load_plan(&fixture.path, None),
