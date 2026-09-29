@@ -1,6 +1,6 @@
 # Aurora Connect — preparação dos mods de voz
 
-Data: 29/09/2026. Estado do utilitário local: **PROTÓTIPO**. Integração runtime de voz Simple Voice Chat e Plasmo Voice: **NÃO IMPLEMENTADO**; homologação individual: **PRECISA DE TESTE**. O SVC possui adaptador nativo experimental de configuração em cópias de diagnóstico, descrito abaixo, compilado apenas com `connect-voice-lab`. Este documento complementa a especificação canônica em `engineering/AURORA_CONNECT_SPEC.md`; não cria um segundo contrato de transporte. Não existe comando Tauri/interface ou voz habilitada para usuários.
+Data: 29/09/2026. Estado do utilitário local: **PROTÓTIPO**. Integração runtime de voz Simple Voice Chat e Plasmo Voice: **NÃO IMPLEMENTADO**; homologação individual: **PRECISA DE TESTE**. Ambos possuem adaptadores nativos experimentais de configuração em cópias de diagnóstico, descritos abaixo, compilados apenas com `connect-voice-lab`. Este documento complementa a especificação canônica em `engineering/AURORA_CONNECT_SPEC.md`; não cria um segundo contrato de transporte. Não existe comando Tauri/interface ou voz habilitada para usuários.
 
 ## Incremento executado
 
@@ -55,7 +55,9 @@ O guia de proxy genérico exige anúncio para o proxy. Plugins Velocity/Bungee t
 
 ### Plasmo Voice
 
-`[host]` determina bind e porta; `port=0` usa o número da porta Minecraft, continuando UDP separado. `[host.public]` anuncia destino. A documentação de instalação cita `config/plasmovoice/config.toml`, enquanto troubleshooting também menciona `server.toml`: o arquivo ativo precisa ser confirmado no artefato/runtime. Por isso o inspector exige caminho explícito e não escolhe pelo nome. [Endereçamento](https://plasmovoice.com/docs/server/advanced/), [instalação](https://plasmovoice.com/docs/server/installing/), [troubleshooting](https://plasmovoice.com/docs/server/not-installed/)
+`[host]` determina bind e porta; `port=0` usa o número da porta Minecraft, continuando UDP separado. `[host.public]` anuncia destino. A documentação de instalação citava `config/plasmovoice/config.toml`, enquanto troubleshooting mencionava `server.toml`. A divergência foi resolvida para o artefato fixado no sexto incremento: **`config/plasmovoice/server/config.toml`** é o caminho do dedicado Fabric, relativo ao diretório do servidor. O inspector Node ainda exige caminho explícito. [Endereçamento](https://plasmovoice.com/docs/server/advanced/), [instalação](https://plasmovoice.com/docs/server/installing/), [troubleshooting](https://plasmovoice.com/docs/server/not-installed/)
+
+Na tag 2.1.17/commit `2b4d22cf9333bc32dad183445b28a267cbf8145f`, [ModVoiceServer.getConfigFolder](https://github.com/plasmoapp/plasmo-voice/blob/2b4d22cf9333bc32dad183445b28a267cbf8145f/client/src/main/java/su/plo/voice/server/ModVoiceServer.java#L33) retorna `config/plasmovoice/server`; [BaseVoiceServer.loadConfig](https://github.com/plasmoapp/plasmo-voice/blob/2b4d22cf9333bc32dad183445b28a267cbf8145f/server/common/src/main/java/su/plo/voice/server/BaseVoiceServer.java#L212) abre `config.toml`. `server.toml` nesse código é recurso de idiomas. Hash/tamanho do JAR e constantes correspondentes das classes foram conferidos em memória, sem execução ou extração. Isso confirma a seleção estática; diretório de execução/mod ativo ainda exige teste runtime.
 
 O fonte `VoiceServerConfig` 2.1.17 separa `Host`/`Public`, documenta herança dos valores públicos zero e seu uso distinto em proxies, e define `voice.mtu_size=1024`, faixa 128–5000. Esses valores não são instalados pelo inspector nem substituem medição de pacotes completos. [Fonte versionada](https://raw.githubusercontent.com/plasmoapp/plasmo-voice/2.1.17/server/common/src/main/java/su/plo/voice/server/config/VoiceServerConfig.java)
 
@@ -92,6 +94,16 @@ cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-ta
 Quatro testes focados passaram; a configuração padrão passou com 258 testes e cinco opt-in ignorados. A suíte com a feature passou, deixando o caso de JAR real opt-in (executado separadamente) e testes externos ignorados. Não use `--include-ignored` na suíte inteira: também ativa testes antigos de serviços externos e exige uma instância pessoal explícita no Doctor. O ensaio focado não baixa nem executa Java. Fixtures próprias são removidas após o teste, sem remover o cache de JARs ou outras instâncias.
 
 Revisão independente encontrou e corrigiu dois defeitos antes do commit: publicar preview antes da aprovação deixava uma via genérica de aplicação após cancelar/expirar; `trim()` Unicode não correspondia à sintaxe Java Properties. Testes negativos acompanham ambas as correções. Nenhuma configuração pessoal foi usada.
+
+## Adaptador nativo Plasmo — sexto incremento
+
+`connect_voice.rs` agora exige `VoiceMod` explícito, associando renderer, caminho, tamanho e hash do JAR selecionado ao plano. SVC mantém seu contrato. `connect_voice_plasmo.rs` acrescenta somente anúncio Plasmo no caminho fixado acima; não aceita arquivo vizinho/legado como substituto. Cópia de diagnóstico, Fabric 1.21.1, artefato habilitado exato, hash original, confirmação consumível, identidade/fingerprint, prazo, CAS/journal/undo e restrições de caller permanecem iguais. Um plano de outro mod não ganha autorização por compartilhar a instância.
+
+O renderer usa `toml =0.9.12` (resolvido `0.9.12+spec-1.1.0`, MIT/Apache-2.0, MSRV 1.76), já presente transitivamente no lock desktop; passou a dependência direta **opcional**, sem atualizar suas versões. Features `parse`, `serde`, `std`, sem defaults/display/unbounded. [API versionada](https://docs.rs/toml/0.9.12%2Bspec-1.1.0/toml/). Spans do parser são cruzados com a sintaxe limitada; só os valores `host.public.ip` e `host.public.port` mudam, mantendo aspas, comentários, bytes e EOL fora dos dois intervalos. Se o bloco estiver ausente, acrescenta `[host.public]` ao EOF sem ativar o template comentado. A saída é revalidada contra limites e comparada semanticamente com a entrada, permitindo somente essas duas diferenças.
+
+Limites: 256 KiB, 4096 linhas, 512 chaves, 128 tabelas, oito níveis e 2048 separadores de arrays. Entrada/saída excedente, bloco parcial/duplicado, tipos errados, aliases/dotted keys, headers quoted, inline tables, arrays aninhados/multilinha, escapes, UTF-8 inválido, sintaxe ambígua ou no-op são recusados. Recusa conservadora não significa configuração inválida para Plasmo. Não altera bind, MTU, codec, chaves/autenticação ou qualquer configuração pessoal. O filtro sensível do recovery continua intacto.
+
+Doze testes nativos focados passaram, incluindo os dois JARs oficiais selecionados. Plasmo foi exercitado separadamente: mudança de bloco existente e adição do ausente em cópias descartáveis, aprovação/cancelamento, mod incorreto, restore genérico recusado, origem intacta, undo exato, edição concorrente e recusa do caminho antigo. Seis unitários adicionais cobrem parser/spans/Unicode/complexidade; o limite da saída acrescentada recebeu negativos após revisão. Reproduzir com `cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --features connect-voice-lab --lib connect_voice:: -- --include-ignored`, com a variável de artefatos explícita já indicada. Não há Java/áudio/servidor executado por esses testes. O anúncio global segue restrito a dedicado só Aurora, sem proxy/misto; todas as máquinas precisam da ponte local.
 
 ## Demonstração reproduzida e testes
 
@@ -135,10 +147,10 @@ Cobertura: separação de endereços, herança explícita de porta, config incom
 | Inspector de configuração e plano sintético | **PROTÓTIPO**, testado | **PROTÓTIPO**, testado |
 | Artefato local/hash/metadados/licença exatos | **CONCLUÍDO** para Fabric 1.21.1/2.6.22; sem execução | **CONCLUÍDO** para Fabric 1.21.1/2.1.17; sem execução |
 | Transporte UDP real do mod, autenticação e retorno | **PRECISA DE TESTE** | **PRECISA DE TESTE** |
-| Endereçamento de dedicado só Aurora | Adaptador nativo restrito a cópia; aplicação/undo em fixture, runtime pendente | Rascunho global, sem aplicação/runtime |
+| Endereçamento de dedicado só Aurora | Adaptador nativo restrito a cópia; aplicação/undo em fixture, runtime pendente | Adaptador nativo restrito a cópia; alteração/adição do anúncio e undo em fixture, runtime pendente |
 | LAN | **NÃO VERIFICADO**, sem override | **NÃO VERIFICADO**, sem override |
 | Misto direto/Aurora e várias instâncias | **NÃO IMPLEMENTADO**, requer adaptador | **NÃO IMPLEMENTADO**, requer adaptador |
-| Mutação confirmada, restauração concorrente e crash | **PROTÓTIPO** em cópia, confirmação/undo/conflito testados; journal reutilizado, crash físico pendente | **NÃO IMPLEMENTADO** neste adaptador |
+| Mutação confirmada, restauração concorrente e crash | **PROTÓTIPO** em cópia, confirmação/undo/conflito testados; journal reutilizado, crash físico pendente | **PROTÓTIPO** em cópia, com provas próprias; journal reutilizado, crash físico pendente |
 | Voz audível consentida, sem gravação, sob carga do jogo | **PRECISA DE TESTE** | **PRECISA DE TESTE** |
 
 O ensaio audível futuro executa cada mod em separado: anfitrião com dedicado descartável, convidado com cliente descartável do mesmo artefato/par, autenticação oficial, serviço UDP autorizado e ponte loopback em cada participante. Registrar handshake próprio do mod e confirmação humana bidirecional, sem gravar áudio; repetir sob carga, porta ocupada, desconexão, revogação e encerramento. Status TCP ou echo UDP não demonstram voz. Os artefatos candidatos já estão fixados; o procedimento com comandos de jogo e ponte ainda depende de preparar o runtime e o adaptador, sem comandos fictícios nesta documentação.

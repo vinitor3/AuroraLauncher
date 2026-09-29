@@ -13,7 +13,7 @@ Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, desligado 
 | Minecraft | Nenhuma JVM/jogo executado pelo laboratório | **NÃO IMPLEMENTADO** como integração; ingresso no mundo pendente |
 | Convites/interface | Pin e lease manual do laboratório | Fluxo social/interface **NÃO IMPLEMENTADO**; não equivale a convite do produto |
 | Simple Voice Chat | Inspector/JAR verificado e adaptador nativo de configuração em cópia; aprovação, conflito e undo testados | **PARCIAL**, opt-in sem UI; runtime/endereço/áudio **PRECISA DE TESTE** |
-| Plasmo Voice | Inspector/plano sem escrita, independente de SVC | **PARCIAL** somente na preparação; runtime/endereço/áudio **PRECISA DE TESTE** |
+| Plasmo Voice | Inspector/JAR verificado; adaptador nativo em cópia altera/adiciona anúncio no caminho confirmado, com aprovação/undo testados | **PARCIAL**, opt-in sem UI; runtime/endereço/áudio **PRECISA DE TESTE** |
 
 Baseline: 24/24 testes Rust (4 unitários, 9 adversariais, 11 de transporte), 55/55 resultados nas cinco repetições da suíte de transporte, fmt/clippy e 14/14 testes do inspector aprovados. Smoke: 1 MiB TCP por direção, dez UDP em duas origens, teto negociado de 1358 bytes e limpeza aprovada. Uma falha intermitente anterior de UDP sob carga TCP foi corrigida reservando 16 KiB do burst para datagramas; o histórico permanece no task. Esses resultados não garantem ausência de perda em UDP, justiça em redes externas ou SLA. Nenhuma linha de mod/loader/hospedagem recebe homologação por esses testes.
 
@@ -24,6 +24,8 @@ Terceiro incremento: 45/45 Rust, fmt/clippy e dois smokes aprovados, com onze ca
 O quarto incremento Connect acrescentou inspeção dos JARs oficiais Fabric 1.21.1 de Simple Voice Chat 2.6.22 e Plasmo Voice 2.1.17, com 31/31 testes Node, incluindo os dois artefatos reais. Hash, metadata e assinaturas relevantes foram conferidos sem carregar JVM. O plano deriva versão do artefato; não prova instalação, anúncio efetivo, áudio ou transporte do mod. [Hashes, métodos e comandos](../aurora-connect-voice.md). Isso não amplia os nove pares nem promove qualquer célula de homologação.
 
 Quinto incremento: quatro testes focados SVC com fixture/JAR real, suíte nativa com feature e padrão aprovadas; padrão 258 PASS/cinco opt-in ignorados. Fmt/clippy nas duas configurações passaram. Reutiliza CAS/lock/identidade/journal/undo existentes, com alvo só persistido após aprovação; não amplia allowlist para aplicar à origem nem comprova jogo, áudio ou crash físico. [Escopo e comandos](../aurora-connect-voice.md#adaptador-nativo-svc-em-cópia-de-diagnóstico--quinto-incremento).
+
+Sexto incremento: adaptador Plasmo separado, mesmo gate opt-in; 12/12 focados com ambos os JARs reais, suíte feature 268 PASS/sete opt-in ignorados, padrão 258 PASS/cinco ignorados, fmt/clippy nas duas configurações. Caminho do artefato Fabric confirmado como `config/plasmovoice/server/config.toml`; substituição/adição do bloco, origem intacta, cancelamento, undo e conflito testados em fixtures. Sem nova célula runtime homologada. Auditoria desktop encontrou rustls antigo vulnerável, tratado como gate próprio; não herda o resultado do lock Connect.
 
 ## Doctor, recuperação e cópias de teste — 29/09/2026
 

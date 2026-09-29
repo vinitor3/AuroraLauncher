@@ -9,15 +9,20 @@ struct Fixture {
     root: PathBuf,
     source: Instance,
     copy: Instance,
+    voice_mod: VoiceMod,
 }
 impl Fixture {
     fn new(jar: Option<&Path>) -> Self {
+        Self::for_mod(jar, VoiceMod::SimpleVoiceChat, ORIGINAL)
+    }
+    fn for_mod(jar: Option<&Path>, voice_mod: VoiceMod, config: &[u8]) -> Self {
         let root = std::env::temp_dir().join(format!("aurora-connect-config-{}", Uuid::new_v4()));
         let layout = InstanceLayout::new(&root);
         let source = layout.open(InstanceId::parse("fixture-source").unwrap());
         source.ensure_layout().unwrap();
-        fs::create_dir_all(source.root().join("config/voicechat")).unwrap();
-        fs::write(source.root().join(CONFIG), ORIGINAL).unwrap();
+        let config_path = source.root().join(voice_mod.config());
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(config_path, config).unwrap();
         fs::write(
             source.root().join("aurora-instance.json"),
             br#"{"minecraft":"1.21.1","loader":"fabric","versionId":"1.21.1"}"#,
@@ -36,17 +41,23 @@ impl Fixture {
         let environment = diagnostic_lab::create(&source, &source_guard, None, |_| {}).unwrap();
         drop(source_guard);
         let copy = layout.open(InstanceId::parse(environment.id).unwrap());
-        Self { root, source, copy }
+        Self {
+            root,
+            source,
+            copy,
+            voice_mod,
+        }
     }
     fn request(&self) -> AnnouncementRequest {
         AnnouncementRequest {
+            voice_mod: self.voice_mod,
             mode: AnnouncementMode::DedicatedAuroraOnly,
             guest_port: 35554,
-            expected_source_sha256: digest(&fs::read(self.copy.root().join(CONFIG)).unwrap()),
+            expected_source_sha256: digest(&self.bytes()),
         }
     }
     fn bytes(&self) -> Vec<u8> {
-        fs::read(self.copy.root().join(CONFIG)).unwrap()
+        fs::read(self.copy.root().join(self.voice_mod.config())).unwrap()
     }
 }
 impl Drop for Fixture {
@@ -227,4 +238,111 @@ fn real_pinned_artifact_copy_uses_existing_preview_confirmation_undo_and_conflic
     ));
     assert_eq!(f.bytes(), edited);
     assert_eq!(fs::read(f.source.root().join(CONFIG)).unwrap(), ORIGINAL);
+}
+
+const PLASMO_ORIGINAL: &[u8] = b"# Keep this comment\r\n[host]\r\nip = \"127.0.0.1\"\r\nport = 25565\r\n\r\n[host.public]\r\nip = 'old.example.invalid' # keep\r\nport = 25565\r\n\r\n[voice]\r\nmtu_size = 1024\r\n";
+
+#[test]
+fn plasmo_cannot_borrow_unapproved_artifact_or_unknown_config_path() {
+    let f = Fixture::for_mod(None, VoiceMod::PlasmoVoice, PLASMO_ORIGINAL);
+    let guard = acquire_instance_recovery_lock(&f.copy).unwrap();
+    assert!(matches!(
+        prepare_announcement(&f.copy, &guard, f.request()),
+        Err(RecoveryError::Compatibility)
+    ));
+    assert_eq!(f.bytes(), PLASMO_ORIGINAL);
+}
+
+#[test]
+#[ignore = "requires explicit AURORA_CONNECT_ARTIFACT_DIR with the pinned public Plasmo JAR; never downloads or executes Java"]
+fn real_plasmo_artifact_can_change_or_add_announcement_with_approval_undo_and_isolation() {
+    let jar = PathBuf::from(
+        std::env::var_os("AURORA_CONNECT_ARTIFACT_DIR")
+            .expect("explicit local artifact directory required"),
+    )
+    .join("plasmovoice-fabric-1.21.1-2.1.17.jar");
+    assert_eq!(
+        recovery::hash_file(&jar).unwrap(),
+        (PLASMO_SHA256.into(), PLASMO_BYTES)
+    );
+    let without_public = b"# [host.public] template stays commented\r\n[host]\r\nip = \"127.0.0.1\"\r\nport = 25565\r\n[voice]\r\nmtu_size = 1024";
+    for original in [PLASMO_ORIGINAL, without_public.as_slice()] {
+        let f = Fixture::for_mod(Some(&jar), VoiceMod::PlasmoVoice, original);
+        let guard = acquire_instance_recovery_lock(&f.copy).unwrap();
+        let mut wrong_mod = f.request();
+        wrong_mod.voice_mod = VoiceMod::SimpleVoiceChat;
+        assert!(matches!(
+            prepare_announcement(&f.copy, &guard, wrong_mod),
+            Err(RecoveryError::Compatibility)
+        ));
+
+        let cancelled = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
+        assert_eq!(cancelled.review().config_path, PLASMO_CONFIG);
+        assert_eq!(f.bytes(), original);
+        let id = cancelled.review().plan_id.clone();
+        drop(cancelled);
+        assert!(matches!(
+            recovery::restore(&f.copy, &guard, &id),
+            Err(RecoveryError::StalePreview)
+        ));
+        assert!(recovery::list_points(&f.copy, &guard)
+            .unwrap()
+            .points
+            .is_empty());
+
+        let rejected = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
+        assert!(matches!(
+            rejected.confirm(&f.copy, &guard, "wrong"),
+            Err(RecoveryError::StalePreview)
+        ));
+        assert_eq!(f.bytes(), original);
+        let prepared = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
+        let approval = prepared.review().digest.clone();
+        assert!(
+            prepared
+                .confirm(&f.copy, &guard, &approval)
+                .unwrap()
+                .undo_available
+        );
+        assert_eq!(f.bytes(), plasmo::render(original, 35554).unwrap().0);
+        assert_eq!(
+            fs::read(f.source.root().join(PLASMO_CONFIG)).unwrap(),
+            original
+        );
+        assert!(diagnostic_lab::inspect(&f.copy, &guard)
+            .unwrap()
+            .changes
+            .is_empty());
+
+        let undo = recovery::preview_undo(&f.copy, &guard).unwrap();
+        recovery::restore(&f.copy, &guard, &undo.id).unwrap();
+        assert_eq!(f.bytes(), original);
+
+        let stale = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
+        let approval = stale.review().digest.clone();
+        let edited = [original, b"\r\n# independent later change\r\n"].concat();
+        fs::write(f.copy.root().join(PLASMO_CONFIG), &edited).unwrap();
+        assert!(matches!(
+            stale.confirm(&f.copy, &guard, &approval),
+            Err(RecoveryError::StalePreview)
+        ));
+        assert_eq!(f.bytes(), edited);
+        assert_eq!(
+            fs::read(f.source.root().join(PLASMO_CONFIG)).unwrap(),
+            original
+        );
+
+        // The active path is derived from the pinned Fabric server's bytecode,
+        // not guessed from nearby old documentation or a similarly named file.
+        let request = f.request();
+        fs::rename(
+            f.copy.root().join(PLASMO_CONFIG),
+            f.copy.root().join("config/plasmovoice/config.toml"),
+        )
+        .unwrap();
+        assert!(matches!(
+            prepare_announcement(&f.copy, &guard, request),
+            Err(RecoveryError::UnsafePath)
+        ));
+    }
 }

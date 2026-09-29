@@ -1,4 +1,4 @@
-//! Experimental, explicitly compiled SVC configuration adapter for verified
+//! Experimental, explicitly compiled voice configuration adapters for verified
 //! diagnostic copies only. No Tauri command or UI exposes this module.
 //! Callers must verify the game is stopped before/after acquiring the shared
 //! mutation lock, just as for recovery. Never infer this from a transport event.
@@ -16,9 +16,36 @@ use uuid::Uuid;
 const CONFIG: &str = "config/voicechat/voicechat-server.properties";
 const SVC_SHA256: &str = "972a01592f670aa57f2dc2e3587a656b798106037468c61e4bfb49eba7d6ae36";
 const SVC_BYTES: u64 = 5_369_475;
+const PLASMO_CONFIG: &str = "config/plasmovoice/server/config.toml";
+const PLASMO_SHA256: &str = "46e1a4ae51786457712991ba05bf573e2d11331aeadb63b7d108839def022a2b";
+const PLASMO_BYTES: u64 = 12_365_966;
 const MAX_CONFIG: u64 = 256 * 1024;
 
 type Result<T> = std::result::Result<T, RecoveryError>;
+
+#[path = "connect_voice_plasmo.rs"]
+mod plasmo;
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceMod {
+    SimpleVoiceChat,
+    PlasmoVoice,
+}
+impl VoiceMod {
+    fn config(self) -> &'static str {
+        match self {
+            Self::SimpleVoiceChat => CONFIG,
+            Self::PlasmoVoice => PLASMO_CONFIG,
+        }
+    }
+    fn artifact(self) -> (&'static str, u64) {
+        match self {
+            Self::SimpleVoiceChat => (SVC_SHA256, SVC_BYTES),
+            Self::PlasmoVoice => (PLASMO_SHA256, PLASMO_BYTES),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum AnnouncementMode {
@@ -28,6 +55,7 @@ pub enum AnnouncementMode {
 }
 
 pub struct AnnouncementRequest {
+    pub voice_mod: VoiceMod,
     pub mode: AnnouncementMode,
     pub guest_port: u16,
     /// Digest of the exact source configuration reviewed by the local operator.
@@ -37,6 +65,7 @@ pub struct AnnouncementRequest {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnnouncementReview {
+    pub voice_mod: VoiceMod,
     pub plan_id: String,
     pub digest: String,
     pub config_path: String,
@@ -52,6 +81,7 @@ pub struct AnnouncementReview {
 /// reachable through generic recovery after cancellation or expiry. Only a
 /// successful confirmation may hand the approved bytes to that executor.
 pub struct PreparedAnnouncement {
+    voice_mod: VoiceMod,
     review: AnnouncementReview,
     replacement: Vec<u8>,
     fingerprint: String,
@@ -84,21 +114,21 @@ impl PreparedAnnouncement {
         let stage = recovery::path(instance.root(), ".aurora/connect-voice-stage")?;
         fs::create_dir_all(&stage)?;
         let _stage_pins = recovery::pin_directory(&stage)?;
-        let staged = recovery::path(&stage, &format!("{}.properties", Uuid::new_v4()))?;
+        let staged = recovery::path(&stage, &format!("{}.config", Uuid::new_v4()))?;
         recovery::write_new(&staged, &self.replacement)?;
         let result = recovery::preview_selected_files(
             instance,
             guard,
             &self.fingerprint,
             &BTreeMap::from([(
-                CONFIG.to_owned(),
+                self.voice_mod.config().to_owned(),
                 Some(recovery::SelectedFile {
                     source: staged.clone(),
                     sha256: digest(&self.replacement),
                     size: self.replacement.len() as u64,
                 }),
             )]),
-            "Anúncio SVC experimental na cópia de teste",
+            "Anúncio de voz experimental na cópia de teste",
         );
         // Only our unique staging file; approved CAS/preview remains for audit/undo.
         let _ = fs::remove_file(staged);
@@ -198,6 +228,8 @@ pub fn prepare_announcement(
         return Err(RecoveryError::Integrity);
     }
     let current = recovery::capture_observation(instance, guard)?;
+    let (artifact_hash, artifact_bytes) = request.voice_mod.artifact();
+    let config = request.voice_mod.config();
     // Runtime claims must agree; the adapter does not infer a loader from a filename.
     let minecraft: Vec<_> = current
         .runtime
@@ -224,8 +256,8 @@ pub fn prepare_announcement(
         .filter(|file| {
             file.path.starts_with("mods/")
                 && file.path.ends_with(".jar")
-                && file.sha256 == SVC_SHA256
-                && file.size == SVC_BYTES
+                && file.sha256 == artifact_hash
+                && file.size == artifact_bytes
         })
         .count()
         != 1
@@ -235,7 +267,7 @@ pub fn prepare_announcement(
     let source = current
         .files
         .iter()
-        .find(|file| file.path == CONFIG)
+        .find(|file| file.path == config)
         .ok_or(RecoveryError::UnsafePath)?;
     if !request
         .expected_source_sha256
@@ -243,18 +275,22 @@ pub fn prepare_announcement(
     {
         return Err(RecoveryError::StalePreview);
     }
-    let bytes = recovery::read_bounded(&recovery::path(instance.root(), CONFIG)?, MAX_CONFIG)?;
+    let bytes = recovery::read_bounded(&recovery::path(instance.root(), config)?, MAX_CONFIG)?;
     if digest(&bytes) != source.sha256 {
         return Err(RecoveryError::Changed);
     }
-    let (replacement, before, after) = render_svc(&bytes, request.guest_port)?;
+    let (replacement, before, after) = match request.voice_mod {
+        VoiceMod::SimpleVoiceChat => render_svc(&bytes, request.guest_port)?,
+        VoiceMod::PlasmoVoice => plasmo::render(&bytes, request.guest_port)?,
+    };
     let expires_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| RecoveryError::Integrity)?
         .as_millis() as u64
         + 300_000;
     let mut review = AnnouncementReview {
-        plan_id: Uuid::new_v4().to_string(), digest: String::new(), config_path: CONFIG.into(), before, after,
+        voice_mod: request.voice_mod,
+        plan_id: Uuid::new_v4().to_string(), digest: String::new(), config_path: config.into(), before, after,
         source_sha256: source.sha256.clone(), expires_at_ms,
         warning: "Experimental, somente cópia dedicada Aurora. Todos os participantes precisam de ponte local; transporte, Java, instância e áudio não foram homologados. Não aplicar à origem por este adaptador.".into(),
     };
@@ -263,6 +299,7 @@ pub fn prepare_announcement(
             .map_err(|_| RecoveryError::Integrity)?,
     );
     Ok(PreparedAnnouncement {
+        voice_mod: request.voice_mod,
         review,
         replacement,
         fingerprint: current.fingerprint,

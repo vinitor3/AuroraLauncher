@@ -211,6 +211,8 @@ O [backlog](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) deve registrar, por dependên
 
 ## Registros complementares preservados do pacote alpha.13
 
+Dependência local do sexto incremento: `toml =0.9.12`, resolvido `0.9.12+spec-1.1.0`, MIT OR Apache-2.0, MSRV 1.76; já presente no lock desktop, agora aresta direta opcional de `connect-voice-lab`, features parse/serde/std sem defaults. Fonte/Cargo.toml local e [API versionada](https://docs.rs/toml/0.9.12%2Bspec-1.1.0/toml/) conferidos em 29/09/2026. Finalidade: spans e validação do anúncio Plasmo, sem serializer geral, serviço remoto, conta, quota ou custo. Falha de parsing recusa plano e conserva arquivo. O lock desktop foi auditado separadamente e registrou rustls 0.23.43/RUSTSEC-2026-0285 preexistente; a correção pontual 0.23.45 e os warnings são registrados no task, sem confundir com o lock independente Connect.
+
 Os itens seguintes eram detalhados no primeiro pacote e não podem desaparecer na reconciliação. São pesquisa histórica de 29/09/2026, sem nova ativação, instalação ou prova de conta. Termos, preços, versões e permissões precisam de reconsulta antes de uso; nenhum participa do laboratório direto inicial.
 
 | ID | Operador/finalidade | Autenticação, licença/termos | Quotas/regiões/limites | Custo, indisponibilidade e decisão |
