@@ -1,0 +1,13 @@
+{
+  "name": "aurora-connect-client-lab",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "engines": { "node": ">=24.8.0" },
+  "devDependencies": {
+    "minecraft-data": "3.109.0",
+    "minecraft-protocol": "1.68.0"
+  },
+  "overrides": { "minecraft-data": "3.109.0", "uuid": "11.1.1" }
+}

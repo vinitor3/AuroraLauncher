@@ -50,6 +50,8 @@ Prazo global padrão 60 s (máximo uma hora), stop padrão/máximo 5 s, saída s
 
 ## Consentimento recebido e execução — décimo oitavo incremento
 
+Preparação posterior19: cliente de protocolo em pacote privado separado, dependências fixadas/auditadas e FrameGuard real com limites/backpressure. Ainda exige integração contra compressão inesperada e ensaio de jogadores; não altera a evidência de STATUS abaixo. [Fontes, vulnerabilidade corrigida e limites](engineering/AURORA_CONNECT_DEPENDENCIES.md#cliente-de-protocolo-somente-para-laboratório--incremento-19).
+
 O usuário declarou ter lido e aceitado a [EULA oficial](https://www.minecraft.net/en-us/eula) e o [Microsoft Services Agreement](https://www.microsoft.com/servicesagreement), autorizando download/execução e testes locais. O impedimento do incremento 14 está resolvido. O agente executa os comandos; não precisa de credenciais ou de nova aceitação. Dois computadores, clientes reais e cada mod de voz mantêm provas próprias.
 
 `server.mjs run-plan <java-home> <prepared-basename>` reconstrói/verifica os nove artefatos, hashes observados, consentimento, JDK e bytes das configurações. Recusa links, extras, mods e estágio usado. Inclui hashes dos executáveis Connect/PowerShell; esses dois arquivos somente de leitura admitem hardlinks legítimos Cargo/WinSxS, sem estender a exceção aos artefatos/configs. Hash/MZ não são verificação de assinatura ou de confiança. O plano explicita argumentos, ambiente mínimo, diff EULA e limites.

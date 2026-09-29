@@ -51,6 +51,8 @@ Décimo sétimo incremento: prova Java 21 próprio + três consultas reais do pr
 
 ## 1. Evidência de partida e limites do inventário
 
+Incremento19: pacote de cliente privado/pinado, vulnerabilidade UUID transitiva corrigida e audit zero. FrameGuard real com14 testes, mais3 de dependência, sem login/mundo. Gate de compressão e observação de jogadores seguem no próximo incremento; não fecha T-MC.
+
 Incremento 18: T-MC-01 ganha prova de servidor real/STATUS por dois agentes, sem concluir seus critérios de mundo. Nove artefatos verificados, bind do Java correlacionado, EULA snapshot/restauração, 50 testes Node sequenciais e 14 focados após correção AppData; stop normal/porta livre. Usuário autorizou termos e online-mode=false somente na pasta própria. Próximo bloqueio local é evidência de login/configuração/mundo, mantendo mods separados e convidados reais/redes externas pendentes. [Registro](../../task-aur-r4-connect.md#décimo-oitavo-incremento--minecraft-real-por-dois-agentes-autenticados).
 
 Leitura local feita em 29/09/2026, sem build, lançamento do jogo, conexão externa ou teste runtime. A existência de um símbolo ou de um teste no arquivo não equivale à execução desse teste.

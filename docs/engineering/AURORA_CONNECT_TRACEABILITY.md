@@ -53,6 +53,7 @@ Baseline de 29/09/2026, comandos/saídas/achados no [task de execução](../task
 
 | Prova executada | Requisitos/tarefas relacionados | Limite da prova |
 | --- | --- | --- |
+| Incremento19: lock isolado do cliente, UUID corrigido/audit zero; 14 testes FrameGuard e três de dependência | REQ-V2-17/20/27; preparação005/008 | Sem login/mundo; guard não valida schema/NBT nem descomprime. Integração precisa recusar compressão antes do handler |
 | Décimo oitavo incremento: artefatos oficiais verificados, Minecraft 1.21.1/Fabric real, bind próprio, STATUS/pong por dois agentes e stop normal/EULA restaurada | T-MC-01 parcial; T-LIFE-01/02; REQ-V2-19/20/23; 002/005/008 | Loopback online-mode=false expressamente solicitado, whitelist ativa; zero login/mundo/mod/áudio. 50 Node sequenciais e 14 focados após correção AppData; nenhuma homologação de clientes mistos |
 | Décimo sétimo incremento: Java 21 próprio real + probe produção STOPPED→RUNNING→STOPPED, stop normal; 1 teste Node/3 probes nativos aprovados | T-LIFE-01/02; T-CONFIG-01/04; 006/007/008 | Sem Minecraft/mod; observação por nome, não correlação de PID. Falha do Cargo não comprova cleanup de sua árvore |
 | Décimo sexto incremento: supervisor de filho explícito com stop/deadline/cancelamento/saída limitada e close observado; 18 testes Node | T-LIFE-01/02; T-SEC; 005/008 | Sem Java/Minecraft, aprovação ou readiness. Callback cooperativo e nenhum descendente; kill forçado é erro, não PASS normal |
