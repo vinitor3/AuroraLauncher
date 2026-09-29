@@ -20,6 +20,7 @@ fn local() -> SocketAddr {
 }
 fn service(id: &str, protocol: Protocol, endpoint: SocketAddr) -> Service {
     Service {
+        udp_return_policy: UdpReturnPolicy::ReplyBudget,
         service_id: id.into(),
         protocol,
         endpoint,

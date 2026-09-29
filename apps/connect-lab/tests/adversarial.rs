@@ -47,6 +47,7 @@ impl Fixture {
             leases: grants,
             services: vec![
                 Service {
+                    udp_return_policy: UdpReturnPolicy::ReplyBudget,
                     service_id: "game".into(),
                     protocol: Protocol::Tcp,
                     endpoint: self.tcp.local_addr().unwrap(),
@@ -55,6 +56,7 @@ impl Fixture {
                     required_capability: Capability::ReliableStream,
                 },
                 Service {
+                    udp_return_policy: UdpReturnPolicy::ReplyBudget,
                     service_id: "voice".into(),
                     protocol: Protocol::Udp,
                     endpoint: self.udp.local_addr().unwrap(),

@@ -1,7 +1,7 @@
 //! Explicit development CLI. No persisted keys, cloud services or launcher hooks.
 use aurora_connect_lab::{
     Capability, EndpointAddr, EndpointId, Guest, GuestConfig, Host, HostConfig, Lease, Limits,
-    Protocol, Service, generate_key,
+    Protocol, Service, UdpReturnPolicy, generate_key,
 };
 use serde_json::json;
 use std::{
@@ -56,6 +56,7 @@ fn duration(arg: &str) -> Result<u64> {
 
 fn service(id: &str, protocol: Protocol, endpoint: SocketAddr) -> Service {
     Service {
+        udp_return_policy: UdpReturnPolicy::ReplyBudget,
         service_id: id.into(),
         required_capability: if protocol == Protocol::Tcp {
             Capability::ReliableStream

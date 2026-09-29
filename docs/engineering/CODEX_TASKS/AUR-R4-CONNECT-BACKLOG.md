@@ -12,7 +12,7 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 | --- | --- | --- |
 | 001 inventário/decisão | Reconciliados contratos/IDs/base; Iroh 1.3.0 fixado somente no laboratório | Gates de integração/distribuição, termos de qualquer infraestrutura futura |
 | 002 TCP | **PROTÓTIPO** real autenticado: duplex, 8 MiB/contrapressão, half-close, concorrência, autorização e encerramento testados | Minecraft e redes externas; não concluir tarefa de produto |
-| 003 UDP | **PROTÓTIPO** real: retorno isolado por peer/sessão/serviço, framing, MTU, abuso, expiração e carga TCP | Perfil downstream autorizado para protocolos que recebem mais do que enviam; medidas e mod real |
+| 003 UDP | **PROTÓTIPO** real: retorno isolado por peer/sessão/serviço, framing, MTU, abuso, expiração e carga TCP; perfil downstream autorizado implementado/testado na biblioteca | Integrar política apropriada ao adaptador, medir mod real e comprovar silêncio/keepalive/endereço; CLI permanece 1:1 |
 | 004 caminhos | Direto IPv4/IPv6 **loopback** testado; roteiro de dois computadores preparado | LAN, NAT/CGNAT, redes distintas, relay elegível e UDP bloqueado |
 | 005 Minecraft/convites/UI | **NÃO IMPLEMENTADO**; lease/pin manual é mecanismo de laboratório | Adaptadores, sinalização autorizada, fluxo social e estados reais |
 | 006 Simple Voice Chat | Inspector e rascunho sem escrita: **PARCIAL** | Artefato local, adaptador de endereço, transporte/runtime e áudio próprios |
@@ -20,6 +20,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 | 008 robustez/liberação | Testes locais adversariais e rollback do laboratório | Matriz real, saturação prolongada, produto e todos os gates anteriores |
 
 Baseline comprovado no [registro de comandos/resultados](../../task-aur-r4-connect.md): 24/24 testes Rust, cinco repetições de transporte com 55/55 resultados, fmt/clippy, 14/14 testes do inspector e smoke multiprocesso com 1 MiB TCP por direção/dez UDP em duas origens/1358 bytes negociados/limpeza aprovada. A falha anterior de UDP sob carga TCP foi preservada no histórico e corrigida com reserva de 16 KiB para datagramas no orçamento agregado. Isso não promete fairness universal nem perda zero. Critérios T-* abrangem mais cenários do que estes testes; nenhum é marcado integralmente concluído por semelhança de nome.
+
+Incremento de política UDP após `b1c6871`: 34/34 Rust e fmt aprovados, com dez casos novos de downstream autorizado/QA. O host pode aprovar bytes/s e datagramas/s por serviço, compartilhados entre associações e persistentes na lease; o peer não altera essa política. Mantém socket conectado, inatividade e prazo absoluto. [Contrato canônico §5.1](../AURORA_CONNECT_SPEC.md#51-retorno-udp-autorizado--incremento-de-laboratório). A biblioteca/testes expõem o novo perfil; CLI e usuários continuam no padrão anterior. Relay remoto continua não executado, por [gate específico de termos](../AURORA_CONNECT_DEPENDENCIES.md#dep-terms--limitações-das-fontes-e-decisões-pendentes), sem bloquear este avanço local.
 
 ## 1. Evidência de partida e limites do inventário
 
@@ -271,7 +273,7 @@ Coluna “caminhos” lista cenários de teste separados: D4 = IPv4 direto; D6 =
 | ID | Serviço/mod | Versão do mod | Minecraft / loader candidato | Hospedagem | Caminhos a validar individualmente | Endereçamento / modo misto | Estado |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | C-TCP | Endpoint TCP controlado | `apps/connect-lab`, Iroh 1.3.0/lock próprio | Sem JVM/loader | Agente host + endpoint controlado | Loopback IPv4/IPv6 comprovado; LAN, D4/D6 externos, N, RG, UB pendentes | Listener loopback aprovado por sessão | PROTÓTIPO local; sem homologação externa |
-| C-UDP | Endpoint UDP controlado | `apps/connect-lab`, framing 24 B | Sem JVM/loader | Agente host + endpoint controlado | Loopback IPv4/IPv6 comprovado; LAN, D4/D6 externos, N, RG, UB pendentes | Associação/resposta por participante/sessão/serviço testada | PROTÓTIPO local; política 1:1 não aprova voz |
+| C-UDP | Endpoint UDP controlado | `apps/connect-lab`, framing 24 B | Sem JVM/loader | Agente host + endpoint controlado | Loopback IPv4/IPv6 comprovado; LAN, D4/D6 externos, N, RG, UB pendentes | Associação/resposta por participante/sessão/serviço testada; downstream opt-in local limitado | PROTÓTIPO local; CLI 1:1 e perfil biblioteca não aprovam voz |
 | C-MC-P | Jogo público sem voz | Protocolo do jogo a registrar | 1.20.1 / Fabric 0.16.14 ou Forge 47.4.23 | Servidor público acessível | Rede normal, sem túnel obrigatório | Manter entrada/auth oficiais | Connect NÃO IMPLEMENTADO / cenário NÃO VERIFICADO |
 | C-MC-D | Jogo por Connect | Protocolo do jogo a registrar | 1.20.1 / Fabric 0.16.14 ou Forge 47.4.23 | Dedicado com agente autorizado | LAN, D4, D6, N, RG, UB aplicável | Porta real do jogo; status e sessão distintos | NÃO IMPLEMENTADO / NÃO VERIFICADO |
 | C-MC-L | Jogo por Connect | Protocolo do jogo a registrar | 1.20.1 / Fabric 0.16.14 ou Forge 47.4.23 | Singleplayer aberto para LAN | LAN, D4, D6, N, RG, UB aplicável | Descoberta/abrir LAN/auto-join separados | NÃO IMPLEMENTADO / NÃO VERIFICADO |

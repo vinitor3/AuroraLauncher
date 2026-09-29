@@ -7,7 +7,7 @@ Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, fora do de
 | Capacidade | Evidência local | Estado e fronteira |
 | --- | --- | --- |
 | TCP | Bytes reais nos dois sentidos, 8 MiB/contrapressão, half-close, múltiplas conexões, autenticação/autorização, limites, expiração/revogação | **PROTÓTIPO**; não executou protocolo Minecraft |
-| UDP | Fronteiras/retorno, três peers, duas sessões, dois serviços, MTU/oversize, replay/forja, quotas, ciclo de vida e carga TCP simultânea | **PROTÓTIPO**; crédito 1:1 inicial restringe protocolos com recepção maior que envio, sem aprovação de voz |
+| UDP | Fronteiras/retorno, três peers, duas sessões, dois serviços, MTU/oversize, replay/forja, quotas, ciclo de vida e carga TCP simultânea; perfil downstream autorizado com orçamento por peer/serviço | **PROTÓTIPO**; CLI mantém crédito 1:1, biblioteca permite perfil explícito; nenhum mod/áudio homologado |
 | Direto | IPv4 e IPv6 loopback; smoke com dois agentes em processos separados | **PROTÓTIPO** local; LAN, redes distintas, IPv4 público, firewall IPv6, NAT/CGNAT pendentes |
 | Relay/UDP externo bloqueado | Pesquisa de capacidade upstream e termos, sem ativação | **NÃO IMPLEMENTADO** no laboratório; nenhum relay configurado/homologado |
 | Minecraft | Nenhuma JVM/jogo executado pelo laboratório | **NÃO IMPLEMENTADO** como integração; ingresso no mundo pendente |
@@ -16,6 +16,8 @@ Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, fora do de
 | Plasmo Voice | Inspector/plano sem escrita, independente de SVC | **PARCIAL** somente na preparação; runtime/endereço/áudio **PRECISA DE TESTE** |
 
 Baseline: 24/24 testes Rust (4 unitários, 9 adversariais, 11 de transporte), 55/55 resultados nas cinco repetições da suíte de transporte, fmt/clippy e 14/14 testes do inspector aprovados. Smoke: 1 MiB TCP por direção, dez UDP em duas origens, teto negociado de 1358 bytes e limpeza aprovada. Uma falha intermitente anterior de UDP sob carga TCP foi corrigida reservando 16 KiB do burst para datagramas; o histórico permanece no task. Esses resultados não garantem ausência de perda em UDP, justiça em redes externas ou SLA. Nenhuma linha de mod/loader/hospedagem recebe homologação por esses testes.
+
+Incremento posterior de retorno UDP: 34/34 Rust (os 24 anteriores + 6 casos downstream + 4 de QA independente) e fmt aprovados. Testa receber múltiplas respostas maiores após ingresso único, quotas entre associações/reconexão, isolamento de serviços/peers/origem, política exclusivamente host, inatividade, revogação e expiração absoluta. O silêncio real do mod ainda depende de keepalive/reabertura e endereçamento, conforme [spec §5.1](AURORA_CONNECT_SPEC.md#51-retorno-udp-autorizado--incremento-de-laboratório).
 
 ## Doctor, recuperação e cópias de teste — 29/09/2026
 

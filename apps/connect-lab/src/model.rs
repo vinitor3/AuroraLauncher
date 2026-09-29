@@ -27,6 +27,21 @@ pub enum Capability {
     Datagram,
 }
 
+/// Host-approved behavior for a UDP service; never supplied by a remote peer.
+/// Neither policy authenticates a voice mod or changes its advertised address.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum UdpReturnPolicy {
+    /// At most the authenticated ingress byte budget, including Aurora framing.
+    #[default]
+    ReplyBudget,
+    /// Opaque downstream after first successful ingress, with per-peer/service bounds.
+    /// Inactivity still expires according to authenticated guest ingress, not replies.
+    AuthorizedDownstream {
+        bytes_per_second: u32,
+        datagrams_per_second: u32,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct Service {
     pub service_id: String,
@@ -35,6 +50,7 @@ pub struct Service {
     pub revision: u32,
     pub max_datagram_bytes: usize,
     pub required_capability: Capability,
+    pub udp_return_policy: UdpReturnPolicy,
 }
 
 #[derive(Debug, Clone)]

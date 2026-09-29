@@ -65,6 +65,8 @@ Contrato lógico v1 reconciliado para o laboratório; nomes serializados finais 
 | `adapter` | ID e versão do adaptador homologado, ou endpoint controlado de laboratório |
 | `serviceRevision` | Aprovação do destino independente de `sessionId`; alteração exige nova aprovação e invalida recursos anteriores. Hash de config é privado quando aplicável |
 
+O modelo local `Service` também contém `udp_return_policy`, escolhido exclusivamente pelo host; não é campo do pedido remoto nem alteração do envelope v1. `ReplyBudget` é padrão e `AuthorizedDownstream { bytes_per_second, datagrams_per_second }` exige aprovação explícita do serviço UDP. Mudança de política/orçamento integra a revisão da aprovação, sem opção de ampliação solicitada pelo convidado.
+
 Catálogo ao convidado omite endpoint do host e só revela serviços autorizados. A abertura referencia a sessão autenticada e `(serviceId, serviceRevision)`; não aceita IP, URL ou porta arbitrários. Host confirma o destino após conferir processo/instância, configuração efetiva e permissão. Manifesto, metadado de mod ou IA apenas propõem serviços; nunca concedem acesso. `requiredCapabilities`, `configurationRevision` e `revision` das propostas antigas não são aliases aceitos silenciosamente; a revisão conserva sua correspondência histórica.
 
 MVP limita destinos a loopback do próprio host. Um bind específico em interface local precisa de confirmação e allowlist de endereços realmente locais; endpoint LAN em outra máquina não entra implicitamente. Não há SOCKS, proxy aberto, encaminhamento geral à LAN, execução remota ou exposição automática de RCON, SSH, banco de dados e painéis. Não resolver nomes controlados pelo convidado, evitando SSRF/DNS rebinding.
@@ -112,6 +114,23 @@ Esses limites não afirmam que atendem a oito jogadores/mods; AUR-R4-003/004 dev
 Voz: fila inicial até 8 datagramas ou 40 ms de permanência local, o menor limite; descarte de vencidos/mais antigos, métricas separadas. Não analisar áudio para decidir. Outros serviços UDP recebem política explícita própria; a política de voz não é herdada automaticamente. O transporte pode guardar dados internamente; verificar limites/TTL reais e não prometer que descartar na aplicação remove áudio já enfileirado num relay TCP.
 
 Streams e voz podem compartilhar conexão se houver isolamento e métricas adequadas. Comparar conexão única com conexões separadas por serviço, observando contenção, prioridade e justiça. Separar conexão não remove gargalo da rede. Não forçar um único socket como dogma.
+
+### 5.1 Retorno UDP autorizado — incremento de laboratório
+
+Após o baseline `b1c6871`, a biblioteca permite dois perfis locais, sem modificar protocolo v1, destinos ou autenticação. A CLI permanece em `ReplyBudget`; o novo perfil está acessível somente por configuração da biblioteca e testes, fora do desktop.
+
+| Perfil | Regra de retorno | Limites efetivos |
+| --- | --- | --- |
+| `ReplyBudget` | Crédito inicial zero; cada ingresso autenticado acrescenta bytes de payload + 24 B, com crédito acumulado até 64 KiB por associação | Retorno consome payload + 24 B; não excede a proporção 1:1; também obedece buckets por peer/serviço e sessão |
+| `AuthorizedDownstream` | Host autoriza recepção maior que envio; retorno só começa após encaminhamento local bem-sucedido do primeiro datagrama autenticado | Orçamento explícito por peer/serviço: bytes/s entre 24 e `Limits.udp_bytes_per_second`; datagramas/s entre 1 e `Limits.datagrams_per_second`. Burst de bytes = mínimo(bytes/s, 65536); burst de pacotes = mínimo(datagramas/s, `Limits.datagram_burst`) |
+
+O bucket de cada peer/serviço pertence à lease e é compartilhado pelas suas associações, inclusive após reconexão, evitando multiplicação de burst por abertura. Serviços e peers distintos mantêm orçamentos próprios. O teto agregado da sessão continua aplicável; o upstream também continua limitado. O socket host permanece conectado ao destino loopback aprovado; retorno só percorre a mesma conexão autenticada e associação do convidado. Peer não fornece endereço de retorno nem escolhe a política; campos remotos desconhecidos são recusados. Receber do socket não concede identidade ao remetente do mod.
+
+Inatividade continua contando desde ingresso autenticado válido, por padrão 30 segundos. Retornos, ainda que válidos, não renovam inatividade nem a autorização absoluta da lease, limitada a uma hora no modelo. Revogação/expiração fecha a associação; MTU dinâmica, janela de sequência, filas e descarte continuam aplicáveis. Portanto, o perfil remove a restrição de proporção de bytes para uma sessão receptora, mas não comprova recepção indefinida com microfone mudo. Homologar keepalive nativo do mod ou reabertura autenticada pelo adaptador, sem inventar áudio/credenciais.
+
+Justificativa de engenharia: proteção QUIC contra reflexão limita envio antes da validação de endereço; não impõe crédito de aplicação vitalício 1:1 após validação. DATAGRAM possui congestionamento, mas não flow control de aplicação. Esses mecanismos upstream permanecem na biblioteca; o Aurora acrescenta autorização e orçamento por serviço. [RFC 9000 §8](https://www.rfc-editor.org/rfc/rfc9000.html#section-8), [RFC 9221 §§5.3–5.4](https://www.rfc-editor.org/rfc/rfc9221.html#section-5.3), consulta 29/09/2026.
+
+Evidência: dez casos novos em `tests/downstream.rs` e `tests/downstream_qa.rs`, com respostas múltiplas/maiores, preservação do padrão 1:1, quotas compartilhadas/isoladas, reconexão, origem estrangeira, tentativa de política pelo peer, inatividade, revogação e expiração absoluta. Suíte completa 34/34 e fmt aprovados conforme [task](../task-aur-r4-connect.md). São datagramas sintéticos opacos; não executam mod, resolvem seu anúncio ou homologam áudio.
 
 ## 6. NAT, caminhos e política de custo
 

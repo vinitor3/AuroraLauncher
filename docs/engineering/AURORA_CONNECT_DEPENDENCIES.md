@@ -56,13 +56,13 @@ Referência Iroh 1.1.0 do pacote alpha.13 foi consultada em documentação/tag v
 | --- | --- |
 | Operador/finalidade | n0.computer; introdução/travessia de NAT e fallback de tráfego cifrado entre endpoints |
 | Autenticação | Acesso ao relay público sem credencial; identidade/autorização entre agentes Aurora continuam obrigatórias |
-| Licença/termos | Software Iroh MIT/Apache-2.0; não equivale a direito ilimitado sobre o serviço. Documentação limita públicos a desenvolvimento/hobby. Termos integrais aplicáveis: **NÃO VERIFICADO**; ver DEP-TERMS |
+| Licença/termos | Software Iroh MIT/Apache-2.0; não equivale a direito ilimitado sobre o serviço. Documentação autoriza desenvolvimento/hobby. Termos gerais lidos integralmente; aplicação da restrição a automação ao SDK/relay público permanece **NÃO VERIFICADO**; ver DEP-TERMS |
 | Quotas/limites | Rate limiting por conexão; números exatos não publicados; capacidade compartilhada; sem SLA; somente stable atual oficialmente suportada; sem version locking |
 | Regiões | Hostnames publicados: `use1-1`, `usw1-1`, `euc1-1`, `aps1-1` em `relay.n0.iroh.link`. Localização contratual, residência e região Brasil: **NÃO VERIFICADO**; não inferir por prefixo |
 | Cobrança | Documentado sem custo; não exige plano pago. Não converter indisponibilidade em upgrade. Sustentabilidade/autorização para distribuição do Aurora: **NÃO VERIFICADO** e não aprovada |
 | Dados/segredos | Tráfego E2E; operador observa metadados/IP/volume e monitora abuso. Não enviar tokens Microsoft/Minecraft ou logs de áudio |
 | Falha | Se caminho direto já estiver funcionando, avaliar continuidade; novas sessões e fallback podem falhar. Throttling/indisponibilidade precisam de estado real, timeout/cancelamento e erro claro; não prometer quota detectável sem evento |
-| Decisão | Candidato para desenvolvimento controlado após gate; distribuição pública desabilitada |
+| Decisão | Gratuidade e finalidade de desenvolvimento confirmadas para candidato de ensaio sintético curto; conexão ainda não executada, pendente delimitação dos termos em DEP-TERMS. Distribuição pública desabilitada |
 | Fonte/data | [Públicos](https://docs.iroh.computer/iroh-services/relays/public), [limites](https://docs.iroh.computer/relays/rate-limiting), [rede](https://docs.iroh.computer/configuring-networks), 29/09/2026 |
 
 ### DEP-IROH-DISCOVERY — DNS/Pkarr e reflexão de endereço
@@ -178,7 +178,17 @@ Para ambos, origem de download/termos do distribuidor, hashes e configuração e
 
 ## DEP-TERMS — limitações das fontes e decisões pendentes
 
-Foi lida documentação oficial de relays, descoberta, redes, custos, credenciais e APIs, além dos READMEs/arquivos indicados. A URL [Iroh Services Terms](https://services.iroh.computer/legal/terms) teve extrato indexado disponível com atualização declarada em 14/05/2025, mas a abertura direta retornou vazio. **Não foi lido integralmente o termo nem verificada sua aplicabilidade exata a cada serviço público.** Isso permanece gate; não se afirma autorização comercial/jurídica de distribuição.
+Reconsulta em 29/09/2026 após o baseline `b1c6871`: [Public Relays](https://docs.iroh.computer/iroh-services/relays/public), [rate limiting](https://docs.iroh.computer/relays/rate-limiting), [hosting](https://www.iroh.computer/services/hosting) e [preços](https://www.iroh.computer/pricing) confirmam gratuidade, uso para desenvolvimento/teste e ausência de conta/autenticação obrigatória no relay público. Quotas exatas não são publicadas; não há SLA. Portanto, o custo e a finalidade técnica de um ensaio sintético pequeno estão documentados; não se rejeita relay gratuito por princípio. Nenhuma conta, plano ou relay foi ativado.
+
+Os [termos gerais resumidos](https://www.iroh.computer/legal) e os [termos completos de Iroh Services](https://services.iroh.computer/legal/terms), datados de 14/05/2025, foram agora lidos integralmente. O segundo frontend exige JavaScript; como o navegador não estava disponível, seu texto foi lido no [asset público identificado pelo HTML/roteamento oficial](https://services.iroh.computer/assets/page-D1XY7eeI.js), sem executar JavaScript. O texto contém aceite pelo uso e restrição ampla a acesso automatizado sem permissão escrita. Não foi localizada uma delimitação explícita dessa cláusula para o SDK/relay público. Essa lacuna de aplicabilidade permanece; não é evidência de cobrança nem conclusão de que todo teste seja proibido.
+
+Ensaio candidato, **não executado**: dois endpoints efêmeros autenticados, somente dados sintéticos, até 1 MiB de payload total e menos de 60 segundos; um relay público explicitamente selecionado, sem descoberta pública, telemetria, conta, assinatura, trial ou fallback. Volume de payload não inclui handshake/overhead externo e não é garantia de quota. Antes de conectar, resolver a aplicabilidade dos termos e registrar decisão específica de teste. Se surgir aceite adicional, cobrança ou necessidade de conta, o ensaio não prossegue automaticamente. Produção continua sem aprovação.
+
+Consulta preparada, **não enviada**, ao contato oficial `hello@n0.computer` publicado na página Legal:
+
+> Please confirm which terms govern a one-off automated development test using the official Iroh 1.3.0 SDK through a public n0 relay: two ephemeral endpoints, synthetic data only, at most 1 MiB total application payload, under 60 seconds, no account, API key, subscription, trial or telemetry. Does the restriction on automated access in Iroh Services Terms §3 apply to this SDK test? Is this use permitted without fees or additional agreement? Please provide the applicable public terms or written clarification. This is not a request for production use.
+
+Não é necessário abrir conta nem fornecer código, IP, chave ou logs para essa consulta. Uma resposta oficial identificando o escopo e a condição de gratuidade permite reavaliar o ensaio restrito de AUR-R4-004; não autoriza distribuição. O agente não pode obter esclarecimento privado sem enviar mensagem externa, ação que não foi solicitada. Esse gate bloqueia somente a conexão ao relay público; implementação local, testes, auditoria de artefatos e preparo dos adaptadores prosseguem.
 
 Há divergência editorial upstream: uma seção de segurança chama relay-only de futuro, enquanto o guia de redes já mostra desativação de transportes IP. Usar código/documentação da versão fixada e teste, não a frase mais conveniente. URLs `latest` e branches móveis são evidência da consulta, não locks reproduzíveis. Nenhuma porcentagem de sucesso ou ganho de ping do fornecedor é métrica Aurora.
 

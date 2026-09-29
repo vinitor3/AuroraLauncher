@@ -60,7 +60,19 @@ Plano de configuração de voz não é executor. O broker existente de JSON não
 | Plasmo Voice | Inspector/plano **PROTÓTIPO**, homologação independente **PRECISA DE TESTE** |
 | R4 e distribuição | **PARCIAL**: gates preservados, sem capacidade pública ativada |
 
-Aceite cumprido para laboratório de bytes: dois agentes reproduzíveis, destinos controlados, autenticação/escopo antes do serviço, falhas testadas e encerramento recuperável. Não cumprido para produto/voz/redes externas. Próximo bloqueio local: substituir a hipótese de retorno 1:1 obrigatório por política downstream autorizada e limitada por serviço, necessária antes de voz recebida em silêncio. Esse trabalho independe de segundo computador e continua autorizado.
+Aceite cumprido para laboratório de bytes: dois agentes reproduzíveis, destinos controlados, autenticação/escopo antes do serviço, falhas testadas e encerramento recuperável. Não cumprido para produto/voz/redes externas. O bloqueio local de retorno 1:1 foi tratado no incremento seguinte, abaixo; nenhum gate de voz foi promovido.
+
+### Segundo incremento — retorno UDP autorizado
+
+O host pode selecionar `UdpReturnPolicy::AuthorizedDownstream` para um serviço UDP, com bytes/s e datagramas/s explícitos dentro dos tetos existentes. `ReplyBudget` permanece padrão. A escolha não é campo aceito do convidado nem altera o schema remoto. Primeiro envio autorizado bem-sucedido habilita retorno; socket conectado, MTU, prazo absoluto, revogação e inatividade por ingresso permanecem. Buckets por lease/serviço são compartilhados entre associações e sobrevivem à reconexão, sem multiplicar burst. O limite agregado da sessão também permanece.
+
+Comandos efetivamente executados: `cargo test --locked --manifest-path apps/connect-lab/Cargo.toml --all-targets` (**34/34 PASS**: 4 unitários, 9 adversariais, 6 downstream, 4 QA downstream, 11 transporte), `cargo fmt --manifest-path apps/connect-lab/Cargo.toml --check`, `cargo clippy --locked --manifest-path apps/connect-lab/Cargo.toml --all-targets -- -D warnings` e `git diff --check` (PASS). Revisão independente do diff não encontrou achado acionável.
+
+Novas provas: várias respostas maiores após um pedido pequeno; padrão 1:1 continua recusando excesso sem gastar crédito da resposta válida; quota compartilhada entre associações e separada por peer/serviço; reconexão não restaura quota; origem UDP estrangeira recusada; campo remoto de política recusado; inatividade e expiração absoluta encerram mesmo sob retorno contínuo; revogação interrompe retorno; configuração de limites inválida é recusada antes do endpoint. Não existe prova de áudio ou de NAT nesses casos.
+
+O primeiro teste combinado de inatividade/revogação recebeu Windows `ConnectionReset` 10054 porque o servidor de teste ainda enviava ao socket expirado e depois reutilizava seu socket com ICMP pendente. Separar as duas fixtures e aguardar a task abortada resolveu a interferência sem relaxar a recusa de payload nem alterar a implementação para ocultar o erro. A suíte completa posterior passou.
+
+Próximos trabalhos locais autorizados: plano explícito para expor downstream no harness (CLI convencional continua conservadora) e inspeção dos JARs oficiais dos mods, sem executá-los nem alterar configurações pessoais. Pendência externa não bloqueia esses incrementos.
 
 ### Achados durante os ciclos, preservados
 

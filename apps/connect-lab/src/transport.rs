@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn tcp_backpressure_preserves_datagram_burst_without_bypassing_aggregate_budget() {
-        let mut bucket = Bucket::new(1, 65536);
+        let mut bucket = Bucket::new(0, 65536);
         for _ in 0..3 {
             assert!(bucket.take_with_reserve(16384, 16384));
         }

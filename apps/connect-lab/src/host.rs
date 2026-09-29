@@ -13,13 +13,13 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 use tokio::{
     net::{TcpStream, UdpSocket},
-    sync::{OwnedSemaphorePermit, Semaphore},
+    sync::{Notify, OwnedSemaphorePermit, Semaphore},
     task::{JoinHandle, JoinSet},
 };
 use tokio_util::sync::CancellationToken;
@@ -27,6 +27,8 @@ use tokio_util::sync::CancellationToken;
 struct LeaseState {
     value: Lease,
     cancel: CancellationToken,
+    udp_limiters: Mutex<HashMap<u32, Arc<Mutex<UdpLimiter>>>>,
+    downstream_limiters: Mutex<HashMap<u32, Arc<Mutex<UdpLimiter>>>>,
 }
 struct State {
     session_id: String,
@@ -59,6 +61,18 @@ impl Host {
         }
         let mut services = HashMap::new();
         for (index, service) in config.services.into_iter().enumerate() {
+            if let UdpReturnPolicy::AuthorizedDownstream {
+                bytes_per_second,
+                datagrams_per_second,
+            } = service.udp_return_policy
+                && (service.protocol != Protocol::Udp
+                    || bytes_per_second < DATAGRAM_HEADER_LEN as u32
+                    || bytes_per_second > config.limits.udp_bytes_per_second
+                    || datagrams_per_second == 0
+                    || datagrams_per_second > config.limits.datagrams_per_second)
+            {
+                return Err(Error::Configuration);
+            }
             if !valid_id(&service.service_id)
                 || !service.endpoint.ip().is_loopback()
                 || service.endpoint.port() == 0
@@ -92,6 +106,8 @@ impl Host {
                 LeaseState {
                     value: lease,
                     cancel: CancellationToken::new(),
+                    udp_limiters: Mutex::new(HashMap::new()),
+                    downstream_limiters: Mutex::new(HashMap::new()),
                 },
             );
         }
@@ -261,6 +277,10 @@ struct Association {
     sequence: Mutex<SequenceWindow>,
     credit: AtomicU64,
     limiter: Arc<Mutex<UdpLimiter>>,
+    downstream_limiter: Arc<Mutex<UdpLimiter>>,
+    return_policy: UdpReturnPolicy,
+    first_forwarded: AtomicBool,
+    first_forwarded_notify: Notify,
 }
 struct UdpLimiter {
     packets: Bucket,
@@ -275,6 +295,21 @@ impl UdpLimiter {
     }
     fn take(&mut self, bytes: usize) -> bool {
         self.packets.take(1) && self.bytes.take(bytes)
+    }
+    fn downstream(policy: UdpReturnPolicy, limits: &Limits) -> Self {
+        match policy {
+            UdpReturnPolicy::ReplyBudget => Self::new(limits),
+            UdpReturnPolicy::AuthorizedDownstream {
+                bytes_per_second,
+                datagrams_per_second,
+            } => Self {
+                packets: Bucket::new(
+                    datagrams_per_second,
+                    datagrams_per_second.min(limits.datagram_burst),
+                ),
+                bytes: Bucket::new(bytes_per_second, bytes_per_second.min(65536)),
+            },
+        }
     }
 }
 type Associations = Arc<Mutex<HashMap<u64, Arc<Association>>>>;
@@ -294,7 +329,6 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
     let cancel = state.cancel.child_token();
     let tcp = Arc::new(Semaphore::new(state.limits.max_tcp_per_peer));
     let associations: Associations = Arc::new(Mutex::new(HashMap::new()));
-    let mut udp_limiters: HashMap<u32, Arc<Mutex<UdpLimiter>>> = HashMap::new();
     let mut tasks = JoinSet::new();
     // Revocation/expiry remains responsive even while a peer stalls a control stream.
     let lease_cancel = lease.cancel.clone();
@@ -395,7 +429,9 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
                         let association = Arc::new(Association { socket: Arc::new(socket), service_handle: handle,
                             generation: service.revision, max_payload, cancel: cancel.child_token(), activity: Mutex::new(Instant::now()),
                             sequence: Mutex::new(SequenceWindow::default()), credit: AtomicU64::new(0),
-                            limiter: udp_limiters.entry(handle).or_insert_with(|| Arc::new(Mutex::new(UdpLimiter::new(&state.limits)))).clone(),
+                            limiter: lease.udp_limiters.lock().unwrap().entry(handle).or_insert_with(|| Arc::new(Mutex::new(UdpLimiter::new(&state.limits)))).clone(),
+                            downstream_limiter: lease.downstream_limiters.lock().unwrap().entry(handle).or_insert_with(|| Arc::new(Mutex::new(UdpLimiter::downstream(service.udp_return_policy, &state.limits)))).clone(),
+                            return_policy: service.udp_return_policy, first_forwarded: AtomicBool::new(false), first_forwarded_notify: Notify::new(),
                         });
                         associations.lock().unwrap().insert(request.request_id, association.clone());
                         let response = Reply { service_handle: handle, association_id: request.request_id, generation: service.revision, max_payload: Some(max_payload), ..Default::default() };
@@ -533,6 +569,8 @@ async fn receive_datagrams(
             result = tokio::time::timeout(Duration::from_millis(40), a.socket.send(&frame.payload)) => result,
         };
         if matches!(delivered, Ok(Ok(n)) if n == frame.payload.len()) {
+            a.first_forwarded.store(true, Ordering::Release);
+            a.first_forwarded_notify.notify_one();
             state.metrics.udp_forwarded.fetch_add(1, Ordering::Relaxed);
         } else {
             state.metrics.udp_dropped.fetch_add(1, Ordering::Relaxed);
@@ -563,12 +601,31 @@ async fn udp_return(
             }
             received = a.socket.recv(&mut buffer) => {
                 let size = match received { Ok(n) => n, Err(_) => break };
+                // A fast destination may answer before the sender task stores its success.
+                // Wait only for that bounded local send, never enable unsolicited traffic.
+                if !a.first_forwarded.load(Ordering::Acquire) {
+                    let notified = a.first_forwarded_notify.notified();
+                    if !a.first_forwarded.load(Ordering::Acquire) {
+                        tokio::select! {
+                            biased;
+                            _ = a.cancel.cancelled() => break,
+                            _ = tokio::time::timeout(Duration::from_millis(40), notified) => (),
+                        }
+                    }
+                    if !a.first_forwarded.load(Ordering::Acquire) {
+                        state.metrics.udp_dropped.fetch_add(1, Ordering::Relaxed); continue;
+                    }
+                }
+                if a.cancel.is_cancelled() || a.activity.lock().unwrap().elapsed() >= state.limits.udp_idle_timeout { break; }
                 let Some(max) = transport::payload_limit(&connection, a.max_payload) else { break; };
                 if size > max { state.metrics.udp_oversize.fetch_add(1, Ordering::Relaxed); continue; }
                 let cost = (size + DATAGRAM_HEADER_LEN) as u64;
-                if a.credit.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(cost)).is_err()
-                    || !a.limiter.lock().unwrap().take(size + DATAGRAM_HEADER_LEN)
-                    || !state.budget.lock().unwrap().take(size + DATAGRAM_HEADER_LEN) {
+                let permitted = match a.return_policy {
+                    UdpReturnPolicy::ReplyBudget => a.credit.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(cost)).is_ok()
+                        && a.limiter.lock().unwrap().take(size + DATAGRAM_HEADER_LEN),
+                    UdpReturnPolicy::AuthorizedDownstream { .. } => a.downstream_limiter.lock().unwrap().take(size + DATAGRAM_HEADER_LEN),
+                };
+                if !permitted || !state.budget.lock().unwrap().take(size + DATAGRAM_HEADER_LEN) {
                     state.metrics.udp_dropped.fetch_add(1, Ordering::Relaxed); continue;
                 }
                 let frame = DatagramFrame { service_handle: a.service_handle, association_id: id, generation: a.generation,

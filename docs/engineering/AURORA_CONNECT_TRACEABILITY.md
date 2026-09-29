@@ -59,8 +59,10 @@ Baseline de 29/09/2026, comandos/saídas/achados no [task de execução](../task
 | IPv4/IPv6 loopback reais | REQ-V2-07/24; 004 parcial | Não comprova LAN, firewall, IPv6 público, NAT/CGNAT ou relay; procedimento em dois computadores preparado, não executado |
 | Inspector Node 14/14 e demonstrações sem escrita | REQ-V2-13/14/16; preparação 006/007 | Fixtures/referências oficiais; não instala/executa mod, não aplica configuração, não homologa endereçamento/áudio |
 | Metadata Cargo: 358 pacotes com licença declarada; rustls 0.23.45 conferido no advisory específico | REQ-V2-17/27; 001 | Inventário não comprova obrigações de distribuição; `cargo audit` indisponível, sem varredura completa |
+| Incremento posterior ao baseline: 34/34 Rust e fmt, dez novos casos downstream/QA | REQ-V2-08/10/11/12/19; 003 e robustez local 008 | Perfil local autorizado recebe mais que envia, com orçamento por peer/serviço, reconexão, isolamento, tentativa de política remota recusada, inatividade/revogação/expiração. CLI permanece padrão 1:1; sem mod/áudio |
+| Termos n0 lidos integralmente e gatilho de ensaio delimitado registrado | REQ-V2-05/06/07/27; 004 | Gratuidade/desenvolvimento confirmados; alcance da cláusula de automação pendente. Consulta preparada não enviada, nenhum relay conectado |
 
-TCP, UDP e direto loopback permanecem **PROTÓTIPO**. Relay está desligado; integração Minecraft, convites sociais e interface não foram implementados. SVC e Plasmo possuem preparação parcial separada, runtime pendente. O limite inicial de retorno UDP 1:1 não constitui condição final de compatibilidade de voz; a política downstream requer incremento próprio. Todas as células reais de Minecraft/mod/rede externa continuam pendentes.
+TCP, UDP e direto loopback permanecem **PROTÓTIPO**. Relay está desligado; integração Minecraft, convites sociais e interface não foram implementados. SVC e Plasmo possuem preparação parcial separada, runtime pendente. O perfil downstream remove o bloqueio de proporção 1:1 para serviço explicitamente aprovado na biblioteca; ainda exige keepalive/reabertura/endereço adequados ao mod. Todas as células reais de Minecraft/mod/rede externa continuam pendentes.
 
 | Decisão | Alteração verificável |
 | --- | --- |
