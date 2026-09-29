@@ -1,10 +1,10 @@
 # Plano de execução paralela Codex
 
-Este plano é executável por worktrees locais. A branch atual `docs/aur-r0-engineering-plan` contém apenas a baseline/planejamento e o patch de regra ainda não implantado. Nenhum agente deve trabalhar diretamente em `main`.
+Este plano é executável por worktrees locais. A branch `docs/aur-r0-engineering-plan` e a base `5aa5fe8` registravam a revisão inicial; não são a base atual de produto. A revisão Connect V2 foi reconciliada com alpha.14 em `6a107b8`; confirmar HEAD, manifests, matriz e entregas concluídas antes de iniciar. Nenhum agente deve trabalhar diretamente em `main`.
 
 ## Regras comuns
 
-- Baseline: `5aa5fe8`; atualizar o SHA explicitamente antes de iniciar se `main` avançar.
+- Baseline: selecionar a base atual reconciliada e registrar o SHA; nunca reutilizar `5aa5fe8` ou alpha.13 descartando entregas posteriores.
 - Uma tarefa, uma branch, um worktree e um commit lógico; não misturar refactor oportunista.
 - Não editar arquivos fora do ownership. Dependência nova ou mudança de contrato exige registrar no PR e avisar integração.
 - Nunca commitar secrets, tokens, `.env`, credenciais, chaves de updater ou material Microsoft/Firebase.
@@ -47,7 +47,11 @@ Ordem candidata:
 | Frontend | AUR-R1-003 | `App.tsx` e novos módulos feature/service | R0 verde; ownership exclusivo de `App.tsx` |
 | Rust filesystem | AUR-R1-004 | executor de download/substituição e testes | R0 verde; contrato coordenado com R1-001 |
 
-R1-001 e R1-004 podem tocar módulos Rust próximos; Integration Agent deve separar ownership por arquivo antes do spawn. HUD começa somente depois do harness.
+R1-001 e R1-004 podem tocar módulos Rust próximos; Integration Agent deve separar ownership por arquivo antes do spawn. HUD/Companion foram retirados pela ADR-018; o harness homologa Core/Skins e, separadamente, o Assistente desktop.
+
+## R4 — Connect V2 em incremento isolado
+
+Usar [backlog](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) e [prompt](CODEX_PROMPTS/AUR-R4-CONNECT-V2.md). Pesquisa e PoC local de transporte autorizadas não liberam produto, UI pública ou sincronização antes dos gates. Não refazer recovery/Doctor/Tools já entregues. Um proprietário do domínio Connect, outro da revisão de ameaça/testes; manifests, registro Tauri e monólitos continuam com owner exclusivo. Adaptadores SVC/Plasmo podem ser investigados separadamente, mas qualquer edição compartilhada no Core exige serialização e matriz afetada. A revisão documental paralela de outro chat não autoriza sobrescrever seus arquivos.
 
 ## Política de worktrees
 

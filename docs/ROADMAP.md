@@ -2,6 +2,8 @@
 
 Este roadmap separa claramente o que já está implementado, o que ainda precisa de homologação em jogo e o que é intenção de produto. Ele não representa promessa de prazo.
 
+Atualização de 29/09/2026: base **alpha.14**, Core **1.1.5**, Skins **0.3.1**. Este é o resumo de produto; fases, IDs, gates e planejamento completo ficam no [roadmap mestre](engineering/MASTER_ROADMAP.md). Check de implementação não é check de homologação runtime.
+
 ## Agora — estabilização da alpha
 
 - [x] Instâncias isoladas e engine de lançamento em Rust.
@@ -19,7 +21,7 @@ Este roadmap separa claramente o que já está implementado, o que ainda precisa
 - [ ] Cobrir fluxos críticos com testes de interface reproduzíveis.
 - [x] Conectar um catálogo próprio de skins com resultados visuais paginados e fallback offline.
 - [ ] Sincronizar skin ativa, biblioteca e favoritos entre Launcher, jogo e API Aurora.
-- [ ] Propagar skins Aurora entre jogadores sem exigir mod no servidor.
+- [x] Implementar sincronização multiplayer do Skins 0.3.1, preservando grade/cache; a solução atual exige Skins compatível no servidor, conforme [ADR-022](engineering/ADR/ADR-022-skins-server-relay.md). Homologação completa permanece pendente; não anunciar propagação universal sem mod servidor.
 
 ## Assistente desktop e módulos mantidos
 
@@ -43,6 +45,21 @@ O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in
 - [ ] Implementar atualização segura do próprio launcher.
 - [ ] Publicar builds assinadas em um canal estável.
 - [ ] Criar telemetria opcional e transparente, com privacidade por padrão.
+
+## Diagnóstico e recuperação — alpha.14
+
+- [x] Doctor determinístico local, orientação Gemini opcional, ações restritas com prévia/confirmação/histórico e restauração.
+- [x] Pontos manuais com CAS local limitado, prévia, proteção anterior, journal e desfazer.
+- [x] Observações verificadas por tentativa, cópias independentes de diagnóstico e aplicação seletiva com confirmação.
+- [ ] Homologar os fluxos completos em runtime; preservar limites de mundos/configurações e evidências em [AUR-1167](task-aur-1167-doctor-lab.md).
+- [ ] Pontos automáticos gerais antes de updates, retenção e GC seguro. CAS existente não equivale a backup integral nem unificação de executores.
+
+## Aurora Connect V2 — R4, ainda não implementado
+
+- [ ] Pontes TCP e UDP autenticadas por serviço autorizado, convites e estados reais de transporte/jogo/voz.
+- [ ] Conectividade direta preferencial e relay gratuito verificado opcional, sem gasto obrigatório/automático; nenhuma infraestrutura própria obrigatória.
+- [ ] Compatibilidade individual de Simple Voice Chat e Plasmo Voice, incluindo endereçamento e testes por versão/loader/modo.
+- [ ] Manifesto, sincronização consentida, redes reais e liberação gradual após gates. [Especificação e backlog](engineering/AURORA_CONNECT_SPEC.md).
 
 ## Fora do escopo atual
 

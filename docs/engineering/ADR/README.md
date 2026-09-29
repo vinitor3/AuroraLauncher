@@ -1,5 +1,7 @@
 # Architecture Decision Records
 
+Proposta atual sem número reservado: [Aurora Connect V2](PROPOSAL-aurora-connect.md). A política de relay foi atualizada por requisito explícito (direto preferencial, relay gratuito verificado, sem gasto obrigatório/automático); a escolha técnica permanece **HIPÓTESE**. ADR-010 conserva o registro histórico e aponta essa revisão. Conferir numeração/ownership antes de aceitar uma ADR nova.
+
 | ADR | Decisão | Estado |
 | --- | --- | --- |
 | [001](ADR-001-prism-reference.md) | Prism como referência, não componente | Aceita |

@@ -6,14 +6,16 @@ Este arquivo é a referência operacional para agentes que trabalham neste repos
 
 Aurora é um launcher independente para Minecraft Java Edition, gratuito e open source. O desktop usa React 19/TypeScript sobre Tauri v2; o núcleo nativo é Rust; o Worker Cloudflare protege Gemini, CurseForge e Supabase; o Aurora Core integra Fabric/Forge ao launcher por WebSocket local autenticado. O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados.
 
-Estado de escopo em 2026-09-21 (resultados executados em `docs/task-remove-companion.md`):
+Estado de escopo reconciliado em 2026-09-29 (retirada em `docs/task-remove-companion.md`; alpha.14 em `docs/task-aur-1167-doctor-lab.md`):
 
 - launcher desktop e núcleo Rust: implementados, build/testes locais verdes;
 - Assistente desktop: preservar painel, conversa, Gemini, microfone, reconhecimento de fala, TTS e atalho `Ctrl+Alt+/`, inclusive com Minecraft fechado;
 - módulos distribuídos: nove Core e nove Skins (18 JARs); não reinstalar Companion nem criar Assistente no jogo;
 - migração de Companion antigo: somente identidade/proveniência confirmadas, jogo encerrado, bloqueio de mutação, caminhos confinados, backup e journal recuperável;
-- homologação runtime completa, CAS, diagnóstico e Tools: pendentes; Master e Social: IMPLEMENTAR FUTURAMENTE;
+- Doctor local, orientação Gemini, Tools restritas confirmadas, recuperação manual com CAS limitado e cópias de diagnóstico: IMPLEMENTADO MAS NÃO HOMOLOGADO; preservar entregas alpha.14. Homologação runtime completa, GC seguro, unificação de executores e pontos automáticos gerais antes de updates continuam pendentes; Master e Social não estão implementados;
 - release `v0.1.0-alpha`: histórico; não reutilizar nem sobrescrever.
+
+Versão reconciliada nesta revisão: launcher `0.1.1-alpha.14`, Core `1.1.5`, Skins `0.3.1`, base `6a107b8`. Conferir manifests, matriz e ancestrais novamente em cada tarefa; o checkout principal pode estar atrás de uma entrega concluída em worktree. Não voltar à alpha.13 descartando recuperação/Doctor/cópias. Aurora Connect V2 está especificado em `docs/engineering/AURORA_CONNECT_SPEC.md`, ainda NÃO IMPLEMENTADO; relay gratuito verificado é permitido, gasto obrigatório/automático não. O prompt de implementação está em `docs/engineering/CODEX_PROMPTS/AUR-R4-CONNECT-V2.md`.
 
 Use exatamente: `CONCLUÍDO`, `PARCIAL`, `PROTÓTIPO`, `IMPLEMENTADO MAS NÃO HOMOLOGADO`, `NÃO IMPLEMENTADO`, `LEGADO`, `RISCO`, `HIPÓTESE`, `NÃO VERIFICADO` e `PRECISA DE TESTE`.
 

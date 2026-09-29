@@ -2,33 +2,55 @@
 
 ## Estado confirmado
 
-`v0.1.0-alpha` é um prerelease público e a CI do commit tagueado passou. Entretanto, o instalador no Git e o asset GitHub sob essa versão não são o mesmo arquivo. Essa versão fica congelada como artefato histórico; não apagar, substituir ou “corrigir” retroativamente.
+Base conferida em 29/09/2026: launcher `0.1.1-alpha.14`, commit `6a107b87adc4882bd464909e22650185f862ea5e`. O [registro da entrega](../task-aur-1167-doctor-lab.md) documenta build oficial, testes automatizados, matriz 18/18 e instalador local com SHA-256/manifesto. Integra recuperação manual, CAS restrito, Doctor e cópias de diagnóstico, preservando Tools, Assistente desktop, sessões, Core 1.1.5 e Skins 0.3.1. Instalação/execução do instalador, homologação completa em Minecraft e assinatura Authenticode permanecem **NÃO VERIFICADO**. Esta revisão não gerou nem publicou artefatos.
+
+`v0.1.0-alpha` é o prerelease público histórico cujo instalador no Git divergia do asset GitHub, conforme a auditoria original. A divergência não descreve automaticamente alpha.14. Todas as versões ficam congeladas como artefatos históricos; não apagar, substituir ou corrigir retroativamente. [Inventário de releases](../../releases/README.md).
 
 ## Versionamento
 
 - SemVer: `MAJOR.MINOR.PATCH-prerelease.N`.
 - canais: `alpha` (quebra/validação), `beta` (feature complete da meta), `stable` (matriz/SLO/suporte).
-- a linha de desenvolvimento atual é `0.1.1-alpha.6`, sincronizada em
-  root/package, desktop/package, Cargo e Tauri; os módulos in-game possuem
-  versões próprias e uma matriz assinada;
+- a base atual é `0.1.1-alpha.14`, sincronizada em root/package,
+  desktop/package, Cargo, Tauri e lockfiles, conforme a entrega registrada;
+  módulos in-game têm versões próprias e nove pares oficiais. A entrega
+  verifica assinatura Ed25519 do Core; isso não prova assinatura de todo
+  artefato nem assinatura do instalador;
 - o preflight local verifica que os manifests do launcher concordam, que o
   checkout está limpo/integrado e que o nome do artefato ainda não existe.
 
-## Pipeline
+## Pipeline de evolução e liberação
+
+Os passos de proteção de branch, SBOM completo, assinatura e publicação abaixo
+continuam gates quando ainda não houver evidência. O empacotamento local de
+alpha.14 não os promove automaticamente a concluídos. Licença/proveniência,
+Microsoft/Xbox/Minecraft entitlement e os gates R0/R1/R1.5/R2/R2.5/R3/R5 do
+roadmap permanecem aplicáveis à distribuição pública.
 
 1. PR com checks obrigatórios e review.
 2. Merge limpo na `main` protegida.
-3. Build oficial somente por `npm run desktop:build`, em branch de integração
-   limpa e depois do commit de produto.
+3. Coordenador consulta `npm run release:status`, integra apenas entregas prontas,
+   preserva mudanças em andamento e faz commit numa branch de integração própria.
+   Executa uma vez `npm run release:package`, que invoca o único build oficial
+   `npm run desktop:build` com preflights e matriz; [fluxo obrigatório](../release-workflow.md).
 4. Tag anotada criada a partir do commit e preservada sem reescrita.
-5. Gerar instalador, JARs, `SHA256SUMS`, manifesto JSON, SBOM CycloneDX/SPDX e proveniência.
+5. Conferir instalador, JARs, hashes e manifesto JSON gerados; completar SBOM CycloneDX/SPDX e proveniência antes da publicação.
 6. Assinar updater/artefatos quando houver chave; verificar assinatura antes do upload.
 7. Publicar GitHub prerelease imutável e anexar changelog/limitações/matriz.
 8. Smoke de download/instalação; falha não substitui asset: cria nova versão.
 
 ## Custo zero
 
-GitHub Actions em repositório público usa runners padrão sem cobrança por minuto. Evitar larger runners e limitar retenção de artefatos. Releases GitHub hospedam instaladores; R2 só entra quando houver necessidade e orçamento de quota.
+Verificar plano, elegibilidade, termos e quotas de CI/armazenamento antes de usar
+infraestrutura externa; a existência de um workflow ou de software open source
+não comprova gratuidade. Conservar limites de execução/retenção e não ativar
+billing, excedente cobrável ou infraestrutura nova por causa desta revisão.
+
+Para Aurora Connect, priorizar direto e admitir relay gratuito somente após
+aprovação documentada para o uso pretendido, separando laboratório de distribuição.
+Serviço com excedente cobrável permanece desabilitado sem bloqueio efetivo e
+comprovado; alertas e contadores locais não bastam. Sem relay permitido, publicar
+no máximo o modo direto homologado com limite explícito, nunca fallback pago
+silencioso. [Dependências e zero-spend](AURORA_CONNECT_DEPENDENCIES.md).
 
 ## Assinaturas
 
@@ -58,3 +80,10 @@ Adiado até:
 - [ ] nenhum secret/log/conta no artefato;
 - [ ] asset publicado corresponde exatamente ao hash anunciado;
 - [ ] release anterior permanece intacto.
+
+Para um incremento Connect, acrescentar somente os gates do alcance anunciado:
+TCP, UDP, cada mod/versão/loader, dedicado/LAN, modo misto e caminhos de rede são
+homologações distintas. O recurso não validado permanece experimental e
+desativado ao usuário por padrão. O caminho relay deve ser observável, gratuito
+e autorizado para distribuição; uma PoC de laboratório não libera R4 inteira.
+Preservar a matriz Core/Skins existente e os recursos alpha.14 durante a integração.

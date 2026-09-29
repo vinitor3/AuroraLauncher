@@ -1,5 +1,9 @@
 # Compatibility Matrix
 
+## Aurora Connect V2 — planejamento de 29/09/2026
+
+Estado do Connect: **NÃO IMPLEMENTADO** no inventário limitado; compatibilidade de transporte/voz: **NÃO VERIFICADO**. A revisão usa alpha.14 (`6a107b8`) e mantém Core 1.1.5, Skins 0.3.1 e os nove pares da matriz ativa. Nenhum caminho TCP/UDP, mod de voz ou relay foi homologado por esta documentação. A [matriz candidata por mod/versão/loader/hospedagem/rede](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) contém os futuros testes, incluindo Simple Voice Chat e Plasmo Voice separados. A matriz abaixo conserva todas as evidências anteriores; não confundir retransmissão Skins com conectividade Connect. [Diagnóstico e base reconciliada](../task-aur-r4-connect-v2-review.md).
+
 ## Doctor, recuperação e cópias de teste — 29/09/2026
 
 Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Launcher alpha.14 integra integralmente a recuperação manual de `be3a1c4`, preserva a base alpha.13 com Doctor, Gemini, Assistente e sessões, e acrescenta observações verificadas por tentativa e cópias independentes com aplicação seletiva, proteção e desfazer. Não amplia Minecraft/loaders/Java e conserva Core 1.1.5/Skins 0.3.1. Mundos são excluídos por padrão e nunca transferidos ao aplicar; cópia explícita de mundo serve somente ao teste. Testes automatizados usam dados descartáveis; partida real, skins/capa, multiplayer, autenticação e voz não recebem nova homologação por build. Evidências: [AUR-1167](../task-aur-1167-doctor-lab.md).

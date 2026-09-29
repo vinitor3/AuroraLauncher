@@ -52,6 +52,6 @@ O uso online depende de publicação da rota `/v1/doctor/advice` no Worker confi
 
 ## Ações confirmadas e histórico
 
-O incremento de 28/09 oferece remoção reversível de mod identificado e ajuste de opções JSON permitidas, com prévia, confirmação, exclusão mútua e restauração dos bytes originais. O histórico local associa categorias de diagnóstico e tentativas a resultados posteriores, sem converter saída normal em prova de correção. Essa restauração é limitada às ações registradas; CAS, backup geral, modo seguro e correções automáticas permanecem **NÃO IMPLEMENTADO**. Contrato, limites e homologação em [Aurora AI Tools](aurora-ai-tools.md).
+O incremento de 28/09 oferece remoção reversível de mod identificado e ajuste de opções JSON permitidas, com prévia, confirmação, exclusão mútua e restauração dos bytes originais. O histórico local associa categorias de diagnóstico e tentativas a resultados posteriores, sem converter saída normal em prova de correção. Essa restauração é limitada às ações registradas. Na alpha.14, o CAS da [Recuperação](instance-recovery.md) já existe em escopo restrito, com prévia e desfazer, e é reutilizado pelas [cópias de teste](diagnostic-lab.md); permanece **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Backup integral, modo seguro, correção automática e pontos automáticos gerais antes de updates continuam **NÃO IMPLEMENTADO**. Contrato das ações confirmadas em [Aurora AI Tools](aurora-ai-tools.md).
 
 Evidências executadas e limitações de homologação: [registro da entrega](task-aurora-doctor.md).

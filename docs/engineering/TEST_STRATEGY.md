@@ -48,7 +48,7 @@
 
 ### Core/Skins runtime e Assistente desktop
 
-Para cada um dos nove pares: OS/build, Java, Minecraft, loader, hashes Core/Skins, launch, handshake/sessão pública, menu, abrir/fechar, foco/mouse, skin classic/slim/64x32, capa onde implementada e shutdown. Não exigir Companion ou HUD/voz no jogo. Evidência é log redigido + screenshot/vídeo + resultado estruturado.
+Para cada um dos nove pares: OS/build, Java, Minecraft, loader, hashes Core/Skins, launch, handshake/sessão pública, menu, abrir/fechar, foco/mouse, skin classic/slim/64x32, capa onde implementada e shutdown. Não exigir Companion, HUD ou voz do Assistente no jogo. Isso não exclui os testes separados dos mods de voz em R4. Evidência é log redigido + screenshot/vídeo + resultado estruturado.
 
 Separadamente, com Minecraft fechado e nenhum Companion instalado: abrir o Assistente pelo botão e `Ctrl+Alt+/`, enviar/receber texto, preservar histórico/estado existentes, mute, microfone/transcrição, áudio/TTS, timeouts e falhas de rede. `assistant-smoke.mjs` mantém o caminho desktop; `supabase-appearance-smoke.mjs` continua usando o painel/API como preparação. Mocks não comprovam serviços online, microfone real ou áudio audível.
 
@@ -74,5 +74,7 @@ Fixtures maliciosas em log, nome de mod, manifesto e HTML. Verificar que frases 
 - release: todos os anteriores, NSIS install/uninstall, manifest/SHA/SBOM e teste updater em canal de staging.
 
 ## Fixtures
+
+Connect V2 tem [matriz própria de testes](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md): TCP, UDP, MTU/associações, auth, convites, relay gratuito permitido e indisponível, endereço dos mods, redes reais e configurações reversíveis. Nenhum teste deve rejeitar relay só por ser relay. TCP aprovado não aprova UDP/voz/R4. Recursos sem prova permanecem experimentais/desligados; não gerar custo externo. A alpha.14 já registra testes de recovery/lab em [AUR-1167](../task-aur-1167-doctor-lab.md); não converter a revisão documental em nova execução desses testes.
 
 Dados reais devem ser redigidos e versionados por causa/padrão, sem username, token, path pessoal, IP público ou mundo. Snapshot dourado só é atualizado com revisão do comportamento esperado.
