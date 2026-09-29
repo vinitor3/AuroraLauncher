@@ -53,6 +53,7 @@ Baseline de 29/09/2026, comandos/saídas/achados no [task de execução](../task
 
 | Prova executada | Requisitos/tarefas relacionados | Limite da prova |
 | --- | --- | --- |
+| Incremento23: apply/strict restore nativo sobre os dois arquivos realmente gerados, hashes exatos, guard Windows de produção e preservação de outras edições | T-CONFIG/T-LIFE;006/007/008 | 2/2 testes opt-in PASS, sem JVM entre aplicação/restauração; writer após apply continua pendente |
 | Incremento22: Plasmo2.1.17/Fabric API fixado executados em Fabric1.21.1, UDP do filho próprio, writer22chaves, STATUS por dois agentes e stop/EULA exata | T-VOICE-02 preparação; T-CONFIG/T-LIFE;007/008 | 55 testes runtime/server +13 de perfil PASS; nenhum cliente/handshake/áudio ou restore nativo com writer vivo |
 | Incremento21: SVC2.6.22 executado em Fabric1.21.1, bind UDP do filho próprio, configuração19chaves gerada, STATUS por dois agentes e stop normal/EULA restaurada | T-VOICE-01 preparação; T-CONFIG/T-LIFE;006/008 | Nenhum cliente/handshake/áudio.57 testes Node distintos após ajuste da representação mapeada; restore nativo não executado contra writer vivo |
 | Incremento20: dois clientes sintéticos no Minecraft real via quatro agentes, LOGIN/CONFIGURATION/PLAY/chunks/presença recíproca, contagem 2→0/cleanup; três smokes PASS; deadlock FrameGuard reproduzido/corrigido | T-MC-01 parcial; T-TCP/T-LIFE; 002/005/008 | Dois pares independentes no mesmo PC. Sem GUI, contas mistas, Core/Skins, voz ou rede externa. 54+16+7 testes Node distintos aprovados; erro/cleanup não viram PASS |

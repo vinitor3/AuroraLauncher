@@ -2,6 +2,9 @@ use super::*;
 use crate::engine::{acquire_instance_recovery_lock, InstanceId, InstanceLayout};
 use std::path::{Path, PathBuf};
 
+#[path = "connect_voice_generated_tests.rs"]
+mod generated;
+
 const ORIGINAL: &[u8] =
     b"# User comment\r\nport=24454\r\nvoice_host=old.example.invalid:24454\r\nmtu_size=1275\r\n";
 const SVC_DEFAULTS: &[u8] =
