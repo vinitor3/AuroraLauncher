@@ -11,10 +11,10 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 | Tarefa/capacidade | Estado comprovado | Trabalho ainda necessário |
 | --- | --- | --- |
 | 001 inventário/decisão | Reconciliados contratos/IDs/base; Iroh 1.3.0 fixado somente no laboratório | Gates de integração/distribuição, termos de qualquer infraestrutura futura |
-| 002 TCP | **PROTÓTIPO** real autenticado: duplex, 8 MiB/contrapressão, half-close, concorrência, autorização e encerramento testados | Minecraft e redes externas; não concluir tarefa de produto |
+| 002 TCP | **PROTÓTIPO** real autenticado: duplex, 8 MiB/contrapressão, half-close, concorrência, autorização, encerramento e STATUS de Minecraft real testados | Login/mundo e redes externas; não concluir tarefa de produto |
 | 003 UDP | **PROTÓTIPO** real: retorno isolado por peer/sessão/serviço, framing, MTU, abuso, expiração e carga TCP; downstream autorizado na biblioteca e CLI por plano/hash local | Integrar política apropriada ao adaptador, medir mod real e comprovar silêncio/keepalive/endereço; comando `host` convencional permanece 1:1 |
 | 004 caminhos | Direto IPv4/IPv6 **loopback** testado; roteiro de dois computadores preparado | LAN, NAT/CGNAT, redes distintas, relay elegível e UDP bloqueado |
-| 005 Minecraft/convites/UI | **PROTÓTIPO** de consulta STATUS/pong; lease/pin manual é mecanismo de laboratório | Servidor/JVM real, login/mundo, adaptadores, sinalização autorizada, fluxo social e estados reais |
+| 005 Minecraft/convites/UI | **PROTÓTIPO** de STATUS/pong de servidor real 1.21.1/Fabric, dois agentes e lifecycle observado; lease/pin manual de laboratório | Login/mundo, clientes mistos, adaptadores, sinalização autorizada, fluxo social e estados reais |
 | 006 Simple Voice Chat | **PARCIAL**: inspector/JAR Fabric 1.21.1/2.6.22 conferido; adaptador nativo de anúncio em cópia, confirmação e undo testados | Integração do caller com jogo encerrado/ponte, endereçamento efetivo, transporte/runtime e áudio próprios |
 | 007 Plasmo Voice | **PARCIAL**: inspector/JAR Fabric 1.21.1/2.1.17 conferido; caminho resolvido e adaptador nativo em cópia com alteração/adição/undo testados | Gates separados de SVC, incluindo integração com ponte, lifecycle, dedicado/LAN e áudio |
 | 008 robustez/liberação | Testes locais adversariais e rollback do laboratório | Matriz real, saturação prolongada, produto e todos os gates anteriores |
@@ -50,6 +50,8 @@ Décimo sexto incremento: T-LIFE-01/02/008 têm supervisor funcional de filho pr
 Décimo sétimo incremento: prova Java 21 próprio + três consultas reais do probe nativo passou STOPPED→RUNNING→STOPPED. Minecraft ainda pendente, mas autorização EULA/MSA foi recebida; próxima preparação usará online-mode=false conforme preferência explicitada. [Evidência](../../task-aur-r4-connect.md#décimo-sétimo-incremento--probe-de-produção-com-java-próprio-real).
 
 ## 1. Evidência de partida e limites do inventário
+
+Incremento 18: T-MC-01 ganha prova de servidor real/STATUS por dois agentes, sem concluir seus critérios de mundo. Nove artefatos verificados, bind do Java correlacionado, EULA snapshot/restauração, 50 testes Node sequenciais e 14 focados após correção AppData; stop normal/porta livre. Usuário autorizou termos e online-mode=false somente na pasta própria. Próximo bloqueio local é evidência de login/configuração/mundo, mantendo mods separados e convidados reais/redes externas pendentes. [Registro](../../task-aur-r4-connect.md#décimo-oitavo-incremento--minecraft-real-por-dois-agentes-autenticados).
 
 Leitura local feita em 29/09/2026, sem build, lançamento do jogo, conexão externa ou teste runtime. A existência de um símbolo ou de um teste no arquivo não equivale à execução desse teste.
 

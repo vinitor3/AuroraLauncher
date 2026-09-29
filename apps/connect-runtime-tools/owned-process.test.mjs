@@ -314,3 +314,19 @@ test('import in a supervised Node fixture has no implicit execution', async t =>
   assert.equal(result.process.stdoutBytes, 0); assert.equal(result.process.stderrBytes, 0);
   assert.equal(result.process.exitCode, 0);
 });
+
+test('ownership predicate accepts only the live owned PID and expires on shutdown', async t => {
+  const root = await fixture(t);
+  const source = graceful.replace("fs.writeFileSync(file('ready'), 'ready');",
+    "fs.writeFileSync(file('pid'), String(process.pid)); fs.writeFileSync(file('ready'), 'ready');");
+  let owns; let pid;
+  await withOwnedProcess(configuration(root, source), async ({ signal, ownsProcessId }) => {
+    await waitFile(join(root, 'ready'), signal);
+    owns = ownsProcessId; pid = Number(await readFile(join(root, 'pid'), 'utf8'));
+    assert.equal(owns(pid), true);
+    for (const other of [process.pid, -1, 0, 1.5, NaN, Infinity, String(pid), null, undefined]) {
+      assert.equal(owns(other), false);
+    }
+  });
+  assert.equal(owns(pid), false);
+});

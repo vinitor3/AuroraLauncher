@@ -36,6 +36,8 @@ Separar identidade/autorização, sinalização, descoberta, transporte, registr
 
 ## Comparação técnica preservada
 
+Decisão local do incremento 18: após aceitação explícita de EULA/MSA e preferência do usuário, o servidor descartável novo usa `online-mode=false`, loopback e whitelist. O pedido posterior substitui a preferência online do plano inicial apenas no escopo autorizado; configurações pessoais e gates R0 de distribuição/entitlement permanecem. Isso não desliga autenticação QUIC/lease e não atribui identidade autenticada de conta Minecraft ao nome offline. O executor usa arquivos/pins fixados, snapshot/CAS de EULA, processo próprio e bind correlacionado; prova STATUS real não é homologação de jogadores originais/offline, login/mundo ou voz. [Contrato e evidências](../../aurora-connect-runtime.md).
+
 | Opção | Capacidades observadas | Trabalho e limitações | Encaminhamento |
 | --- | --- | --- | --- |
 | Iroh 1.3.0 observado | Rust, identidade de endpoint, streams e datagramas, descoberta/NAT traversal integrados, relay e observação de caminhos | Configurar explicitamente infraestrutura/portmapper; vincular identidade a convite e autorização Aurora; verificar limites/MTU e compatibilidade de versão | Primeiro candidato para PoC; infraestrutura de produção não aprovada |

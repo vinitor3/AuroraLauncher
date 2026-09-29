@@ -114,7 +114,7 @@ test('plan reads synthetic JDK bytes without executing and deterministically bin
   assert.equal(plan.java.executableSha256, hash(await readFile(join(home, 'bin/java.exe'))));
   assert.equal(plan.java.releaseSha256, hash(await readFile(join(home, 'release'))));
   assert.equal(plan.files['server.properties'], SERVER_PROPERTIES);
-  for (const entry of ['server-ip=127.0.0.1', 'server-port=43001', 'online-mode=true', 'enable-rcon=false', 'enable-query=false', 'white-list=true', 'enforce-whitelist=true']) {
+  for (const entry of ['server-ip=127.0.0.1', 'server-port=43001', 'online-mode=false', 'enable-rcon=false', 'enable-query=false', 'white-list=true', 'enforce-whitelist=true']) {
     assert.ok(plan.files['server.properties'].split('\n').includes(entry));
   }
   assert.equal(plan.files['eula.txt'], `# ${EULA_URL}\neula=false\n`);

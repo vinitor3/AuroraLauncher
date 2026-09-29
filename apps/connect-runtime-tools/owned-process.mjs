@@ -59,7 +59,9 @@ function validate(options, operation) {
 }
 
 /**
- * Runs one explicitly selected local child while operation({signal}) executes.
+ * Runs one explicitly selected local child while operation({signal,
+ * ownsProcessId}) executes. The predicate checks an observed PID against this
+ * still-running child; it never returns a PID or exposes a process handle.
  * This is lifecycle supervision, not artifact/EULA approval or application
  * readiness. The caller must check those gates and perform its own readiness
  * probe. No process is started on import, and no child handle/PID is exposed.
@@ -154,11 +156,14 @@ export async function withOwnedProcess(options, operation) {
     Math.max(1, config.timeoutMs - (performance.now() - startedAt)));
   let value;
   let graceTimer;
+  const ownsProcessId = candidate => !controller.signal.aborted && spawned && !closed
+    && child.exitCode === null && child.signalCode === null
+    && Number.isSafeInteger(candidate) && candidate > 0 && candidate === child.pid;
   try {
     await Promise.race([didSpawn, failure]);
     if (!failureCode) {
       const work = Promise.resolve().then(() => {
-        if (!failureCode) return operation({ signal: controller.signal });
+        if (!failureCode) return operation({ signal: controller.signal, ownsProcessId });
       }).then(
         result => { value = result; },
         () => fail('owned_process_operation_failed'),

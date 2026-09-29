@@ -21,7 +21,7 @@ export function artifactPins() {
 export const EULA_URL = 'https://www.minecraft.net/en-us/eula';
 export const SERVER_PROPERTIES = [
   '# Disposable Aurora Connect STATUS laboratory; no personal world.',
-  'server-ip=127.0.0.1', 'server-port=43001', 'online-mode=true',
+  'server-ip=127.0.0.1', 'server-port=43001', 'online-mode=false',
   'white-list=true', 'enforce-whitelist=true', 'enable-rcon=false',
   'enable-query=false', 'enable-jmx-monitoring=false', 'enable-status=true',
   'max-players=2', 'view-distance=2', 'simulation-distance=5',

@@ -25,6 +25,8 @@ Arquivo de voz regravado pode usar revisão separada `prepare_reconciled_restore
 
 APIs Connect de configuração exigem `VoiceMutationGuard`, adquirido com probe Windows de qualquer java/javaw antes/depois do lock e rechecado ao preparar/confirmar, inclusive após CAS. Não aceita guard recovery comum nem injeção pública. Não detecta JVM renomeada/embutida ou impede início externo após consulta. Soltar guard ao concluir a operação é necessário antes de lançar jogo; recibo pode permanecer em RAM. Não encerrar Java do usuário para satisfazer o gate.
 
+O laboratório descartável `apps/connect-runtime-tools` já executou Minecraft 1.21.1/Fabric 0.16.14 e STATUS/pong por dois agentes, com stop normal e EULA restaurada. O usuário aceitou EULA/MSA e solicitou `online-mode=false` nessa configuração própria; não repetir a pergunta de termos ou mudar instâncias pessoais. Isso não homologa login/mundo, clientes mistos, mods ou redes externas. `server.mjs` exige plano/hash, estágio novo, bind do filho próprio e restauração exata; consultar `docs/aurora-connect-runtime.md`. Suites que inventariam a raiz de staging exigem `--test-concurrency=1`.
+
 ## Mapa do repositório
 
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.

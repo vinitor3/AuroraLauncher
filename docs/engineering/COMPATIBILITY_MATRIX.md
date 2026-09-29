@@ -10,7 +10,7 @@ Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, desligado 
 | UDP | Fronteiras/retorno, três peers, duas sessões, dois serviços, MTU/oversize, replay/forja, quotas, ciclo de vida e carga TCP simultânea; downstream autorizado por plano/hash local e orçamento por peer/serviço | **PROTÓTIPO**; `host` mantém 1:1 e `host-plan` permite perfil explícito; nenhum mod/áudio homologado |
 | Direto | IPv4 e IPv6 loopback; smoke com dois agentes em processos separados | **PROTÓTIPO** local; LAN, redes distintas, IPv4 público, firewall IPv6, NAT/CGNAT pendentes |
 | Relay/UDP externo bloqueado | Pesquisa de capacidade upstream e termos, sem ativação | **NÃO IMPLEMENTADO** no laboratório; nenhum relay configurado/homologado |
-| Minecraft | Consulta STATUS/ping limitada pelo listener, fixture independente através de Host/Guest e CLI | **PROTÓTIPO** de consulta; integração desktop/login/LAN/ingresso no mundo **NÃO IMPLEMENTADO**; nenhuma JVM executada |
+| Minecraft | Servidor real 1.21.1/Fabric 0.16.14/Java 21, bind próprio loopback e STATUS/pong por dois agentes; stop normal | **PROTÓTIPO** de laboratório; integração desktop/login/LAN/ingresso no mundo e clientes mistos **PRECISA DE TESTE**; sem mods |
 | Convites/interface | Pin e lease manual do laboratório | Fluxo social/interface **NÃO IMPLEMENTADO**; não equivale a convite do produto |
 | Simple Voice Chat | Inspector/JAR verificado e adaptador nativo de configuração em cópia; aprovação, conflito e undo testados | **PARCIAL**, opt-in sem UI; runtime/endereço/áudio **PRECISA DE TESTE** |
 | Plasmo Voice | Inspector/JAR verificado; adaptador nativo em cópia altera/adiciona anúncio no caminho confirmado, com aprovação/undo testados | **PARCIAL**, opt-in sem UI; runtime/endereço/áudio **PRECISA DE TESTE** |
@@ -46,6 +46,8 @@ Décimo quinto incremento: guest-tcp e plano sem aux; STATUS/pong de fixture via
 Décimo sexto incremento: supervisor opt-in de filho local, 18 testes com Node e encerramento observado. Ainda não inicia Minecraft ou homologa mod; [limites](../aurora-connect-runtime.md#supervisor-de-processo-próprio--décimo-sexto-incremento).
 
 Décimo sétimo incremento: programa Java 21 próprio, probe de produção RUNNING/STOPPED e stop normal aprovados. Não é Minecraft nem mod; matriz permanece intacta. Autorização de termos recebida para próximo runtime descartável, com preferência explícita por online-mode=false; não desliga autenticação Connect. [Evidência](../task-aur-r4-connect.md#décimo-sétimo-incremento--probe-de-produção-com-java-próprio-real).
+
+Décimo oitavo incremento: nove artefatos oficiais baixados/verificados, Minecraft real respondeu protocolo 767 por Host/Guest autenticados e somente game/tcp. EULA restaurada, exit 0 sem kill, porta/Java/agentes ausentes após stop. Configuração própria online-mode=false solicitada, whitelist ativa, nenhum login/cliente original/offline/voz comprovado. 50 testes Node sequenciais passaram; correção posterior de isolamento AppData validada por 14 focados e ensaio real. [Comandos, falhas e limites](../task-aur-r4-connect.md#décimo-oitavo-incremento--minecraft-real-por-dois-agentes-autenticados).
 
 ## Doctor, recuperação e cópias de teste — 29/09/2026
 
