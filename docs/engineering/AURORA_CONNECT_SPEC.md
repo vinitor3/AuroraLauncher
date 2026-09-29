@@ -67,9 +67,19 @@ Contrato lógico v1 reconciliado para o laboratório; nomes serializados finais 
 
 O modelo local `Service` também contém `udp_return_policy`, escolhido exclusivamente pelo host; não é campo do pedido remoto nem alteração do envelope v1. `ReplyBudget` é padrão e `AuthorizedDownstream { bytes_per_second, datagrams_per_second }` exige aprovação explícita do serviço UDP. Mudança de política/orçamento integra a revisão da aprovação, sem opção de ampliação solicitada pelo convidado.
 
-Catálogo ao convidado omite endpoint do host e só revela serviços autorizados. A abertura referencia a sessão autenticada e `(serviceId, serviceRevision)`; não aceita IP, URL ou porta arbitrários. Host confirma o destino após conferir processo/instância, configuração efetiva e permissão. Manifesto, metadado de mod ou IA apenas propõem serviços; nunca concedem acesso. `requiredCapabilities`, `configurationRevision` e `revision` das propostas antigas não são aliases aceitos silenciosamente; a revisão conserva sua correspondência histórica.
+Catálogo ao convidado omite endpoint do host e só revela serviços autorizados. A abertura referencia a sessão autenticada e `(serviceId, serviceRevision)`; não aceita IP, URL ou porta arbitrários. Host confirma o destino após conferir processo/instância, configuração efetiva e permissão. Manifesto, metadado de mod ou IA apenas propõem serviços; nunca concedem acesso. `requiredCapabilities`, `configurationRevision` e `revision` das propostas antigas não são aliases aceitos silenciosamente no pedido remoto; o campo `revision` do modelo/plano local é convertido explicitamente à revisão do serviço, conforme §3.1.
 
 MVP limita destinos a loopback do próprio host. Um bind específico em interface local precisa de confirmação e allowlist de endereços realmente locais; endpoint LAN em outra máquina não entra implicitamente. Não há SOCKS, proxy aberto, encaminhamento geral à LAN, execução remota ou exposição automática de RCON, SSH, banco de dados e painéis. Não resolver nomes controlados pelo convidado, evitando SSRF/DNS rebinding.
+
+### 3.1 Plano local revisado por hash — laboratório
+
+A CLI possui `plan <arquivo>` para prévia sem abrir socket nem escrever arquivo, e `host-plan <arquivo> <sha256-aprovado>` para iniciar exatamente o plano revisado. O hash SHA-256 cobre bytes originais, incluindo espaços e BOM UTF-8; qualquer diferença exige nova revisão. O arquivo é lido uma vez para um snapshot imutável em memória. Hash divergente é recusado antes de `host_identity`/abertura de transporte. Depois da revisão, ainda é necessário autorizar manualmente o pin público do convidado; sessão/chaves são novas por execução.
+
+O schema **local** v1 é estrito e limitado a 16 KiB: `schemaVersion`, `bind`, `durationSeconds` e `services`. O bind de transporte tem porta não zero e não pode ser multicast/broadcast; duração é 10–3600 segundos. Existem exatamente dois serviços: `game` TCP/reliableStream e `aux` UDP/datagram, ambos revisão 1, com destino literal loopback e porta não zero. O serviço usa `serviceId`, `protocol`, `endpoint`, `revision`, `requiredCapability`, `maxDatagramBytes` e `udpReturnPolicy` opcional; omissão da política seleciona `replyBudget`. Somente `aux` pode selecionar `authorizedDownstream` com orçamento explícito. Campos desconhecidos em qualquer nível são recusados. Esse plano de configuração não é schema remoto, manifesto de modpack ou convite de produto.
+
+Caminho deve ser arquivo local regular dentro dos limites de leitura. No Windows, UNC/dispositivos/ADS e aliases ambíguos são recusados lexicalmente antes de consultar o filesystem; links/reparse points observados são recusados. Essas verificações não constituem sandbox contra toda troca concorrente maliciosa de diretórios. Prévia contém endpoints para revisão local e não é diagnóstico compartilhável. Nenhuma configuração pessoal/mod é escrita: rollback é revogar e encerrar agentes, sem restauração de arquivo que o comando não alterou. [Exemplo concreto](../../apps/connect-lab/examples/host-downstream.json), [procedimento e comandos](../aurora-connect.md).
+
+Evidência do terceiro incremento: onze testes de plano, suíte completa 45/45, fmt/clippy e dois smokes multiprocesso aprovados. O smoke downstream recusou hash zero antes da identidade do host e comprovou 2 bytes UDP enviados/8192 recebidos em 16 respostas de duas origens, além de 1 MiB TCP por direção. O plano de fixture permaneceu inalterado. O ensaio padrão manteve dez UDP e 3138 bytes por direção. Os planos temporários gerados pelo script são fixtures ignoradas, não configurações pessoais.
 
 ## 4. TCP: contrato verificável
 
@@ -117,7 +127,7 @@ Streams e voz podem compartilhar conexão se houver isolamento e métricas adequ
 
 ### 5.1 Retorno UDP autorizado — incremento de laboratório
 
-Após o baseline `b1c6871`, a biblioteca permite dois perfis locais, sem modificar protocolo v1, destinos ou autenticação. A CLI permanece em `ReplyBudget`; o novo perfil está acessível somente por configuração da biblioteca e testes, fora do desktop.
+Após o baseline `b1c6871`, a biblioteca recebeu dois perfis locais no incremento `42bf0ad`, sem modificar protocolo v1, destinos ou autenticação. Naquele incremento o novo perfil estava disponível somente na biblioteca/testes. Agora `host-plan` permite selecioná-lo pelo plano local e hash aprovado (§3.1); `host` convencional permanece em `ReplyBudget`. Ambos continuam fora do desktop.
 
 | Perfil | Regra de retorno | Limites efetivos |
 | --- | --- | --- |
@@ -130,7 +140,7 @@ Inatividade continua contando desde ingresso autenticado válido, por padrão 30
 
 Justificativa de engenharia: proteção QUIC contra reflexão limita envio antes da validação de endereço; não impõe crédito de aplicação vitalício 1:1 após validação. DATAGRAM possui congestionamento, mas não flow control de aplicação. Esses mecanismos upstream permanecem na biblioteca; o Aurora acrescenta autorização e orçamento por serviço. [RFC 9000 §8](https://www.rfc-editor.org/rfc/rfc9000.html#section-8), [RFC 9221 §§5.3–5.4](https://www.rfc-editor.org/rfc/rfc9221.html#section-5.3), consulta 29/09/2026.
 
-Evidência: dez casos novos em `tests/downstream.rs` e `tests/downstream_qa.rs`, com respostas múltiplas/maiores, preservação do padrão 1:1, quotas compartilhadas/isoladas, reconexão, origem estrangeira, tentativa de política pelo peer, inatividade, revogação e expiração absoluta. Suíte completa 34/34 e fmt aprovados conforme [task](../task-aur-r4-connect.md). São datagramas sintéticos opacos; não executam mod, resolvem seu anúncio ou homologam áudio.
+Evidência do segundo incremento: dez casos novos em `tests/downstream.rs` e `tests/downstream_qa.rs`, com respostas múltiplas/maiores, preservação do padrão 1:1, quotas compartilhadas/isoladas, reconexão, origem estrangeira, tentativa de política pelo peer, inatividade, revogação e expiração absoluta. O snapshot 34/34 e fmt foi preservado no [task](../task-aur-r4-connect.md); o terceiro incremento amplia para 45/45 conforme §3.1. São datagramas sintéticos opacos; não executam mod, resolvem seu anúncio ou homologam áudio. Tetos observados de 1358 e 1390 bytes em smokes distintos são resultados de negociação dinâmica, não pin do contrato ou garantia de payload para um mod.
 
 ## 6. NAT, caminhos e política de custo
 

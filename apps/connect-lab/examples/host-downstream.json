@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "bind": "127.0.0.1:42000",
+  "durationSeconds": 600,
+  "services": [
+    {
+      "serviceId": "game",
+      "protocol": "tcp",
+      "endpoint": "127.0.0.1:42001",
+      "revision": 1,
+      "requiredCapability": "reliableStream",
+      "maxDatagramBytes": 1400,
+      "udpReturnPolicy": { "type": "replyBudget" }
+    },
+    {
+      "serviceId": "aux",
+      "protocol": "udp",
+      "endpoint": "127.0.0.1:42002",
+      "revision": 1,
+      "requiredCapability": "datagram",
+      "maxDatagramBytes": 1400,
+      "udpReturnPolicy": {
+        "type": "authorizedDownstream",
+        "bytesPerSecond": 100000,
+        "datagramsPerSecond": 100
+      }
+    }
+  ]
+}

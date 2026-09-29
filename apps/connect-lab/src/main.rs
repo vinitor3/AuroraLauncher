@@ -1,11 +1,10 @@
 //! Explicit development CLI. No persisted keys, cloud services or launcher hooks.
 use aurora_connect_lab::{
     Capability, EndpointAddr, EndpointId, Guest, GuestConfig, Host, HostConfig, Lease, Limits,
-    Protocol, Service, UdpReturnPolicy, generate_key,
+    Protocol, Service, UdpReturnPolicy, generate_key, load_plan,
 };
 use serde_json::json;
 use std::{
-    collections::BTreeSet,
     error::Error,
     io::{BufRead, Read, Write},
     net::SocketAddr,
@@ -78,11 +77,72 @@ async fn host(args: &[String]) -> Result<()> {
     let tcp: SocketAddr = args[1].parse()?;
     let udp: SocketAddr = args[2].parse()?;
     let seconds = duration(&args[3])?;
+    run_host(
+        bind_addr,
+        seconds,
+        vec![
+            service("game", Protocol::Tcp, tcp),
+            service("aux", Protocol::Udp, udp),
+        ],
+        None,
+    )
+    .await
+}
+
+fn plan(args: &[String]) -> Result<()> {
+    if args.len() != 1 {
+        return Err("plan_args".into());
+    }
+    let plan = load_plan(&args[0], None)?;
+    event(json!({"event":"plan_ready", "plan":plan.preview()}));
+    Ok(())
+}
+
+async fn host_plan(args: &[String]) -> Result<()> {
+    if args.len() != 2 {
+        return Err("host_plan_args".into());
+    }
+    // Load/hash/validate before opening transport or asking for a peer. The immutable
+    // in-memory services are exactly the bytes selected by the local operator.
+    let plan = load_plan(&args[0], Some(&args[1]))?;
+    run_host(plan.bind, plan.seconds, plan.services, Some(plan.hash)).await
+}
+
+async fn run_host(
+    bind_addr: SocketAddr,
+    seconds: u64,
+    services: Vec<Service>,
+    plan_hash: Option<String>,
+) -> Result<()> {
+    if bind_addr.port() == 0
+        || services
+            .iter()
+            .any(|service| !service.endpoint.ip().is_loopback() || service.endpoint.port() == 0)
+    {
+        return Err(aurora_connect_lab::Error::Configuration.into());
+    }
+    let approved_ids = services
+        .iter()
+        .map(|service| service.service_id.clone())
+        .collect();
+    let approval: Vec<_> = services.iter().map(|service| {
+        let policy = match service.udp_return_policy {
+            UdpReturnPolicy::ReplyBudget => json!({"type":"replyBudget"}),
+            UdpReturnPolicy::AuthorizedDownstream { bytes_per_second, datagrams_per_second } =>
+                json!({"type":"authorizedDownstream", "bytesPerSecond":bytes_per_second, "datagramsPerSecond":datagrams_per_second}),
+        };
+        json!({"serviceId":service.service_id, "protocol":service.protocol,
+            "endpoint":service.endpoint.to_string(), "revision":service.revision,
+            "maxDatagramBytes":service.max_datagram_bytes,
+            "requiredCapability":service.required_capability, "udpReturnPolicy":policy})
+    }).collect();
     let secret_key = generate_key();
     // The public key is fresh each run, hence also provides a fresh public session ID.
     let session_id = secret_key.public().to_string();
     event(
-        json!({"event":"host_identity", "peer":session_id, "session":session_id, "bind":bind_addr.to_string(), "next":"enter guest public peer ID"}),
+        json!({"event":"host_identity", "peer":session_id, "session":session_id, "bind":bind_addr.to_string(),
+            "planHash":plan_hash, "approvedServices":approval, "durationSeconds":seconds,
+            "next":"review these services, then enter the guest public peer ID to authorize; Ctrl+C cancels"}),
     );
     let peer: EndpointId = input()?
         .parse()
@@ -93,15 +153,12 @@ async fn host(args: &[String]) -> Result<()> {
         secret_key,
         bind_addr,
         session_id,
-        services: vec![
-            service("game", Protocol::Tcp, tcp),
-            service("aux", Protocol::Udp, udp),
-        ],
+        services,
         leases: vec![Lease {
             lease_id: "manual-lab".into(),
             peer,
             expires_at_unix_ms,
-            services: BTreeSet::from(["game".into(), "aux".into()]),
+            services: approved_ids,
         }],
         limits: Limits::default(),
     })
@@ -160,7 +217,7 @@ async fn guest(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-async fn echo(args: &[String]) -> Result<()> {
+async fn echo(args: &[String], downstream: bool) -> Result<()> {
     if args.len() != 3 {
         return Err("echo_args".into());
     }
@@ -192,7 +249,18 @@ async fn echo(args: &[String]) -> Result<()> {
             },
             result = udp.recv_from(&mut buffer) => {
                 let (n, source) = result?;
-                if source.ip().is_loopback() { udp.send_to(&buffer[..n], source).await?; }
+                if source.ip().is_loopback() {
+                    if downstream {
+                        // Controlled synthetic service for asymmetric-return tests only.
+                        if n == 1 {
+                            let mut reply = [buffer[0]; 512];
+                            for sequence in 0..8 {
+                                reply[1] = sequence;
+                                udp.send_to(&reply, source).await?;
+                            }
+                        }
+                    } else { udp.send_to(&buffer[..n], source).await?; }
+                }
             },
             _ = tasks.join_next(), if !tasks.is_empty() => {},
         }
@@ -203,7 +271,7 @@ async fn echo(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-async fn probe(args: &[String]) -> Result<()> {
+async fn probe(args: &[String], downstream: bool) -> Result<()> {
     if args.len() != 2 {
         return Err("probe_args".into());
     }
@@ -234,6 +302,9 @@ async fn probe(args: &[String]) -> Result<()> {
         return Err("tcp_integrity_failed".into());
     }
     let mut packets = 0;
+    let mut requests = 0;
+    let mut udp_bytes_sent = 0;
+    let mut udp_bytes_received = 0;
     let mut roundtrips_micros = Vec::new();
     for marker in [19u8, 71u8] {
         let socket = UdpSocket::bind(if udp.is_ipv4() {
@@ -243,16 +314,45 @@ async fn probe(args: &[String]) -> Result<()> {
         })
         .await?;
         socket.connect(udp).await?;
+        if downstream {
+            let packet_started = std::time::Instant::now();
+            socket.send(&[marker]).await?;
+            requests += 1;
+            udp_bytes_sent += 1;
+            let mut seen = [false; 8];
+            for _ in 0..8 {
+                let mut reply = vec![0; 65536];
+                let n =
+                    tokio::time::timeout(Duration::from_secs(5), socket.recv(&mut reply)).await??;
+                if n != 512
+                    || reply[0] != marker
+                    || reply[1] >= 8
+                    || reply[2..n].iter().any(|byte| *byte != marker)
+                    || seen[reply[1] as usize]
+                {
+                    return Err("udp_downstream_integrity_failed".into());
+                }
+                seen[reply[1] as usize] = true;
+                packets += 1;
+                udp_bytes_received += n;
+                // Request-to-each-response timings, not per-packet RTT or audio delay.
+                roundtrips_micros.push(packet_started.elapsed().as_micros());
+            }
+            continue;
+        }
         for length in [0usize, 1, 32, 512, 1024] {
             let payload = vec![marker; length];
             let packet_started = std::time::Instant::now();
             socket.send(&payload).await?;
+            requests += 1;
+            udp_bytes_sent += length;
             let mut reply = vec![0; 65536];
             let n = tokio::time::timeout(Duration::from_secs(5), socket.recv(&mut reply)).await??;
             if reply[..n] != payload {
                 return Err("udp_integrity_failed".into());
             }
             roundtrips_micros.push(packet_started.elapsed().as_micros());
+            udp_bytes_received += n;
             packets += 1;
         }
     }
@@ -263,7 +363,10 @@ async fn probe(args: &[String]) -> Result<()> {
         .unwrap_or(0);
     roundtrips_micros.sort_unstable();
     event(
-        json!({"event":"probe_passed", "tcpBytesEachDirection":payload.len(), "udpPackets":packets, "localSources":2, "elapsedMs":started.elapsed().as_millis(), "udpApplicationRoundtripMicrosP50":roundtrips_micros[roundtrips_micros.len()/2], "udpApplicationRoundtripMicrosMax":roundtrips_micros.last(), "udpAdjacentRoundtripVariationMicrosMax":jitter, "minecraft":"not_tested", "voice":"not_tested"}),
+        json!({"event":"probe_passed", "tcpBytesEachDirection":payload.len(), "udpPackets":packets,
+            "udpRequests":requests, "udpPayloadBytesSent":udp_bytes_sent, "udpPayloadBytesReceived":udp_bytes_received,
+            "udpMeasurement":if downstream { "one_request_to_each_response" } else { "request_response_roundtrip" },
+            "localSources":2, "elapsedMs":started.elapsed().as_millis(), "udpApplicationRoundtripMicrosP50":roundtrips_micros[roundtrips_micros.len()/2], "udpApplicationRoundtripMicrosMax":roundtrips_micros.last(), "udpAdjacentRoundtripVariationMicrosMax":jitter, "minecraft":"not_tested", "voice":"not_tested"}),
     );
     Ok(())
 }
@@ -273,17 +376,25 @@ async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("host") => host(&args[1..]).await,
+        Some("plan") => plan(&args[1..]),
+        Some("host-plan") => host_plan(&args[1..]).await,
         Some("guest") => guest(&args[1..]).await,
-        Some("echo") => echo(&args[1..]).await,
-        Some("probe") => {
-            match tokio::time::timeout(Duration::from_secs(30), probe(&args[1..])).await {
+        Some("echo") => echo(&args[1..], false).await,
+        Some("echo-downstream") => echo(&args[1..], true).await,
+        Some("probe") | Some("probe-downstream") => {
+            match tokio::time::timeout(
+                Duration::from_secs(30),
+                probe(&args[1..], args[0] == "probe-downstream"),
+            )
+            .await
+            {
                 Ok(v) => v,
                 Err(_) => Err("probe_timeout".into()),
             }
         }
         _ => {
             println!(
-                "EXPERIMENTAL - no launcher integration, keys only in memory\nhost <quic-bind> <approved-tcp-target> <approved-udp-target> <seconds>\nguest <host-public-id> <host-direct-address> <session-id> <local-tcp> <local-udp> <seconds>\necho <loopback-tcp> <loopback-udp> <seconds>\nprobe <loopback-tcp> <loopback-udp>\nUse stop on stdin or Ctrl+C to end. See docs/aurora-connect.md."
+                "EXPERIMENTAL - no launcher integration, keys only in memory\nhost <quic-bind> <approved-tcp-target> <approved-udp-target> <seconds>\nplan <local-service-plan.json>\nhost-plan <local-service-plan.json> <approved-sha256>\nguest <host-public-id> <host-direct-address> <session-id> <local-tcp> <local-udp> <seconds>\necho <loopback-tcp> <loopback-udp> <seconds>\nprobe <loopback-tcp> <loopback-udp>\necho-downstream / probe-downstream: same arguments, controlled asymmetric UDP test only\nUse stop on stdin or Ctrl+C to end. See docs/aurora-connect.md."
             );
             Ok(())
         }
@@ -293,6 +404,11 @@ async fn main() {
         let code = error
             .downcast_ref::<aurora_connect_lab::Error>()
             .map(|e| e.code())
+            .or_else(|| {
+                error
+                    .downcast_ref::<aurora_connect_lab::PlanError>()
+                    .map(ToString::to_string)
+            })
             .unwrap_or_else(|| "lab_operation_failed".into());
         event(
             json!({"event":"failed", "code":code, "hint":"check arguments, authorization, local ports, capability and deadline; no NAT diagnosis inferred"}),

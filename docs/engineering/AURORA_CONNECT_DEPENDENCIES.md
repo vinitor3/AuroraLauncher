@@ -21,12 +21,13 @@ Antes de habilitar uma dependência: fixar versão/configuração; revisar fonte
 | Componente e versão | `iroh = 1.3.0` exato em `apps/connect-lab/Cargo.toml`, resolução em lock próprio; `publish = false`; não adicionado ao desktop |
 | Mantenedor/licença | n0/comunidade; MIT OR Apache-2.0 no artefato confirmado por `cargo info iroh@1.3.0` |
 | Toolchain | MSRV 1.91; Rust local 1.98.0; nenhuma atualização global ou do lock desktop |
+| Hash de aprovação local | `sha2 =0.11.0`, sem default features, agora dependência direta; a mesma versão já existia transitivamente no lock. Manifest do pacote consultado: MIT OR Apache-2.0, MSRV 1.85. SHA-256 de bytes exatos do plano, sem implementação criptográfica própria |
 | Autenticação/capacidade | Identidade criptográfica Iroh com pin esperado; lease host por peer/sessão/serviço/prazo. Streams confiáveis e DATAGRAM; autorização Aurora permanece própria |
 | Defaults e serviços | `default-features = false`, `tls-ring`; preset `Minimal`, relay Disabled, lookup/relay defaults limpos, bind e destino manuais; sem portmapper/telemetria gerenciada |
 | Operador/termos externos | Nenhum serviço remoto configurado para o ensaio direto local. Licença de biblioteca não aprova uso futuro de infraestrutura |
 | Quotas/regiões | Não aplicáveis a operador no laboratório local; limites de recursos locais no código/task. Não é capacidade anunciada para oito jogadores/mods |
 | Custo e falha | Nenhuma conta, cobrança, crédito ou fallback pago. Sem caminho manual alcançável, timeout/erro; não classifica NAT/CGNAT |
-| Segurança de dependências | Aviso RUSTSEC-2026-0285 conferido contra rustls 0.23.45 resolvido. `cargo audit` indisponível no ambiente; não houve varredura completa de vulnerabilidades |
+| Segurança de dependências | rustls 0.23.45 resolve o aviso RUSTSEC-2026-0285 conferido. Varredura Cargo Audit posterior: zero vulnerabilidades conhecidas na base consultada e um alerta de manutenção `paste 1.0.15`, preservado; detalhes abaixo |
 | Metadados de licença | `cargo metadata --locked --format-version 1 --manifest-path apps/connect-lab/Cargo.toml` identificou 358 pacotes, incluindo o local, todos com campo de licença. Isso é inventário, não revisão jurídica ou prova de cumprimento de cada obrigação de distribuição |
 | Plataformas/homologação | Testes Windows locais conforme task; outros sistemas, NAT, relay, Minecraft e voz exigem evidências próprias |
 | Fonte/API | Release/tag/manifest oficiais exatos e código do pacote Cargo 1.3.0; docs.rs exata teve erro de acesso, mantido como limitação |
@@ -34,6 +35,20 @@ Antes de habilitar uma dependência: fixar versão/configuração; revisar fonte
 Fontes verificadas pelo agente de transporte: [release v1.3.0](https://github.com/n0-computer/iroh/releases/tag/v1.3.0), [Cargo.toml da tag](https://raw.githubusercontent.com/n0-computer/iroh/v1.3.0/iroh/Cargo.toml), [presets da tag](https://github.com/n0-computer/iroh/blob/v1.3.0/iroh/src/endpoint/presets.rs), [advisory rustls](https://rustsec.org/advisories/RUSTSEC-2026-0285.html), consulta 29/09/2026. `N0DisableRelay` ainda teria descoberta/publicação e não foi selecionado. A [ADR](ADR/PROPOSAL-aurora-connect.md) explica a escolha frente às alternativas. Pesquisas históricas abaixo continuam distintas desta configuração.
 
 O grafo de features conferido por `cargo tree -e features -i iroh` contém apenas `tls-ring` na seleção direta; `cargo tree -i rustls` identifica 0.23.45 e `cargo tree -i portmapper` não encontra o pacote. A presença de código upstream de relay no artefato não significa ativação. O [cliente de relay da tag 1.3.0](https://raw.githubusercontent.com/n0-computer/iroh/v1.3.0/iroh-relay/src/client.rs) constrói conexão WebSocket com TLS para URL HTTPS: evidência estática de um candidato sob UDP externo bloqueado, sem execução/habilitação, autorização de operador ou homologação de voz nesta configuração.
+
+### Auditoria automatizada local — 29/09/2026
+
+A ausência inicial de `cargo audit` foi resolvida instalando **cargo-audit 0.22.2** somente em `.aurora/connect-tools`, com compilação em `.aurora/connect-tools-build`; não houve instalação global nem dependência nova do desktop. `cargo info` confirmou MIT OR Apache-2.0 e MSRV 1.88. Instalação com `--locked --no-default-features --debug`, sem conta/cobrança; arquivos auxiliares permanecem ignorados pelo Git. Comando executado pelo coordenador:
+
+```powershell
+./.aurora/connect-tools/bin/cargo-audit.exe audit --file apps/connect-lab/Cargo.lock --db .aurora/connect-advisory-db --json
+```
+
+Resultado conferido no relatório local `.aurora/connect-validation/audit-20260929.json`: exit 0; 358 dependências; 1277 advisories; base `f23b768236fe2880e4cfa167da662cad8ca79240`, atualizada em `2026-09-29T04:32:15-03:00`; zero vulnerabilidades e um warning. Lista de ignores vazia, sem silenciamento ou substituição automática.
+
+Após o lock final do terceiro incremento, o coordenador repetiu a auditoria com `--no-fetch` contra a mesma base e atualizou o relatório: exit 0, mesmo resultado. SHA-256 de `apps/connect-lab/Cargo.lock`: `94D0D98CA1D8BE92FAB31B20AC598B8AF7296CBFA30056B7F09D5418F14B3AA9`, também conferido na revisão documental. A repetição usa o snapshot de advisories identificado acima; não afirma atualização posterior dessa base.
+
+O warning [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436.html) informa ausência de manutenção de `paste 1.0.15`, não vulnerabilidade classificada nesse relatório. O grafo Windows consultado por `cargo tree --locked -i paste` não encontra uso; `--target all` mostra a proc-macro via `netlink-packet-core 0.8.2` → `netdev 0.45.1`/`netwatch 0.19.3` → Iroh 1.3.0. O alerta continua relevante para os alvos em que essa cadeia é compilada e exige acompanhamento upstream antes de ampliar a homologação. Zero vulnerabilidades conhecidas nesse snapshot não comprova segurança absoluta, revisão do código, cobertura de todas as falhas ou obrigações de licença.
 
 ### Correspondência dos registros anteriores
 

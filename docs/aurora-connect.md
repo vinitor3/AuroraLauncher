@@ -20,12 +20,45 @@ cargo test --locked --manifest-path apps/connect-lab/Cargo.toml
 cargo fmt --manifest-path apps/connect-lab/Cargo.toml --all -- --check
 cargo clippy --locked --manifest-path apps/connect-lab/Cargo.toml --all-targets -- -D warnings
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/connect-lab-smoke.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/connect-lab-smoke.ps1 -AuthorizedDownstream
 node --test apps/connect-voice-tools/inspect.test.mjs
 ```
 
 O smoke compila somente o executável de laboratório e inicia três processos filhos ocultos: endpoint echo TCP/UDP, host e convidado. Portas loopback são efêmeras. Troca somente pins públicos por stdin; chaves privadas ficam em memória. Um quarto processo `probe` compara 1 MiB em cada direção TCP e dez datagramas (0, 1, 32, 512 e 1024 bytes em duas origens locais). Não executa Minecraft nem mod.
 
 Saída esperada: JSON `result=PASS`, `agents=2`, `topology=same_machine_loopback` e `CLEANUP_PASS`. Os tempos medem ida/volta da aplicação de teste, **não** latência de áudio nem RTT puro de rede. Pico de memória/CPU são observações desses processos debug; não SLA, benchmark de jogo ou memória exclusiva dos buffers. Se uma porta for ocupada entre reserva e bind, falha sem encerrar seu proprietário. Saída compartilhável não inclui pins, endereços, payloads ou dados de conta.
+
+Com `-AuthorizedDownstream`, o script cria um plano sintético próprio em `.aurora/connect-validation`, confere preview/hash, comprova recusa de hash não aprovado antes de iniciar o host e só então autoriza o peer do ensaio. O endpoint controlado responde oito datagramas de 512 bytes para cada pedido de um byte. Resultado esperado: duas origens, dois pedidos, 2 bytes enviados, 8.192 recebidos em 16 respostas íntegras, além do mesmo TCP. Os tempos são pedido–cada resposta, não RTT de cada pacote. A fixture permanece ignorada e inalterada; nenhuma configuração pessoal ou chave é persistida.
+
+## Plano explícito de serviços do laboratório
+
+O comando convencional `host` mantém `ReplyBudget`. Para autorizar o perfil assimétrico, `plan` lê um JSON local de até 16 KiB, apresenta o estado antes/depois e seu SHA-256. `host-plan` exige esse hash, relê os bytes e recusa qualquer diferença antes de abrir transporte. A revisão é dos bytes exatos, incluindo BOM/espaços. Depois do hash, ainda é obrigatório autorizar o peer público mostrado pelo convidado. Chaves privadas e a sessão são novas a cada execução.
+
+O [exemplo](../apps/connect-lab/examples/host-downstream.json) usa somente loopback e portas de ensaio: transporte 42000, TCP 42001, UDP 42002, 600 segundos, downstream 100.000 bytes/s e 100 datagramas/s. São valores de laboratório, não configuração recomendada de mod. Exatamente `game`/TCP e `aux`/UDP, revisão 1, são aceitos pela CLI atual; não é catálogo genérico, manifesto de mod ou novo contrato remoto. Campos desconhecidos e destinos não loopback são recusados. Escolher uma porta de transporte concreta; zero não é aceito nesta CLI.
+
+Com o endpoint `echo-downstream` rodando em outro terminal, revisar o plano:
+
+```powershell
+$lab = './apps/connect-lab/target/debug/aurora-connect-lab.exe'
+& $lab echo-downstream 127.0.0.1:42001 127.0.0.1:42002 600
+```
+
+Em outro terminal, no diretório desta worktree:
+
+```powershell
+$lab = './apps/connect-lab/target/debug/aurora-connect-lab.exe'
+$planFile = './apps/connect-lab/examples/host-downstream.json'
+$review = (& $lab plan $planFile | ConvertFrom-Json).plan
+$review | ConvertTo-Json -Depth 8
+```
+
+Após revisar destinos, orçamento, prazo e hash, iniciar e autorizar o convidado pelo mesmo procedimento de troca de pins abaixo:
+
+```powershell
+& $lab host-plan $planFile $review.hash
+```
+
+O convidado usa o comando `guest` existente. Para este endpoint sintético, executar `probe-downstream` em vez de `probe`. Encerrar por `stop`, Ctrl+C ou prazo. Estes comandos de plano não escrevem configurações; não existe snapshot de configuração pessoal a restaurar. Um futuro adaptador que edite propriedades/TOML terá fluxo próprio de autorização, snapshot/journal e recuperação. O plano contém destinos para revisão local; não compartilhar esse JSON como log sanitizado.
 
 ## Ensaio em dois computadores — preparado, ainda não executado
 
@@ -83,7 +116,7 @@ Devolver somente: PASS/falha e código, versões/hash do binário iguais ou dife
 
 - Uma sessão host, até oito peers, destinos/serviços explícitos, lifetime máximo de uma hora. A CLI autoriza um convidado; testes da biblioteca exercitam vários. Não há convites sociais/contas/interface no produto.
 - Payload UDP útil é o menor teto autorizado/negociado e `max_datagram_size − 24` atual. Limite pode diminuir; aumento depende da negociação da associação. Oversize é descartado integralmente e contado, nunca truncado ou fragmentado. Falta de DATAGRAM recusa serviço.
-- A política padrão `ReplyBudget` limita o retorno UDP a 1:1 incluindo framing, sem crédito inicial e com teto de 64 KiB. A biblioteca também permite `AuthorizedDownstream`, selecionada exclusivamente pelo host para um serviço UDP, com tetos explícitos de bytes/s e datagramas/s por participante/serviço. O retorno começa somente após o primeiro envio autorizado ao endpoint; quotas são compartilhadas entre associações e preservadas na reconexão. Expiração absoluta, revogação, MTU, socket conectado e inatividade por ingresso continuam obrigatórios. Dez testes reais adicionais cobrem essa política. A CLI atual mantém o padrão conservador; acesso por plano explícito é o próximo incremento. Receber mais bytes não prova compatibilidade de voz nem endereçamento do mod.
+- A política padrão `ReplyBudget` limita o retorno UDP a 1:1 incluindo framing, sem crédito inicial e com teto de 64 KiB. `AuthorizedDownstream` exige plano explícito do host para o serviço UDP, com tetos de bytes/s e datagramas/s por participante/serviço. O retorno começa somente após o primeiro envio autorizado ao endpoint; quotas são compartilhadas entre associações e preservadas na reconexão. Expiração absoluta, revogação, MTU, socket conectado e inatividade por ingresso continuam obrigatórios. Dez testes reais adicionais cobrem essa política. Receber mais bytes não prova compatibilidade de voz nem endereçamento do mod.
 - Filas de aplicação UDP têm até oito mensagens/40 ms, com descarte; buffers internos de transporte também são limitados, mas não há garantia de prazo de áudio em congestionamento. TCP sob carga e voz em redes reais precisam de medição própria.
 - Listeners loopback não autenticam processos locais. Um processo com acesso à máquina pode tentar usar a porta; autenticação do jogo/mod continua obrigatória. Nenhum IP original é inventado para o serviço.
 - NAT duplo/CGNAT, UDP externo bloqueado, relay/migração, perda real, BR–BR/BR–EUA, runtime Minecraft, SVC e Plasmo, plano/apply/recovery de config e UI permanecem gates separados. A ferramenta de voz só produz plano/diff, não escreve.

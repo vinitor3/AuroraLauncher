@@ -2,6 +2,7 @@
 mod guest;
 mod host;
 mod model;
+mod plan;
 mod transport;
 mod wire;
 
@@ -9,6 +10,7 @@ pub use guest::{Guest, TcpBridge, UdpAssociation, UdpBridge};
 pub use host::Host;
 pub use iroh::{EndpointAddr, EndpointId, SecretKey};
 pub use model::*;
+pub use plan::{MAX_PLAN_BYTES, PlanError, ValidatedPlan, load_plan};
 pub use wire::{DATAGRAM_HEADER_LEN, DatagramFrame};
 
 pub fn generate_key() -> SecretKey {
