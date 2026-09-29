@@ -15,8 +15,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 | 003 UDP | **PROTÓTIPO** real: retorno isolado por peer/sessão/serviço, framing, MTU, abuso, expiração e carga TCP; downstream autorizado na biblioteca e CLI por plano/hash local | Integrar política apropriada ao adaptador, medir mod real e comprovar silêncio/keepalive/endereço; comando `host` convencional permanece 1:1 |
 | 004 caminhos | Direto IPv4/IPv6 **loopback** testado; roteiro de dois computadores preparado | LAN, NAT/CGNAT, redes distintas, relay elegível e UDP bloqueado |
 | 005 Minecraft/convites/UI | **NÃO IMPLEMENTADO**; lease/pin manual é mecanismo de laboratório | Adaptadores, sinalização autorizada, fluxo social e estados reais |
-| 006 Simple Voice Chat | Inspector e rascunho sem escrita: **PARCIAL** | Artefato local, adaptador de endereço, transporte/runtime e áudio próprios |
-| 007 Plasmo Voice | Inspector e rascunho sem escrita: **PARCIAL** | Gates separados de SVC, incluindo lifecycle do cliente/adaptador |
+| 006 Simple Voice Chat | **PARCIAL**: inspector/plano sem escrita; JAR Fabric 1.21.1/2.6.22 com hash/metadados/API conferidos | Adaptador de endereço, transporte/runtime e áudio próprios |
+| 007 Plasmo Voice | **PARCIAL**: inspector/plano sem escrita; JAR Fabric 1.21.1/2.1.17 com hash/metadados/API conferidos | Gates separados de SVC, incluindo lifecycle do cliente/adaptador |
 | 008 robustez/liberação | Testes locais adversariais e rollback do laboratório | Matriz real, saturação prolongada, produto e todos os gates anteriores |
 
 Baseline comprovado no [registro de comandos/resultados](../../task-aur-r4-connect.md): 24/24 testes Rust, cinco repetições de transporte com 55/55 resultados, fmt/clippy, 14/14 testes do inspector e smoke multiprocesso com 1 MiB TCP por direção/dez UDP em duas origens/1358 bytes negociados/limpeza aprovada. A falha anterior de UDP sob carga TCP foi preservada no histórico e corrigida com reserva de 16 KiB para datagramas no orçamento agregado. Isso não promete fairness universal nem perda zero. Critérios T-* abrangem mais cenários do que estes testes; nenhum é marcado integralmente concluído por semelhança de nome.
@@ -294,7 +294,7 @@ Coluna “caminhos” lista cenários de teste separados: D4 = IPv4 direto; D6 =
 
 Fazer uma linha de evidência por combinação realmente executada, incluindo patch exato do loader e mod, Java, sistema operacional, host/convidados e caminho. Um mod aprovado em dedicado não aprova LAN; um loader aprovado não aprova outro; D4 não aprova relay/UDP bloqueado. Cada distribuição futura publica somente as linhas comprovadas, mantendo o restante experimental/desligado.
 
-A [preparação posterior dos mods](../../aurora-connect-voice.md) pesquisou candidatos Fabric 1.21.1 SVC 2.6.22 e Plasmo 2.1.17, dentro dos nove pares existentes. Os 14 testes do inspector usam fixtures de configuração e versões declaradas; nenhum JAR/loader/JVM foi executado. Assim, não preenchem as linhas runtime 1.20.1 acima nem criam uma linha 1.21.1 homologada. Transporte e endereçamento continuam gates independentes para cada mod.
+A [preparação posterior dos mods](../../aurora-connect-voice.md) selecionou para inspeção os candidatos Fabric 1.21.1 SVC 2.6.22 e Plasmo 2.1.17, dentro dos nove pares existentes. O quarto incremento conferiu os JARs oficiais locais, hashes publicados/recalculados, metadados e assinaturas de endereçamento sem executar bytecode. Os 31 testes Node finais incluem os dois arquivos reais, parser limitado, prova de artefato não forjável por JSON e planos derivados da versão efetiva. Nenhum JAR/loader/JVM foi executado; as linhas runtime 1.20.1 acima e a homologação 1.21.1 continuam pendentes. Transporte, endereçamento, instalação efetiva e voz audível são gates independentes.
 
 ## 6. Registro de evidência e métricas
 

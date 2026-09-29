@@ -3,6 +3,8 @@ import { createSocket } from 'node:dgram';
 import { open, lstat, realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { inspectArtifact, isVerifiedArtifact, readArtifactFile } from './artifact.mjs';
+import { rejectLinkedParents, resolveExplicitLocalPath } from './local-path.mjs';
 
 const MAX_CONFIG_BYTES = 256 * 1024;
 const RESEARCH_VERSIONS = { svc: ['2.6.22'], plasmo: ['2.1.17'] };
@@ -78,7 +80,8 @@ export function parseConfig(mod, bytes) {
 
 export async function readConfig(file) {
   // Explicit path only; never walk an instance, find accounts or infer config paths.
-  const absolute = resolve(file);
+  const absolute = resolveExplicitLocalPath(file);
+  await rejectLinkedParents(absolute);
   const before = await lstat(absolute);
   if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) fail('unsafe_config_file');
   if ((await realpath(absolute)).toLowerCase() !== absolute.toLowerCase()) fail('linked_config_path');
@@ -120,7 +123,11 @@ export async function probeGuestPort(guestPort) {
 }
 
 export function createPlan(options, bytes) {
-  const { mod, version, mode, guestPort, gamePort, gameBind, datagramBudget, transportPayload, installation = 'not_checked', portProbe = 'not_checked' } = options;
+  const { mod, mode, guestPort, gamePort, gameBind, datagramBudget, transportPayload, installation = 'not_checked', portProbe = 'not_checked' } = options;
+  const artifactVerified = isVerifiedArtifact(options.artifact);
+  const version = artifactVerified ? options.artifact.version : options.version;
+  const targetLoader = options.loader ?? 'fabric';
+  const targetMinecraft = options.minecraft ?? '1.21.1';
   const parsed = parseConfig(mod, bytes);
   const get = key => parsed.entries.get(key)?.value;
   const blockers = [];
@@ -132,8 +139,17 @@ export function createPlan(options, bytes) {
   if (mode === 'mixed') blockers.push('per_participant_adapter_required');
   if (mode === 'lan') blockers.push('lan_effective_config_not_verified');
   if (installation === 'absent') blockers.push('mod_absent');
-  // An operator-supplied version or filename never proves the installed artifact.
-  blockers.push('artifact_metadata_hash_and_runtime_not_verified');
+  // A boolean or deserialized report cannot stand in for this process inspecting bytes.
+  let artifactMismatch = false;
+  if (artifactVerified) {
+    if (options.artifact.mod !== mod) { blockers.push('artifact_mod_mismatch'); artifactMismatch = true; }
+    if (options.version !== undefined && options.version !== version) { blockers.push('artifact_version_mismatch'); artifactMismatch = true; }
+    if (options.artifact.loader !== targetLoader || options.artifact.minecraft !== targetMinecraft) { blockers.push('artifact_target_mismatch'); artifactMismatch = true; }
+    blockers.push('voice_runtime_not_verified');
+  } else {
+    blockers.push('artifact_metadata_hash_and_runtime_not_verified');
+    if (options.artifact !== undefined) { blockers.push('artifact_not_recognized_or_untrusted_report'); artifactMismatch = true; }
+  }
   if (portProbe !== 'available_at_probe') blockers.push(portProbe === 'not_checked' ? 'guest_port_not_probed' : portProbe);
 
   const integer = key => {
@@ -163,7 +179,7 @@ export function createPlan(options, bytes) {
   if (configuredMtu !== null && Number.isInteger(datagramBudget) && configuredMtu > datagramBudget) blockers.push('datagram_budget_below_configured_mtu');
 
   const changes = [];
-  const canDraft = mode === 'dedicated-aurora-only' && RESEARCH_VERSIONS[mod].includes(version) && installation !== 'absent';
+  const canDraft = mode === 'dedicated-aurora-only' && RESEARCH_VERSIONS[mod].includes(version) && installation !== 'absent' && !artifactMismatch;
   if (canDraft) {
     const wanted = mod === 'svc'
       ? [['voice_host', `127.0.0.1:${guestPort}`]]
@@ -176,7 +192,9 @@ export function createPlan(options, bytes) {
   }
   return {
     schemaVersion: 1, state: 'PROTÓTIPO', applySupported: false, runtimeHomologated: false,
-    mod, declaredVersion: version, mode,
+    mod, declaredVersion: options.version ?? null, effectiveVersion: version ?? null, mode,
+    artifact: artifactVerified ? options.artifact : null,
+    artifactVerified, target: { loader: targetLoader, minecraft: targetMinecraft },
     sourceSha256: parsed.sourceSha256, sourceBytes: parsed.sourceBytes,
     host: { bindConfigured: bindValue ?? null, bindResolved: hostBind, portConfigured: rawPort, portResolved: hostPort, protocol: 'udp' },
     advertisement: mod === 'svc' ? { voiceHost: get('voice_host') ?? null } : { ip: get('host.public.ip') ?? null, port: get('host.public.port') ?? null },
@@ -193,6 +211,7 @@ export function createPlan(options, bytes) {
       'Mod mtu_size may omit protocol overhead; supply an observed full UDP datagram bound and the current transport payload after Aurora framing.',
       'Config addresses are local diagnostic data; redact them before sharing this JSON.',
       'Applying later requires confined native paths, instance identity, lock, explicit authorization, hash recheck, snapshot, journal and conflict-safe recovery.',
+      'An explicit JAR proves those file bytes only; it does not prove installation in this instance, dependencies, mod authentication, audible voice or runtime compatibility.',
     ],
   };
 }
@@ -208,20 +227,22 @@ export function redactPlan(plan) {
 }
 
 async function main(argv) {
-  const allowed = new Set(['mod', 'version', 'mode', 'config', 'guest-port', 'game-port', 'game-bind', 'datagram-budget', 'transport-payload', 'installation', 'probe-port', 'show-addresses']);
+  const allowed = new Set(['mod', 'version', 'mode', 'config', 'guest-port', 'game-port', 'game-bind', 'datagram-budget', 'transport-payload', 'installation', 'probe-port', 'show-addresses', 'jar', 'loader', 'minecraft']);
   const args = {};
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i]?.slice(2);
     if (!argv[i]?.startsWith('--') || !allowed.has(key) || !argv[i + 1] || args[key] !== undefined) fail('invalid_arguments');
     args[key] = argv[i + 1];
   }
-  for (const key of ['mod', 'version', 'mode', 'config', 'guest-port']) if (!args[key]) fail('missing_argument');
+  for (const key of ['mod', 'mode', 'config', 'guest-port']) if (!args[key]) fail('missing_argument');
+  if (!args.version && !args.jar) fail('version_or_jar_required');
   if (args['probe-port'] !== undefined && args['probe-port'] !== 'true') fail('invalid_probe_flag');
   if (args['show-addresses'] !== undefined && args['show-addresses'] !== 'true') fail('invalid_address_flag');
   const guestPort = Number(args['guest-port']);
   const bytes = await readConfig(args.config);
+  const artifact = args.jar ? inspectArtifact(await readArtifactFile(args.jar)) : undefined;
   const optionalNumber = key => args[key] === undefined ? undefined : Number(args[key]);
-  const plan = createPlan({ mod: args.mod, version: args.version, mode: args.mode, guestPort,
+  const plan = createPlan({ mod: args.mod, version: args.version, mode: args.mode, guestPort, artifact, loader: args.loader, minecraft: args.minecraft,
     gamePort: optionalNumber('game-port'), gameBind: args['game-bind'],
     datagramBudget: optionalNumber('datagram-budget'), transportPayload: optionalNumber('transport-payload'),
     installation: args.installation,
