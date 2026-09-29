@@ -1,9 +1,10 @@
 //! Experimental, explicitly compiled voice configuration adapters for verified
 //! diagnostic copies only. No Tauri command or UI exposes this module.
-//! Callers must verify the game is stopped before/after acquiring the shared
-//! mutation lock, just as for recovery. Never infer this from a transport event.
+//! The opaque guard checks for standard Java processes around the shared lock
+//! and confirmation. Callers still must prevent external starts during mutation;
+//! renamed/embedded JVMs are not detectable by this conservative lab gate.
 use super::recovery::{self, RecoveryError, RecoveryResult};
-use super::{diagnostic_lab, Instance, InstanceMutationGuard};
+use super::{diagnostic_lab, Instance};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -25,6 +26,9 @@ type Result<T> = std::result::Result<T, RecoveryError>;
 
 #[path = "connect_voice_plasmo.rs"]
 mod plasmo;
+#[path = "connect_voice_process.rs"]
+mod process;
+pub use process::{acquire_voice_mutation_guard, VoiceMutationGuard};
 #[path = "connect_voice_restore.rs"]
 mod restoration;
 pub use restoration::{PreparedRestoration, RestorationReceipt, RestorationState};
@@ -117,7 +121,7 @@ impl PreparedAnnouncement {
     pub fn confirm(
         self,
         instance: &Instance,
-        guard: &InstanceMutationGuard,
+        guard: &VoiceMutationGuard,
         approved_digest: &str,
     ) -> Result<AppliedAnnouncement> {
         // Construct the opaque receipt before commit. Never perform fallible I/O
@@ -130,23 +134,30 @@ impl PreparedAnnouncement {
     fn apply(
         self,
         instance: &Instance,
-        guard: &InstanceMutationGuard,
+        guard: &VoiceMutationGuard,
         approved_digest: &str,
         on_executor_begin: impl FnOnce(),
     ) -> Result<RecoveryResult> {
         if Instant::now() >= self.deadline || approved_digest != self.review.digest {
             return Err(RecoveryError::StalePreview);
         }
+        guard.recheck()?;
         require_test_copy(instance)?;
-        let current = recovery::capture_observation(instance, guard)?;
+        let current = recovery::capture_observation(instance, guard.inner())?;
         if current.instance_uuid != self.instance_uuid {
             return Err(RecoveryError::Identity);
         }
         if current.fingerprint != self.fingerprint {
             return Err(RecoveryError::StalePreview);
         }
+        // Inventory hashing may take time; do not reuse a pre-review or
+        // pre-inventory observation of Java process absence for the write.
+        guard.recheck()?;
+        if Instant::now() >= self.deadline {
+            return Err(RecoveryError::StalePreview);
+        }
         on_executor_begin();
-        let _pins = recovery::check_guard(instance, guard)?;
+        let _pins = recovery::check_guard(instance, guard.inner())?;
         let stage = recovery::path(instance.root(), ".aurora/connect-voice-stage")?;
         fs::create_dir_all(&stage)?;
         let _stage_pins = recovery::pin_directory(&stage)?;
@@ -154,7 +165,7 @@ impl PreparedAnnouncement {
         recovery::write_new(&staged, &self.replacement)?;
         let result = recovery::preview_selected_files(
             instance,
-            guard,
+            guard.inner(),
             &self.fingerprint,
             &BTreeMap::from([(
                 self.voice_mod.config().to_owned(),
@@ -179,9 +190,12 @@ impl PreparedAnnouncement {
         // Only our unique staging file; approved CAS/preview remains for audit/undo.
         let _ = fs::remove_file(staged);
         let preview = result?;
+        // Snapshot/CAS work may itself be slow. A process appearing during it
+        // blocks the actual file transaction and leaves recovery inspection.
+        guard.recheck()?;
         // Recovery revalidates the persisted preview, hashes, identity and entire
         // observed state; it captures protection before its durable transaction.
-        recovery::restore(instance, guard, &preview.id)
+        recovery::restore(instance, guard.inner(), &preview.id)
     }
 }
 
@@ -273,7 +287,7 @@ fn render_svc(bytes: &[u8], port: u16) -> Result<(Vec<u8>, String, String)> {
 
 pub fn prepare_announcement(
     instance: &Instance,
-    guard: &InstanceMutationGuard,
+    guard: &VoiceMutationGuard,
     request: AnnouncementRequest,
 ) -> Result<PreparedAnnouncement> {
     require_test_copy(instance)?;
@@ -286,7 +300,8 @@ pub fn prepare_announcement(
     {
         return Err(RecoveryError::Integrity);
     }
-    let current = recovery::capture_observation(instance, guard)?;
+    guard.recheck()?;
+    let current = recovery::capture_observation(instance, guard.inner())?;
     let (artifact_hash, artifact_bytes) = request.voice_mod.artifact();
     let config = request.voice_mod.config();
     // Runtime claims must agree; the adapter does not infer a loader from a filename.

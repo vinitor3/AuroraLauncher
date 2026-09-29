@@ -59,13 +59,14 @@ impl RestorationReceipt {
     pub fn prepare_restore<'a>(
         &'a mut self,
         instance: &Instance,
-        guard: &InstanceMutationGuard,
+        guard: &VoiceMutationGuard,
     ) -> Result<PreparedRestoration<'a>> {
         if self.state != RestorationState::Ready {
             return Err(RecoveryError::StalePreview);
         }
         require_test_copy(instance)?;
-        let current = recovery::capture_observation(instance, guard)?;
+        guard.recheck()?;
+        let current = recovery::capture_observation(instance, guard.inner())?;
         if current.instance_uuid != self.instance_uuid {
             return Err(RecoveryError::Identity);
         }
@@ -116,7 +117,7 @@ impl RestorationReceipt {
     pub fn prepare_reconciled_restore<'a>(
         &'a mut self,
         instance: &Instance,
-        guard: &InstanceMutationGuard,
+        guard: &VoiceMutationGuard,
         expected_current_sha256: &str,
     ) -> Result<PreparedRestoration<'a>> {
         if self.state != RestorationState::Ready {
@@ -130,7 +131,8 @@ impl RestorationReceipt {
             return Err(RecoveryError::Integrity);
         }
         require_test_copy(instance)?;
-        let current = recovery::capture_observation(instance, guard)?;
+        guard.recheck()?;
+        let current = recovery::capture_observation(instance, guard.inner())?;
         if current.instance_uuid != self.instance_uuid {
             return Err(RecoveryError::Identity);
         }
@@ -222,7 +224,7 @@ impl PreparedRestoration<'_> {
     pub fn confirm(
         self,
         instance: &Instance,
-        guard: &InstanceMutationGuard,
+        guard: &VoiceMutationGuard,
         approved_digest: &str,
     ) -> Result<RecoveryResult> {
         let receipt = self.receipt;

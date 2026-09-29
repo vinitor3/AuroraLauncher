@@ -9,6 +9,42 @@ const SVC_DEFAULTS: &[u8] =
 const PLASMO_DEFAULTS: &[u8] =
     include_bytes!("../../tests/fixtures/connect_voice/plasmo-default-equivalent.toml");
 
+// These filesystem fixtures do not run Java. Probe injection is private and
+// compiled only for tests; the public guard always uses the real OS query.
+fn fixture_voice_guard(instance: &Instance) -> Result<VoiceMutationGuard> {
+    process::acquire_with_probe(instance, Box::new(|| Ok(())))
+}
+
+fn controlled_voice_guard(
+    instance: &Instance,
+) -> (
+    VoiceMutationGuard,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let refuse_at = Arc::new(AtomicUsize::new(0));
+    let probe_calls = calls.clone();
+    let probe_refusal = refuse_at.clone();
+    let guard = process::acquire_with_probe(
+        instance,
+        Box::new(move || {
+            let call = probe_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if probe_refusal.load(Ordering::SeqCst) == call {
+                Err(RecoveryError::VoiceProcessRunning)
+            } else {
+                Ok(())
+            }
+        }),
+    )
+    .unwrap();
+    (guard, calls, refuse_at)
+}
+
 struct Fixture {
     root: PathBuf,
     source: Instance,
@@ -148,8 +184,8 @@ fn complete_default_equivalents_are_eligible_without_weakening_sensitive_filters
         let f = Fixture::for_mod(None, voice_mod, original);
         let config = f.copy.root().join(voice_mod.config());
         assert!(!recovery::sensitive_config(&config, voice_mod.config()).unwrap());
-        let guard = acquire_instance_recovery_lock(&f.copy).unwrap();
-        let observation = recovery::capture_observation(&f.copy, &guard).unwrap();
+        let guard = fixture_voice_guard(&f.copy).unwrap();
+        let observation = recovery::capture_observation(&f.copy, guard.inner()).unwrap();
         assert!(observation
             .files
             .iter()
@@ -178,7 +214,7 @@ fn complete_default_equivalents_are_eligible_without_weakening_sensitive_filters
         ));
         fs::write(&config, [original, b"\n# token=fixture-only\n"].concat()).unwrap();
         assert!(recovery::sensitive_config(&config, voice_mod.config()).unwrap());
-        assert!(!recovery::capture_observation(&f.copy, &guard)
+        assert!(!recovery::capture_observation(&f.copy, guard.inner())
             .unwrap()
             .files
             .iter()
@@ -189,13 +225,13 @@ fn complete_default_equivalents_are_eligible_without_weakening_sensitive_filters
 #[test]
 fn primary_instances_and_unapproved_jar_bytes_never_get_an_announcement_plan() {
     let f = Fixture::new(None);
-    let primary_guard = acquire_instance_recovery_lock(&f.source).unwrap();
+    let primary_guard = fixture_voice_guard(&f.source).unwrap();
     assert!(matches!(
         prepare_announcement(&f.source, &primary_guard, f.request()),
         Err(RecoveryError::UnsafePath)
     ));
     drop(primary_guard);
-    let guard = acquire_instance_recovery_lock(&f.copy).unwrap();
+    let guard = fixture_voice_guard(&f.copy).unwrap();
 
     assert!(matches!(
         prepare_announcement(&f.copy, &guard, f.request()),
@@ -217,10 +253,10 @@ fn real_pinned_artifact_copy_uses_existing_preview_confirmation_undo_and_conflic
         (SVC_SHA256.into(), SVC_BYTES)
     );
     let f = Fixture::new(Some(&jar));
-    let guard = acquire_instance_recovery_lock(&f.copy).unwrap();
+    let guard = fixture_voice_guard(&f.copy).unwrap();
 
     let other = Fixture::new(Some(&jar));
-    let other_guard = acquire_instance_recovery_lock(&other.copy).unwrap();
+    let other_guard = fixture_voice_guard(&other.copy).unwrap();
     let foreign = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
     let foreign_digest = foreign.review().digest.clone();
     assert!(matches!(
@@ -239,8 +275,8 @@ fn real_pinned_artifact_copy_uses_existing_preview_confirmation_undo_and_conflic
 
     // Preparation creates neither a target point nor a reusable recovery preview.
     // Generic recovery must not bypass cancellation, wrong approval or expiry.
-    let point_ids = |f: &Fixture, guard: &InstanceMutationGuard| {
-        recovery::list_points(&f.copy, guard)
+    let point_ids = |f: &Fixture, guard: &VoiceMutationGuard| {
+        recovery::list_points(&f.copy, guard.inner())
             .unwrap()
             .points
             .into_iter()
@@ -254,7 +290,7 @@ fn real_pinned_artifact_copy_uses_existing_preview_confirmation_undo_and_conflic
     let cancelled_id = cancelled.review().plan_id.clone();
     drop(cancelled);
     assert!(matches!(
-        recovery::restore(&f.copy, &guard, &cancelled_id),
+        recovery::restore(&f.copy, guard.inner(), &cancelled_id),
         Err(RecoveryError::StalePreview)
     ));
     assert_eq!(f.bytes(), ORIGINAL);
@@ -285,15 +321,15 @@ fn real_pinned_artifact_copy_uses_existing_preview_confirmation_undo_and_conflic
     assert_eq!(f.bytes(), render_svc(ORIGINAL, 35554).unwrap().0);
     assert_eq!(fs::read(f.source.root().join(CONFIG)).unwrap(), ORIGINAL);
     assert!(
-        diagnostic_lab::inspect(&f.copy, &guard)
+        diagnostic_lab::inspect(&f.copy, guard.inner())
             .unwrap()
             .changes
             .is_empty(),
         "voice edit must not become applicable to source through existing generic settings"
     );
 
-    let undo = recovery::preview_undo(&f.copy, &guard).unwrap();
-    recovery::restore(&f.copy, &guard, &undo.id).unwrap();
+    let undo = recovery::preview_undo(&f.copy, guard.inner()).unwrap();
+    recovery::restore(&f.copy, guard.inner(), &undo.id).unwrap();
     assert_eq!(f.bytes(), ORIGINAL);
 
     let stale = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
@@ -313,7 +349,7 @@ const PLASMO_ORIGINAL: &[u8] = b"# Keep this comment\r\n[host]\r\nip = \"127.0.0
 #[test]
 fn plasmo_cannot_borrow_unapproved_artifact_or_unknown_config_path() {
     let f = Fixture::for_mod(None, VoiceMod::PlasmoVoice, PLASMO_ORIGINAL);
-    let guard = acquire_instance_recovery_lock(&f.copy).unwrap();
+    let guard = fixture_voice_guard(&f.copy).unwrap();
     assert!(matches!(
         prepare_announcement(&f.copy, &guard, f.request()),
         Err(RecoveryError::Compatibility)
@@ -336,7 +372,7 @@ fn real_plasmo_artifact_can_change_or_add_announcement_with_approval_undo_and_is
     let without_public = b"# [host.public] template stays commented\r\n[host]\r\nip = \"127.0.0.1\"\r\nport = 25565\r\n[voice]\r\nmtu_size = 1024";
     for original in [PLASMO_ORIGINAL, without_public.as_slice()] {
         let f = Fixture::for_mod(Some(&jar), VoiceMod::PlasmoVoice, original);
-        let guard = acquire_instance_recovery_lock(&f.copy).unwrap();
+        let guard = fixture_voice_guard(&f.copy).unwrap();
         let mut wrong_mod = f.request();
         wrong_mod.voice_mod = VoiceMod::SimpleVoiceChat;
         assert!(matches!(
@@ -350,10 +386,10 @@ fn real_plasmo_artifact_can_change_or_add_announcement_with_approval_undo_and_is
         let id = cancelled.review().plan_id.clone();
         drop(cancelled);
         assert!(matches!(
-            recovery::restore(&f.copy, &guard, &id),
+            recovery::restore(&f.copy, guard.inner(), &id),
             Err(RecoveryError::StalePreview)
         ));
-        assert!(recovery::list_points(&f.copy, &guard)
+        assert!(recovery::list_points(&f.copy, guard.inner())
             .unwrap()
             .points
             .is_empty());
@@ -378,13 +414,13 @@ fn real_plasmo_artifact_can_change_or_add_announcement_with_approval_undo_and_is
             fs::read(f.source.root().join(PLASMO_CONFIG)).unwrap(),
             original
         );
-        assert!(diagnostic_lab::inspect(&f.copy, &guard)
+        assert!(diagnostic_lab::inspect(&f.copy, guard.inner())
             .unwrap()
             .changes
             .is_empty());
 
-        let undo = recovery::preview_undo(&f.copy, &guard).unwrap();
-        recovery::restore(&f.copy, &guard, &undo.id).unwrap();
+        let undo = recovery::preview_undo(&f.copy, guard.inner()).unwrap();
+        recovery::restore(&f.copy, guard.inner(), &undo.id).unwrap();
         assert_eq!(f.bytes(), original);
 
         let stale = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
@@ -427,7 +463,7 @@ fn exercise_selective_restoration(voice_mod: VoiceMod, jar_name: &str, original:
         (voice_mod.artifact().0.into(), voice_mod.artifact().1)
     );
     let f = Fixture::for_mod(Some(&jar), voice_mod, original);
-    let guard = acquire_instance_recovery_lock(&f.copy).unwrap();
+    let guard = fixture_voice_guard(&f.copy).unwrap();
     let prepared = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
     let approval = prepared.review().digest.clone();
     let mut applied = prepared.confirm(&f.copy, &guard, &approval).unwrap();
@@ -448,7 +484,7 @@ fn exercise_selective_restoration(voice_mod: VoiceMod, jar_name: &str, original:
     )
     .unwrap();
     let point_ids = || {
-        recovery::list_points(&f.copy, &guard)
+        recovery::list_points(&f.copy, guard.inner())
             .unwrap()
             .points
             .into_iter()
@@ -468,7 +504,7 @@ fn exercise_selective_restoration(voice_mod: VoiceMod, jar_name: &str, original:
     assert_eq!(applied.receipt.state(), RestorationState::Ready);
     assert_eq!(point_ids(), points_before_cancel);
     assert!(matches!(
-        recovery::restore(&f.copy, &guard, &cancelled_id),
+        recovery::restore(&f.copy, guard.inner(), &cancelled_id),
         Err(RecoveryError::StalePreview)
     ));
 
@@ -483,7 +519,7 @@ fn exercise_selective_restoration(voice_mod: VoiceMod, jar_name: &str, original:
     assert_eq!(applied.receipt.state(), RestorationState::Ready);
 
     let other = Fixture::for_mod(Some(&jar), voice_mod, original);
-    let other_guard = acquire_instance_recovery_lock(&other.copy).unwrap();
+    let other_guard = fixture_voice_guard(&other.copy).unwrap();
     assert!(matches!(
         applied.receipt.prepare_restore(&other.copy, &other_guard),
         Err(RecoveryError::Identity)
@@ -623,7 +659,7 @@ fn equivalent_plasmo_reserialization_requires_review_instead_of_trusting_new_has
     )
     .join("plasmovoice-fabric-1.21.1-2.1.17.jar");
     let f = Fixture::for_mod(Some(&jar), VoiceMod::PlasmoVoice, PLASMO_DEFAULTS);
-    let guard = acquire_instance_recovery_lock(&f.copy).unwrap();
+    let guard = fixture_voice_guard(&f.copy).unwrap();
     let prepared = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
     let approval = prepared.review().digest.clone();
     let mut applied = prepared.confirm(&f.copy, &guard, &approval).unwrap();
@@ -662,7 +698,7 @@ fn exercise_reconciled_restoration(voice_mod: VoiceMod, jar_name: &str, original
     )
     .join(jar_name);
     let f = Fixture::for_mod(Some(&jar), voice_mod, original);
-    let guard = acquire_instance_recovery_lock(&f.copy).unwrap();
+    let guard = fixture_voice_guard(&f.copy).unwrap();
     let config = f.copy.root().join(voice_mod.config());
     let plan = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
     let apply_approval = plan.review().digest.clone();
@@ -686,7 +722,12 @@ fn exercise_reconciled_restoration(voice_mod: VoiceMod, jar_name: &str, original
     fs::write(&config, &current).unwrap();
     fs::write(f.copy.root().join("options.txt"), b"renderDistance:23\n").unwrap();
     let current_hash = digest(current.as_bytes());
-    let points = || recovery::list_points(&f.copy, &guard).unwrap().points.len();
+    let points = || {
+        recovery::list_points(&f.copy, guard.inner())
+            .unwrap()
+            .points
+            .len()
+    };
     let before_points = points();
     assert!(matches!(
         applied.receipt.prepare_restore(&f.copy, &guard),
@@ -713,7 +754,7 @@ fn exercise_reconciled_restoration(voice_mod: VoiceMod, jar_name: &str, original
     assert_eq!(points(), before_points);
     assert_eq!(applied.receipt.state(), RestorationState::Ready);
     assert!(matches!(
-        recovery::restore(&f.copy, &guard, &cancelled_id),
+        recovery::restore(&f.copy, guard.inner(), &cancelled_id),
         Err(RecoveryError::StalePreview)
     ));
     for wrong_approval in [
@@ -839,4 +880,101 @@ fn plasmo_reconciliation_removes_own_public_table_and_preserves_comments() {
         "plasmovoice-fabric-1.21.1-2.1.17.jar",
         PLASMO_DEFAULTS,
     );
+}
+
+#[test]
+fn voice_preparation_rechecks_processes_even_when_the_guard_was_acquired_earlier() {
+    use std::sync::atomic::Ordering;
+    let f = Fixture::new(None);
+    let (guard, calls, refuse_at) = controlled_voice_guard(&f.copy);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    calls.store(0, Ordering::SeqCst);
+    refuse_at.store(1, Ordering::SeqCst);
+    assert!(matches!(
+        prepare_announcement(&f.copy, &guard, f.request()),
+        Err(RecoveryError::VoiceProcessRunning)
+    ));
+    assert_eq!(f.bytes(), ORIGINAL);
+    assert!(!f.copy.root().join(".aurora/connect-voice-stage").exists());
+}
+
+#[test]
+#[ignore = "requires explicit pinned SVC artifact; process observations are controlled fixtures, no Java"]
+fn voice_confirmation_rechecks_before_executor_and_again_after_snapshot_work() {
+    use std::sync::atomic::Ordering;
+    let jar = PathBuf::from(
+        std::env::var_os("AURORA_CONNECT_ARTIFACT_DIR")
+            .expect("explicit local artifact directory required"),
+    )
+    .join("voicechat-fabric-1.21.1-2.6.22.jar");
+    let f = Fixture::new(Some(&jar));
+    let (guard, calls, refuse_at) = controlled_voice_guard(&f.copy);
+    // Application cannot reuse the earlier preparation result as proof of idle.
+    for refusal in [1, 2] {
+        refuse_at.store(0, Ordering::SeqCst);
+        let plan = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
+        let approval = plan.review().digest.clone();
+        calls.store(0, Ordering::SeqCst);
+        refuse_at.store(refusal, Ordering::SeqCst);
+        assert!(matches!(
+            plan.confirm(&f.copy, &guard, &approval),
+            Err(RecoveryError::VoiceProcessRunning)
+        ));
+        assert_eq!(f.bytes(), ORIGINAL);
+        assert!(!f.copy.root().join(".aurora/connect-voice-stage").exists());
+        assert!(recovery::list_points(&f.copy, guard.inner())
+            .unwrap()
+            .points
+            .is_empty());
+    }
+    refuse_at.store(0, Ordering::SeqCst);
+    let plan = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
+    let approval = plan.review().digest.clone();
+    let mut applied = plan.confirm(&f.copy, &guard, &approval).unwrap();
+    let announced = f.bytes();
+    calls.store(0, Ordering::SeqCst);
+    refuse_at.store(1, Ordering::SeqCst);
+    assert!(matches!(
+        applied.receipt.prepare_restore(&f.copy, &guard),
+        Err(RecoveryError::VoiceProcessRunning)
+    ));
+    calls.store(0, Ordering::SeqCst);
+    assert!(matches!(
+        applied
+            .receipt
+            .prepare_reconciled_restore(&f.copy, &guard, &digest(&announced)),
+        Err(RecoveryError::VoiceProcessRunning)
+    ));
+    assert_eq!(applied.receipt.state(), RestorationState::Ready);
+    // A late failure before starting restoration is cancellable; after CAS
+    // starts, retain the conservative recovery state even if target is intact.
+    for refusal in [1, 2, 3] {
+        refuse_at.store(0, Ordering::SeqCst);
+        let plan = applied.receipt.prepare_restore(&f.copy, &guard).unwrap();
+        let approval = plan.review().digest.clone();
+        calls.store(0, Ordering::SeqCst);
+        refuse_at.store(refusal, Ordering::SeqCst);
+        assert!(matches!(
+            plan.confirm(&f.copy, &guard, &approval),
+            Err(RecoveryError::VoiceProcessRunning)
+        ));
+        assert_eq!(f.bytes(), announced);
+        assert_eq!(
+            applied.receipt.state(),
+            if refusal < 3 {
+                RestorationState::Ready
+            } else {
+                RestorationState::NeedsRecovery
+            }
+        );
+        assert_eq!(
+            fs::read_dir(f.copy.root().join(".aurora/connect-voice-stage"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+    refuse_at.store(0, Ordering::SeqCst);
+    assert!(applied.receipt.prepare_restore(&f.copy, &guard).is_err());
+    assert_eq!(fs::read(f.source.root().join(CONFIG)).unwrap(), ORIGINAL);
 }

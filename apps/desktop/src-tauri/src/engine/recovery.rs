@@ -68,6 +68,12 @@ pub enum RecoveryError {
     NotFound,
     #[error("A recuperação requer o bloqueio exclusivo desta instância com o jogo fechado.")]
     WrongLock,
+    #[cfg(feature = "connect-voice-lab")]
+    #[error("O laboratório de voz exige fechar todos os processos Java antes de alterar a configuração. Nenhum processo foi encerrado pelo Aurora.")]
+    VoiceProcessRunning,
+    #[cfg(feature = "connect-voice-lab")]
+    #[error("Não foi possível verificar a ausência de processos Java. A alteração de voz foi bloqueada; nenhuma configuração foi aplicada por esta tentativa.")]
+    VoiceProcessUnavailable,
     #[error(
         "A instância ultrapassa o limite de recuperação: 30 mil arquivos ou 8 GiB protegidos."
     )]

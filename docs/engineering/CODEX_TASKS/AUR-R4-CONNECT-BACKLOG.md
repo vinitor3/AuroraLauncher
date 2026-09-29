@@ -37,6 +37,8 @@ Décimo incremento: consulta STATUS/pong limitada, com fixture independente atra
 
 Décimo primeiro incremento: plano separado para restaurar somente chaves próprias em arquivo regravado, com hash atual explícito e aprovação nova. SVC/Plasmo recusam conflito nas chaves; Plasmo valida árvore e preserva comentários ao retirar bloco criado. T-CONFIG-03 ganha provas locais de revisão/concorrência, mantendo pendentes caller com jogo parado, UI, roundtrip JVM, crash físico e recibo durável. Não amplia 006/007 a LAN/misto nem encerra os gates de voz. [Contrato](../../aurora-connect-voice.md#restauração-revisada-de-arquivo-regravado--décimo-primeiro-incremento).
 
+Décimo segundo incremento: adaptador exige guard opaco com verificação de qualquer Java padrão no Windows ao adquirir lock, preparar e confirmar, inclusive após snapshot/CAS. Cobre o bloqueio conservador do dedicado `-jar`; não interpreta credenciais e não encerra processo. Caller de produto/UI continua pendente, assim como corrida com início externo e JVM renomeada/embutida. [Contrato](../../aurora-connect-voice.md#verificação-de-processos-no-adaptador--décimo-segundo-incremento).
+
 ## 1. Evidência de partida e limites do inventário
 
 Leitura local feita em 29/09/2026, sem build, lançamento do jogo, conexão externa ou teste runtime. A existência de um símbolo ou de um teste no arquivo não equivale à execução desse teste.

@@ -23,6 +23,8 @@ Incrementos Connect posteriores acrescentaram adaptadores nativos SVC/Plasmo sob
 
 Arquivo de voz regravado pode usar revisão separada `prepare_reconciled_restore`: exige hash atual, valores próprios ainda aplicados e aprovação nova; preserva outras edições. Não chamar automaticamente após falha da restauração estrita. `Restored` nessa via significa chaves restauradas, não hash integral original. Consulta Minecraft `minecraft-status` no laboratório comprova somente STATUS/pong; não promove login/mundo/voz.
 
+APIs Connect de configuração exigem `VoiceMutationGuard`, adquirido com probe Windows de qualquer java/javaw antes/depois do lock e rechecado ao preparar/confirmar, inclusive após CAS. Não aceita guard recovery comum nem injeção pública. Não detecta JVM renomeada/embutida ou impede início externo após consulta. Soltar guard ao concluir a operação é necessário antes de lançar jogo; recibo pode permanecer em RAM. Não encerrar Java do usuário para satisfazer o gate.
+
 ## Mapa do repositório
 
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
