@@ -91,6 +91,22 @@ fn renderer_changes_only_existing_announcement_and_preserves_every_other_byte() 
 }
 
 #[test]
+fn svc_output_must_fit_the_same_bound_as_future_selective_restoration() {
+    let suffix = b"\nvoice_host=";
+    let mut input = vec![b'#'; MAX_CONFIG as usize - suffix.len()];
+    input.extend_from_slice(suffix);
+    assert_eq!(input.len(), MAX_CONFIG as usize);
+    assert!(matches!(
+        render_svc(&input, 65535),
+        Err(RecoveryError::Limit)
+    ));
+    let growth = b"127.0.0.1:65535".len();
+    input.drain(..growth);
+    let (output, _, _) = render_svc(&input, 65535).unwrap();
+    assert_eq!(output.len(), MAX_CONFIG as usize);
+}
+
+#[test]
 fn renderer_refuses_ambiguous_properties_unknown_syntax_and_missing_field() {
     for bytes in [
         b"voice_host=a\nvoice_host=b".as_slice(),
@@ -212,6 +228,7 @@ fn real_pinned_artifact_copy_uses_existing_preview_confirmation_undo_and_conflic
     assert!(
         plan.confirm(&f.copy, &guard, &approval)
             .unwrap()
+            .recovery
             .undo_available
     );
     assert_eq!(f.bytes(), render_svc(ORIGINAL, 35554).unwrap().0);
@@ -302,6 +319,7 @@ fn real_plasmo_artifact_can_change_or_add_announcement_with_approval_undo_and_is
             prepared
                 .confirm(&f.copy, &guard, &approval)
                 .unwrap()
+                .recovery
                 .undo_available
         );
         assert_eq!(f.bytes(), plasmo::render(original, 35554).unwrap().0);
@@ -345,4 +363,202 @@ fn real_plasmo_artifact_can_change_or_add_announcement_with_approval_undo_and_is
             Err(RecoveryError::UnsafePath)
         ));
     }
+}
+
+fn exercise_selective_restoration(voice_mod: VoiceMod, jar_name: &str, original: &[u8]) {
+    let jar = PathBuf::from(
+        std::env::var_os("AURORA_CONNECT_ARTIFACT_DIR")
+            .expect("explicit local artifact directory required"),
+    )
+    .join(jar_name);
+    assert_eq!(
+        recovery::hash_file(&jar).unwrap(),
+        (voice_mod.artifact().0.into(), voice_mod.artifact().1)
+    );
+    let f = Fixture::for_mod(Some(&jar), voice_mod, original);
+    let guard = acquire_instance_recovery_lock(&f.copy).unwrap();
+    let prepared = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
+    let approval = prepared.review().digest.clone();
+    let mut applied = prepared.confirm(&f.copy, &guard, &approval).unwrap();
+    let announced = f.bytes();
+    assert_eq!(applied.receipt.state(), RestorationState::Ready);
+
+    // Edits that predate the restoration review must survive. Removing the mod
+    // must not prevent cleaning up the exact bytes that we ourselves wrote.
+    fs::write(f.copy.root().join("options.txt"), b"renderDistance:19\n").unwrap();
+    fs::write(
+        f.copy.root().join("config/unrelated.json"),
+        br#"{"quality":7}"#,
+    )
+    .unwrap();
+    fs::rename(
+        f.copy.root().join("mods/voicechat.jar"),
+        f.copy.root().join("mods/voicechat.jar.disabled"),
+    )
+    .unwrap();
+    let point_ids = || {
+        recovery::list_points(&f.copy, &guard)
+            .unwrap()
+            .points
+            .into_iter()
+            .map(|point| point.id)
+            .collect::<Vec<_>>()
+    };
+    let points_before_cancel = point_ids();
+    let cancelled = applied.receipt.prepare_restore(&f.copy, &guard).unwrap();
+    assert!(matches!(
+        cancelled.review().action,
+        AnnouncementAction::RestoreOriginal { .. }
+    ));
+    assert_eq!(cancelled.review().source_sha256, digest(&announced));
+    assert_eq!(cancelled.review().replacement_sha256, digest(original));
+    let cancelled_id = cancelled.review().plan_id.clone();
+    drop(cancelled);
+    assert_eq!(applied.receipt.state(), RestorationState::Ready);
+    assert_eq!(point_ids(), points_before_cancel);
+    assert!(matches!(
+        recovery::restore(&f.copy, &guard, &cancelled_id),
+        Err(RecoveryError::StalePreview)
+    ));
+
+    let wrong = applied.receipt.prepare_restore(&f.copy, &guard).unwrap();
+    assert!(
+        matches!(
+            wrong.confirm(&f.copy, &guard, &approval),
+            Err(RecoveryError::StalePreview)
+        ),
+        "apply approval cannot authorize restore"
+    );
+    assert_eq!(applied.receipt.state(), RestorationState::Ready);
+
+    let other = Fixture::for_mod(Some(&jar), voice_mod, original);
+    let other_guard = acquire_instance_recovery_lock(&other.copy).unwrap();
+    assert!(matches!(
+        applied.receipt.prepare_restore(&other.copy, &other_guard),
+        Err(RecoveryError::Identity)
+    ));
+    assert_eq!(other.bytes(), original);
+    assert_eq!(applied.receipt.state(), RestorationState::Ready);
+    drop(other_guard);
+
+    let manifest = f.copy.root().join("aurora-instance.json");
+    let initial_manifest = fs::read(&manifest).unwrap();
+    fs::write(
+        &manifest,
+        br#"{"minecraft":"1.20.1","loader":"fabric","versionId":"1.20.1"}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        applied.receipt.prepare_restore(&f.copy, &guard),
+        Err(RecoveryError::Compatibility)
+    ));
+    assert_eq!(f.bytes(), announced);
+    assert_eq!(applied.receipt.state(), RestorationState::Ready);
+    fs::write(&manifest, initial_manifest).unwrap();
+
+    // A later unrelated edit still invalidates the prepared transaction; a new
+    // review must use the newer inventory instead of reverting it.
+    let stale = applied.receipt.prepare_restore(&f.copy, &guard).unwrap();
+    let restore_approval = stale.review().digest.clone();
+    fs::write(f.copy.root().join("options.txt"), b"renderDistance:21\n").unwrap();
+    assert!(matches!(
+        stale.confirm(&f.copy, &guard, &restore_approval),
+        Err(RecoveryError::StalePreview)
+    ));
+    assert_eq!(applied.receipt.state(), RestorationState::Ready);
+
+    let restored = applied.receipt.prepare_restore(&f.copy, &guard).unwrap();
+    let restore_approval = restored.review().digest.clone();
+    restored
+        .confirm(&f.copy, &guard, &restore_approval)
+        .unwrap();
+    assert_eq!(applied.receipt.state(), RestorationState::Restored);
+    assert_eq!(f.bytes(), original);
+    assert_eq!(
+        fs::read(f.copy.root().join("options.txt")).unwrap(),
+        b"renderDistance:21\n"
+    );
+    assert_eq!(
+        fs::read(f.copy.root().join("config/unrelated.json")).unwrap(),
+        br#"{"quality":7}"#
+    );
+    assert_eq!(
+        recovery::hash_file(&f.copy.root().join("mods/voicechat.jar.disabled")).unwrap(),
+        (voice_mod.artifact().0.into(), voice_mod.artifact().1)
+    );
+    assert!(!f.copy.root().join("mods/voicechat.jar").exists());
+    assert_eq!(
+        fs::read(f.source.root().join(voice_mod.config())).unwrap(),
+        original
+    );
+    assert!(applied.receipt.prepare_restore(&f.copy, &guard).is_err());
+
+    // A new receipt cannot erase even a comment added to its own file before
+    // restore is prepared. Put the test mod back solely for this new apply.
+    fs::rename(
+        f.copy.root().join("mods/voicechat.jar.disabled"),
+        f.copy.root().join("mods/voicechat.jar"),
+    )
+    .unwrap();
+    let prepared = prepare_announcement(&f.copy, &guard, f.request()).unwrap();
+    let approval = prepared.review().digest.clone();
+    let mut second = prepared.confirm(&f.copy, &guard, &approval).unwrap();
+    let second_announced = f.bytes();
+    let stale_target = second.receipt.prepare_restore(&f.copy, &guard).unwrap();
+    let restore_approval = stale_target.review().digest.clone();
+    let edited = [
+        second_announced.as_slice(),
+        b"\n# later independent comment\n",
+    ]
+    .concat();
+    fs::write(f.copy.root().join(voice_mod.config()), &edited).unwrap();
+    assert!(matches!(
+        stale_target.confirm(&f.copy, &guard, &restore_approval),
+        Err(RecoveryError::StalePreview)
+    ));
+    assert!(matches!(
+        second.receipt.prepare_restore(&f.copy, &guard),
+        Err(RecoveryError::StalePreview)
+    ));
+    assert_eq!(f.bytes(), edited);
+    assert_eq!(second.receipt.state(), RestorationState::Ready);
+
+    // Fixture-only fault injection after all approval checks: a regular file
+    // occupies the staging directory. Once the executor starts, an error must
+    // require recovery inspection instead of allowing a blind receipt retry.
+    fs::write(f.copy.root().join(voice_mod.config()), &second_announced).unwrap();
+    let stage = f.copy.root().join(".aurora/connect-voice-stage");
+    assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+    fs::remove_dir(&stage).unwrap(); // Empty, exact fixture directory only.
+    fs::write(&stage, b"fixture staging fault").unwrap();
+    let failed = second.receipt.prepare_restore(&f.copy, &guard).unwrap();
+    let restore_approval = failed.review().digest.clone();
+    assert!(failed.confirm(&f.copy, &guard, &restore_approval).is_err());
+    assert_eq!(second.receipt.state(), RestorationState::NeedsRecovery);
+    assert_eq!(f.bytes(), second_announced);
+    assert!(second.receipt.prepare_restore(&f.copy, &guard).is_err());
+    assert_eq!(
+        fs::read(f.copy.root().join("options.txt")).unwrap(),
+        b"renderDistance:21\n"
+    );
+}
+
+#[test]
+#[ignore = "requires explicit local pinned SVC artifact; no download or Java execution"]
+fn svc_selective_restoration_preserves_later_unrelated_edits_and_refuses_target_edits() {
+    exercise_selective_restoration(
+        VoiceMod::SimpleVoiceChat,
+        "voicechat-fabric-1.21.1-2.6.22.jar",
+        ORIGINAL,
+    );
+}
+
+#[test]
+#[ignore = "requires explicit local pinned Plasmo artifact; no download or Java execution"]
+fn plasmo_selective_restoration_removes_only_its_appended_block_and_preserves_later_edits() {
+    exercise_selective_restoration(
+        VoiceMod::PlasmoVoice,
+        "plasmovoice-fabric-1.21.1-2.1.17.jar",
+        b"[host]\nip = '127.0.0.1'\nport = 25565\n[voice]\nmtu_size = 1024",
+    );
 }

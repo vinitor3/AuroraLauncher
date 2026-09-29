@@ -29,6 +29,8 @@ Quinto incremento: feature nativa `connect-voice-lab` desligada por padrão, sem
 
 Sexto incremento: caminho do Plasmo fixado resolvido em tag/JAR; adaptador TOML limitado em cópia, com seleção explícita de mod/caminho/hash. 12 testes focados com os dois artefatos reais; suites feature 268 PASS/sete opt-in ignorados e padrão 258 PASS/cinco opt-in ignorados; fmt/clippy aprovados. Limites da saída append também testados. Voz continua sem homologação e desligada. Auditoria desktop identificou vulnerabilidade rustls preexistente para correção pontual em incremento separado. [Comandos, riscos e evidências](../../task-aur-r4-connect.md).
 
+Oitavo incremento: restauração seletiva do anúncio por recibo privado da aplicação, com nova aprovação e inventário atual. Preserva arquivos alheios modificados após aplicação, aceita limpeza após desabilitar o mod e recusa editar arquivo próprio divergente. Cancelar não publica ponto; erro após iniciar executor exige inspeção pela Recuperação. Recibo não sobrevive ao processo. Testes e limite de saída SVC no [domínio de voz](../../aurora-connect-voice.md#restauração-seletiva-do-anúncio--oitavo-incremento); não fecha os gates de crash/runtime/UI de T-CONFIG.
+
 ## 1. Evidência de partida e limites do inventário
 
 Leitura local feita em 29/09/2026, sem build, lançamento do jogo, conexão externa ou teste runtime. A existência de um símbolo ou de um teste no arquivo não equivale à execução desse teste.

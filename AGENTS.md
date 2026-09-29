@@ -19,6 +19,8 @@ Versão reconciliada nesta revisão: launcher `0.1.1-alpha.14`, Core `1.1.5`, Sk
 
 Use exatamente: `CONCLUÍDO`, `PARCIAL`, `PROTÓTIPO`, `IMPLEMENTADO MAS NÃO HOMOLOGADO`, `NÃO IMPLEMENTADO`, `LEGADO`, `RISCO`, `HIPÓTESE`, `NÃO VERIFICADO` e `PRECISA DE TESTE`.
 
+Incrementos Connect posteriores acrescentaram adaptadores nativos SVC/Plasmo sob `connect-voice-lab`, desligada por padrão, somente para cópias de diagnóstico verificadas. Aplicação confirmada e restauração seletiva reutilizam recovery; recibo de restauração é apenas de memória. Não há comando Tauri/UI nem homologação de jogo/voz. Preservar esses limites e consultar `docs/aurora-connect-voice.md` antes de integrar o caller/processos.
+
 ## Mapa do repositório
 
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.

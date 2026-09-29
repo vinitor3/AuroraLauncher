@@ -2,7 +2,7 @@
 
 ## Aurora Connect V2 — laboratório local de 29/09/2026
 
-Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, desligado para usuários. O núcleo desktop tem um adaptador de configuração SVC apenas opt-in/cópia de diagnóstico, sem comando ou interface. Base cumulativa alpha.14 (`5ac2f7e` sobre `6a107b8`), Core 1.1.5, Skins 0.3.1 e os nove pares preservados. Evidências e comandos no [task de execução](../task-aur-r4-connect.md); roteiro no [laboratório](../aurora-connect.md). A [matriz candidata por mod/versão/loader/hospedagem/rede](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) mantém os gates futuros. A matriz abaixo conserva todas as evidências anteriores; retransmissão Skins e testes sintéticos de transporte não homologam Connect em Minecraft.
+Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, desligado para usuários. O núcleo desktop tem adaptadores de configuração SVC/Plasmo apenas opt-in/cópia de diagnóstico, sem comando ou interface. Base cumulativa alpha.14 (`5ac2f7e` sobre `6a107b8`), Core 1.1.5, Skins 0.3.1 e os nove pares preservados. Evidências e comandos no [task de execução](../task-aur-r4-connect.md); roteiro no [laboratório](../aurora-connect.md). A [matriz candidata por mod/versão/loader/hospedagem/rede](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) mantém os gates futuros. A matriz abaixo conserva todas as evidências anteriores; retransmissão Skins e testes sintéticos de transporte não homologam Connect em Minecraft.
 
 | Capacidade | Evidência local | Estado e fronteira |
 | --- | --- | --- |
@@ -26,6 +26,8 @@ O quarto incremento Connect acrescentou inspeção dos JARs oficiais Fabric 1.21
 Quinto incremento: quatro testes focados SVC com fixture/JAR real, suíte nativa com feature e padrão aprovadas; padrão 258 PASS/cinco opt-in ignorados. Fmt/clippy nas duas configurações passaram. Reutiliza CAS/lock/identidade/journal/undo existentes, com alvo só persistido após aprovação; não amplia allowlist para aplicar à origem nem comprova jogo, áudio ou crash físico. [Escopo e comandos](../aurora-connect-voice.md#adaptador-nativo-svc-em-cópia-de-diagnóstico--quinto-incremento).
 
 Sexto incremento: adaptador Plasmo separado, mesmo gate opt-in; 12/12 focados com ambos os JARs reais, suíte feature 268 PASS/sete opt-in ignorados, padrão 258 PASS/cinco ignorados, fmt/clippy nas duas configurações. Caminho do artefato Fabric confirmado como `config/plasmovoice/server/config.toml`; substituição/adição do bloco, origem intacta, cancelamento, undo e conflito testados em fixtures. Sem nova célula runtime homologada. Auditoria desktop encontrou rustls antigo vulnerável, tratado como gate próprio; não herda o resultado do lock Connect.
+
+Oitavo incremento: recibo em memória restaura somente a própria configuração ainda inalterada, preparando a seleção no inventário atual para preservar outras edições. Recusa outra identidade/runtime, aprovação incorreta e alterações posteriores; falha do executor bloqueia retry. Provas próprias SVC/Plasmo e correção de limite da saída SVC, sem JVM/áudio. Restauração seletiva após reinício continua pendente. [Contrato e limites](../aurora-connect-voice.md#restauração-seletiva-do-anúncio--oitavo-incremento).
 
 ## Doctor, recuperação e cópias de teste — 29/09/2026
 

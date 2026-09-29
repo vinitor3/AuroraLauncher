@@ -25,6 +25,22 @@ type Result<T> = std::result::Result<T, RecoveryError>;
 
 #[path = "connect_voice_plasmo.rs"]
 mod plasmo;
+#[path = "connect_voice_restore.rs"]
+mod restoration;
+pub use restoration::{PreparedRestoration, RestorationReceipt, RestorationState};
+
+pub struct AppliedAnnouncement {
+    pub recovery: RecoveryResult,
+    /// Session-local selective restoration; dropping it never writes files.
+    pub receipt: RestorationReceipt,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AnnouncementAction {
+    SetAnnouncement,
+    RestoreOriginal { receipt_id: String },
+}
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +81,7 @@ pub struct AnnouncementRequest {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnnouncementReview {
+    pub action: AnnouncementAction,
     pub voice_mod: VoiceMod,
     pub plan_id: String,
     pub digest: String,
@@ -72,6 +89,7 @@ pub struct AnnouncementReview {
     pub before: String,
     pub after: String,
     pub source_sha256: String,
+    pub replacement_sha256: String,
     pub expires_at_ms: u64,
     pub warning: String,
 }
@@ -84,6 +102,8 @@ pub struct PreparedAnnouncement {
     voice_mod: VoiceMod,
     review: AnnouncementReview,
     replacement: Vec<u8>,
+    original: Vec<u8>,
+    runtime: BTreeMap<String, String>,
     fingerprint: String,
     instance_uuid: String,
     deadline: Instant,
@@ -98,6 +118,20 @@ impl PreparedAnnouncement {
         instance: &Instance,
         guard: &InstanceMutationGuard,
         approved_digest: &str,
+    ) -> Result<AppliedAnnouncement> {
+        // Construct the opaque receipt before commit. Never perform fallible I/O
+        // afterwards and accidentally report failure for a completed mutation.
+        let receipt = RestorationReceipt::from_plan(&self);
+        let recovery = self.apply(instance, guard, approved_digest, || {})?;
+        Ok(AppliedAnnouncement { recovery, receipt })
+    }
+
+    fn apply(
+        self,
+        instance: &Instance,
+        guard: &InstanceMutationGuard,
+        approved_digest: &str,
+        on_executor_begin: impl FnOnce(),
     ) -> Result<RecoveryResult> {
         if Instant::now() >= self.deadline || approved_digest != self.review.digest {
             return Err(RecoveryError::StalePreview);
@@ -110,6 +144,7 @@ impl PreparedAnnouncement {
         if current.fingerprint != self.fingerprint {
             return Err(RecoveryError::StalePreview);
         }
+        on_executor_begin();
         let _pins = recovery::check_guard(instance, guard)?;
         let stage = recovery::path(instance.root(), ".aurora/connect-voice-stage")?;
         fs::create_dir_all(&stage)?;
@@ -128,7 +163,14 @@ impl PreparedAnnouncement {
                     size: self.replacement.len() as u64,
                 }),
             )]),
-            "Anúncio de voz experimental na cópia de teste",
+            match &self.review.action {
+                AnnouncementAction::SetAnnouncement => {
+                    "Anúncio de voz experimental na cópia de teste"
+                }
+                AnnouncementAction::RestoreOriginal { .. } => {
+                    "Restaurar anúncio de voz da cópia de teste"
+                }
+            },
         );
         // Only our unique staging file; approved CAS/preview remains for audit/undo.
         let _ = fs::remove_file(staged);
@@ -204,6 +246,9 @@ fn render_svc(bytes: &[u8], port: u16) -> Result<(Vec<u8>, String, String)> {
     let after = format!("127.0.0.1:{port}");
     if before == after {
         return Err(RecoveryError::Integrity);
+    }
+    if bytes.len() - (end - start) + after.len() > MAX_CONFIG as usize {
+        return Err(RecoveryError::Limit);
     }
     let mut rendered = Vec::with_capacity(bytes.len() + after.len());
     rendered.extend_from_slice(&bytes[..start]);
@@ -283,25 +328,62 @@ pub fn prepare_announcement(
         VoiceMod::SimpleVoiceChat => render_svc(&bytes, request.guest_port)?,
         VoiceMod::PlasmoVoice => plasmo::render(&bytes, request.guest_port)?,
     };
+    prepare_change(
+        request.voice_mod,
+        current,
+        bytes,
+        replacement,
+        before,
+        after,
+        AnnouncementAction::SetAnnouncement,
+    )
+}
+
+fn prepare_change(
+    voice_mod: VoiceMod,
+    current: recovery::RecoveryObservation,
+    original: Vec<u8>,
+    replacement: Vec<u8>,
+    before: String,
+    after: String,
+    action: AnnouncementAction,
+) -> Result<PreparedAnnouncement> {
+    // Both directions must remain readable by the bounded restoration adapter.
+    if original.len() > MAX_CONFIG as usize || replacement.len() > MAX_CONFIG as usize {
+        return Err(RecoveryError::Limit);
+    }
     let expires_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| RecoveryError::Integrity)?
         .as_millis() as u64
         + 300_000;
+    let warning = match &action {
+        AnnouncementAction::SetAnnouncement => "Experimental, somente cópia dedicada Aurora. Todos os participantes precisam de ponte local; transporte, Java, instância e áudio não foram homologados. Não aplicar à origem por este adaptador.",
+        AnnouncementAction::RestoreOriginal { .. } => "Restauração experimental de um único arquivo na cópia de teste. Exige que ele ainda tenha os bytes aplicados; outras mudanças anteriores a este plano serão preservadas. O recibo não sobrevive ao encerramento do processo.",
+    };
     let mut review = AnnouncementReview {
-        voice_mod: request.voice_mod,
-        plan_id: Uuid::new_v4().to_string(), digest: String::new(), config_path: config.into(), before, after,
-        source_sha256: source.sha256.clone(), expires_at_ms,
-        warning: "Experimental, somente cópia dedicada Aurora. Todos os participantes precisam de ponte local; transporte, Java, instância e áudio não foram homologados. Não aplicar à origem por este adaptador.".into(),
+        action,
+        voice_mod,
+        plan_id: Uuid::new_v4().to_string(),
+        digest: String::new(),
+        config_path: voice_mod.config().into(),
+        before,
+        after,
+        source_sha256: digest(&original),
+        replacement_sha256: digest(&replacement),
+        expires_at_ms,
+        warning: warning.into(),
     };
     review.digest = digest(
         &serde_json::to_vec(&(&review, &current.instance_uuid, &current.fingerprint))
             .map_err(|_| RecoveryError::Integrity)?,
     );
     Ok(PreparedAnnouncement {
-        voice_mod: request.voice_mod,
+        voice_mod,
         review,
         replacement,
+        original,
+        runtime: current.runtime,
         fingerprint: current.fingerprint,
         instance_uuid: current.instance_uuid,
         deadline: Instant::now() + Duration::from_secs(300),

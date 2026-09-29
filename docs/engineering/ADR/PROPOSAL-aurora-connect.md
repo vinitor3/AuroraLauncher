@@ -80,6 +80,8 @@ Decisão limitada do quinto incremento: feature `connect-voice-lab` no núcleo, 
 
 Extensão do sexto incremento: selecionar mod explicitamente e reutilizar o mesmo gate/executor para Plasmo 2.1.17 no caminho derivado de tag/JAR `config/plasmovoice/server/config.toml`. Parser TOML 0.9.12 já transitivo passa a dependência opcional exata; spans cruzados com subset limitado preservam bytes. Bloco ausente só é acrescentado após prova de ausência de colisão, reparse e comparação semântica. Sem outro writer genérico, sem integração de áudio ou comando Tauri. [Provas separadas de Plasmo](../../aurora-connect-voice.md#adaptador-nativo-plasmo--sexto-incremento).
 
+Decisão do oitavo incremento: desfazer o anúncio usa recibo privado da aplicação bem-sucedida e prepara nova seleção de um único arquivo a partir do inventário atual. Não usar undo de snapshot antigo como limpeza de sessão, pois pode restaurar mudanças alheias. Cancelar não escreve; confirmação própria revalida estado; falha após iniciar executor exige recuperação antes de qualquer retry. Recibo em RAM não oferece retomada seletiva após restart, e encerramento de transporte não aprova mutação. [Contrato e testes](../../aurora-connect-voice.md#restauração-seletiva-do-anúncio--oitavo-incremento).
+
 ## Decisões pendentes e condições de aceitação
 
 1. Inventário real e versão fixada: compilador, runtime, dependências transitivas, código já existente e gate R4. Não promover pesquisa a implementação.
