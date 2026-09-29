@@ -161,6 +161,8 @@ A ordem é ajustável ao bloqueio real. É útil investigar APIs/endereço dos m
 | Rollback | Desligar entrada experimental, revogar sessões, fechar recursos, restaurar somente config própria com comparação de estado. Preservar launcher normal, login lembrado/sessões independentes, Assistente e instalação de conteúdo. |
 | Estado/evidência | **NÃO IMPLEMENTADO**; INV-03 comprova contratos existentes examinados, não integração Connect. Auto-join/LAN/convites/voz **NÃO VERIFICADO**. |
 
+Avanço experimental em 005: produtor de consulta STATUS/ping e comando `minecraft-status` no laboratório, com limites, erros redigidos e resumo sem dados de jogadores/texto. Host/Guest reais encaminham a consulta até fixture independente; CLI também exercitada. Não conclui T-MC-01 de servidor Minecraft real, não faz login/auto-join/LAN, nem substitui os critérios de convites/interface desta tarefa. [Contrato delimitado](../AURORA_CONNECT_SPEC.md#91-produtor-experimental-de-status-tcp).
+
 ### AUR-R4-006 — Simple Voice Chat, isoladamente
 
 | Campo | Contrato da tarefa |

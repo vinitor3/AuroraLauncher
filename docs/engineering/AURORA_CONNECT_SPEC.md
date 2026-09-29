@@ -220,6 +220,12 @@ Fluxo: preparar servidor/mundo → criar sessão → autorizar convidado → neg
 
 Erros distintos conforme evidência: mod ausente, versão não homologada, endereço não configurável, porta ocupada, serviço recusando conexão, credencial inválida, datagrama grande, quota explícita, relay indisponível e conectividade não estabelecida. Timeout genérico não vira diagnóstico “CGNAT restritivo”. Se apenas jogo funcionar, exibir voz indisponível e instrução específica; não declarar sessão integralmente homologada.
 
+### 9.1 Produtor experimental de status TCP
+
+O laboratório acrescenta `probe_minecraft_status`/CLI `minecraft-status`, independente do desktop. Requisita STATUS e ping por listener loopback explicitamente indicado, sem login/conta/JVM. Validação de framing/JSON/schema externo e pong exato precede o resumo de protocolo relatado, contagens e durações. Prazo total limitado a cinco segundos, JSON até 64 KiB/32.767 unidades UTF-16, sem retries/DNS, redigindo texto/imagens/identidades. `protocolMatchesRequested` é comparação de números, não compatibilidade de mods ou prova de login. Descrição recebe validação de forma externa, sem interpretar o dialeto completo de componentes Minecraft.
+
+A consulta sozinha não autentica a propriedade do listener local: integração deve combinar sua resposta com a sessão/ponte Guest autenticada correspondente. Uma fixture através de Host/Guest prova encadeamento de desenvolvimento, não runtime Minecraft. Não produzir `jogador no mundo` ou `voz validada` a partir desse evento. Fontes versionadas, limites e procedimento runtime ainda pendente em [laboratório](../aurora-connect.md#consulta-de-status-de-jogo-pelo-listener-tcp--experimental).
+
 ## 10. Validação, incrementalidade e liberação
 
 Ordem candidata: inventário/ADR → TCP autenticado → UDP simultâneo controlado → redes reais/relay verificado → Minecraft/convites/estados → SVC e Plasmo separadamente → robustez, manifesto e liberação. Reordenar se código/evidência mostrar incremento já pronto ou bloqueio mais importante; não refazer recovery/Doctor/Tools alpha.14. Testes completos e tarefas estão no [backlog](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md).

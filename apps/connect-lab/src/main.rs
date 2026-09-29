@@ -45,6 +45,36 @@ async fn until_stop(seconds: u64) {
     }
 }
 
+async fn minecraft_status(args: &[String]) -> Result<()> {
+    use aurora_connect_lab::{
+        MAX_MINECRAFT_STATUS_TIMEOUT, MinecraftStatusError, MinecraftStatusRequest,
+        probe_minecraft_status,
+    };
+    if args.len() != 4 {
+        return Err(MinecraftStatusError::InvalidRequest.into());
+    }
+    let request = MinecraftStatusRequest {
+        endpoint: args[0]
+            .parse()
+            .map_err(|_| MinecraftStatusError::InvalidRequest)?,
+        handshake_host: args[1].clone(),
+        handshake_port: args[2]
+            .parse()
+            .map_err(|_| MinecraftStatusError::InvalidRequest)?,
+        protocol: args[3]
+            .parse()
+            .map_err(|_| MinecraftStatusError::InvalidRequest)?,
+        timeout: MAX_MINECRAFT_STATUS_TIMEOUT,
+    };
+    let summary = probe_minecraft_status(request).await?;
+    event(
+        json!({"event":"minecraft_status_received", "summary":summary,
+        "evidence":"status_and_matching_pong_only", "runtimeHomologated":false,
+        "worldJoined":false, "voice":"not_tested"}),
+    );
+    Ok(())
+}
+
 fn duration(arg: &str) -> Result<u64> {
     let n: u64 = arg.parse()?;
     if !(10..=3600).contains(&n) {
@@ -379,6 +409,7 @@ async fn main() {
         Some("plan") => plan(&args[1..]),
         Some("host-plan") => host_plan(&args[1..]).await,
         Some("guest") => guest(&args[1..]).await,
+        Some("minecraft-status") => minecraft_status(&args[1..]).await,
         Some("echo") => echo(&args[1..], false).await,
         Some("echo-downstream") => echo(&args[1..], true).await,
         Some("probe") | Some("probe-downstream") => {
@@ -394,7 +425,7 @@ async fn main() {
         }
         _ => {
             println!(
-                "EXPERIMENTAL - no launcher integration, keys only in memory\nhost <quic-bind> <approved-tcp-target> <approved-udp-target> <seconds>\nplan <local-service-plan.json>\nhost-plan <local-service-plan.json> <approved-sha256>\nguest <host-public-id> <host-direct-address> <session-id> <local-tcp> <local-udp> <seconds>\necho <loopback-tcp> <loopback-udp> <seconds>\nprobe <loopback-tcp> <loopback-udp>\necho-downstream / probe-downstream: same arguments, controlled asymmetric UDP test only\nUse stop on stdin or Ctrl+C to end. See docs/aurora-connect.md."
+                "EXPERIMENTAL - no launcher integration, keys only in memory\nhost <quic-bind> <approved-tcp-target> <approved-udp-target> <seconds>\nplan <local-service-plan.json>\nhost-plan <local-service-plan.json> <approved-sha256>\nguest <host-public-id> <host-direct-address> <session-id> <local-tcp> <local-udp> <seconds>\necho <loopback-tcp> <loopback-udp> <seconds>\nprobe <loopback-tcp> <loopback-udp>\nminecraft-status <loopback-tcp-bridge> <handshake-host> <handshake-port> <protocol-number>\necho-downstream / probe-downstream: same arguments, controlled asymmetric UDP test only\nUse stop on stdin or Ctrl+C to end. See docs/aurora-connect.md."
             );
             Ok(())
         }
@@ -407,6 +438,11 @@ async fn main() {
             .or_else(|| {
                 error
                     .downcast_ref::<aurora_connect_lab::PlanError>()
+                    .map(ToString::to_string)
+            })
+            .or_else(|| {
+                error
+                    .downcast_ref::<aurora_connect_lab::MinecraftStatusError>()
                     .map(ToString::to_string)
             })
             .unwrap_or_else(|| "lab_operation_failed".into());

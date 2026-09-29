@@ -30,6 +30,20 @@ Saída esperada: JSON `result=PASS`, `agents=2`, `topology=same_machine_loopback
 
 Com `-AuthorizedDownstream`, o script cria um plano sintético próprio em `.aurora/connect-validation`, confere preview/hash, comprova recusa de hash não aprovado antes de iniciar o host e só então autoriza o peer do ensaio. O endpoint controlado responde oito datagramas de 512 bytes para cada pedido de um byte. Resultado esperado: duas origens, dois pedidos, 2 bytes enviados, 8.192 recebidos em 16 respostas íntegras, além do mesmo TCP. Os tempos são pedido–cada resposta, não RTT de cada pacote. A fixture permanece ignorada e inalterada; nenhuma configuração pessoal ou chave é persistida.
 
+## Consulta de status de jogo pelo listener TCP — experimental
+
+`minecraft-status <loopback-tcp-bridge> <handshake-host> <handshake-port> <protocol-number>` faz uma conexão TCP local, handshake com intenção STATUS, pedido de status e ping/pong correspondente. Não faz login, abre LAN, entra no mundo ou envia credenciais. O host do handshake é dado do protocolo para roteamento virtual: não é resolvido por DNS nem muda o endereço de conexão. O listener por si só não prova autenticação Connect; o caller deve associá-lo à ponte autenticada e à sessão corretas.
+
+Limites: timeout total de cinco segundos na CLI, JSON até 64 KiB e 32.767 unidades UTF-16, framing conferido antes de alocar, sem retries. Recusa destino externo/porta zero, host acima de 253 bytes ou com caracteres de forwarding/controles, protocolo zero/negativo, VarInt inválido, frame/tipo errado, truncamento e pong divergente. Não interpreta eventos de rich text nem decodifica favicon. Resumo contém somente protocolo informado/relatado, igualdade, contagens relatadas e durações; nenhum MOTD, nome/UUID de jogador, imagem ou host é retornado. As contagens são dados declarados pelo servidor.
+
+Um teste usa Host/Guest reais e uma fixture de protocolo independente no destino TCP; outro executa a CLI. A fixture não é Minecraft. O comando abaixo é um **procedimento preparado para runtime ainda pendente**: pressupõe um servidor já autorizado no destino de `game`, bridge existente em `127.0.0.1:42010`, handshake local `localhost:25565` e par 1.21.1. Não executar sobre o endpoint echo, que não responde ao protocolo de status.
+
+    ./apps/connect-lab/target/debug/aurora-connect-lab.exe minecraft-status 127.0.0.1:42010 localhost 25565 767
+
+Sucesso emite `minecraft_status_received` após status e pong válidos, com `runtimeHomologated=false` e `worldJoined=false`; diferença de protocolo fica explícita. A consulta fecha sua conexão ao concluir/falhar/cancelar e não encerra outras conexões do túnel. O encerramento do host/convidado segue `stop`/Ctrl+C/prazo. Sem mutação, arquivos ou snapshot adicional. Comandos/resultados efetivamente executados estão no [task](task-aur-r4-connect.md).
+
+Referências de wire consultadas em 29/09/2026: [MCProtocolLib fixado para 1.21/protocolo 767](https://github.com/GeyserMC/MCProtocolLib/blob/e71d7df8c127b7196fd81dd392034d7d97acbb4e/protocol/src/main/java/org/geysermc/mcprotocollib/protocol/codec/MinecraftCodec.java), [handshake na revisão consultada](https://github.com/GeyserMC/MCProtocolLib/blob/19783c29ece24bc3f07f8ff08628549527e3de20/protocol/src/main/java/org/geysermc/mcprotocollib/protocol/packet/handshake/serverbound/ClientIntentionPacket.java) e [registro 1.21.1/protocolo 767](https://github.com/PrismarineJS/minecraft-data/blob/d56346a4e32defcd28d9ba6750957c12001e78d6/data/pc/1.21.1/version.json). Não adiciona nenhuma dessas bibliotecas, nova versão à matriz ou homologação de mod.
+
 ## Plano explícito de serviços do laboratório
 
 O comando convencional `host` mantém `ReplyBudget`. Para autorizar o perfil assimétrico, `plan` lê um JSON local de até 16 KiB, apresenta o estado antes/depois e seu SHA-256. `host-plan` exige esse hash, relê os bytes e recusa qualquer diferença antes de abrir transporte. A revisão é dos bytes exatos, incluindo BOM/espaços. Depois do hash, ainda é obrigatório autorizar o peer público mostrado pelo convidado. Chaves privadas e a sessão são novas a cada execução.
@@ -58,7 +72,7 @@ Após revisar destinos, orçamento, prazo e hash, iniciar e autorizar o convidad
 & $lab host-plan $planFile $review.hash
 ```
 
-O convidado usa o comando `guest` existente. Para este endpoint sintético, executar `probe-downstream` em vez de `probe`. Encerrar por `stop`, Ctrl+C ou prazo. Estes comandos de plano não escrevem configurações; não existe snapshot de configuração pessoal a restaurar. Um futuro adaptador que edite propriedades/TOML terá fluxo próprio de autorização, snapshot/journal e recuperação. O plano contém destinos para revisão local; não compartilhar esse JSON como log sanitizado.
+O convidado usa o comando `guest` existente. Para este endpoint sintético, executar `probe-downstream` em vez de `probe`. Encerrar por `stop`, Ctrl+C ou prazo. Estes comandos de plano não escrevem configurações; não existe snapshot de configuração pessoal a restaurar. Os adaptadores nativos opt-in de propriedades/TOML em cópias de diagnóstico têm fluxo próprio de autorização, snapshot/journal e recuperação; esse plano de serviços não os autoriza. O plano contém destinos para revisão local; não compartilhar esse JSON como log sanitizado.
 
 ## Ensaio em dois computadores — preparado, ainda não executado
 
