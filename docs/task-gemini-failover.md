@@ -8,7 +8,7 @@ Base: `a3325b5` (launcher alpha.13), branch `codex/aur-gemini-failover`, na work
 
 Consultas reais apresentaram indisponibilidade intermitente do Flash e recusa de uma credencial. Adicionar chaves não garante capacidade nem corrige uma autorização recusada. O usuário autorizou explicitamente Flash-Lite como último recurso, mantendo Flash como primeira opção.
 
-Assistente, Doctor, Tools e tradução passam pelo mesmo transporte. A seleção usa até três secrets opcionais (`GEMINI_API_KEY`, `GEMINI_API_KEY_2`, `GEMINI_API_KEY_3`), com remoção de espaços nas extremidades e deduplicação de valores. `GEMINI_KEY_ORDER` aceita somente uma sequência de slots 1–3, sem repetição; configuração inválida falha antes do provedor. A configuração preparada para produção é `1,2`. O slot 3 permanece excluído após 403 e só deve ser reativado depois de corrigida e validada sua autorização.
+Assistente, Doctor, Tools e tradução passam pelo mesmo transporte. A seleção usa até três secrets opcionais (`GEMINI_API_KEY`, `GEMINI_API_KEY_2`, `GEMINI_API_KEY_3`), com remoção de espaços nas extremidades e deduplicação de valores. `GEMINI_KEY_ORDER` aceita somente uma sequência de slots 1–3, sem repetição; configuração inválida falha antes do provedor. A configuração publicada em produção é `1,2`. O slot 3 permanece excluído após 403 e só deve ser reativado depois de corrigida e validada sua autorização.
 
 `gemini-flash-latest` é a primeira opção; ausência do alias permite `gemini-3.8-flash`. `GEMINI_FALLBACK_MODEL=gemini-flash-lite-latest` habilita a alternativa explicitamente aprovada. Ausência do alias Lite permite `gemini-3.5-flash-lite`. O modelo efetivamente retornado continua validado. Decisão: [ADR-026](engineering/ADR/ADR-026-bounded-gemini-failover.md).
 
@@ -53,7 +53,9 @@ Os tempos por tentativa não incluem toda a espera entre chamadas. A proposta re
 | Suíte final Worker | **CONCLUÍDO**: 155 testes passaram |
 | `npm --prefix apps/edge-proxy run check` | **CONCLUÍDO**: dry-run passou |
 | Preview do fluxo final com ordem `1,2` e fallback Lite | **CONCLUÍDO** no escopo sintético: Assistente, Doctor e Tools responderam conforme as tentativas acima; não comprova produção autenticada |
-| Deploy desta alteração em produção e verificação posterior | **NÃO VERIFICADO**: pendente; registrar versão do Worker e resultados sem dados privados |
+| Deploy desta alteração em produção | **CONCLUÍDO**: fonte `cab7bb1`, versão Worker `37d71a4c-1253-4950-bb2f-477209194f02`; ordem `1,2`, Lite habilitado |
+| Saúde e proteção das rotas após deploy | **CONCLUÍDO**: `/health` retornou 200 e revisão `2026-09-29-gemini-key-failover-v1`; as quatro rotas POST recusaram chamadas sem sessão com 401 e código `session`; os três nomes de secrets continuam presentes |
+| Chamada autenticada em produção | **NÃO VERIFICADO**: a tentativa de criar sessão anônima temporária no Firebase retornou `ADMIN_ONLY_OPERATION` (HTTP 400). Nenhuma conta de teste foi criada; configurações de autenticação não foram alteradas |
 | Estabilidade continuada, conta real no desktop e resposta de cada superfície | **NÃO VERIFICADO** |
 
 Falha de Gemini continua preservando o Doctor local e o texto original da tradução. A mudança não executa propostas, não modifica instâncias e não altera o broker de confirmação. O histórico da entrega alpha.13 permanece em [task-ai-tools.md](task-ai-tools.md).

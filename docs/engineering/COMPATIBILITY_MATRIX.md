@@ -2,7 +2,7 @@
 
 ## Failover Gemini no Worker — 29/09/2026
 
-Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Base `a3325b5`, cliente alpha.13 existente, Core 1.1.5 e Skins 0.3.1 preservados. O Worker limita tentativas entre chaves e oferece Flash-Lite explicitamente autorizado como último recurso, com prazo e orçamento compartilhados. Tradução usa o mesmo transporte; contratos desktop e confirmação local permanecem iguais. Não exige novo instalador nem altera os 18 JARs ou a matriz Minecraft/loader/Java. Provas pontuais de preview não demonstram estabilidade; publicação e validação do fluxo final estão registradas como pendentes em [task-gemini-failover.md](../task-gemini-failover.md).
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Base `a3325b5`, cliente alpha.13 existente, Core 1.1.5 e Skins 0.3.1 preservados. O Worker limita tentativas entre chaves e oferece Flash-Lite explicitamente autorizado como último recurso, com prazo e orçamento compartilhados. Tradução usa o mesmo transporte; contratos desktop e confirmação local permanecem iguais. Não exige novo instalador nem altera os 18 JARs ou a matriz Minecraft/loader/Java. Publicado na revisão `2026-09-29-gemini-key-failover-v1`, com saúde e proteção de sessão verificadas. Preview respondeu com Gemini real; chamada autenticada em produção permanece **NÃO VERIFICADO**, pois Firebase recusou sessão anônima de teste. Evidências em [task-gemini-failover.md](../task-gemini-failover.md).
 
 ## Gemini e ações locais confirmadas — 28/09/2026
 

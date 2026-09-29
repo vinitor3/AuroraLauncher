@@ -8,7 +8,7 @@ Consultas reais alternaram entre respostas válidas, indisponibilidade e credenc
 
 ## Decisão
 
-Compartilhar o transporte entre Assistente, Doctor, Tools e tradução. Aceitar três secrets opcionais, com trim/deduplicação, e uma ordem explícita estrita de slots. A configuração preparada é `GEMINI_KEY_ORDER=1,2`; o terceiro slot recusado permanece excluído até validação de sua autorização.
+Compartilhar o transporte entre Assistente, Doctor, Tools e tradução. Aceitar três secrets opcionais, com trim/deduplicação, e uma ordem explícita estrita de slots. A configuração publicada é `GEMINI_KEY_ORDER=1,2`; o terceiro slot recusado permanece excluído até validação de sua autorização.
 
 Tentar Flash primeiro e limitar a consulta a quatro chamadas. Quando `GEMINI_FALLBACK_MODEL=gemini-flash-lite-latest` estiver habilitado, limitar a fase Flash a 20 segundos e até três chamadas, reservando orçamento para Lite no prazo global de 35 segundos. Aliases ausentes podem usar os modelos explícitos permitidos. Configuração de modelo não permitida falha antes do provedor.
 
