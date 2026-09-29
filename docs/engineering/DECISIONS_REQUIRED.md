@@ -22,10 +22,10 @@ Somente decisões que mudam contrato público ou direitos permanecem aqui. O res
 
 ## D-003 — estratégia de fallback multiplayer
 
-**Decisão registrada: sim.**
+**Decisão de produto revisada em 29/09/2026 por requisito explícito Aurora Connect V2.** A decisão anterior aceitava direto e providers opcionais. A revisão esclarece relay gratuito permitido, transporte TCP/UDP e compatibilidade individual com Simple Voice Chat/Plasmo Voice, sem criar voz própria.
 
-**Escopo aprovado para a primeira versão:** usar conexão direta e providers externos opcionais (e4mc/World Host/playit/BYO), sem relay Aurora e sem garantia universal.
+**Escopo vigente:** direto preferido; relay gratuito só após verificar termos, integração, quotas, autenticação e uso pretendido. Nenhuma dependência de produção é aprovada apenas por funcionar em teste. Proibidos gasto obrigatório/automático, billing ativado por esta tarefa e excedente cobrável sem bloqueio efetivo. Relay próprio obrigatório permanece adiado; o usuário não precisa hospedá-lo para cumprir o MVP. Sem caminho permitido, falha clara, sem fallback pago silencioso ou promessa universal.
 
-**Recomendação:** sim. Isso mantém custo obrigatório zero e permite medir taxa direta, latência e demanda. Usuário escolhe/autoriza o provider; nenhum serviço externo vira dependência oculta.
+**Proposta técnica, ainda não decisão aceita:** avaliar Iroh primeiro; comparar Quinn com conectividade compatível e manter e4mc/World Host como PoCs/referências conforme TCP/UDP/voz/custo. Processo auxiliar Go só por vantagem concreta. A proposta e as pendências estão na [ADR sem número](ADR/PROPOSED-aurora-connect-transport.md); termos e aprovações por ambiente em [dependências](AURORA_CONNECT_DEPENDENCIES.md).
 
-**Se não:** a feature deve esperar orçamento/operador para relay, proteção antiabuso, privacidade, monitoramento e suporte.
+**Decisões pendentes:** versão/biblioteca após PoC, sinalização de produto, eventual relay gratuito sustentável de distribuição, versões/artefatos dos mods e adaptação por participante. Ausência de relay aprovado preserva modo direto limitado; não implica contratar infraestrutura. A revisão documental não habilita feature, serviço ou faturamento.

@@ -1,5 +1,7 @@
 # Engenharia Aurora
 
+Revisão documental de 29/09/2026: [Aurora Connect V2 — diagnóstico e sete entregáveis em ordem](AURORA_CONNECT_REVIEW.md). O [Master Roadmap](MASTER_ROADMAP.md) permanece canônico e completo; Connect não está implementado/homologado por esta revisão.
+
 Escopo vigente em 21/09/2026: **O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados.** Consulte o [mapa de consumidores e validação](../task-remove-companion.md), a [ADR-018](ADR/ADR-018-remove-companion-keep-desktop-assistant.md) e o [IPC do Core](../core-ipc.md). Auditorias de agosto/setembro conservam resultados históricos; não são autorização para restaurar o mod.
 
 ## Mudança de segurança preparada nesta branch

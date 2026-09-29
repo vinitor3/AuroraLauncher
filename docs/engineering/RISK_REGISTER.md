@@ -15,7 +15,7 @@
 | R-010 | P1 | supply chain/update malicioso | sem updater assinado/SBOM/pinning completo | updater fail-closed, hashes, assinatura, dependency review |
 | R-011 | P1 | prompt injection/excessive agency | chat recebe logs/web; Tools planejadas | broker tipado, least privilege, confirmação, auditoria e red-team |
 | R-012 | P1 | Loom/Gradle obsoletos | warning de Loom 1.3 e Gradle 9 | upgrade isolado; reconstruir e testar cada linha |
-| R-013 | P1 | relay P2P próprio viola custo zero | relay consome tráfego/abuso/operação | PoC e4mc/World Host; sem SLA e sem relay Aurora agora |
+| R-013 | P1 | relay ou serviço auxiliar cria dependência de custo/termos não verificados | relay consome tráfego/abuso/operação; software livre não garante infraestrutura gratuita | direto preferido; relay gratuito permitido após verificação por uso; nenhum relay de produção aprovado; excedente cobrável sem bloqueio efetivo fica desabilitado; relay próprio obrigatório adiado. Ver [dependências V2](AURORA_CONNECT_DEPENDENCIES.md) |
 | R-014 | P2 | bucket de aparência público | URL vazada é acessível; 1 GB/egress limitado | retenção, remoção, chaves aleatórias e migração opcional R2 |
 | R-015 | P2 | nonce IPC observável no argv | propriedade JVM é visível a processo local | single-client, TTL, vínculo ao processo e canal herdado futuro |
 | R-016 | P2 | Edge TTS não oficial/instável | teste depende de serviço externo e está ignored | fallback sem voz, aviso de privacidade e adaptador substituível |

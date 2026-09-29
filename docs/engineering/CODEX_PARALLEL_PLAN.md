@@ -1,5 +1,7 @@
 # Plano de execução paralela Codex
 
+Nota de vigência — 29/09/2026: branches/SHAs citados abaixo são o baseline histórico desse plano, não autorização para voltar a uma base antiga. Revalidar `AGENTS.md`, HEAD, status e matriz ativa antes de cada wave. Aurora Connect V2 acrescenta [backlog R4](AURORA_CONNECT_BACKLOG.md), preservando gates e ownership existentes.
+
 Este plano é executável por worktrees locais. A branch atual `docs/aur-r0-engineering-plan` contém apenas a baseline/planejamento e o patch de regra ainda não implantado. Nenhum agente deve trabalhar diretamente em `main`.
 
 ## Regras comuns
@@ -47,7 +49,7 @@ Ordem candidata:
 | Frontend | AUR-R1-003 | `App.tsx` e novos módulos feature/service | R0 verde; ownership exclusivo de `App.tsx` |
 | Rust filesystem | AUR-R1-004 | executor de download/substituição e testes | R0 verde; contrato coordenado com R1-001 |
 
-R1-001 e R1-004 podem tocar módulos Rust próximos; Integration Agent deve separar ownership por arquivo antes do spawn. HUD começa somente depois do harness.
+R1-001 e R1-004 podem tocar módulos Rust próximos; Integration Agent deve separar ownership por arquivo antes do spawn. A antiga previsão de HUD foi retirada pela ADR-018: o harness valida Assistente desktop e Core/Skins, sem Companion nem Assistente in-game.
 
 ## Política de worktrees
 

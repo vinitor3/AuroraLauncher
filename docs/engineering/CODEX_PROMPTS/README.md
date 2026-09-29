@@ -9,3 +9,4 @@ Use exatamente um prompt por task/worktree. Todos partem do mesmo baseline e dev
 
 Não iniciar R1 antes do `GO` do QA da Wave 0.
 
+Prompt posterior, sem alterar a prioridade/gates acima: [Aurora Connect V2 — inventário e primeiro incremento seguro](AUR-R4-connect-v2.md). É autossuficiente, exige implementação pequena na futura execução e mantém PoC local experimental separada da liberação de R4. Esta revisão de 29/09/2026 entrega somente documentação.

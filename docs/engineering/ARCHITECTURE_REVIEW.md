@@ -67,7 +67,7 @@ O modelo propõe chamadas; nunca executa. O broker valida schema, capability, ra
 
 ### Master e multiplayer
 
-Master só começa depois de manifesto v3, roles e auditoria. Multiplayer separa descoberta/convite, autenticação de sessão e transporte. O IPC local nunca vira canal remoto. O primeiro experimento mede e4mc e World Host sem acoplar Aurora a relay próprio.
+Master só começa depois de manifesto v3, roles e auditoria. Multiplayer separa descoberta/convite, autenticação de sessão e transporte. O IPC local nunca vira canal remoto. A revisão [Aurora Connect V2](AURORA_CONNECT_SPEC.md) propõe registro de serviços autorizados, ponte de bytes TCP e ponte UDP bidirecional com retorno por participante/associação; inclui transporte de Simple Voice Chat e Plasmo Voice, sem criar voz própria. Avaliar Iroh primeiro, comparar Quinn e medir e4mc/World Host conforme escopo real; nenhum transporte foi implementado por essa revisão. Direto preferido, relay gratuito condicionado a termos/uso/quotas verificados, sem gasto obrigatório/automático e sem infraestrutura própria obrigatória. Gates anteriores e retirada Companion/HUD permanecem.
 
 ## Princípios
 

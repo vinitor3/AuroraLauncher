@@ -4,6 +4,8 @@
 
 Pesquisa encerrada em 2026-08-30. Foram priorizadas documentação oficial, repositórios dos autores, RFCs e termos dos provedores. “Referência” abaixo significa estudar contratos e comportamento; não autoriza copiar código, marca ou ativo.
 
+Atualização de autoridade, 29/09/2026: a pesquisa de multiplayer abaixo é histórica. A [especificação Aurora Connect V2](AURORA_CONNECT_SPEC.md) e a [matriz de dependências](AURORA_CONNECT_DEPENDENCIES.md) registram a nova consulta oficial. TCP/UDP e compatibilidade de Simple Voice Chat e Plasmo Voice integram R4; a menção antiga a “voz futura” não os exclui. Relay gratuito verificado é permitido; gasto obrigatório/automático e relay próprio obrigatório permanecem fora do plano. Tiers, números e versões abaixo não constituem aprovação atual.
+
 ## Conclusões executivas
 
 1. O custo obrigatório inicial pode permanecer em zero usando GitHub Releases/Actions, limites rígidos dos free tiers e degradação local. “Grátis” não significa ilimitado ou com SLA.

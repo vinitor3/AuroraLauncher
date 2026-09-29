@@ -1,0 +1,139 @@
+# Prompt executável — Aurora Connect V2
+
+Copie o conteúdo deste documento para a tarefa de implementação. Ele é autossuficiente quanto ao escopo e às restrições; os documentos referenciados acrescentam os contratos detalhados e devem ser lidos na base atual. Esta entrega que gerou o prompt foi somente documental; a autorização de implementar abaixo vale para a tarefa posterior em que o prompt for executado.
+
+## Missão e resultado obrigatório
+
+Atue como arquiteto e implementador do Aurora Launcher. Audite o código de forma focal, refine o plano com evidências e execute um incremento pequeno, funcional e verificável do Aurora Connect, nome de trabalho da camada de conectividade. Não entregue apenas sugestões. Não tente concluir R4 inteira em uma tarefa. Não publique infraestrutura, faça push, abra publicação/release, contrate serviço, habilite faturamento ou gere instalador. Preserve alterações locais e trabalho de outros agentes. Não use reset destrutivo, limpeza de diretórios ou substituição de branch para facilitar a tarefa.
+
+Se não houver transporte de jogo, comece pela menor ponte TCP autenticada, com dois agentes, destino controlado, teste reproduzível e fronteiras concretas para UDP. Deixe contrato UDP, capability negociada, erro de indisponibilidade, tamanho máximo e casos de teste especificados; não aceite um `TODO UDP` como cobertura. Se TCP já existir, inspecione seus testes e avance para o próximo bloqueio real: UDP/retorno, autenticação, endereçamento ou conectividade. Não refaça implementação comprovada. Um módulo experimental/harness local isolado pode produzir evidência de desenvolvimento sem fechar os gates de fase; não o registre como capacidade pública do produto enquanto os gates aplicáveis estiverem abertos.
+
+## Base, leitura e autoridade
+
+1. O repositório ativo informado é `C:/Users/usuario/Desktop/AuroraLauncher`. Leia seu `AGENTS.md` e os aplicáveis ao checkout. `C:/Users/usuario/Desktop/TESTE-main/aurora-skins-runtime` é histórico e não pode servir de base de feature/release. Antes de criar worktree, leia HEAD, branch, `git status --short`, `git worktree list --porcelain`, `scripts/active-mod-matrix.json` e `scripts/skins-feature-contract.json`. Nunca desenvolver em `main`; use branch curta `codex/<task-id>-<slug>` em worktree exclusiva. Prefira ferramenta gerenciada de worktree, com `ref` explícito atual; se ela não suportar o repositório, registre o motivo antes de criar uma worktree Git no repositório correto. Não use base remota antiga por conveniência.
+2. A revisão documental partiu de `dc2ec5ac36a88f54b1130bac4789f8ecd56641d2`; manifests então registravam launcher `0.1.1-alpha.13`, Core `1.1.5`, Skins `0.3.1`. Isso é referência histórica, não ordem para voltar a esse SHA. Reconfirme o checkout e integre cumulativamente recursos posteriores quando necessário. A revisão está na branch `codex/aur-r4-connect-v2-docs`, em `C:/Users/usuario/Desktop/AuroraLauncher-worktrees/codex-aur-r4-connect-v2-docs`. Se seus documentos ainda não estiverem integrados, leia-os ali e proponha integração preservando mudanças atuais; não substitua o checkout inteiro.
+3. Leia integralmente `docs/engineering/MASTER_ROADMAP.md` canônico e: `AURORA_CONNECT_REVIEW.md`, `AURORA_CONNECT_SPEC.md`, `AURORA_CONNECT_BACKLOG.md`, `AURORA_CONNECT_DEPENDENCIES.md`, `AURORA_CONNECT_TRACEABILITY.md`, `ADR/PROPOSED-aurora-connect-transport.md`, `COMPATIBILITY_MATRIX.md`, `CODEX_PARALLEL_PLAN.md`, `CODEX_INTEGRATION_PLAN.md`, `ADR/ADR-010-multiplayer.md` e `ADR/ADR-018-remove-companion-keep-desktop-assistant.md`, todos sob `docs/engineering`. Leia `docs/core-ipc.md`, `SECURITY.md`, os documentos de domínio que reutilizar e os task files de evidência correspondentes. Se algum arquivo não estiver acessível, declare precisamente a falta e continue o que for seguro; não diga que leu uma referência apenas por vê-la citada.
+4. Leia manifests e lockfiles reais de root, desktop e Rust; toolchain/CI e módulos relevantes de rede, autorização, IPC, processos, sessões, instâncias, mutações/configs e frontend. A base lida usava React 19/TypeScript, Tauri v2 e Rust. Confirme novamente; não suponha stack nem adicione Go automaticamente. Leia regras Firestore antes de propor sinalização. Localize testes e scripts verdadeiros antes de citar ou executar comandos.
+5. Distinga requisito explícito V2, original do roadmap, evidência estática, teste executado, evidência histórica, proposta e decisão pendente. Novos requisitos explícitos prevalecem sobre documentos antigos conflitantes. Não transformar proposta, dependência transitiva, build ou mock em funcionalidade homologada. Estados permitidos pelo repositório: `CONCLUÍDO`, `PARCIAL`, `PROTÓTIPO`, `IMPLEMENTADO MAS NÃO HOMOLOGADO`, `NÃO IMPLEMENTADO`, `LEGADO`, `RISCO`, `HIPÓTESE`, `NÃO VERIFICADO`, `PRECISA DE TESTE`.
+
+No inventário documental anterior, `Cargo.toml` não tinha Iroh/Quinn diretos; `Cargo.lock` tinha Quinn `0.11.11` transitivo, sem prova de uso como transporte Connect. `engine/mod.rs` não enumerava Connect nas fronteiras lidas. Isso orienta a procura, não substitui sua auditoria atual. As regras Firestore examinadas não tinham sessões/convites. O broker AI Tools atual não equivale a editor genérico de TOML/properties de voz.
+
+## Preservação integral do roadmap
+
+- R0: segurança, regras Firestore positivas/negativas e auditoria, CI, licença, proveniência, releases imutáveis e gates de distribuição pública, inclusive entitlement. Não aproveitar Connect para contornar autenticação Microsoft/Minecraft.
+- R1: Assistente desktop, modularização, HTTP/IPC limitado/cancelável e homologação dos nove pares Core/Skins. Não inventar nem ampliar a matriz. O Assistente continua no desktop, inclusive voz/microfone/TTS/atalho com Minecraft fechado. Companion e HUD foram retirados pela ADR-018; não reintroduzir assistente in-game por hook de rede.
+- R1.5: updater planificado/reversível, staging/hash, snapshots/journal/configurações preservadas. Implementação não significa homologação runtime. CurseForge só permite downloads autorizados; fluxo oficial/manual permanece onde necessário. Não distribuir mods por atalhos de rede.
+- R2/R2.5: recovery, Doctor determinístico somente leitura, CAS/restore e Tools com schema, plano, diff, confirmação, snapshot e auditoria. Não reimplementar nem declarar concluídas capacidades baseando-se em resumos antigos.
+- R3: manifesto versionado e Creator determinístico. R4: multiplayer/social, convites autorizados e sincronização consentida por manifesto, dependente dos contratos anteriores. R5: updater assinado, produção, privacidade e budgets zero-spend.
+- Preserve IDs AUR-R0/AUR-R1, gates e ownership. IDs novos propostos livres na base documental: AUR-R4-001 a AUR-R4-007; conferir colisões atuais. `App.tsx`, `commands.rs` e `apps/edge-proxy/src/index.ts` têm um owner exclusivo por wave. Não misture refatoração ampla com feature. Delimite ownership antes de paralelizar; QA independente revisa sem editar os mesmos arquivos simultaneamente.
+
+## Experiência e modos de operação
+
+O objetivo é compartilhar servidor/mundo com convidados autorizados e pouca configuração, incluindo jogo e serviços auxiliares homologados, inicialmente Simple Voice Chat e Plasmo Voice. Minecraft continua autoritativo; P2P descreve conectividade, não simulação distribuída. Host deve ficar ligado/disponível; hospedagem Aurora oficial 24h não está no escopo.
+
+Distinga conexão pública já acessível (pode dispensar túnel), servidor privado com agente autorizado pelo responsável, dedicado local e singleplayer aberto para LAN. Não prometer acesso a servidor privado sem cooperação. Transporte, descoberta de portas, abertura do mundo para LAN, auto-join e sincronização de pack são capacidades separadas e têm provas próprias. Fluxo normal suportado não exige instalação manual de VPN externa, driver, administrador permanente ou portas manuais. Configuração explícita de desenvolvimento e troca manual de endereço/chave servem para a PoC, não para anunciar “um clique”.
+
+## Política obrigatória de custo e relay
+
+Priorize direto. Relay gratuito pode ser avaliado e usado somente após verificar gratuidade, termos, integração e uso pretendido. NÃO existe proibição de todo relay nem de candidatos relayed. Critério de aceite não pode exigir falha só porque o direto falhou: deve aceitar relay permitido e falhar claramente apenas quando nenhum caminho permitido existir.
+
+Não depender de pagamento obrigatório/automático, VPS própria obrigatória, relay hospedado pelo usuário como requisito MVP, créditos promocionais temporários, rotação de contas, burla de quotas ou relays públicos aleatórios. Software open source não equivale a infraestrutura gratuita. Serviço com excedente cobrável permanece desabilitado sem bloqueio efetivo e comprovado de cobrança no provedor; contador local e alerta não bastam. Não habilitar faturamento nesta tarefa. Se não houver relay gratuito aprovado, preservar direto e documentar limite, nunca mudar silenciosamente para pago.
+
+Para cada dependência externa registre operador, finalidade, autenticação, licença, termos, quotas, regiões, limitações, risco de cobrança, comportamento na indisponibilidade, URL oficial e data. Diferencie teste/desenvolvimento de distribuição sustentável do launcher. A pesquisa de 29/09/2026 indicou relays públicos Iroh gratuitos limitados para dev/teste, sem aprovação de produção; revalide os termos atuais. Nenhuma oferta paga citada nos documentos é autorização de contratar. Pode existir relay permitido no início e tentativa de migração ao direto: descrever o fluxo real, toda infraestrutura auxiliar e testar continuidade antes de prometê-la.
+
+Sinalização, descoberta, NAT traversal/STUN e relay são responsabilidades distintas mesmo que venham integradas. Firebase/Worker/Supabase existentes não estão automaticamente autorizados para tráfego ou contratos novos. Firestore somente metadados mínimos por participante, regras testadas, expiração lógica e retenção limitada; nunca áudio, jogo ou arquivos de modpack. Não assumir que TTL físico de provedor está incluído no plano gratuito. Sem permissões/quotas verificadas, use apenas o modo local/manual de desenvolvimento.
+
+## Escolha tecnológica condicionada à evidência
+
+Avalie Iroh primeiro. A ADR propôs Iroh `1.1.0` como candidato documental, com Rust mínimo `1.91` a verificar no ambiente; não está instalado nem aprovado. Use docs/source da versão efetivamente fixada, não copie APIs de `latest` para dependência antiga. Compare esforço, plataformas, licença/distribuição, manutenção, versão, streams/datagramas, identidade, sinalização, telemetria de caminhos, direto/relay e custo. Confira a possibilidade de suprimir dependências externas/defaults nos testes locais.
+
+Compare Quinn com mecanismos compatíveis de descoberta/NAT traversal. O fato de Quinn implementar QUIC não inclui autorização, descoberta ou relay. Pion ICE + quic-go é alternativa com processo auxiliar só mediante vantagem concreta: incluir build multiplataforma, assinatura, updater, IPC autenticado, lifecycle/encerramento e manutenção. Não implemente todas as alternativas. Não imponha ICE/STUN externo a Iroh sem necessidade. ICE + QUIC exige demonstrar reutilização do caminho negociado e coordenação de leitura/demultiplexação do socket; não são encaixe automático.
+
+Reavalie e4mc/World Host por alcance de TCP/UDP/voz, mod/version/loader, licença e serviços externos. Não descarte por relay nem presuma suporte de voz. Playit/BYO histórico não autoriza instalação/bundling/faturamento. Relay próprio obrigatório continua adiado.
+
+Teste LAN, IPv6 com firewall, IPv4 alcançável, hole punching e, se suportado, PCP/NAT-PMP/UPnP opcional com consentimento, lease curto e limpeza. Não inferir NAT por timeout; IPv6 não elimina firewall e roteador doméstico não controla CGNAT do provedor. Com UDP externo bloqueado, verificar caminho real TCP/TLS/WebSocket da versão: relay UDP-only não resolve. Encapsular em TCP pode atrasar áudio por retransmissão; não prometer latência equivalente nem migração sem interrupção.
+
+## Contrato mínimo de arquitetura, TCP e UDP
+
+Separe identidade/autorização, sinalização, descoberta/NAT traversal, transporte, registro de serviços, integração Minecraft/mods e UI em fronteiras pequenas. Não criar monólito ou framework genérico sem uso demonstrado. Caminhos existentes relevantes incluem `apps/desktop/src-tauri/src/engine`, `apps/desktop/src`, `apps/aurora-core`, `firebase` e `apps/edge-proxy`; novas pastas/arquivos de Connect são PROPOSTOS até criados após o inventário. Não converter o WebSocket IPC local em túnel remoto.
+
+Fluxo TCP: aplicação convidada → listener TCP loopback do Aurora convidado → stream confiável autenticado → Aurora host → endpoint TCP aprovado. Respostas retornam à mesma conexão. Faça ponte de bytes da aplicação, não VPN improvisada de pacotes TCP. Preserve ordem, integridade, bidirecionalidade, backpressure, half-close/fechamento, cancelamento e deadlines. Cada conexão, inclusive status/query e jogo, tem stream/estado próprios; bytes TCP não podem ser enviados por UDP sem confiabilidade.
+
+Fluxo UDP: mod convidado → listener UDP loopback → datagramas do transporte autenticado → Aurora host → endpoint UDP aprovado; retorno mantém convidado/sessão/serviço/associação. Preserve fronteiras e conteúdo, mesmo número TCP/UDP não identifica mesmo serviço. Não compartilhar socket host entre jogadores sem demultiplexação comprovada; socket dedicado por associação é candidato simples. A associação não pode ser sequestrada por mensagem com ID de outro participante. Expire/limpe sockets e estado em inatividade, fim da sessão, revogação e crash.
+
+Registro pequeno/versionado: identidade do serviço, TCP/UDP, endpoint local aprovado pelo host, permissões por participante, limites, capacidade requerida e adaptador. Confirme nomes com contratos reais antes de implementar. O destino privado fica no host; o convidado solicita service ID autorizado, jamais IP/porta arbitrário. Manifesto/metadados de mod são não confiáveis e não concedem exposição de portas. Não criar SOCKS/proxy aberto/acesso geral à LAN/execução remota nem expor automaticamente RCON, SSH, bancos ou interfaces administrativas. Serviços futuros exigem extensão/homologação explícita.
+
+Use QUIC DATAGRAM ou equivalente com semântica não confiável/não ordenada adequada. Não colocar áudio por padrão no stream ordenado do jogo. Transporte QUIC não captura UDP automaticamente. Negocie capability, versão, tamanho máximo e limites antes de habilitar serviço. Calcule payload útil a partir do máximo atual da biblioteca, descontando framing Aurora e overhead efetivo; não assumir 1200/1275/1500 bytes como capacidade universal. Reaja a mudanças de caminho/MTU. Pacote grande deve gerar diagnóstico e recusa, nunca truncamento silencioso. Fragmentação de aplicação só após projeto autenticado e limitado, testes e timeout de remontagem; a primeira PoC não precisa dela e deve declarar incompatibilidade quando necessário.
+
+Defina limites explícitos, testáveis e documentados de sessões/participantes, streams, associações UDP, bytes/tamanho de mensagem, memória, banda, frequência, filas, handshakes e expiração. Use os candidatos da especificação e calibre em testes, sem tratá-los como desempenho homologado. Voz usa filas curtas/descarte de vencidos; outros serviços UDP precisam de política própria. Não reinventar criptografia ou controle de congestionamento. Compartilhar conexão QUIC jogo/voz é hipótese: testar contenção, isolamento e saturação; permitir outra organização quando necessária.
+
+## Mods de voz e configurações
+
+Não criar chat de voz próprio. Integração do transporte de Simple Voice Chat e Plasmo Voice faz parte de R4 mesmo se o primeiro incremento for só TCP. Homologue separadamente, sem exigir ambos ativos na mesma instância. Registre versão exata, loader/build, Minecraft/Java, JAR/hash/origem/licença, configuração efetiva, modo dedicado/LAN e caminhos testados. Não fixar portas padrão pelo nome do mod nem anunciar suporte multiversão por existência de API.
+
+Resolver duas partes: encaminhamento UDP e destino usado pelo cliente. Diferencie bind do serviço no host, endereço anunciado pelo servidor e endereço/porta loopback da ponte de cada convidado. Investigue `voice_host` do Simple Voice Chat e `[host.public]` do Plasmo Voice conforme versão. A documentação consultada marca configurações SVC relevantes como dedicadas; não extrapolar para mundo LAN. API Simple Voice Chat `2.6.20` e documentação Plasmo `2.1.17` foram referências de pesquisa, não artefatos selecionados/homologados. Reconfirme APIs reais e versões antes de usar override por participante ou socket de cliente.
+
+Não substituir globalmente o anúncio por `127.0.0.1`: cada máquina/instância precisa de ponte própria e convidados diretos podem não a possuir. Trate porta ocupada, múltiplas instâncias, configuração alterada pelo usuário e modos mistos direto/Aurora. Se anúncio global não atender ambos, documente restrição e mantenha modo misto desabilitado até API oficial/add-on provar adaptação por participante. Não inventar setters/APIs nem reescrever endereços por substituição de bytes dentro do Minecraft criptografado.
+
+Prefira configuração reversível ou API/add-on oficial. Hook mínimo Core só com contrato/capability, matriz afetada e regressões documentados; não é requisito da primeira PoC. Preserve autenticação/identidade/criptografia dos mods; túnel não substitui auth Minecraft/voz. IP original pode ser perdido pela ponte: documentar impacto sem inventar identidade encaminhada aceita pelo servidor. Não gravar, inspecionar ou analisar conteúdo de áudio para encaminhar.
+
+Alteração de config exige plano/diff, autorização, snapshot, lock apropriado, detecção de hash/estado concorrente, restauração que não apague edições posteriores e recuperação de crash. Não reutilizar broker JSON como se suportasse properties/TOML. Não instalar/redistribuir mods sem licença/proveniência/regras do updater.
+
+## Segurança e privacidade
+
+Vincule identidade do peer, chave do transporte, sessão, convite e permissões por validação criptográfica. Verifique identidade esperada; não aceitar certificado qualquer. Convites têm expiração, revogação, proteção contra replay, escopo e destinatário. Mesmo em relay, criptografia deve ser ponta a ponta entre agentes; autenticação sozinha não garante confidencialidade. Use bibliotecas maduras, sem protocolo criptográfico caseiro. PoC com pins explícitos precisa comprovar peer errado/convite errado recusados antes de abrir o destino.
+
+Jamais enviar tokens Microsoft/Minecraft/Firebase a outros jogadores, relays, JVM ou logs. Não embutir chave administrativa ou segredo compartilhado global no cliente. Se credencial de relay exigir emissão segura, documente e implemente backend separado somente quando autorizado e compatível com zero-spend; segredo no binário não está protegido. Preserve `online-mode` e configurações oficiais. Serviços locais escutam apenas loopback; transporte externo é endpoint autenticado separado. Autenticar/autorizar antes de qualquer conexão ao serviço host. Proteger contra abuso/amplificação, consultas/flood e uso por processos locais não autorizados dentro dos limites reais da plataforma.
+
+Direto expõe informações de conectividade/IP; não prometer anonimato. Relays/sinalização podem ver metadados, não devem receber conteúdo em claro. Diagnósticos compartilháveis redigem IP/endereço, chaves, tokens, convites e dados pessoais. Logs só contêm eventos/contadores/erros necessários, nunca conteúdo de voz. Testes externos usam contas, peers e ambiente autorizados e não geram custo.
+
+## UI e evidências
+
+Preparar servidor/mundo → criar sessão → autorizar convidado → negociar transporte → validar jogo e serviços → entrar. Estados vêm do backend, não de temporizadores/simulações. Mostrar separadamente autenticação/transporte, caminho direto ou relay gratuito, servidor do jogo e voz. Conexão QUIC autenticada prova túnel; resposta TCP/status prova disponibilidade do serviço; jogador no mundo exige evento/observação correlacionada; voz validada exige sessão autenticada do mod e teste de comunicação consentido, sem gravação. Sem evento confiável, mostrar “não verificado”.
+
+Falha de voz não derruba jogo automaticamente. Diagnóstico distingue mod ausente, versão não homologada, porta ocupada, serviço indisponível, credencial inválida, quota e conectividade somente quando há evidência. Timeout isolado não prova CGNAT. Não usar sucesso de ping/status ou heartbeat como evidência de áudio audível.
+
+## Incrementos e testes obrigatórios
+
+Mantenha AUR-R4-001 inventário/ADR/ameaças/custos; 002 ponte TCP; 003 UDP/TCP simultâneos; 004 redes/relay permitido; 005 Minecraft/convites/UI; 006 voz individual e endereçamento; 007 robustez/manifesto/liberação gradual. Reordene apenas para reduzir incerteza demonstrada, registrando dependências. Nada aprovado em 002 homologa automaticamente 003–007.
+
+No incremento TCP execute ao menos: bytes exatos nos dois sentidos, cargas maiores que buffer, backpressure, conexões simultâneas separadas/status+jogo, half-close/cancelamento/timeout, peer ou credencial inválidos, sessão expirada/revogada e serviço/destino não autorizado, com evidência de que o destino não foi acessado no caso negativo. Teste limpeza e limites. Quando UDP ainda não existir, teste negociação/recusa de capability e validação pura do contrato/limites se houver código pertinente; os testes de datagramas reais ficam claramente pendentes em 003.
+
+Para UDP: ida/volta byte a byte e fronteiras preservadas, resposta ao jogador correto, vários jogadores/sessões/serviços/instâncias, datagramas tardios, perda/reordenação/duplicatas, MTU exata/oversize/mudança de caminho, saturação/fairness/filas/expiração, TCP+UDP simultâneos e ausência de amplificação. Não use somente echo de um jogador como prova de isolamento. Para voz: cada mod separado, config real, dedicado e LAN onde suportado, porta ocupada, instalação ausente/versão desconhecida, mixed direto/Aurora somente se anunciado, carga do jogo, reversão/config editada durante sessão/crash.
+
+Para rede externa: direto IPv4/IPv6, NAT duplo/CGNAT, UDP bloqueado, relay indisponível/quota/caminho alternativo, redes distintas, Brasil–Brasil e Brasil–EUA. Registre topologia real redigida e versão/configuração. Loopback, LAN e mocks não provam travessia NAT; não rotule sucesso local como conectividade universal. Meça tempo até conexão, RTT, jitter, perda, CPU/RAM/banda, estabilidade e impacto da carga do jogo. Diferencie RTT da rede, atraso de áudio e desempenho do servidor. Não inventar porcentagens, ganhos de ping ou metas alcançadas. Testes não executados ficam `PRECISA DE TESTE` com motivo e roteiro reproduzível.
+
+Use comandos reais confirmados. Na base documental, estes existiam e eram relevantes conforme arquivos alterados:
+
+```powershell
+npm --prefix apps/desktop run build
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+npm --prefix apps/edge-proxy run check
+npm --prefix functions run lint
+npm run core:build
+npm run skins:build
+npm run release:verify-mods
+git diff --check
+```
+
+Primeiro execute os testes focados reais do incremento, depois checks exigidos por `AGENTS.md` para os componentes afetados; não inventar nome de script, filtro ou comando Firestore. Descubra harness/CLI e dependências antes de rodar. Se adicionar feature opcional, valide sua combinação ligada e desligada pelos comandos reais correspondentes; o teste padrão que não compila a feature não a valida. Não rodar empacotamento oficial como substituto de testes. Builds Java sequenciais quando necessários; não recompilar toda matriz se nenhum Java/contrato/artefato foi alterado e as regras não exigirem. Falha de ambiente é limitação, não teste aprovado.
+
+## Relatório e atualização obrigatórios
+
+Atualize o task file correspondente, domínio, backlog e matriz apenas no escopo comprovado; ADR quando houver decisão/reversão. Cada tarefa registra objetivo, escopo, dependências, arquivos reais/propostos, risco, teste, critério de aceite, rollback, estado e evidências. Faça revisão do diff completo; preserve dados/configs/release imutável. Commit local lógico só com diff próprio revisado e testes registrados, sem push; se o ambiente ou instrução impedir commit, reporte o diff preservado.
+
+Entregue nesta ordem:
+
+1. Base/branch/HEAD, mudanças locais preexistentes preservadas, arquivos realmente lidos e lacunas.
+2. Achados de código com caminhos/símbolos lidos, diferenças em relação ao plano e requisitos em conflito; evidência estática separada de execução.
+3. Decisão técnica do incremento, versão fixada, custo/dependências aprovados e decisões pendentes; explique por que a alternativa escolhida atende ao bloqueio real.
+4. Implementação concreta: arquivos alterados, comportamento observável, limites, modo experimental e demonstração reproduzível.
+5. Testes com comando exato, ambiente, resultado e evidência redigida; liste testes não executados e limites, sem promover runtime.
+6. Segurança, custos, rollback, riscos e próximo menor incremento. Informe separadamente estado TCP, UDP, voz de cada mod, direto, relay, convites/UI e R4.
+7. Branch/commit ou motivo de não commit; nenhum push/deploy/instalador/billing. Não dizer “pronto” sem delimitar o que foi efetivamente validado.
+
+## Fontes iniciais a reconferir
+
+Consulte versões exatas e registre data/URL: [Iroh relays](https://docs.iroh.computer/concepts/relays), [NAT traversal](https://docs.iroh.computer/concepts/nat-traversal), [Iroh 1.1.0 Connection](https://docs.rs/iroh/1.1.0/iroh/endpoint/struct.Connection.html), [QUIC DATAGRAM RFC 9221](https://www.rfc-editor.org/rfc/rfc9221.html), [Simple Voice Chat proxy](https://modrepo.de/minecraft/voicechat/wiki/proxy_setup), [Simple Voice Chat API](https://voicechat.modrepo.de/), [Plasmo Voice advanced](https://plasmovoice.com/docs/server/advanced/) e [Plasmo API 2.1.17](https://dokka.plasmovoice.com/older/2.1.17/index.html). São pesquisa, não prova de implementação/homologação Aurora. A matriz de dependências lista as demais fontes oficiais, licenças e restrições.

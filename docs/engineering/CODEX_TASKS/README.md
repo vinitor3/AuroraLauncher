@@ -14,3 +14,5 @@ Cada arquivo abaixo é um contrato de implementação. O agente deve respeitar o
 | [AUR-R1-004](AUR-R1-004-atomic-files.md) | R1 | P0 | Substituição transacional e rollback de arquivo | após R0 |
 
 Branch padrão: `codex/<id-em-minusculo>-<slug>`. Um commit lógico por tarefa, mensagem `feat|fix|chore(scope): resumo [ID]`. PR deve incluir “Tests”, “Risk”, “Rollback” e “Docs”.
+
+R4/Wave 6+ — [backlog Aurora Connect V2](../AURORA_CONNECT_BACKLOG.md): AUR-R4-001 inventário/decisão; 002 TCP autenticado; 003 UDP; 004 redes/relay permitido; 005 Minecraft/convites/estados; 006 Simple Voice Chat e Plasmo Voice separados; 007 robustez/manifesto/liberação. Detalhes ficam no documento de domínio para evitar sete cópias de contrato. IDs anteriores, dependências e gates são preservados; pesquisa/PoC local não liberam produto.

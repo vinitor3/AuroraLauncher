@@ -1,5 +1,9 @@
 # Compatibility Matrix
 
+## Aurora Connect V2 — revisão documental, 29/09/2026
+
+Estado do escopo novo desta revisão: **NÃO IMPLEMENTADO**; nenhum transporte Connect foi encontrado nas fronteiras examinadas, sem concluir inexistência global. Homologação: **NÃO VERIFICADO**. A revisão preserva a matriz ativa de nove pares Core 1.1.5/Skins 0.3.1 e não altera JARs. O [backlog Connect](AURORA_CONNECT_BACKLOG.md) transcreve esses pares e separa as células de investigação Simple Voice Chat/Plasmo Voice por versão, loader, dedicado/LAN e caminho direto/relay. Nenhuma dessas células de voz está homologada, e a homologação histórica de skins não as aprova. [Especificação](AURORA_CONNECT_SPEC.md), [limites das fontes](AURORA_CONNECT_REVIEW.md) e [registro documental](../task-aurora-connect-v2-docs.md).
+
 ## Failover Gemini no Worker — 29/09/2026
 
 Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Base `a3325b5`, cliente alpha.13 existente, Core 1.1.5 e Skins 0.3.1 preservados. O Worker limita tentativas entre chaves e oferece Flash-Lite explicitamente autorizado como último recurso, com prazo e orçamento compartilhados. Tradução usa o mesmo transporte; contratos desktop e confirmação local permanecem iguais. Não exige novo instalador nem altera os 18 JARs ou a matriz Minecraft/loader/Java. Publicado na revisão `2026-09-29-gemini-key-failover-v1`, com saúde e proteção de sessão verificadas. Preview respondeu com Gemini real; chamada autenticada em produção permanece **NÃO VERIFICADO**, pois Firebase recusou sessão anônima de teste. Evidências em [task-gemini-failover.md](../task-gemini-failover.md).

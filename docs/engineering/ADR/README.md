@@ -27,3 +27,5 @@
 | [026](ADR-026-bounded-gemini-failover.md) | Limitar failover de chaves Gemini e oferecer Flash-Lite opcional dentro do prazo e orçamento compartilhados | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 
 Estados mudam somente por novo ADR que substitua o anterior ou por revisão explícita deste arquivo.
+
+Proposta sem número reservado: [Aurora Connect — transporte TCP/UDP](PROPOSED-aurora-connect-transport.md), de 29/09/2026. A política V2 permite relay gratuito verificado e mantém zero-spend; a escolha tecnológica é proposta condicional, não aceita nem implementada. A ADR-010 conserva a decisão histórica com nota explícita da revisão V2; a ADR-018 permanece integralmente vigente.
