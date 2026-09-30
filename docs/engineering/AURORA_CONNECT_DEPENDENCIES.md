@@ -25,7 +25,7 @@ Antes de habilitar uma dependência: fixar versão/configuração; revisar fonte
 | Toolchain | MSRV 1.91; Rust local 1.98.0; nenhuma atualização global ou do lock desktop |
 | Hash de aprovação local | `sha2 =0.11.0`, sem default features, agora dependência direta; a mesma versão já existia transitivamente no lock. Manifest do pacote consultado: MIT OR Apache-2.0, MSRV 1.85. SHA-256 de bytes exatos do plano, sem implementação criptográfica própria |
 | Autenticação/capacidade | Identidade criptográfica Iroh com pin esperado; lease host por peer/sessão/serviço/prazo. Streams confiáveis e DATAGRAM; autorização Aurora permanece própria |
-| Defaults e serviços | `default-features = false`, `tls-ring`; preset `Minimal`, relay Disabled, lookup/relay defaults limpos, bind e destino manuais; sem portmapper/telemetria gerenciada |
+| Defaults e serviços | `default-features = false`, `tls-ring`; preset `Minimal`, relay Disabled, lookup/relay defaults limpos, bind e destino inicial manuais; sem portmapper/telemetria gerenciada. Correção32: QNT32/multipath8 permanecem ativos; setter0 anterior era ignorado. Observed reports false/false, NetReport minimal; [contrato efetivo](AURORA_CONNECT_SPEC.md#61-configuração-efetiva-do-laboratório--incremento32) |
 | Operador/termos externos | Nenhum serviço remoto configurado para o ensaio direto local. Licença de biblioteca não aprova uso futuro de infraestrutura |
 | Quotas/regiões | Não aplicáveis a operador no laboratório local; limites de recursos locais no código/task. Não é capacidade anunciada para oito jogadores/mods |
 | Custo e falha | Nenhuma conta, cobrança, crédito ou fallback pago. Sem caminho manual alcançável, timeout/erro; não classifica NAT/CGNAT |

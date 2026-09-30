@@ -4,13 +4,13 @@ Estado: **PRECISA DE TESTE** em dois computadores. O ensaio é somente de bytes 
 
 ## O que falta e a ação mínima
 
-Esta conversa executa comandos apenas no Windows atual. Não há acesso remoto autorizado/configurado ao computador convidado. É necessário um segundo **Windows x64**, com uso autorizado, ligado à mesma rede local, e alguém para copiar os arquivos de teste e abrir dois terminais PowerShell nele. Não é preciso instalar Rust, programar, alterar roteador ou enviar credenciais. Na primeira rodada, não usar uma rede diferente.
+Esta conversa executa comandos apenas no Windows atual. Não há acesso remoto autorizado/configurado ao computador convidado. É necessário um segundo **Windows x64**, com uso autorizado, ligado à mesma rede local, e alguém para copiar os arquivos de teste e abrir dois terminais PowerShell nele. Não é preciso instalar Rust, programar, alterar roteador ou enviar credenciais. Para outra internet, usar o roteiro separado em `aurora-connect-internet.md`; não reutilizar um IPv4 privado da LAN como destino externo.
 
 O anfitrião é o PC atual: o agente pode preparar/executar todo esse lado. O convidado é o segundo PC. A pasta de ensaio contém `aurora-connect-lab.exe` e este roteiro. A cópia pode ser feita por um meio privado já disponível, por exemplo pendrive, para uma pasta nova `C:/AuroraConnectLab`. Não sobrescrever uma pasta existente; nesse caso usar outro nome e ajustar `Set-Location` nos **dois** blocos do convidado para a mesma pasta. Ambos conferem o hash antes de executar.
 
 Binário debug Windows x64 verificado localmente, SHA-256:
 
-`2cc277150e942dab68ab8b2037a4b1791a8ed1e06a7cc2f6af8bc411be36caac`
+`7f8c7ed40e00826f58b5f482f80d1660941d5568d36a2983588488c84d0b9a40`
 
 Fonte nesta worktree: `apps/connect-lab`, branch `codex/aur-r4-connect`; dependências fixadas em seu `Cargo.lock`. Esse hash identifica o artefato testado, não uma assinatura de distribuição. Se o hash divergir, não executar: conferir a cópia e o artefato revisado. Não baixar um substituto aleatório.
 
@@ -43,7 +43,7 @@ Copiar a pasta nova, abrir PowerShell e executar o bloco inteiro abaixo, incluin
 $ErrorActionPreference = 'Stop'
 Set-Location C:/AuroraConnectLab
 $lab = (Resolve-Path ./aurora-connect-lab.exe).Path
-$expected = '2cc277150e942dab68ab8b2037a4b1791a8ed1e06a7cc2f6af8bc411be36caac'
+$expected = '7f8c7ed40e00826f58b5f482f80d1660941d5568d36a2983588488c84d0b9a40'
 if ((Get-FileHash -LiteralPath $lab -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'LAB_HASH_MISMATCH: nao executar' }
 $hostAddress = Read-Host 'IPv4 local do anfitriao, sem porta'
 $hostPeer = Read-Host 'Peer publico do anfitriao, 64 caracteres hexadecimais'
@@ -65,7 +65,7 @@ Após `guest_ready`, executar este segundo bloco inteiro:
 $ErrorActionPreference = 'Stop'
 Set-Location C:/AuroraConnectLab
 $lab = (Resolve-Path ./aurora-connect-lab.exe).Path
-$expected = '2cc277150e942dab68ab8b2037a4b1791a8ed1e06a7cc2f6af8bc411be36caac'
+$expected = '7f8c7ed40e00826f58b5f482f80d1660941d5568d36a2983588488c84d0b9a40'
 if ((Get-FileHash -LiteralPath $lab -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'LAB_HASH_MISMATCH: nao executar' }
 & $lab probe 127.0.0.1:42010 127.0.0.1:42011
 }

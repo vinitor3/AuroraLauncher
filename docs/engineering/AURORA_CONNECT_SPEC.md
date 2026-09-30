@@ -154,6 +154,14 @@ Para Quinn, demonstrar descoberta/traversal/relay que faltam ao transporte; para
 
 Bloqueio de UDP externo requer caminho realmente alcançável, por exemplo relay HTTPS/WebSocket quando suportado pela versão. QUIC encapsulado em TCP pode sofrer retenção por retransmissões e piorar áudio. Relay apenas UDP não resolve. Medir migração, interrupções, mudança do teto de datagramas e ausência de relay; não prometer transição imperceptível, anonimato, conectividade universal ou ping equivalente ao direto. Dependências e termos na [matriz](AURORA_CONNECT_DEPENDENCIES.md).
 
+### 6.1 Configuração efetiva do laboratório — incremento32
+
+Iroh1.3 fixado, `Minimal`, relay Disabled, lookup/relays limpos e sem portmapper. `send_observed_address_reports(false)` e `receive_observed_address_reports(false)` explícitos; `NetReportConfig::minimal()` desativa probes HTTPS/captive portal. Sem mapa relay não há alvos externos QAD configurados; não deduzir STUN externo de nomes internos antigos. QNT/multipath permanecem ativos com32candidatos remotos/8caminhos. O setter anterior de candidatos0 era ignorado porque está abaixo do mínimo aceito; foi removido. O teste32 usa endpoints reais de produção e observa zero observed reports e tráfego QNT, além de4096B de stream em cada direção e um datagrama em cada direção.
+
+Registro da conexão upstream oferece candidatos após TLS e antes de Hello/lease Aurora. Esse controle interno não equivale à abertura dos destinos `game`/`aux`, que permanecem protegidos pela autorização de peer/sessão/serviço. Não garantir transporte restrito para sempre ao endereço inicial fornecido. Bind explícito restringe candidatos locais; guest manual wildcard pode oferecer interfaces ao peer TLS. A CLI atual precisa de caminho inicial alcançável: não tem bootstrap coordenado entre dois NATs sem conectividade inicial e não ativa relay como fallback.
+
+O [preflight/roteiro IPv6 externo](../aurora-connect-internet.md) somente prepara o teste de dois PCs; candidato com rota não prova alcance. [Comandos, fontes e revisão32](../task-aur-r4-connect.md#trigésimo-segundo-incremento--configuração-efetiva-e-preparação-entre-redes). Gates de caminho/voz/UI e política de custos permanecem.
+
 ## 7. Simple Voice Chat e Plasmo Voice
 
 Integrar transporte de mods existentes é requisito R4. Criar codec, capturar, gravar, transcrever ou analisar voz própria não faz parte do Connect. Homologar os dois mods separadamente; não exigir coexistência. Não baixar/redistribuir JARs sem origem, licença e autorização conforme updater/CurseForge.

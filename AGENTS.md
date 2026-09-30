@@ -51,6 +51,8 @@ Incremento30: SVC `--offline-lab --keepalive` passou35s no mod real com35control
 
 Incremento31: Plasmo `--offline-lab --keepalive` passou separadamente35s no mod2.1.17 real,11Pings/11respostas locais, cliente PLAY, dois agentes e restore normal. Janela desde primeiro Ping, span31700ms/gap3901ms; os mesmos tetos conservadores30, com credencial simples do mod/sem MAC ou AEAD próprio. Suíte completa cliente377PASS0skip após Java fechado; não executar testes de portas junto ao servidor. Sem áudio/GUI/contas mistas/LAN/internet. Registro31 contém hashes/encerramento; próximas alterações de transporte exigem rebuild revisado e atualização explícita do pin/kit.
 
+Incremento32: remove setter QNT0 ignorado no Iroh1.3, explicita observed reports false/false e NetReport minimal. QNT32/multipath8 permanecem ativos e podem operar antes do Hello Aurora; destinos de serviço continuam autorizados antes de abrir.83Rust+11callerPASS, smokes manual/convite-downstream PASS. Novo debug SHA7f8c7ed40e00826f58b5f482f80d1660941d5568d36a2983588488c84d0b9a40 repinado. Preflight PS somenteleitura31fixturesx64/31x86; guia externo35/35 e LAN8/8. Kit novo separado do antigo; leia docs/aurora-connect-internet.md antes do ensaio remoto. Candidato IPv6 não prova alcance; segundo PC ainda não executado. Sem UI, relay, mod/Java novo ou mudança de matriz/dependências.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

@@ -6,6 +6,12 @@ Incremento20: três ensaios com Minecraft 1.21.1/Fabric real e dois clientes sin
 
 Incrementos25/26: SVC2.6.22 e Plasmo2.1.17 passaram separadamente pelo anúncio TCP e controle UDP real, cada um com um cliente sintético e dois agentes. SVC valida AuthAck/CheckAck AES-GCM; Plasmo valida Ping com credencial de sessão, sem MAC/AEAD próprio nesse pacote. QUIC mantém a cifra do transporte. Ambos tiveram stop normal e restauração nativa revisada; áudio e GUI continuam pendentes. [Execução atual](aurora-connect-runtime.md#controle-plasmo-pela-ponte--vigésimo-sexto-incremento).
 
+## Preparação de dois computadores
+
+Há roteiros separados para [a mesma rede LAN](aurora-connect-lan.md) e [redes diferentes por IPv6 candidato](aurora-connect-internet.md), com kit privado revisado, verificação de hash, papéis e encerramento. `scripts/connect-network-preflight.ps1` lê somente inventário local e emite contagens/booleans sem endereços. Nenhum teste externo foi executado; os comandos locais não precisam de ajuda do usuário. A intervenção necessária é copiar e executar o kit somente no computador remoto autorizado e devolver o JSON redigido.
+
+Incremento32 corrigiu uma configuração ignorada pelo Iroh: QNT permanece ativo, com32candidatos/8caminhos, separado de relay/lookup/observed reports desligados. Pode haver negociação de caminhos antes do Hello Aurora, com destinos de serviço ainda protegidos. [Limites efetivos](engineering/AURORA_CONNECT_SPEC.md#61-configuração-efetiva-do-laboratório--incremento32). O novo binário foi testado, mas ainda não foi executado em outro computador.
+
 ## Convite manual assinado — experimental e somente loopback
 
 Os comandos `host-invite-plan`, `guest-invite` e `guest-invite-tcp` são um fluxo separado do pin/lease manual anterior. Um convite autoriza **uma admissão**, com chave do convidado, sessão, serviços e prazo até10min, assinatura Ed25519 e aprovação do digest. Receber o JSON não substitui possuir a chave privada do convidado. Reentrar exige novas execuções/chaves/convite; não há persistência ou identidade social. [Contrato e limites](engineering/AURORA_CONNECT_SPEC.md#81-convite-manual-assinado--laboratório).
