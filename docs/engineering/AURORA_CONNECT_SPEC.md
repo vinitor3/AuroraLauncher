@@ -164,6 +164,8 @@ O [preflight/roteiro IPv6 externo](../aurora-connect-internet.md) somente prepar
 
 ## 7. Simple Voice Chat e Plasmo Voice
 
+Diagnóstico local34: teto de áudio configurado acima do payload útil negociado válido já exige recusa conservadora (`configured_mtu_exceeds_transport_payload` no inspector). Valor igual/menor não substitui orçamento integral UDP, protocolo/cifra e teste de áudio por mod; valores inseguros/desconhecidos ficam não resolvidos. Não abaixar MTU automaticamente ou tratar o teto1264B de uma sessão como constante do transporte. [Evidência e limites](../task-aur-r4-connect.md#trigésimo-quarto-incremento--diagnóstico-de-mtu-após-o-ensaio-externo).
+
 Integrar transporte de mods existentes é requisito R4. Criar codec, capturar, gravar, transcrever ou analisar voz própria não faz parte do Connect. Homologar os dois mods separadamente; não exigir coexistência. Não baixar/redistribuir JARs sem origem, licença e autorização conforme updater/CurseForge.
 
 Para cada versão registrar três endereços: **bind real do serviço no host**, **destino anunciado ao cliente** e **listener loopback individual do convidado**. Porta TCP do jogo e porta UDP do mod são serviços independentes, mesmo quando têm o mesmo número. Descoberta usa configuração efetiva e API documentada, não nome de mod ou porta padrão fixa.

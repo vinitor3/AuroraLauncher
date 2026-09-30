@@ -55,6 +55,8 @@ Incremento32: remove setter QNT0 ignorado no Iroh1.3, explicita observed reports
 
 Incremento33: usuário executou kit32 em Windowsx64 de outra internet e devolveu guest_ready/probe_passed/guest_stopped. Direto com endereço inicial IPv6, TCP1MiB/direção e10UDP/2origens passou nessa amostra; teto negociado1264B, cleanup host/echo exit0, portas livres. Evidência remota é relato do usuário; host/cleanup observados aqui. Não prova NAT/CGNAT, MTU exata1264, TCP+UDP sob carga externa, jogo/voz ou regiões. Supervisor privado passou a aceitar guest_identity JSON após a primeira preparação recusar a linha completa. Kit/binário32 preservados; consulte task33 antes de repetir.
 
+Incremento34: inspector somenteleitura sinaliza configured_mtu_exceeds_transport_payload se teto de áudio configurado excede payload negociado válido; inverso nunca aprova UDP integral/áudio. SVC1275 versus1264 bloqueia; Plasmo1024 mantém fullUDP/runtime pendentes. Inteiros SVC fora de Number.isSafeInteger ficam não resolvidos.38NodePASS0skip com JARs fixados; auditoria das configs reais preservou hashes. Não abaixar MTU automaticamente, fragmentar ou processar áudio para contornar; consulte domínio voz/task34. Revisão independente sem bloqueador, sem novo Rust/binário/dependência/config.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

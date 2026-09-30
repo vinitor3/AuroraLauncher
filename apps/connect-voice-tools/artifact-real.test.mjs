@@ -40,3 +40,23 @@ for (const [mod, filename, version, apiCount, fixture] of [
   assert.equal(unpinned.recognizedArtifact, false);
   assert.equal(unpinned.metadataVersion, artifact.metadataVersion);
 });
+
+for (const [mod, filename, fixture, exceeds] of [
+  ['svc', 'voicechat-fabric-1.21.1-2.6.22.jar', 'svc.properties', true],
+  ['plasmo', 'plasmovoice-fabric-1.21.1-2.1.17.jar', 'plasmo.toml', false],
+]) test(`real ${mod} identity composes with the external 1264-byte ceiling without approving audio`, { skip: !directory }, async () => {
+  const artifact = inspectArtifact(await readArtifactFile(join(directory, filename)));
+  const config = await readFile(new URL(`./fixtures/${fixture}`, import.meta.url));
+  const before = Buffer.from(config);
+  const plan = createPlan({ mod, artifact, mode: 'dedicated-aurora-only', guestPort: 35554,
+    gamePort: 25565, transportPayload: 1264 }, config);
+  assert.equal(plan.artifactVerified, true);
+  assert.equal(plan.blockers.includes('configured_mtu_exceeds_transport_payload'), exceeds);
+  assert(plan.blockers.includes('full_udp_datagram_budget_required'));
+  assert(plan.blockers.includes('voice_runtime_not_verified'));
+  assert.equal(plan.mtu.lowersModMtu, false);
+  assert.equal(plan.runtimeHomologated, false);
+  assert.equal(plan.applySupported, false);
+  assert(!plan.changes.some(change => change.key.includes('mtu')));
+  assert.deepEqual(config, before);
+});

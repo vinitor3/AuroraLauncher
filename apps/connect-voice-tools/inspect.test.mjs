@@ -75,6 +75,62 @@ test('MTU incompatibility is explicit and never reduces config value', () => {
   }
 });
 
+test('observed external ceiling refuses SVC configured maximum before a complete UDP bound exists', () => {
+  const before = Buffer.from(svc);
+  const plan = createPlan({ ...base, datagramBudget: undefined, transportPayload: 1264 }, svc);
+  assert(plan.blockers.includes('configured_mtu_exceeds_transport_payload'));
+  assert(plan.blockers.includes('full_udp_datagram_budget_required'));
+  assert.equal(plan.mtu.configuredValue, 1275);
+  assert.equal(plan.mtu.lowersModMtu, false);
+  assert(!plan.changes.some(change => change.key.includes('mtu')));
+  assert.deepEqual(svc, before);
+});
+
+test('equal and smaller configured ceilings do not replace the required full UDP bound', () => {
+  for (const mtu of [1024, 1264]) {
+    const config = Buffer.from(`port=24454\nbind_address=127.0.0.1\nvoice_host=\nmtu_size=${mtu}\n`);
+    const plan = createPlan({ ...base, datagramBudget: undefined, transportPayload: 1264 }, config);
+    assert(!plan.blockers.includes('configured_mtu_exceeds_transport_payload'));
+    assert(plan.blockers.includes('full_udp_datagram_budget_required'));
+    assert.equal(plan.runtimeHomologated, false);
+    assert.equal(plan.applySupported, false);
+  }
+});
+
+test('a smaller configured ceiling still refuses an oversized complete datagram', () => {
+  const plan = createPlan({ ...base, mod: 'plasmo', version: '2.1.17', gamePort: 25565,
+    datagramBudget: 1265, transportPayload: 1264 }, plasmo);
+  assert(!plan.blockers.includes('configured_mtu_exceeds_transport_payload'));
+  assert(plan.blockers.includes('transport_payload_too_small'));
+  assert.equal(plan.mtu.lowersModMtu, false);
+  assert(!plan.changes.some(change => change.key.includes('mtu')));
+});
+
+test('invalid or unknown transport ceilings remain unknown rather than measured incompatibility', () => {
+  for (const transportPayload of [undefined, 0, -1, 65508, 1264.5, '1264', NaN]) {
+    const plan = createPlan({ ...base, datagramBudget: undefined, transportPayload }, svc);
+    assert(plan.blockers.includes('negotiated_transport_payload_required'));
+    assert(!plan.blockers.includes('configured_mtu_exceeds_transport_payload'));
+  }
+});
+
+test('invalid configured MTU stays unresolved without a measured size mismatch or config mutation', () => {
+  for (const mtu of ['0', '-1', '1264.5', 'NaN', 'Infinity', '9007199254740992', '9'.repeat(400)]) {
+    const config = Buffer.from(`port=24454\nbind_address=127.0.0.1\nvoice_host=\nmtu_size=${mtu}\n`);
+    const before = Buffer.from(config);
+    const plan = createPlan({ ...base, datagramBudget: undefined, transportPayload: 1264 }, config);
+    assert(plan.blockers.includes('mod_mtu_unresolved'));
+    assert(!plan.blockers.includes('configured_mtu_exceeds_transport_payload'));
+    assert.equal(plan.mtu.lowersModMtu, false);
+    assert.equal(plan.applySupported, false);
+    assert.deepEqual(config, before);
+  }
+  const config = Buffer.from('port=9007199254740992\nbind_address=127.0.0.1\nvoice_host=\nmtu_size=1275\n');
+  const plan = createPlan({ ...base, transportPayload: 1264 }, config);
+  assert.equal(plan.host.portResolved, null);
+  assert(plan.blockers.includes('host_port_unresolved'));
+});
+
 test('parser refuses duplicate/escaped/continued properties and oversized/non-UTF8 input', () => {
   for (const bytes of [Buffer.from('port=1\nport=2'), Buffer.from('voice_host=a\\\nb'), Buffer.from('voice_host=\\u0031'), Buffer.alloc(256 * 1024 + 1), Buffer.from([0xff]), Buffer.from('x=\u0000')]) {
     assert.throws(() => parseConfig('svc', bytes));

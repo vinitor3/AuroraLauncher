@@ -154,8 +154,9 @@ export function createPlan(options, bytes) {
 
   const integer = key => {
     const value = get(key);
-    if (mod === 'svc' && typeof value === 'string' && /^-?(0|[1-9][0-9]*)$/.test(value)) return Number(value);
-    if (Number.isSafeInteger(value)) return value;
+    const parsed = mod === 'svc' && typeof value === 'string' && /^-?(0|[1-9][0-9]*)$/.test(value)
+      ? Number(value) : value;
+    if (Number.isSafeInteger(parsed)) return parsed;
     return null;
   };
   const bindKey = mod === 'svc' ? 'bind_address' : 'host.ip';
@@ -175,6 +176,13 @@ export function createPlan(options, bytes) {
   if (configuredMtu === null || configuredMtu <= 0) blockers.push('mod_mtu_unresolved');
   if (!Number.isInteger(datagramBudget) || datagramBudget < 1 || datagramBudget > 65507) blockers.push('full_udp_datagram_budget_required');
   if (!Number.isInteger(transportPayload) || transportPayload < 1 || transportPayload > 65507) blockers.push('negotiated_transport_payload_required');
+  // A configured audio ceiling above the entire negotiated UDP payload is
+  // already a conservative incompatibility, even before a full packet bound
+  // is measured. The inverse never proves that protocol/cipher overhead fits.
+  if (configuredMtu !== null && configuredMtu > 0 && Number.isInteger(transportPayload)
+    && transportPayload >= 1 && transportPayload <= 65507 && configuredMtu > transportPayload) {
+    blockers.push('configured_mtu_exceeds_transport_payload');
+  }
   if (Number.isInteger(datagramBudget) && Number.isInteger(transportPayload) && datagramBudget > transportPayload) blockers.push('transport_payload_too_small');
   if (configuredMtu !== null && Number.isInteger(datagramBudget) && configuredMtu > datagramBudget) blockers.push('datagram_budget_below_configured_mtu');
 
