@@ -7,9 +7,13 @@ const code = error => /^(client|plasmo_control)_[a-z_]+$/.test(error?.message ??
 
 // One synthetic game client, one private Plasmo control socket, no audio. Both
 // exist only in this standalone client process. Secrets never reach its caller.
-export async function observePlasmoPlayer(bridgePort, voicePort, { signal, timeoutMs = 60000 } = {}) {
+export async function observePlasmoPlayer(bridgePort, voicePort, options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)
+    || Object.keys(options).some(key => !['signal', 'timeoutMs', 'keepalive'].includes(key))) throw new Error('client_plasmo_arguments');
+  const { signal, timeoutMs = 60000, keepalive = false } = options;
   if (!Number.isSafeInteger(bridgePort) || bridgePort < 1 || bridgePort > 65535 || voicePort !== 35554
     || (signal !== undefined && !(signal instanceof AbortSignal))
+    || typeof keepalive !== 'boolean'
     || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) throw new Error('client_plasmo_arguments');
   signal?.throwIfAborted();
   const controller = new AbortController(); const evidence = new PlayEvidence(0);
@@ -38,7 +42,7 @@ export async function observePlasmoPlayer(bridgePort, voicePort, { signal, timeo
     if (signal?.aborted) abort();
     // Plasmo requests PlayerInfo at join. Register before PLAY/world packets so
     // the real request cannot be lost while waiting for chunks.
-    probeWork = probePlasmoControl(client, { approvedPort: voicePort, signal: controller.signal, timeoutMs: 10000 });
+    probeWork = probePlasmoControl(client, { approvedPort: voicePort, signal: controller.signal, timeoutMs: 10000, keepalive });
     probeWork.catch(error => fail(code(error)));
     await Promise.race([ready, failed]);
     const voice = await Promise.race([probeWork, failed]);

@@ -49,6 +49,8 @@ Incremento29: caller Node usa convites assinados nos três perfis, com plano/rev
 
 Incremento30: SVC `--offline-lab --keepalive` passou35s no mod real com35controles autenticados/respostas locais, cliente PLAY, dois agentes/cleanup e restore normal. Janela35s, gap5s, span30s, orçamento96UDP/16KiB; clocks/deadlines também conferidos fora dos timers e close250ms.156testescliente focados após hardening PASS. Não mede entrega remota/RTT/áudio nem identidade da associação interna; duplicata exata pode causar recusa conservadora. Guia LAN registra dependência VCRUNTIME140 do binário, sem instalação automática.
 
+Incremento31: Plasmo `--offline-lab --keepalive` passou separadamente35s no mod2.1.17 real,11Pings/11respostas locais, cliente PLAY, dois agentes e restore normal. Janela desde primeiro Ping, span31700ms/gap3901ms; os mesmos tetos conservadores30, com credencial simples do mod/sem MAC ou AEAD próprio. Suíte completa cliente377PASS0skip após Java fechado; não executar testes de portas junto ao servidor. Sem áudio/GUI/contas mistas/LAN/internet. Registro31 contém hashes/encerramento; próximas alterações de transporte exigem rebuild revisado e atualização explícita do pin/kit.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

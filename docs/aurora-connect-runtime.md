@@ -12,6 +12,10 @@ Ensaio SVC de manutenção do controle, opt-in no incremento30: após `voice_con
 
 Minecraft sem mods e cada perfil de voz continuam em execuções separadas e pastas novas, com `online-mode=false` autorizado. Não reutilizar pasta Java executada. O roteiro [LAN com dois computadores](aurora-connect-lan.md) usa o modo manual anterior: estes convites continuam limitados a loopback. A prova local não valida conexão externa nem dispensa os testes de GUI, contas mistas e áudio.
 
+## Keepalive Plasmo — trigésimo primeiro incremento
+
+Após `voice_control_ready` do perfil `plasmo`, `node --max-old-space-size=512 apps/connect-client-lab/plasmo-smoke.mjs --offline-lab --keepalive` observa35s desde o primeiro Ping válido, responde ao protocolo oficial e conserva o cliente sintético em PLAY. Modo rápido sem a flag permanece disponível. O mesmo plano de servidor é usado em uma cópia nova por execução; stop e restore continuam separados. Ensaio31 passou com11Pings/11callbacks de resposta, span31700ms/gap3901ms e encerramento/restauração normais. A credencial do Ping não fornece MAC/AEAD próprio; o transporte QUIC externo cifra os bytes. Sem processamento de áudio. [Comandos, hashes, testes e limites](task-aur-r4-connect.md#trigésimo-primeiro-incremento--keepalive-plasmo-além-do-prazo-udp).
+
 ## Controle Plasmo pela ponte — vigésimo sexto incremento
 
 `live-writer.mjs plan-control/run-control` agora aceita `svc` ou `plasmo`, sempre com exercício pareado no digest. Plasmo usa o estágio de recursos intocado `prepared-6jQLQp`; cada execução cria uma cópia nativa nova. Revisar plano e apply, aguardar `voice_control_ready`, executar `node --max-old-space-size=512 apps/connect-client-lab/plasmo-smoke.mjs --offline-lab` em outro processo, enviar `stop` ao supervisor e aprovar separadamente o restore apresentado. Não inferir resultado do probe a partir do PASS de writer. [Comandos exatos executados](task-aur-r4-connect.md#vigésimo-sexto-incremento--controle-plasmo-real-pela-ponte).

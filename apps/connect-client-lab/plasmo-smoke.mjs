@@ -8,7 +8,9 @@ const controller = new AbortController(); const interrupt = () => controller.abo
 process.on('SIGINT', interrupt); process.on('SIGTERM', interrupt);
 let clientFailure;
 try {
-  if (process.argv.length !== 3 || process.argv[2] !== '--offline-lab') throw new Error('client_plasmo_usage');
+  const args = process.argv.slice(2);
+  if (args[0] !== '--offline-lab' || (args.length !== 1 && !(args.length === 2 && args[1] === '--keepalive'))) throw new Error('client_plasmo_usage');
+  const keepalive = args.length === 2;
   if (process.platform !== 'win32' || process.env.NODE_OPTIONS || process.env.DEBUG || globalThis.debugNMP) throw new Error('client_plasmo_environment');
   const root = join(repo, '.aurora/connect-validation'); await rejectLinkedParents(root);
   await mkdir(root, { recursive: true });
@@ -21,7 +23,7 @@ try {
   const { withPlasmoTunnel } = await import('./tunnel-session.mjs');
   const { observePlasmoPlayer } = await import('./plasmo-play.mjs');
   const result = await withPlasmoTunnel(async ({ bridgePort, voicePort, signal }) => {
-    try { return await observePlasmoPlayer(bridgePort, voicePort, { signal }); }
+    try { return await observePlasmoPlayer(bridgePort, voicePort, { signal, keepalive }); }
     catch (error) { clientFailure = error; throw error; }
   }, { signal: controller.signal, timeoutMs: 90000 });
   process.stdout.write(`${JSON.stringify({ event: 'plasmo_control_probe', result: 'PASS', ...result.value,
