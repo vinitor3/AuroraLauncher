@@ -1,9 +1,8 @@
 import { lstat, mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { makeRunPlan, runPlanDigest } from './server.mjs';
-import { makePlan } from './runtime.mjs';
-import { runtimeArtifacts } from './play-profile.mjs';
+import { makeRunPlan, runPlanDigest, waitForStop } from './server.mjs';
+import { runtimeArtifacts, runtimeFiles } from './play-profile.mjs';
 import { SVC_CONFIG_PATH, validateSvcConfig } from './svc-profile.mjs';
 import { PLASMO_CONFIG_PATH, validatePlasmoConfig } from './plasmo-profile.mjs';
 import { readLocal, hash } from './files.mjs';
@@ -30,15 +29,22 @@ async function helperInfo(name) {
   return { file, sha256: hash(bytes), bytes: bytes.length, test: HELPER_TEST };
 }
 
-export async function makeLivePlan(javaHome, prepared, profile, helperName) {
+export async function makeLivePlan(javaHome, prepared, profile, helperName, exercise = 'writer') {
   if (!['svc', 'plasmo'].includes(profile)) fail('live_profile');
+  if (!['writer', 'svc-control'].includes(exercise) || (exercise === 'svc-control' && profile !== 'svc')) fail('live_exercise');
   const server = await makeRunPlan(javaHome, prepared, profile);
   const resources = join(PARENT, prepared);
   const launchArgs = ['-Djava.io.tmpdir=.connect-run-temp', '-Duser.home=.connect-run-temp', '-XX:-UsePerfData',
     '-Xms256M', '-Xmx1536M', `-Dfabric.gameJarPath=${join(resources, 'server.jar')}`, '-cp',
     runtimeArtifacts(profile).filter(pin => pin.file.startsWith('libraries/')).map(pin => join(resources, pin.file)).join(';'),
     'net.fabricmc.loader.impl.launch.knot.KnotServer', 'nogui'];
-  return { schemaVersion: 1, purpose: 'aurora_connect_native_voice_writer_roundtrip', profile,
+  const files = runtimeFiles(exercise === 'svc-control' ? 'play' : profile);
+  const gameFiles = Object.fromEntries(['server.properties', 'eula.txt', ...(exercise === 'svc-control' ? ['whitelist.json'] : [])]
+    .map(file => [file, { contents: files[file], sha256: hash(files[file]) }]));
+  return { schemaVersion: 1, purpose: 'aurora_connect_native_voice_writer_roundtrip', profile, exercise, gameFiles,
+    ...(exercise === 'svc-control' ? { clientExercise: { syntheticOfflineOnly: true, serverPort: 43001, voiceServerPort: 43002,
+      guestVoicePort: 35554, command: 'node --max-old-space-size=512 apps/connect-client-lab/svc-smoke.mjs --offline-lab',
+      resultInSeparateClientReport: true, stopRequiredAfterProbe: true, audio: false } } : {}),
     resourceStage: prepared, resourceRunPlanSha256: runPlanDigest(server), java: server.java,
     artifacts: server.artifacts, tools: server.tools, helper: await helperInfo(helperName),
     helperArgs: [HELPER_TEST, '--exact', '--ignored', '--test-threads=1', '--nocapture'],
@@ -148,18 +154,20 @@ async function preparedResources(javaHome, prepared, profile, expected) {
   if (runPlanDigest(await makeRunPlan(javaHome, prepared, profile)) !== expected) fail('live_resources_changed');
 }
 
-export async function runLiveWriter(javaHome, prepared, profile, helperName, approval, acceptedEula, { signal, onReview } = {}) {
+export async function runLiveWriter(javaHome, prepared, profile, helperName, approval, acceptedEula, { signal, onReview, exercise = 'writer', onReady } = {}) {
   if (acceptedEula !== true) fail('live_eula_acceptance_required');
   if (typeof approval !== 'string' || !digestPattern.test(approval) || typeof onReview !== 'function'
     || (signal !== undefined && !(signal instanceof AbortSignal))) fail('live_approval');
-  const plan = await makeLivePlan(javaHome, prepared, profile, helperName);
+  if (exercise === 'svc-control' && typeof onReady !== 'function') fail('live_control_observer');
+  if (onReady !== undefined && typeof onReady !== 'function') fail('live_control_observer');
+  const plan = await makeLivePlan(javaHome, prepared, profile, helperName, exercise);
   if (livePlanDigest(plan) !== approval) fail('live_plan_changed');
   signal?.throwIfAborted();
   await rejectLinkedParents(PARENT);
   const probeHome = await mkdtemp(join(PARENT, 'probe-'));
   if ((await listeners(PARENT, probeHome, signal)).length || (await listeners(PARENT, probeHome, signal, profile)).length) fail('live_port_in_use');
   // Confirm after the potentially slow OS queries and before creating the lab.
-  if (livePlanDigest(await makeLivePlan(javaHome, prepared, profile, helperName)) !== approval) fail('live_plan_changed');
+  if (livePlanDigest(await makeLivePlan(javaHome, prepared, profile, helperName, exercise)) !== approval) fail('live_plan_changed');
   const root = await mkdtemp(join(PARENT, 'voice-roundtrip-'));
   const ipcDirectory = join(root, 'ipc'); await mkdir(ipcDirectory);
   const ipc = new LiveIpc(ipcDirectory, profile);
@@ -190,9 +198,8 @@ export async function runLiveWriter(javaHome, prepared, profile, helperName, app
       nativeSignal.throwIfAborted();
       await preparedResources(javaHome, prepared, profile, plan.resourceRunPlanSha256);
       nativeSignal.throwIfAborted();
-      const baseline = await makePlan(javaHome, profile);
-      for (const file of ['server.properties', 'eula.txt']) {
-        nativeSignal.throwIfAborted(); await writeFile(join(copy, file), baseline.files[file], { flag: 'wx' });
+      for (const [file, record] of Object.entries(plan.gameFiles)) {
+        nativeSignal.throwIfAborted(); await writeFile(join(copy, file), record.contents, { flag: 'wx' });
       }
       nativeSignal.throwIfAborted();
       const temp = join(copy, '.connect-run-temp'); await mkdir(temp);
@@ -202,7 +209,11 @@ export async function runLiveWriter(javaHome, prepared, profile, helperName, app
       javaWork = withLabEula(copy, approval, async () => withOwnedProcess({ executable: plan.java.executable,
         args: plan.launch.args, cwd: copy, env: minimalEnvironment(temp), signal: nativeSignal,
         timeoutMs: 300000, stopTimeoutMs: 5000, outputLimitBytes: 4194304 },
-      async ({ signal: javaSignal, ownsProcessId }) => ready(copy, probeHome, javaSignal, ownsProcessId, profile)));
+      async ({ signal: javaSignal, ownsProcessId }) => {
+        const evidence = await ready(copy, probeHome, javaSignal, ownsProcessId, profile);
+        if (onReady) await onReady({ signal: javaSignal, evidence });
+        return evidence;
+      }));
       javaResult = await javaWork;
       const writer = inspectAnnouncedConfig(profile, await readLocal(join(copy, configPath(profile)), 256 * 1024));
       await ipc.send('java-closed.json', { ...Object.fromEntries(['closed', 'exitCode', 'forced'].map(key => [key, javaResult.value.process[key]])),
@@ -239,7 +250,7 @@ export async function runLiveWriter(javaHome, prepared, profile, helperName, app
     if (nativeCode) failure.operationCode = nativeCode;
     throw failure;
   }
-  return { event: 'native_writer_roundtrip', result: 'PASS', profile, labBasename: root.split(/[\\/]/).at(-1),
+  return { event: 'native_writer_roundtrip', result: 'PASS', profile, exercise, labBasename: root.split(/[\\/]/).at(-1),
     planSha256: approval, native: nativeResult.process, java: javaResult.value.process,
     eulaRestored: javaResult.eulaRestored, restoration: restored.mode,
     sourceUnchanged: restored.sourceUnchanged, unownedPreserved: restored.unownedPreserved,
@@ -265,15 +276,20 @@ export async function readApproval(input, expected, signal) {
 }
 
 export async function main(args, { input = process.stdin, signal, emit = value => process.stdout.write(json(value)) } = {}) {
-  if (args.length === 5 && args[0] === 'plan') {
-    const plan = await makeLivePlan(...args.slice(1));
+  if (args.length === 5 && ['plan', 'plan-control'].includes(args[0])) {
+    const plan = await makeLivePlan(...args.slice(1), args[0] === 'plan-control' ? 'svc-control' : 'writer');
     return { event: 'native_writer_plan', planSha256: livePlanDigest(plan), plan };
   }
-  if (args.length === 7 && args[0] === 'run' && args[6] === '--user-accepted-minecraft-eula') {
-    return runLiveWriter(...args.slice(1, 5), args[5], true, { signal,
+  if (args.length === 7 && ['run', 'run-control'].includes(args[0]) && args[6] === '--user-accepted-minecraft-eula') {
+    const control = args[0] === 'run-control';
+    return runLiveWriter(...args.slice(1, 5), args[5], true, { signal, exercise: control ? 'svc-control' : 'writer',
+      ...(control ? { onReady: async ({ signal: childSignal, evidence }) => {
+        emit({ event: 'voice_control_ready', profile: 'svc', evidence, clientProbe: 'separate_process_required' });
+        await waitForStop(input, childSignal);
+      } } : {}),
       onReview: async (review, childSignal) => { emit({ event: 'voice_mutation_review', review }); return readApproval(input, review.digest, childSignal); } });
   }
-  fail(args[0] === 'run' ? 'live_eula_acceptance_required' : 'live_usage');
+  fail(['run', 'run-control'].includes(args[0]) ? 'live_eula_acceptance_required' : 'live_usage');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const controller = new AbortController(); const interrupt = () => controller.abort();

@@ -37,6 +37,8 @@ Incremento22: perfil `plasmo` executou Plasmo2.1.17/Fabric API0.116.10+1.21.1 em
 
 Incremento24: SVC/Plasmo passaram separadamente por apply nativo→JVM/writer real→stop/close→restore reconciliado aprovado. `live-writer.mjs` cria só cópias nativas novas/preservadas, supervisiona ambos os filhos e exige duas aprovações. Helper é teste opt-in com recibo RAM/guard CIM; árvore exata inclui uma transação recovery com new/old vazios. Oracle Plasmo preserva whitespace interno do writer. IPC de erro só código estático, nunca config/log bruto. Não usar include-ignored geral, reutilizar pasta executada ou promover authUDP/áudio. Consultar domínio/runtime/task antes do próximo caller.
 
+Incremento25: `plan-control/run-control` aprova gameFiles sintéticos para SVC, mantendo ciclo nativo/restauração. `svc-smoke.mjs --offline-lab` executou um cliente em PLAY, anúncio correto e AuthAck/CheckAck AES-GCM pelo mod real através de dois agentes. Não é áudio/GUI/contas mistas nem prova Plasmo. Segredo somente no processo cliente de teste/mod; nunca em supervisor/launcher/log. `withSvcTunnel` fixaTCP43001/UDP43002/guest35554, recusaocupação e exige callbackcooperativo.112client+40runtime testes passaram; controle puro82 está incluído. Preservar relatórios separados do probe e do writer/restore.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { LiveIpc, validateNativeEvent, readNativeFailure } from './live-ipc.mjs';
-import { inspectAnnouncedConfig, verifyCopyTree, readApproval, runLiveWriter, main } from './live-writer.mjs';
+import { inspectAnnouncedConfig, verifyCopyTree, readApproval, runLiveWriter, makeLivePlan, main } from './live-writer.mjs';
 import { withLabEula, requireLabRoot } from './server-lifecycle.mjs';
 import { withOwnedProcess } from './owned-process.mjs';
 import { runtimeFiles, runtimeArtifacts } from './play-profile.mjs';
@@ -195,6 +195,10 @@ test('live EULA/approval gates precede JDK, helper and stage access', async () =
   await errorCode(runLiveWriter('PRIVATE', 'bad', 'svc', 'bad', digest, false), 'live_eula_acceptance_required');
   await errorCode(runLiveWriter('PRIVATE', 'bad', 'svc', 'bad', digest, true), 'live_approval');
   await errorCode(main(['run']), 'live_eula_acceptance_required');
+  await errorCode(main(['run-control']), 'live_eula_acceptance_required');
+  await errorCode(makeLivePlan('PRIVATE', 'bad', 'plasmo', 'bad', 'svc-control'), 'live_exercise');
+  await errorCode(runLiveWriter('PRIVATE', 'bad', 'svc', 'bad', digest, true,
+    { onReview: () => digest, exercise: 'svc-control' }), 'live_control_observer');
 });
 
 test('real sibling cancellation waits for callback preparation and owned child close after helper death', async t => {

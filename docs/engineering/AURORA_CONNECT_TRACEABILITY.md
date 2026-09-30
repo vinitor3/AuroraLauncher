@@ -53,6 +53,7 @@ Baseline de 29/09/2026, comandos/saídas/achados no [task de execução](../task
 
 | Prova executada | Requisitos/tarefas relacionados | Limite da prova |
 | --- | --- | --- |
+| Incremento25: SVC2.6.22 real/cliente sintético, anúncio viaTCP, AuthAck/CheckAck AES-GCM viaUDP por dois agentes; stop e restore nativo separados PASS | T-VOICE-02/05 parcial;003/005/006/008 |112client+40runtimePASS;82controle mock incluídos. Uma sessão/um cliente,126B↑62B↓/30ms do probe; sem áudio/GUI/contas mistas/redes/carga |
 | Incremento24: apply nativo, JVM/writer real, stop e restore reconciliado com aprovação própria, SVC e Plasmo separados; origem/arquivos alheios intactos, recursos rechecados | T-CONFIG/T-LIFE;006/007/008 | Ambos PASS após corrigir árvore de recovery/oracle de whitespace;40 Node/3 puros Rust PASS. Sem cliente de voz, authUDP/áudio ou recibo durável |
 | Incremento23: apply/strict restore nativo sobre os dois arquivos realmente gerados, hashes exatos, guard Windows de produção e preservação de outras edições | T-CONFIG/T-LIFE;006/007/008 | 2/2 testes opt-in PASS, sem JVM entre aplicação/restauração; writer após apply tratado no24 |
 | Incremento22: Plasmo2.1.17/Fabric API fixado executados em Fabric1.21.1, UDP do filho próprio, writer22chaves, STATUS por dois agentes e stop/EULA exata | T-VOICE-02 preparação; T-CONFIG/T-LIFE;007/008 | 55 testes runtime/server +13 de perfil PASS; nenhum cliente/handshake/áudio ou restore nativo com writer vivo |

@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createConnection, createServer } from 'node:net';
+import { createSocket } from 'node:dgram';
 import { setTimeout as delay } from 'node:timers/promises';
-import { GameTunnelError, withGameTunnel } from './tunnel-session.mjs';
+import { GameTunnelError, withGameTunnel, withSvcTunnel } from './tunnel-session.mjs';
 
 const windows = process.platform === 'win32';
 const deferred = () => {
@@ -192,4 +193,64 @@ test('deadline during binary verification starts no agents or operation', { skip
     assert.equal(error.cleanup.closed, 0); assert.equal(error.cleanup.forced, false); return true;
   });
   assert.equal(called, false);
+});
+
+async function udpFixture(t, port) {
+  const socket = createSocket('udp4');
+  try {
+    await new Promise((resolve, reject) => {
+      socket.once('error', reject); socket.bind({ address: '127.0.0.1', port, exclusive: true }, resolve);
+    });
+  } catch (error) {
+    try { socket.close(); } catch { /* not bound */ }
+    throw error;
+  }
+  t.after(() => new Promise(resolve => socket.close(resolve)));
+  return socket;
+}
+
+async function udpExchange(port, payload, signal) {
+  const socket = createSocket('udp4'); let timer;
+  const abort = () => socket.close();
+  try {
+    return await new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('udp_fixture_deadline')), 2000);
+      signal?.addEventListener('abort', abort, { once: true });
+      socket.once('error', () => reject(new Error('udp_fixture_io')));
+      socket.once('close', () => reject(new Error('udp_fixture_closed')));
+      socket.once('message', (bytes, source) => {
+        assert.equal(source.address, '127.0.0.1'); assert.equal(source.port, port); resolve(bytes);
+      });
+      socket.bind(0, '127.0.0.1', () => socket.send(payload, port, '127.0.0.1'));
+    });
+  } finally {
+    clearTimeout(timer); signal?.removeEventListener('abort', abort);
+    await new Promise(resolve => { try { socket.close(resolve); } catch { resolve(); } });
+  }
+}
+
+test('SVC control profile carries opaque UDP returns to two origins while TCP remains active', { skip: !windows }, async t => {
+  const f = await fixture(t); if (!f) return;
+  const udp = await udpFixture(t, 43002); const origins = new Set();
+  udp.on('message', (bytes, source) => { origins.add(source.port); udp.send(bytes, source.port, source.address); });
+  const result = await withSvcTunnel(async context => {
+    assert.equal(context.voicePort, 35554); assert.ok(context.maxDatagramPayload >= 128);
+    const tcp = Buffer.alloc(96 * 1024, 0x42); const first = Buffer.alloc(83, 0x51); const second = Buffer.alloc(47, 0x72);
+    const replies = await Promise.all([exchange(context.bridgePort, tcp, context.signal),
+      udpExchange(context.voicePort, first, context.signal), udpExchange(context.voicePort, second, context.signal)]);
+    assert.deepEqual(replies, [tcp, first, second]); return true;
+  });
+  assert.equal(result.value, true); reaped(result.cleanup); assert.equal(origins.size, 2);
+  // Released guest UDP port can be rebound without touching the target fixture.
+  const released = await udpFixture(t, 35554); assert.equal(released.address().port, 35554);
+  assert.equal(f.server.listening, true); assert.equal(udp.address().port, 43002);
+});
+
+test('occupied SVC guest port refuses before agents and preserves the foreign listener', { skip: !windows }, async t => {
+  const foreign = await udpFixture(t, 35554); let called = false;
+  await assert.rejects(withSvcTunnel(() => { called = true; }), error => {
+    assert.equal(error.code, 'game_tunnel_voice_port_in_use'); assert.equal(error.cleanup.agents, 0);
+    assert.equal(error.cleanup.closed, 0); return true;
+  });
+  assert.equal(called, false); assert.equal(foreign.address().port, 35554);
 });

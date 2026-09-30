@@ -4,6 +4,7 @@ import { createSocket } from 'node:dgram';
 import { lstat, mkdir, mkdtemp, open, realpath, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { rejectLinkedParents, resolveExplicitLocalPath } from '../connect-voice-tools/local-path.mjs';
 import { readLocal } from '../connect-runtime-tools/files.mjs';
 
@@ -198,6 +199,16 @@ async function stopAgent(agent, fail) {
  * the ignored validation directory; personal configuration is never changed.
  */
 export async function withGameTunnel(operation, options = {}) {
+  return withTunnel(operation, options, false);
+}
+
+// Test-only SVC control profile. The mod's announcement must select this exact
+// guest port. No caller can provide a destination or broaden the service set.
+export async function withSvcTunnel(operation, options = {}) {
+  return withTunnel(operation, options, true);
+}
+
+async function withTunnel(operation, options, voice) {
   if (typeof operation !== 'function' || !options || typeof options !== 'object' || Array.isArray(options)
     || Object.keys(options).some(key => !['signal', 'timeoutMs'].includes(key))
     || (options.signal !== undefined && !(options.signal instanceof AbortSignal))) invalid('game_tunnel_invalid_options');
@@ -217,7 +228,7 @@ export async function withGameTunnel(operation, options = {}) {
   if (options.signal?.aborted) onAbort();
   const timer = setTimeout(() => fail('game_tunnel_deadline'), timeoutMs);
   const agents = [];
-  let reservation; let planFile; let planHash; let value;
+  let reservation; let voiceReservation; let planFile; let planHash; let value; let callbackWork;
   const event = async agent => {
     let timer;
     const expired = new Promise(resolve => { timer = setTimeout(() => { fail('game_tunnel_event_deadline'); resolve(); }, EVENT_TIMEOUT_MS); });
@@ -230,9 +241,21 @@ export async function withGameTunnel(operation, options = {}) {
     const environment = { SystemRoot: process.env.SystemRoot, windir: process.env.SystemRoot,
       TEMP: directory, TMP: directory, USERPROFILE: directory };
     reservation = await reserveBind(); check();
+    if (voice) {
+      const socket = createSocket('udp4');
+      await new Promise((resolve, reject) => {
+        socket.once('error', () => { try { socket.close(); } catch { /* not bound */ } reject(new GameTunnelError('game_tunnel_voice_port_in_use')); });
+        socket.bind({ address: '127.0.0.1', port: 35554, exclusive: true }, resolve);
+      });
+      voiceReservation = { socket }; check();
+    }
     const service = { serviceId: 'game', protocol: 'tcp', endpoint: '127.0.0.1:43001',
       revision: 1, requiredCapability: 'reliableStream', maxDatagramBytes: 1400, udpReturnPolicy: { type: 'replyBudget' } };
-    const plan = { schemaVersion: 1, bind: reservation.address, durationSeconds: LIFETIME_SECONDS, services: [service] };
+    const services = [service];
+    if (voice) services.push({ serviceId: 'aux', protocol: 'udp', endpoint: '127.0.0.1:43002', revision: 1,
+      requiredCapability: 'datagram', maxDatagramBytes: 1400,
+      udpReturnPolicy: { type: 'authorizedDownstream', bytesPerSecond: 16384, datagramsPerSecond: 20 } });
+    const plan = { schemaVersion: 1, bind: reservation.address, durationSeconds: LIFETIME_SECONDS, services };
     const bytes = Buffer.from(`${JSON.stringify(plan)}\n`);
     planFile = join(directory, 'plan.json'); planHash = hash(bytes);
     await writeFile(planFile, bytes, { flag: 'wx' }); check();
@@ -241,10 +264,9 @@ export async function withGameTunnel(operation, options = {}) {
     if (!/^[a-f0-9]{64}$/.test(hostIdentity.peer) || hostIdentity.session !== hostIdentity.peer
       || hostIdentity.bind !== plan.bind || hostIdentity.planHash !== planHash
       || hostIdentity.durationSeconds !== LIFETIME_SECONDS || !Array.isArray(hostIdentity.approvedServices)
-      || hostIdentity.approvedServices.length !== 1
-      || Object.keys(service).some(key => JSON.stringify(hostIdentity.approvedServices[0]?.[key]) !== JSON.stringify(service[key]))) invalid('game_tunnel_approval_mismatch');
-    const guest = startAgent(['guest-tcp', hostIdentity.peer, plan.bind, hostIdentity.session,
-      '127.0.0.1:0', String(LIFETIME_SECONDS)], 'guest', environment, fail); agents.push(guest);
+      || !isDeepStrictEqual(hostIdentity.approvedServices, services)) invalid('game_tunnel_approval_mismatch');
+    const guest = startAgent([voice ? 'guest' : 'guest-tcp', hostIdentity.peer, plan.bind, hostIdentity.session,
+      '127.0.0.1:0', ...(voice ? ['127.0.0.1:35554'] : []), String(LIFETIME_SECONDS)], 'guest', environment, fail); agents.push(guest);
     const guestIdentity = await event(guest);
     if (!/^[a-f0-9]{64}$/.test(guestIdentity.peer) || guestIdentity.peer === hostIdentity.peer) invalid('game_tunnel_identity_invalid');
     // The CLI binds after authorizing its guest. Keep the reservation until this
@@ -254,16 +276,22 @@ export async function withGameTunnel(operation, options = {}) {
     host.write(guestIdentity.peer);
     const hostReady = await event(host);
     if (hostReady.experimental !== true || hostReady.relay !== false) invalid('game_tunnel_mode_invalid');
+    if (voiceReservation) { await closeReservation(voiceReservation); voiceReservation = undefined; check(); }
     guest.write('ready');
     const guestReady = await event(guest);
     const match = typeof guestReady.tcp === 'string' && /^127\.0\.0\.1:([1-9][0-9]{0,4})$/.exec(guestReady.tcp);
-    if (!match || Number(match[1]) > 65535 || guestReady.mode !== 'tcp' || guestReady.experimental !== true
-      || Object.hasOwn(guestReady, 'udp')) invalid('game_tunnel_mode_invalid');
+    if (!match || Number(match[1]) > 65535 || guestReady.experimental !== true) invalid('game_tunnel_mode_invalid');
+    if (voice) {
+      if (guestReady.udp !== '127.0.0.1:35554' || Object.hasOwn(guestReady, 'mode')
+        || !Number.isSafeInteger(guestReady.maxDatagramPayload) || guestReady.maxDatagramPayload < 128
+        || guestReady.maxDatagramPayload > 1400) invalid('game_tunnel_mode_invalid');
+    } else if (guestReady.mode !== 'tcp' || Object.hasOwn(guestReady, 'udp')) invalid('game_tunnel_mode_invalid');
     check();
-    const work = Promise.resolve().then(() => {
-      check(); return operation(Object.freeze({ bridgePort: Number(match[1]), signal: controller.signal }));
+    callbackWork = Promise.resolve().then(() => {
+      check(); return operation(Object.freeze({ bridgePort: Number(match[1]), signal: controller.signal,
+        ...(voice ? { voicePort: 35554, maxDatagramPayload: guestReady.maxDatagramPayload } : {}) }));
     }).then(result => { value = result; }, () => fail('game_tunnel_operation_failed'));
-    await Promise.race([work, failure.promise]);
+    await Promise.race([callbackWork, failure.promise]);
   } catch (error) { fail(error instanceof GameTunnelError ? error.code : 'game_tunnel_preparation_failed'); }
   finally {
     controller.abort();
@@ -274,6 +302,12 @@ export async function withGameTunnel(operation, options = {}) {
     if (reservation) {
       try { await closeReservation(reservation); } catch { fail('game_tunnel_reservation_failed'); }
     }
+    if (voiceReservation) {
+      try { await closeReservation(voiceReservation); } catch { fail('game_tunnel_reservation_failed'); }
+    }
+    // The fixed voice probe cooperates with abort and owns its UDP socket.
+    // Await that cleanup; retain the prior generic TCP callback semantics.
+    if (voice && callbackWork) await callbackWork;
     clearTimeout(timer); options.signal?.removeEventListener('abort', onAbort);
     if (planFile && planHash) {
       try { if (hash(await readLocal(planFile, EVENT_BYTES)) !== planHash) fail('game_tunnel_plan_changed'); }
