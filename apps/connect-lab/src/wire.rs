@@ -12,6 +12,14 @@ pub(crate) struct Hello {
     pub session_id: String,
     pub lease_id: String,
     pub capabilities: Vec<Capability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invitation: Option<InvitationProof>,
+}
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct InvitationProof {
+    pub digest: String,
+    pub generation: u64,
 }
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

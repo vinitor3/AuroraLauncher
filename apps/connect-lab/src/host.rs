@@ -26,6 +26,8 @@ use tokio_util::sync::CancellationToken;
 
 struct LeaseState {
     value: Lease,
+    invitation: Option<Invitation>,
+    consumed: AtomicBool,
     cancel: CancellationToken,
     udp_limiters: Mutex<HashMap<u32, Arc<Mutex<UdpLimiter>>>>,
     downstream_limiters: Mutex<HashMap<u32, Arc<Mutex<UdpLimiter>>>>,
@@ -50,6 +52,16 @@ pub struct Host {
 }
 impl Host {
     pub async fn start(config: HostConfig) -> Result<Self> {
+        Self::start_inner(config, None).await
+    }
+    /// One explicit invited lease, separate from the reconnectable manual mode.
+    /// The caller must create fresh host/session keys each run: replay state is
+    /// local to this Host and is neither persisted nor reconstructed from tokens.
+    pub async fn start_invited(config: HostConfig, invitation: &Invitation) -> Result<Self> {
+        invitation.check_host(&config)?;
+        Self::start_inner(config, Some(invitation.clone())).await
+    }
+    async fn start_inner(config: HostConfig, mut invitation: Option<Invitation>) -> Result<Self> {
         config.limits.validate()?;
         if !valid_id(&config.session_id)
             || config.services.is_empty()
@@ -105,6 +117,8 @@ impl Host {
                 lease.lease_id.clone(),
                 LeaseState {
                     value: lease,
+                    invitation: invitation.take(),
+                    consumed: AtomicBool::new(false),
                     cancel: CancellationToken::new(),
                     udp_limiters: Mutex::new(HashMap::new()),
                     downstream_limiters: Mutex::new(HashMap::new()),
@@ -148,6 +162,8 @@ impl Host {
         self.state.metrics.snapshot()
     }
     pub fn revoke(&self, lease_id: &str) -> bool {
+        // Linearize revocation with admission and its single-use decision.
+        let _admission = self.state.active_leases.lock().unwrap();
         if let Some(lease) = self.state.leases.get(lease_id) {
             lease.cancel.cancel();
             true
@@ -220,6 +236,9 @@ fn authorize<'a>(state: &'a State, lease_id: &str, peer: EndpointId) -> Result<&
     if lease.cancel.is_cancelled() || unix_millis() >= lease.value.expires_at_unix_ms {
         return Err(Error::Expired);
     }
+    if let Some(invitation) = &lease.invitation {
+        invitation.check_current()?;
+    }
     Ok(lease)
 }
 
@@ -234,11 +253,33 @@ async fn handshake(connection: &Connection, state: &Arc<State>) -> Result<(Hello
         {
             return Err(Error::Unauthorized);
         }
-        authorize(state, &hello.lease_id, connection.remote_id())?;
+        let lease = authorize(state, &hello.lease_id, connection.remote_id())?;
+        match (&lease.invitation, &hello.invitation) {
+            (None, None) => (),
+            (Some(invitation), Some(proof)) if *proof == invitation.proof() => {
+                if hello.capabilities != invitation.capabilities() {
+                    return Err(Error::CapabilityUnavailable);
+                }
+            }
+            // Missing proof cannot downgrade an invited lease to manual;
+            // a manual lease never interprets an unsolicited invitation proof.
+            _ => return Err(Error::Unauthorized),
+        }
         let mut active = state.active_leases.lock().unwrap();
-        if active.len() >= state.limits.max_peers || !active.insert(hello.lease_id.clone()) {
+        authorize(state, &hello.lease_id, connection.remote_id())?;
+        if lease.invitation.is_some() && lease.consumed.load(Ordering::Acquire) {
+            return Err(Error::Replay);
+        }
+        if active.len() >= state.limits.max_peers || active.contains(&hello.lease_id) {
             return Err(Error::Limit);
         }
+        // TLS is fully authenticated before this handler is entered. Consume
+        // only after every binding/capability/revocation check, before the ACK.
+        // Never undo consumption if sending the ACK fails or the peer drops.
+        if lease.invitation.is_some() {
+            lease.consumed.store(true, Ordering::Release);
+        }
+        active.insert(hello.lease_id.clone());
         Ok(PeerGuard {
             state: state.clone(),
             lease_id: hello.lease_id.clone(),
@@ -324,8 +365,11 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
         return;
     };
     let lease = &state.leases[&hello.lease_id];
-    let remaining =
+    let mut remaining =
         Duration::from_millis(lease.value.expires_at_unix_ms.saturating_sub(unix_millis()));
+    if let Some(invitation) = &lease.invitation {
+        remaining = remaining.min(invitation.remaining());
+    }
     let cancel = state.cancel.child_token();
     let tcp = Arc::new(Semaphore::new(state.limits.max_tcp_per_peer));
     let associations: Associations = Arc::new(Mutex::new(HashMap::new()));

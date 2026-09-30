@@ -6,6 +6,25 @@ Incremento20: três ensaios com Minecraft 1.21.1/Fabric real e dois clientes sin
 
 Incrementos25/26: SVC2.6.22 e Plasmo2.1.17 passaram separadamente pelo anúncio TCP e controle UDP real, cada um com um cliente sintético e dois agentes. SVC valida AuthAck/CheckAck AES-GCM; Plasmo valida Ping com credencial de sessão, sem MAC/AEAD próprio nesse pacote. QUIC mantém a cifra do transporte. Ambos tiveram stop normal e restauração nativa revisada; áudio e GUI continuam pendentes. [Execução atual](aurora-connect-runtime.md#controle-plasmo-pela-ponte--vigésimo-sexto-incremento).
 
+## Convite manual assinado — experimental e somente loopback
+
+Os comandos `host-invite-plan`, `guest-invite` e `guest-invite-tcp` são um fluxo separado do pin/lease manual anterior. Um convite autoriza **uma admissão**, com chave do convidado, sessão, serviços e prazo até10min, assinatura Ed25519 e aprovação do digest. Receber o JSON não substitui possuir a chave privada do convidado. Reentrar exige novas execuções/chaves/convite; não há persistência ou identidade social. [Contrato e limites](engineering/AURORA_CONNECT_SPEC.md#81-convite-manual-assinado--laboratório).
+
+Roteiro automatizado próprio, com dois agentes e endpoint controlado:
+
+~~~powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/connect-lab-smoke.ps1 -Invitations
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/connect-lab-smoke.ps1 -SkipBuild -Invitations -AuthorizedDownstream
+~~~
+
+`-SkipBuild` exige binário já compilado/revisado. Script prepara plano sintético novo, prova rejeição de hash incorreto, mantém convite apenas em RAM/stdin e imprime contagens redigidas. Encerramento envia stop ao convidado, host e echo; exige exit0 e `CLEANUP_PASS`. Não registra convite, chave, IP ou payload no relatório. Configurações pessoais não participam; plano novo permanece na pasta ignorada. Resultados realmente executados ficam no task; um roteiro ainda não executado não é evidência.
+
+Ensaio manual preparado, **no mesmo PC**, usa o exemplo existente `apps/connect-lab/examples/host-downstream.json`, portas42000(transporte),42001(TCP destino),42002(UDP destino),42010/42011(pontes). Todos os terminais partem desta worktree. No terminal do endpoint, executar `./apps/connect-lab/target/debug/aurora-connect-lab.exe echo-downstream 127.0.0.1:42001 127.0.0.1:42002 600`. No anfitrião, executar `plan apps/connect-lab/examples/host-downstream.json` com o mesmo executável; conferir serviços/política/prazo e passar o hash retornado a `host-invite-plan apps/connect-lab/examples/host-downstream.json <hash-revisado>`. Hash é saída real a preencher, nunca copiar de outro plano.
+
+No convidado, iniciar `guest-invite <peer-publico-do-host> 127.0.0.1:42010 127.0.0.1:42011 600`. Copiar seu peer público para o stdin do anfitrião, que emitirá o convite. Entregar o JSON completo ao stdin do convidado; conferir prévia, pin, serviços, expiração e listeners; enviar `approve <digest-da-previa>`. Cada prompt expira em60s ou antes pelo convite. Após guest_ready, `probe-downstream 127.0.0.1:42010 127.0.0.1:42011` comprova somente bytes sintéticos. Não usar esse convite em outro computador: este incremento recusa endereço externo.
+
+Encerrar com `stop` primeiro no convidado, depois anfitrião e endpoint, aguardando eventos stopped/exit. EOF em prompt pendente recusa sem conexão; Ctrl+C cancela. Revogação/expiração do host também fecha o convidado. Porta ocupada falha, nunca encerra proprietário alheio. Reinício descarta chaves/convite; não reutilizar a mesma identidade host para tentar reconstruir consumo em memória. Nenhuma configuração de jogo, EULA ou mod muda neste ensaio. Convites completos e pins não pertencem a logs compartilhados; devolver somente PASS/código fixo/contagens/cleanup.
+
 ## O que este executável faz
 
 Dois agentes autenticam as chaves públicas esperadas usando Iroh 1.3.0 e QUIC cifrado. O host concede uma lease de laboratório ao peer convidado, sessão e serviços explícitos, com prazo e revogação. `guest` pede IDs `game` (TCP) e `aux` (UDP), revisão 1; `guest-tcp` pede somente `game`, anunciando apenas `reliableStream`. Os destinos aprovados são literais loopback do host; o convidado não escolhe IP/porta do destino.

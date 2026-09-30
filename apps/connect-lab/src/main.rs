@@ -1,7 +1,7 @@
 //! Explicit development CLI. No persisted keys, cloud services or launcher hooks.
 use aurora_connect_lab::{
-    Capability, EndpointAddr, EndpointId, Guest, GuestConfig, Host, HostConfig, Lease, Limits,
-    Protocol, Service, UdpReturnPolicy, generate_key, load_plan,
+    Capability, EndpointAddr, EndpointId, Guest, GuestConfig, Host, HostConfig, Invitation, Lease,
+    Limits, Protocol, Service, UdpReturnPolicy, generate_key, load_plan, unix_millis,
 };
 use serde_json::json;
 use std::{
@@ -42,6 +42,44 @@ async fn until_stop(seconds: u64) {
         _ = rx => {},
         _ = tokio::signal::ctrl_c() => {},
         _ = tokio::time::sleep(Duration::from_secs(seconds)) => {},
+    }
+}
+
+// Invitation prompts have their own bounded, timed reader. Never use a blocking
+// Tokio task: a stalled terminal must not hold runtime shutdown open. At most
+// one dedicated stdin thread remains until this CLI exits after cancellation.
+async fn invitation_input(max_bytes: usize, timeout: Duration) -> Result<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let result = std::io::stdin()
+            .lock()
+            .take((max_bytes + 1) as u64)
+            .read_line(&mut line);
+        let value = if result.is_err()
+            || line.is_empty()
+            || line.len() > max_bytes
+            || !line.ends_with('\n')
+        {
+            Err(aurora_connect_lab::Error::Protocol)
+        } else {
+            line.pop();
+            if line.ends_with('\r') {
+                line.pop();
+            }
+            // Windows PowerShell 5 may prefix its first redirected stdin line
+            // with UTF-8 BOM. Strip that framing marker, not signed JSON bytes.
+            if line.starts_with('\u{feff}') {
+                line.remove(0);
+            }
+            Ok(line)
+        };
+        let _ = tx.send(value);
+    });
+    tokio::select! {
+        value = rx => Ok(value.map_err(|_| aurora_connect_lab::Error::Io)??),
+        _ = tokio::time::sleep(timeout) => Err(aurora_connect_lab::Error::Timeout.into()),
+        _ = tokio::signal::ctrl_c() => Err(aurora_connect_lab::Error::Closed.into()),
     }
 }
 
@@ -136,6 +174,113 @@ async fn host_plan(args: &[String]) -> Result<()> {
     // in-memory services are exactly the bytes selected by the local operator.
     let plan = load_plan(&args[0], Some(&args[1]))?;
     run_host(plan.bind, plan.seconds, plan.services, Some(plan.hash)).await
+}
+
+async fn host_invite_plan(args: &[String]) -> Result<()> {
+    if args.len() != 2 {
+        return Err(aurora_connect_lab::Error::Configuration.into());
+    }
+    let plan = load_plan(&args[0], Some(&args[1]))?;
+    if !plan.bind.ip().is_loopback() || plan.seconds > 600 {
+        return Err(aurora_connect_lab::Error::Configuration.into());
+    }
+    let secret_key = generate_key();
+    let session_id = secret_key.public().to_string();
+    event(
+        json!({"event":"invite_host_identity", "peer":session_id, "plan":plan.preview(),
+        "next":"review services; give host public ID to guest through an authorized channel; enter guest public ID within 60 seconds"}),
+    );
+    let peer: EndpointId = invitation_input(128, Duration::from_secs(60))
+        .await?
+        .parse()
+        .map_err(|_| aurora_connect_lab::Error::Unauthorized)?;
+    let invitation = Invitation::issue(
+        &secret_key,
+        peer,
+        &session_id,
+        plan.bind,
+        &plan.services,
+        unix_millis().saturating_add(plan.seconds * 1000),
+    )?;
+    let lease = invitation.lease();
+    let lease_id = lease.lease_id.clone();
+    let host = Host::start_invited(
+        HostConfig {
+            secret_key,
+            bind_addr: plan.bind,
+            session_id,
+            services: plan.services,
+            leases: vec![lease],
+            limits: Limits::default(),
+        },
+        &invitation,
+    )
+    .await?;
+    // Public invitation travels only to the intended guest. No private key,
+    // internal destination, account token or persisted invitation is emitted.
+    event(
+        json!({"event":"host_invitation", "invitation":invitation.encode(),
+        "digest":invitation.digest(), "singleAdmission":true}),
+    );
+    event(
+        json!({"event":"host_ready", "experimental":true, "relay":false,
+        "next":"enter stop to revoke and close; reconnect requires a fresh host/session/invitation"}),
+    );
+    until_stop(plan.seconds).await;
+    host.revoke(&lease_id);
+    host.shutdown().await;
+    event(json!({"event":"host_stopped"}));
+    Ok(())
+}
+
+async fn guest_invite(args: &[String], tcp_only: bool) -> Result<()> {
+    if args.len() != if tcp_only { 3 } else { 4 } {
+        return Err(aurora_connect_lab::Error::Configuration.into());
+    }
+    let host: EndpointId = args[0]
+        .parse()
+        .map_err(|_| aurora_connect_lab::Error::Unauthorized)?;
+    let tcp: SocketAddr = args[1].parse()?;
+    let udp = if tcp_only {
+        None
+    } else {
+        Some(args[2].parse::<SocketAddr>()?)
+    };
+    let seconds = duration(&args[if tcp_only { 2 } else { 3 }])?;
+    if seconds > 600 || !tcp.ip().is_loopback() || udp.is_some_and(|addr| !addr.ip().is_loopback())
+    {
+        return Err(aurora_connect_lab::Error::Configuration.into());
+    }
+    let secret_key = generate_key();
+    event(
+        json!({"event":"guest_identity", "peer":secret_key.public().to_string(),
+        "next":"authorize this public ID at the pinned host; paste its invitation within 60 seconds"}),
+    );
+    // 4096 signed bytes plus optional UTF-8 BOM and CRLF framing.
+    let encoded = invitation_input(4101, Duration::from_secs(60)).await?;
+    let invitation = Invitation::verify(&encoded, host, secret_key.public())?;
+    let lease = invitation.lease();
+    if !lease.services.contains("game") || lease.services.contains("aux") != udp.is_some() {
+        return Err(aurora_connect_lab::Error::ServiceDenied.into());
+    }
+    let remaining = invitation
+        .expires_at_unix_ms()
+        .saturating_sub(unix_millis());
+    if remaining == 0 {
+        return Err(aurora_connect_lab::Error::Expired.into());
+    }
+    event(
+        json!({"event":"invitation_review", "digest":invitation.digest(), "invitation":invitation.preview(),
+        "localTcp":tcp.to_string(), "localUdp":udp.map(|a| a.to_string()),
+        "next":"review pinned host, guest, services and expiry; enter approve followed by the exact digest"}),
+    );
+    if invitation_input(80, Duration::from_millis(remaining.min(60_000))).await?
+        != format!("approve {}", invitation.digest())
+    {
+        return Err(aurora_connect_lab::Error::Unauthorized.into());
+    }
+    let guest = Guest::connect_invited(secret_key, &invitation, Limits::default()).await?;
+    run_guest_bridges(guest, tcp, udp, seconds, true).await
 }
 
 async fn run_host(
@@ -245,6 +390,16 @@ async fn guest(args: &[String], tcp_only: bool) -> Result<()> {
         limits: Limits::default(),
     })
     .await?;
+    run_guest_bridges(guest, tcp, udp, seconds, false).await
+}
+
+async fn run_guest_bridges(
+    guest: Guest,
+    tcp: SocketAddr,
+    udp: Option<SocketAddr>,
+    seconds: u64,
+    invited: bool,
+) -> Result<()> {
     let tcp_bridge = match guest.tcp_bridge("game", 1, tcp).await {
         Ok(bridge) => bridge,
         Err(error) => {
@@ -273,7 +428,14 @@ async fn guest(args: &[String], tcp_only: bool) -> Result<()> {
             json!({"event":"guest_ready", "tcp":tcp_bridge.local_addr().to_string(), "mode":"tcp", "experimental":true, "next":"enter stop to close"}),
         );
     }
-    until_stop(seconds).await;
+    if invited {
+        tokio::select! {
+            _ = until_stop(seconds) => {},
+            _ = guest.connection().closed() => {},
+        }
+    } else {
+        until_stop(seconds).await;
+    }
     guest.shutdown().await;
     if let Some(bridge) = udp_bridge {
         bridge.shutdown().await;
@@ -444,8 +606,11 @@ async fn main() {
         Some("host") => host(&args[1..]).await,
         Some("plan") => plan(&args[1..]),
         Some("host-plan") => host_plan(&args[1..]).await,
+        Some("host-invite-plan") => host_invite_plan(&args[1..]).await,
         Some("guest") => guest(&args[1..], false).await,
         Some("guest-tcp") => guest(&args[1..], true).await,
+        Some("guest-invite") => guest_invite(&args[1..], false).await,
+        Some("guest-invite-tcp") => guest_invite(&args[1..], true).await,
         Some("minecraft-status") => minecraft_status(&args[1..]).await,
         Some("echo") => echo(&args[1..], false).await,
         Some("echo-downstream") => echo(&args[1..], true).await,
@@ -463,6 +628,9 @@ async fn main() {
         _ => {
             println!(
                 "EXPERIMENTAL - no launcher integration, keys only in memory\nhost <quic-bind> <approved-tcp-target> <approved-udp-target> <seconds>\nplan <local-service-plan.json>\nhost-plan <local-service-plan.json> <approved-sha256>\nguest <host-public-id> <host-direct-address> <session-id> <local-tcp> <local-udp> <seconds>\nguest-tcp <host-public-id> <host-direct-address> <session-id> <local-tcp> <seconds>\necho <loopback-tcp> <loopback-udp> <seconds>\nprobe <loopback-tcp> <loopback-udp>\nminecraft-status <loopback-tcp-bridge> <handshake-host> <handshake-port> <protocol-number>\necho-downstream / probe-downstream: same arguments, controlled asymmetric UDP test only\nUse stop on stdin or Ctrl+C to end. See docs/aurora-connect.md."
+            );
+            println!(
+                "host-invite-plan <reviewed-plan.json> <approved-sha256>\nguest-invite <pinned-host-public-id> <local-tcp> <local-udp> <seconds>\nguest-invite-tcp <pinned-host-public-id> <local-tcp> <seconds>\nInvitation commands are loopback-only, one admission, at most 600 seconds; interactive prompts expire."
             );
             Ok(())
         }

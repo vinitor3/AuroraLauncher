@@ -1,4 +1,4 @@
-param([switch]$SkipBuild, [switch]$AuthorizedDownstream)
+param([switch]$SkipBuild, [switch]$AuthorizedDownstream, [switch]$Invitations)
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $manifest = Join-Path $repo 'apps/connect-lab/Cargo.toml'
@@ -58,8 +58,12 @@ try {
     $hostAddress = $reservation.Client.LocalEndPoint.ToString()
     $reservation.Dispose()
     $returnPolicy = 'replyBudget'
-    if ($AuthorizedDownstream) {
-        $returnPolicy = 'authorizedDownstream'
+    if ($AuthorizedDownstream -or $Invitations) {
+        $udpPolicy = @{ type='replyBudget' }
+        if ($AuthorizedDownstream) {
+            $returnPolicy = 'authorizedDownstream'
+            $udpPolicy = @{ type='authorizedDownstream'; bytesPerSecond=100000; datagramsPerSecond=100 }
+        }
         $planDirectory = Join-Path $repo '.aurora/connect-validation'
         $null = New-Item -ItemType Directory -Path $planDirectory -Force
         $planRelative = '.aurora/connect-validation/smoke-plan-' + [Guid]::NewGuid().ToString('N') + '.json'
@@ -68,7 +72,7 @@ try {
             schemaVersion = 1; bind = $hostAddress; durationSeconds = 120
             services = @(
                 [ordered]@{ serviceId='game'; protocol='tcp'; endpoint=$targets.tcp; revision=1; requiredCapability='reliableStream'; maxDatagramBytes=1400; udpReturnPolicy=@{ type='replyBudget' } },
-                [ordered]@{ serviceId='aux'; protocol='udp'; endpoint=$targets.udp; revision=1; requiredCapability='datagram'; maxDatagramBytes=1400; udpReturnPolicy=@{ type='authorizedDownstream'; bytesPerSecond=100000; datagramsPerSecond=100 } }
+                [ordered]@{ serviceId='aux'; protocol='udp'; endpoint=$targets.udp; revision=1; requiredCapability='datagram'; maxDatagramBytes=1400; udpReturnPolicy=$udpPolicy }
             )
         }
         [IO.File]::WriteAllText($planPath, ($plan | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
@@ -78,20 +82,42 @@ try {
         $preview = Read-Event $review 'plan_ready'
         if (-not $review.WaitForExit(5000) -or $review.ExitCode -ne 0) { throw 'plan_preview_failed' }
         if ($preview.plan.hash -ne (Get-FileHash -LiteralPath $planPath -Algorithm SHA256).Hash.ToLowerInvariant()) { throw 'plan_hash_mismatch' }
-        $rejected = Start-Lab @('host-plan', $planRelative, ('0' * 64))
+        $hostCommand = 'host-plan'
+        if ($Invitations) { $hostCommand = 'host-invite-plan' }
+        $rejected = Start-Lab @($hostCommand, $planRelative, ('0' * 64))
         $denial = Read-Event $rejected 'failed'
         if ($denial.code -ne 'plan_changed_since_review' -or -not $rejected.WaitForExit(5000) -or $rejected.ExitCode -ne 1) { throw 'unapproved_plan_was_not_rejected' }
-        $hostAgent = Start-Lab @('host-plan', $planRelative, $preview.plan.hash)
+        $hostAgent = Start-Lab @($hostCommand, $planRelative, $preview.plan.hash)
     } else {
         $hostAgent = Start-Lab @('host', $hostAddress, $targets.tcp, $targets.udp, '120')
     }
-    $hostIdentity = Read-Event $hostAgent 'host_identity'
-    $guestAgent = Start-Lab @('guest', $hostIdentity.peer, $hostAddress, $hostIdentity.session, '127.0.0.1:0', '127.0.0.1:0', '120')
+    if ($Invitations) {
+        $hostIdentity = Read-Event $hostAgent 'invite_host_identity'
+        if ($hostIdentity.plan.hash -ne $preview.plan.hash) { throw 'invite_host_plan_mismatch' }
+        $guestAgent = Start-Lab @('guest-invite', $hostIdentity.peer, '127.0.0.1:0', '127.0.0.1:0', '120')
+    } else {
+        $hostIdentity = Read-Event $hostAgent 'host_identity'
+        $guestAgent = Start-Lab @('guest', $hostIdentity.peer, $hostAddress, $hostIdentity.session, '127.0.0.1:0', '127.0.0.1:0', '120')
+    }
     $guestIdentity = Read-Event $guestAgent 'guest_identity'
     $hostAgent.StandardInput.WriteLine($guestIdentity.peer)
     $hostAgent.StandardInput.Flush()
-    $null = Read-Event $hostAgent 'host_ready'
-    $guestAgent.StandardInput.WriteLine('ready')
+    if ($Invitations) {
+        $issued = Read-Event $hostAgent 'host_invitation'
+        if (-not $issued.singleAdmission -or $issued.invitation.Length -gt 4096 -or $issued.digest -notmatch '^[0-9a-f]{64}$') { throw 'invitation_invalid' }
+        $null = Read-Event $hostAgent 'host_ready'
+        $guestAgent.StandardInput.WriteLine($issued.invitation)
+        $guestAgent.StandardInput.Flush()
+        $invitationReview = Read-Event $guestAgent 'invitation_review'
+        if ($invitationReview.digest -ne $issued.digest) { throw 'invitation_review_mismatch' }
+        # This supervisor owns both agent processes and the reviewed synthetic plan.
+        # Private keys stay inside their respective agents.
+        # The invitation never leaves RAM/stdin or enters the shared report.
+        $guestAgent.StandardInput.WriteLine('approve ' + $issued.digest)
+    } else {
+        $null = Read-Event $hostAgent 'host_ready'
+        $guestAgent.StandardInput.WriteLine('ready')
+    }
     $guestAgent.StandardInput.Flush()
     $bridges = Read-Event $guestAgent 'guest_ready'
     $probeCommand = 'probe'
@@ -111,7 +137,8 @@ try {
         $null = Read-Event $pair[0] $pair[1]
         if (-not $pair[0].WaitForExit(5000) -or $pair[0].ExitCode -ne 0) { throw 'lab_shutdown_failed' }
     }
-    if ($AuthorizedDownstream -and $preview.plan.hash -ne (Get-FileHash -LiteralPath $planPath -Algorithm SHA256).Hash.ToLowerInvariant()) { throw 'lab_plan_changed' }
+    if (($AuthorizedDownstream -or $Invitations) -and $preview.plan.hash -ne (Get-FileHash -LiteralPath $planPath -Algorithm SHA256).Hash.ToLowerInvariant()) { throw 'lab_plan_changed' }
+    if ($Invitations) { Write-Output 'INVITATION_PASS: signature, pinned recipient, explicit digest approval and single admission enabled; no account or cloud identity asserted.' }
     Write-Output 'CLEANUP_PASS: owned agents and endpoint process exited; no keys or personal configuration persisted. Generated lab plan, if used, retained unchanged in ignored validation folder.'
 } finally {
     foreach ($process in $processes) {

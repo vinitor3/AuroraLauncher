@@ -1,6 +1,7 @@
 //! Experimental transport lab. No desktop integration, discovery, relay or port mapping.
 mod guest;
 mod host;
+mod invitation;
 mod minecraft_status;
 mod model;
 mod plan;
@@ -9,6 +10,7 @@ mod wire;
 
 pub use guest::{Guest, TcpBridge, UdpAssociation, UdpBridge};
 pub use host::Host;
+pub use invitation::{Invitation, MAX_INVITATION_BYTES, MAX_INVITATION_LIFETIME};
 pub use iroh::{EndpointAddr, EndpointId, SecretKey};
 pub use minecraft_status::{
     MAX_MINECRAFT_STATUS_JSON_BYTES, MAX_MINECRAFT_STATUS_TIMEOUT,

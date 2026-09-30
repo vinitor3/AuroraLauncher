@@ -446,6 +446,41 @@ Nova cópia `voice-roundtrip-J0s63R`, helperSHA `1cf119159312e99f47e06a9db01341b
 
 Estado: Plasmo **PARCIAL** para controle/endereço dedicado sóAurora em loopback; SVC mantém prova25 própria. TCP/UDP/direto loopback **PROTÓTIPO**; relay desligado; Minecraft sintético validado nesse alcance; convites/UI **NÃO IMPLEMENTADO**. Áudio/GUI/contas mistas/LAN/redes/carga/keepalive prolongado/MTU de áudio e R4 **PRECISA DE TESTE**. Zero custo, sem push/deploy/billing/release/instalador. Rollback operacional fecha filhos/sockets próprios, stop e restauração por revisão; crash preserva diretório/journal, recibo continuaRAM. Revert local revisado para código. Nenhuma intervenção humana necessária; próximo bloqueio local independente: convite manual com vínculo de chave/serviço/expiração, sem nuvem ou UI pública.
 
+### Vigésimo sétimo incremento — convite assinado com uma admissão
+
+Base `e04a4ed`, branch/worktree exclusiva mantidas; Windows/PowerShell5,Node24.8.0,Rust1.98.0,Iroh1.3.0. Objetivo005/T-SEC-01..04/T-LIFE: substituir troca fragmentada de metadados por convite manual assinado com destinatário/serviços/prazo, sem nuvem/UI. Auditoria leu main/host/guest/model/wire/transport e APIs de assinatura do Iroh fixado no cache. Achado: leases manuais precisam reconectar preservando quotas; consumo único não pode ser imposto globalmente. Ed25519 sign/verify_strict já vem de Iroh; zero dependências/manifests/locks novos.
+
+Arquivos: novo `apps/connect-lab/src/invitation.rs`, `tests/{invitation.rs,cli_invitation.test.mjs}`; alterações em `src/{host,guest,wire,lib,main}.rs`, `scripts/connect-lab-smoke.ps1`, pin do binário em `apps/connect-client-lab/tunnel-session.mjs` e documentação/ADR canônicos. Chave privada fica exclusivamente em cada agente; supervisor recebe somente metadados públicos em RAM/stdin, redige relatório e não grava convite. Envelope canônico≤4096B,domínio fixo,TTL≤600s/generation1,gameTCP obrigatório/auxUDP opcional,addrloopback. Host exige registro/lease exatos; Hello com proofdigest+generation não pode cair para modo manual. Consumo/revogação têm lock comum, consumo precedeACK e persiste ao fechar/falharACK. Deadline monotônico impede prolongar a admissão por retrocesso do relógio durante a execução. [Contrato completo](engineering/AURORA_CONNECT_SPEC.md#81-convite-manual-assinado--laboratório).
+
+CLI mostra plano/hash host e exige peer autorizado; convidado confere pin/assinatura/destinatário/serviços e exige `approve <digest>` após a prévia, antes de endpoint/listeners. Prompts≤60s,entrada limitada/BOM inicial de framing paraPowerShell5,EOF parcial recusa. Uma thread std de stdin pode ficar até a saída do processo se input estagnar; não se usa spawn_blocking que prenderia shutdownTokio. Modo convidado fecha ao cair transporte. O caminho manual conserva comportamento e reconexão. QA independente não encontrou bloqueador; corrigiu somente comentário para explicitar que o supervisor possui processos, nunca chaves privadas.
+
+Comandos realmente executados:
+
+~~~powershell
+cargo test --offline --locked --manifest-path apps/connect-lab/Cargo.toml --lib
+cargo test --offline --locked --manifest-path apps/connect-lab/Cargo.toml --test invitation
+cargo fmt --manifest-path apps/connect-lab/Cargo.toml --all -- --check
+cargo test --offline --locked --manifest-path apps/connect-lab/Cargo.toml
+cargo clippy --offline --locked --manifest-path apps/connect-lab/Cargo.toml --all-targets -- -D warnings
+cargo build --offline --locked --manifest-path apps/connect-lab/Cargo.toml
+node --test --test-concurrency=1 apps/connect-lab/tests/cli_invitation.test.mjs
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/connect-lab-smoke.ps1 -SkipBuild -Invitations
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/connect-lab-smoke.ps1 -SkipBuild -Invitations -AuthorizedDownstream
+node --test --test-concurrency=1 apps/connect-client-lab/*.test.mjs
+cargo test --offline --locked --manifest-path apps/connect-lab/Cargo.toml --lib --test invitation
+git diff --check
+~~~
+
+Focados iniciais6lib/15integraçãoPASS; integração repetida após redação de assertsPASS0,72s. Suite completa **76PASS/0FAIL/0ignored**, compilação1m07s (6lib+9adversarial+6downstream+4downstreamQA+15invitation+13MinecraftSTATUS+12plan+11transport). Primeira análiseClippy recusou `chunks_exact(2)` pelo lintnovo `chunks_exact_to_as_chunks`; corrigido para `as_chunks::<2>().0.iter()` sem supressão ou mudança de gramática/MSRV1.91. Clippy corrigidoPASS7,60s,buildPASS7,39s,fmtPASS. Regressão após esse ajuste **6lib+15integraçãoPASS**, compile6,70s/testes0,01+0,71s. Negativos reais incluem intruso/proof ausente/digest/generation/caps/sessão/lease incorretos sem consumir; vencedor único concorrente; fechamento/ACK com STOP_SENDING não reabrem admissão; revogação antes/depois e expiração; manual segue reconectável. IPv6 do convite só provou admissão+recusaaux, sem transferirTCP nesse caso; transporteIPv6 antigo tem prova própria.
+
+Binário SHA256 **`2cc277150e942dab68ab8b2037a4b1791a8ed1e06a7cc2f6af8bc411be36caac`**, pinNode revisadoexplicitamente. Suite cliente **204PASS/0FAIL/0skips**,9,586s com binário novo; testeCLI **8PASS/0FAIL/0skips**,60,870s. CLI recusou envelope inválido/oversize/EOF/parcial/controle/listener externo/vida>600 antes de abrir ponte. Prompt sem resposta terminou por prazo60,032s,exit1 normal,semkill/guest_ready; EOF normal também encerrou. Não confundir exit1 esperado desses negativos com falha do teste.
+
+Smoke normal por **dois agentes separados** PASS:TCP1.048.576B/direção,10UDP/3.138B/direção,duasorigens,teto1358B,elapsed872ms; p50/maxUDPaplicação709/1683µs,variaçãoadjacente1096µs; picosRAMhost/guest28.061.696/28.041.216B,CPU406,25/453,125ms. Smoke downstream separado PASS:mesmoTCP,2pedidos/2B↑,16respostas/8.192B↓,duasorigens,teto1358B,elapsed869ms; p50/maxpedido–resposta1951/2186µs,variação484µs,RAM28.000.256/28.053.504B,CPU62,5/109,375ms. São amostrasdebug locais com métodos diferentes, não SLA/RTTpuro/voz. Ambos recusaram hashzero antes dohost,aprovaram digest no convidado,preservaram plano,exibiram INVITATION_PASS/CLEANUP_PASS e saíram0 semforça. Pós-check agentes0/Java0/hashbinárioinalterado. Portas efêmeras pertencem aos processos encerrados; não houve regra de firewall/roteador.
+
+Logs redigidos `.aurora/connect-validation/invitation-twenty-seven-{rust-suite,clippy,clippy-corrected,hex-regression,cli-tests,client-regression,smoke,downstream-smoke}.log` e `post-stop.json`; planos sintéticos novos mantidos ignorados. NenhumMinecraft/mod foi executado no27: provas20/25/26 permanecem históricas delimitadas. TCP/UDP/direto loopback **PROTÓTIPO**; convite manual agora **PROTÓTIPO**, UI/contas/sinalização **NÃO IMPLEMENTADO**; SVC/Plasmo **PARCIAL** de controle, áudio/GUI/misto/redes/R4 **PRECISA DE TESTE**. BibliotecaTLS permiteearlydata internamente; aplicação esperaTLScompleto, mas teste adversarial0-RTT específico permanece pendente. Estado de consumo sóRAM: proibir reuso de identidade ao reiniciar; nenhuma persistência/renovação foi anunciada.
+
+Preservados alpha.14/Assistente/recuperação/CAS/Doctor,Core1.1.5/Skins0.3.1 e novepares. Diff protegido contra5ac2f7e vazio; sem push/deploy/billing/release/instalador. Rollback: stop/revogação/encerramento dos filhos próprios, plano novo preservado, nenhuma configuração pessoal a restaurar; código por revert local revisado, atualizar pin do artefato somente após recompilar/revisar. Nenhuma intervenção humana necessária. Próximo trabalho local: prova de resumption/earlydata ou integração do convite ao laboratório Minecraft conforme auditoria da API; redes externas e áudio continuam exigindo recursos próprios em etapa separada.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.

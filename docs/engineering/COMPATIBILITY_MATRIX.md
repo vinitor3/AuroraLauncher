@@ -11,7 +11,7 @@ Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, desligado 
 | Direto | IPv4 e IPv6 loopback; smoke com dois agentes em processos separados | **PROTÓTIPO** local; LAN, redes distintas, IPv4 público, firewall IPv6, NAT/CGNAT pendentes |
 | Relay/UDP externo bloqueado | Pesquisa de capacidade upstream e termos, sem ativação | **NÃO IMPLEMENTADO** no laboratório; nenhum relay configurado/homologado |
 | Minecraft | Servidor real 1.21.1/Fabric 0.16.14/Java 21; dois clientes sintéticos observam LOGIN/CONFIGURATION/PLAY, chunks/presença recíproca; contagem 2→0 e stop normal em três ensaios | **PROTÓTIPO**; dois pares Host/Guest independentes. Desktop, clientes gráficos/mistos, LAN, Core/Skins e voz **PRECISA DE TESTE** |
-| Convites/interface | Pin e lease manual do laboratório | Fluxo social/interface **NÃO IMPLEMENTADO**; não equivale a convite do produto |
+| Convites/interface | Convite manual27 Ed25519, uma admissão, pin/serviços/prazo/revogação; TCP/UDP por dois agentes,76Rust/8CLI/204clientePASS | Convite **PROTÓTIPO** sóloopback/estadoRAM; conta/sinalização social/interface **NÃO IMPLEMENTADO** |
 | Simple Voice Chat | Ciclo nativo/writer/restore24; controle25 no mod2.6.22 real via dois agentes, anúncio ao cliente sintético + AuthAck/CheckAck AES-GCM UDP | **PARCIAL**, opt-in sem UI; áudio, GUI, estabilidade/carga, LAN e redes externas **PRECISA DE TESTE** |
 | Plasmo Voice | Ciclo nativo/writer/restore24; controle26 real2.1.17/Fabric API0.116.10 via dois agentes, anúncio ao cliente sintético e Ping UDP com credencial da sessão | **PARCIAL**, opt-in sem UI; Ping sem MAC/AEAD próprio; áudio, GUI, estabilidade/carga, LAN/redes **PRECISA DE TESTE** |
 

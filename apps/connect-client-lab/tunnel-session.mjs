@@ -13,7 +13,7 @@ const PARENT = join(REPO, '.aurora', 'connect-validation');
 const EXECUTABLE = join(REPO, 'apps/connect-lab/target/debug/aurora-connect-lab.exe');
 // The already reviewed local debug artifact, not a signing/trust assertion. A
 // rebuild requires reviewing its changes and updating this explicit laboratory pin.
-const EXECUTABLE_SHA256 = 'bb53b6edb77ffb7e54aa6351f78f79eba4c3b787ff6fa6d1429b007328f1d4b5';
+const EXECUTABLE_SHA256 = '2cc277150e942dab68ab8b2037a4b1791a8ed1e06a7cc2f6af8bc411be36caac';
 const EVENT_BYTES = 16 * 1024;
 const OUTPUT_BYTES = 64 * 1024;
 const EVENT_TIMEOUT_MS = 10_000;

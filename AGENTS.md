@@ -41,6 +41,8 @@ Incremento25: `plan-control/run-control` aprova gameFiles sintéticos para SVC, 
 
 Incremento26: `plan-control/run-control` aceita também perfil Plasmo estritamente pareado. `plasmo-smoke.mjs --offline-lab` passou no mod2.1.17 real: Request/PlayerInfo, anúncio35554 e Ping UDP pela ponte43003, cliente PLAY, cleanup normal e restore nativo separado. Ping usa credencial simples, sem MAC/AEAD do mod ou RTT; QUIC externo permanece cifrado. Nenhum áudio/key de áudio é processado.204client+51supervisor PASS (11túnel sobrepostos),90controle puro incluídos. Instalar probe antes de PLAY; RSA nativa não é cancelável e cleanup aguarda callback. Não reutilizar pasta Java executada nem promover prova a GUI/contas mistas/LAN/R4.
 
+Incremento27: convite manual Ed25519/≤4KiB/≤600s no laboratório, modo separado `start_invited/connect_invited` +CLI host-invite-plan/guest-invite[-tcp]. Uma admissão, identidade TLS/prova/capacidades conferidas antes do consumo; replay após desconexão/ACK falho recusado. Estado sóRAM: chaves/sessão novas a cada execução, sem renovação. Manual anterior continua reconectável.76Rust+8CLI+204cliente PASS; smokes normais/downstream com2agentes e cleanup PASS. Binário revisado SHA2cc277150e942dab68ab8b2037a4b1791a8ed1e06a7cc2f6af8bc411be36caac fixado no callerNode. Nenhuma nuvem/conta/UI; convite sóloopback. Admissão aguardaTLScompleto; não afirmar0-RTTglobal desativado upstream. Consultar spec§8.1 antes de ampliar.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

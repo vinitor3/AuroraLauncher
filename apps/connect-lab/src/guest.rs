@@ -1,7 +1,7 @@
 use crate::{
     model::{Metrics, valid_id},
     transport::{self, Bucket, Budget},
-    wire::{self, Hello, OpenRequest, Operation, Reply, SequenceWindow},
+    wire::{self, Hello, InvitationProof, OpenRequest, Operation, Reply, SequenceWindow},
     *,
 };
 use bytes::Bytes;
@@ -50,6 +50,45 @@ pub struct Guest {
 
 impl Guest {
     pub async fn connect(config: GuestConfig) -> Result<Self> {
+        Self::connect_inner(config, None).await
+    }
+    /// Derive every peer/session/grant field from an already verified invitation.
+    /// Validate our private key's public identity before opening any endpoint.
+    pub async fn connect_invited(
+        secret_key: SecretKey,
+        invitation: &Invitation,
+        limits: Limits,
+    ) -> Result<Self> {
+        if secret_key.public() != invitation.guest_key() {
+            return Err(Error::Unauthorized);
+        }
+        invitation.check_current()?;
+        let direct = invitation.direct_addr();
+        let bind_addr = if direct.is_ipv4() {
+            "127.0.0.1:0"
+        } else {
+            "[::1]:0"
+        }
+        .parse()
+        .map_err(|_| Error::Configuration)?;
+        Self::connect_inner(
+            GuestConfig {
+                secret_key,
+                bind_addr,
+                host: EndpointAddr::new(invitation.host_key()).with_ip_addr(direct),
+                session_id: invitation.session_id().into(),
+                lease_id: invitation.lease().lease_id,
+                capabilities: invitation.capabilities(),
+                limits,
+            },
+            Some(invitation.proof()),
+        )
+        .await
+    }
+    async fn connect_inner(
+        config: GuestConfig,
+        invitation: Option<InvitationProof>,
+    ) -> Result<Self> {
         config.limits.validate()?;
         if !valid_id(&config.session_id)
             || !valid_id(&config.lease_id)
@@ -81,6 +120,7 @@ impl Guest {
                 session_id: config.session_id,
                 lease_id: config.lease_id,
                 capabilities: config.capabilities,
+                invitation,
             };
             wire::write_message(&mut send, &hello, config.limits.max_control_bytes).await?;
             send.finish().map_err(|_| Error::Transport)?;

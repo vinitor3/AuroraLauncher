@@ -86,6 +86,8 @@ Decisão do oitavo incremento: desfazer o anúncio usa recibo privado da aplica�
 
 ## Decisões pendentes e condições de aceitação
 
+Decisão do incremento27: convites manuais assinados usam Ed25519 já fornecido por Iroh1.3.0 e SHA256 já fixado, sem dependência nova. Formato canônico estrito, host pin obtido por canal autorizado, destinatário preso à chave TLS, prazo≤600s/generation1 e admissão consumida antes do ACK. Caminho separado preserva reconexão/quota das leases manuais existentes. Endereço permanece somente loopback; renovar/reentrar exige novas chaves/sessão/convite, pois replay state é de memória. Isso resolve a troca fragmentada de metadados na CLI e testa autorização, sem instituir schema Firestore, conta social ou distribuição. [Contrato §8.1](../AURORA_CONNECT_SPEC.md#81-convite-manual-assinado--laboratório). A aplicação aguarda TLS completo; não alegar desativação global de early data upstream. Testes e limitações registrados no task antes de concluir o incremento.
+
 1. Inventário real e versão fixada: compilador, runtime, dependências transitivas, código já existente e gate R4. Não promover pesquisa a implementação.
 2. Escolha final da biblioteca e configuração sem acessos externos implícitos; IP direto, LAN, IPv6 e testes entre redes distintos.
 3. Infraestrutura autorizada para descoberta/sinalização/relay: termos integrais, quotas, regiões, retenção, segredo/credenciais e custo efetivo. Não embutir key de projeto.
