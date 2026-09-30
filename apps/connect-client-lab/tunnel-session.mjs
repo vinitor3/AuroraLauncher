@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { rejectLinkedParents, resolveExplicitLocalPath } from '../connect-voice-tools/local-path.mjs';
 import { readLocal } from '../connect-runtime-tools/files.mjs';
+import { InvitationGateError, clearInvitationEvent, createInvitationGate } from './invitation-gate.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const PARENT = join(REPO, '.aurora', 'connect-validation');
@@ -106,35 +107,51 @@ function startAgent(args, kind, environment, fail) {
   const state = { child, spawned: false, closed: false, closing: false, forced: false,
     exitCode: null, exitSignal: null, stdoutBytes: 0, stderrBytes: 0, stopped: false,
     didSpawn: spawned.promise, didClose: closed.promise };
-  const sequence = [`${kind}_identity`, `${kind}_ready`, `${kind}_stopped`];
+  const sequence = kind === 'host'
+    ? ['invite_host_identity', 'host_invitation', 'host_ready', 'host_stopped']
+    : ['guest_identity', 'invitation_review', 'guest_ready', 'guest_stopped'];
   const queue = [];
-  let phase = 0; let waiter; let used = 0;
+  const pendingInputs = new Set();
+  let phase = 0; let waiter; let used = 0; let parsingFailed = false;
   const line = Buffer.alloc(EVENT_BYTES);
   const decoder = new TextDecoder('utf-8', { fatal: true });
+  const clearQueue = () => { for (const event of queue) clearInvitationEvent(event); queue.length = 0; };
+  const malformed = code => {
+    parsingFailed = true; clearQueue(); line.fill(0); used = 0; fail(code);
+  };
   const deliver = bytes => {
     let event;
     try { event = JSON.parse(decoder.decode(bytes)); }
-    catch { fail('game_tunnel_event_invalid'); return; }
+    catch { malformed('game_tunnel_event_invalid'); return; }
     if (!event || typeof event !== 'object' || Array.isArray(event) || phase >= sequence.length || event.event !== sequence[phase]
-      || (phase === 2 && !state.closing)) { fail('game_tunnel_event_unexpected'); return; }
+      || (event.event === `${kind}_stopped` && (!state.closing
+        || !isDeepStrictEqual(event, { event: `${kind}_stopped` })))) {
+      clearInvitationEvent(event); malformed('game_tunnel_event_unexpected'); return;
+    }
     phase++;
     if (event.event === `${kind}_stopped`) state.stopped = true;
     if (waiter) { const pending = waiter; waiter = undefined; pending(event); }
     else if (queue.length < 3) queue.push(event);
-    else fail('game_tunnel_event_queue_limit');
+    else { clearInvitationEvent(event); malformed('game_tunnel_event_queue_limit'); }
   };
   child.stdout.on('data', bytes => {
-    state.stdoutBytes += bytes.length;
-    if (state.stdoutBytes > OUTPUT_BYTES) { fail('game_tunnel_output_limit'); return; }
-    for (const byte of bytes) {
-      if (byte === 10) { deliver(line.subarray(0, used)); used = 0; }
-      else if (used === EVENT_BYTES) { fail('game_tunnel_event_limit'); return; }
-      else line[used++] = byte;
-    }
+    try {
+      state.stdoutBytes += bytes.length;
+      if (state.stdoutBytes > OUTPUT_BYTES) { malformed('game_tunnel_output_limit'); return; }
+      if (parsingFailed) return;
+      for (const byte of bytes) {
+        if (byte === 10) {
+          deliver(line.subarray(0, used)); line.fill(0); used = 0;
+          if (parsingFailed) return;
+        } else if (used === EVENT_BYTES) { malformed('game_tunnel_event_limit'); return; }
+        else line[used++] = byte;
+      }
+    } finally { bytes.fill(0); }
   });
   child.stderr.on('data', bytes => {
     state.stderrBytes += bytes.length;
     if (state.stderrBytes > OUTPUT_BYTES) fail('game_tunnel_output_limit');
+    bytes.fill(0);
   });
   child.stdout.on('error', () => fail('game_tunnel_io_failed'));
   child.stderr.on('error', () => fail('game_tunnel_io_failed'));
@@ -150,14 +167,27 @@ function startAgent(args, kind, environment, fail) {
   child.once('close', (code, signal) => {
     state.closed = true; state.exitCode = code; state.exitSignal = signal;
     if (used) fail('game_tunnel_event_truncated');
+    line.fill(0); used = 0;
     closed.resolve();
   });
   state.event = () => queue.length ? Promise.resolve(queue.shift())
     : new Promise(resolve => { waiter = resolve; });
-  state.clear = () => { queue.length = 0; waiter = undefined; line.fill(0); };
+  state.clear = () => {
+    clearQueue(); waiter = undefined; line.fill(0); used = 0;
+    for (const input of pendingInputs) input.fill(0);
+    pendingInputs.clear();
+  };
   state.write = text => {
     if (state.closed || child.stdin.destroyed) invalid('game_tunnel_io_failed');
-    child.stdin.write(`${text}\n`);
+    if (typeof text !== 'string' || Buffer.byteLength(text) > 4096 || /[\r\n\0]/.test(text)) invalid('game_tunnel_input_invalid');
+    const input = Buffer.from(`${text}\n`);
+    pendingInputs.add(input);
+    try {
+      child.stdin.write(input, error => {
+        input.fill(0); pendingInputs.delete(input);
+        if (error && !state.closing) fail('game_tunnel_io_failed');
+      });
+    } catch { input.fill(0); pendingInputs.delete(input); invalid('game_tunnel_io_failed'); }
   };
   return state;
 }
@@ -191,6 +221,9 @@ async function stopAgent(agent, fail) {
  * and own/reap any sockets or work it creates. A late callback is observed but
  * cannot turn cancellation/failure into success. No process handle or identity
  * is exposed. Success requires normal zero exits and both stopped events.
+ * The owned pair uses one signed invitation. Its exact local plan, public
+ * bindings, grants, deadline and Rust-verified review precede digest approval.
+ * Invitations stay in RAM/stdin; V8 strings cannot be guaranteed zeroized.
  *
  * Startup and operation share timeoutMs (default 60 s, maximum 120 s). Each
  * event waits at most 10 s. Cleanup always reaps both children, allowing 5 s
@@ -233,12 +266,17 @@ async function withTunnel(operation, options, voiceProfile) {
   if (options.signal?.aborted) onAbort();
   const timer = setTimeout(() => fail('game_tunnel_deadline'), timeoutMs);
   const agents = [];
-  let reservation; let voiceReservation; let planFile; let planHash; let value; let callbackWork;
+  let reservation; let voiceReservation; let planFile; let planHash; let value; let callbackWork; let invitationGate;
   const event = async agent => {
-    let timer;
+    let timer; let result; let active = true;
     const expired = new Promise(resolve => { timer = setTimeout(() => { fail('game_tunnel_event_deadline'); resolve(); }, EVENT_TIMEOUT_MS); });
-    try { const result = await Promise.race([agent.event(), failure.promise, expired]); check(); return result; }
-    finally { clearTimeout(timer); }
+    const next = agent.event().then(value => {
+      if (!active) { clearInvitationEvent(value); return undefined; }
+      return value;
+    });
+    try { result = await Promise.race([next, failure.promise, expired]); check(); return result; }
+    catch (error) { clearInvitationEvent(result); throw error; }
+    finally { active = false; clearTimeout(timer); }
   };
   try {
     await checkExecutable(); check();
@@ -264,42 +302,57 @@ async function withTunnel(operation, options, voiceProfile) {
     const bytes = Buffer.from(`${JSON.stringify(plan)}\n`);
     planFile = join(directory, 'plan.json'); planHash = hash(bytes);
     await writeFile(planFile, bytes, { flag: 'wx' }); check();
-    const host = startAgent(['host-plan', planFile, planHash], 'host', environment, fail); agents.push(host);
+    invitationGate = createInvitationGate({ plan, planHash });
+    const host = startAgent(['host-invite-plan', planFile, planHash], 'host', environment, fail); agents.push(host);
     const hostIdentity = await event(host);
-    if (!/^[a-f0-9]{64}$/.test(hostIdentity.peer) || hostIdentity.session !== hostIdentity.peer
-      || hostIdentity.bind !== plan.bind || hostIdentity.planHash !== planHash
-      || hostIdentity.durationSeconds !== LIFETIME_SECONDS || !Array.isArray(hostIdentity.approvedServices)
-      || !isDeepStrictEqual(hostIdentity.approvedServices, services)) invalid('game_tunnel_approval_mismatch');
-    const guest = startAgent([voice ? 'guest' : 'guest-tcp', hostIdentity.peer, plan.bind, hostIdentity.session,
+    let hostPin;
+    try { hostPin = invitationGate.hostIdentity(hostIdentity); }
+    finally { clearInvitationEvent(hostIdentity); }
+    const guest = startAgent([voice ? 'guest-invite' : 'guest-invite-tcp', hostPin,
       '127.0.0.1:0', ...(voice ? ['127.0.0.1:35554'] : []), String(LIFETIME_SECONDS)], 'guest', environment, fail); agents.push(guest);
+    hostPin = undefined;
     const guestIdentity = await event(guest);
-    if (!/^[a-f0-9]{64}$/.test(guestIdentity.peer) || guestIdentity.peer === hostIdentity.peer) invalid('game_tunnel_identity_invalid');
+    try { invitationGate.guestIdentity(guestIdentity); }
+    finally { clearInvitationEvent(guestIdentity); }
     // The CLI binds after authorizing its guest. Keep the reservation until this
     // last moment; a foreign winner of the unavoidable release/bind race causes
     // a startup error, never permission to terminate or modify that process.
     await closeReservation(reservation); reservation = undefined; check();
-    host.write(guestIdentity.peer);
+    invitationGate.authorizePeer(peer => host.write(peer));
+    const invitation = await event(host);
+    try { invitationGate.invitation(invitation, encoded => guest.write(encoded)); }
+    finally { clearInvitationEvent(invitation); }
     const hostReady = await event(host);
-    if (hostReady.experimental !== true || hostReady.relay !== false) invalid('game_tunnel_mode_invalid');
+    try {
+      if (!isDeepStrictEqual(hostReady, { event: 'host_ready', experimental: true, relay: false,
+        next: 'enter stop to revoke and close; reconnect requires a fresh host/session/invitation' })) invalid('game_tunnel_mode_invalid');
+    } finally { clearInvitationEvent(hostReady); }
+    const review = await event(guest);
+    try { invitationGate.review(review); }
+    finally { clearInvitationEvent(review); }
     if (voiceReservation) { await closeReservation(voiceReservation); voiceReservation = undefined; check(); }
-    guest.write('ready');
+    check(); invitationGate.approve(approval => guest.write(approval));
     const guestReady = await event(guest);
-    const match = typeof guestReady.tcp === 'string' && /^127\.0\.0\.1:([1-9][0-9]{0,4})$/.exec(guestReady.tcp);
-    if (!match || Number(match[1]) > 65535 || guestReady.experimental !== true) invalid('game_tunnel_mode_invalid');
-    if (voice) {
-      if (guestReady.udp !== '127.0.0.1:35554' || Object.hasOwn(guestReady, 'mode')
-        || !Number.isSafeInteger(guestReady.maxDatagramPayload) || guestReady.maxDatagramPayload < 128
-        || guestReady.maxDatagramPayload > 1400) invalid('game_tunnel_mode_invalid');
-    } else if (guestReady.mode !== 'tcp' || Object.hasOwn(guestReady, 'udp')) invalid('game_tunnel_mode_invalid');
+    let bridgePort; let maxDatagramPayload;
+    try {
+      const match = typeof guestReady.tcp === 'string' && /^127\.0\.0\.1:([1-9][0-9]{0,4})$/.exec(guestReady.tcp);
+      if (!match || Number(match[1]) > 65535 || guestReady.experimental !== true) invalid('game_tunnel_mode_invalid');
+      const expected = { event: 'guest_ready', tcp: guestReady.tcp, experimental: true, next: 'enter stop to close',
+        ...(voice ? { udp: '127.0.0.1:35554', maxDatagramPayload: guestReady.maxDatagramPayload } : { mode: 'tcp' }) };
+      if (!isDeepStrictEqual(guestReady, expected) || (voice && (!Number.isSafeInteger(guestReady.maxDatagramPayload)
+        || guestReady.maxDatagramPayload < 128 || guestReady.maxDatagramPayload > 1400))) invalid('game_tunnel_mode_invalid');
+      bridgePort = Number(match[1]); maxDatagramPayload = guestReady.maxDatagramPayload;
+    } finally { clearInvitationEvent(guestReady); }
     check();
     callbackWork = Promise.resolve().then(() => {
-      check(); return operation(Object.freeze({ bridgePort: Number(match[1]), signal: controller.signal,
-        ...(voice ? { voicePort: 35554, maxDatagramPayload: guestReady.maxDatagramPayload } : {}) }));
+      check(); return operation(Object.freeze({ bridgePort, signal: controller.signal,
+        ...(voice ? { voicePort: 35554, maxDatagramPayload } : {}) }));
     }).then(result => { value = result; }, () => fail('game_tunnel_operation_failed'));
     await Promise.race([callbackWork, failure.promise]);
-  } catch (error) { fail(error instanceof GameTunnelError ? error.code : 'game_tunnel_preparation_failed'); }
+  } catch (error) { fail(error instanceof GameTunnelError || error instanceof InvitationGateError ? error.code : 'game_tunnel_preparation_failed'); }
   finally {
     controller.abort();
+    invitationGate?.dispose();
     // Mark both closing before stopping either, because closing a host can end
     // its guest's transport. Both stop deadlines run concurrently, never 5+5 s.
     for (const agent of agents) agent.closing = true;

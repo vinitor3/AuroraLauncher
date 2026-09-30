@@ -56,23 +56,49 @@ export class LiveIpc {
     this.#directory = directory; this.#profile = profile;
   }
   async #tree() {
+    try { return await this.#inspectTree(); }
+    catch (error) {
+      // Preserve already-redacted protocol/native failure codes, never a raw
+      // filesystem exception containing a path from this enumeration.
+      if (error instanceof Error && /^live_[a-z_]+$/.test(error.message)) throw error;
+      FAIL('live_ipc_file');
+    }
+  }
+  async #inspectTree() {
     await rejectLinkedParents(this.#directory);
     const metadata = await lstat(this.#directory);
     if (!metadata.isDirectory() || metadata.isSymbolicLink()) FAIL('live_ipc_directory');
+    const published = new Set();
     for (const name of await readdir(this.#directory)) {
-      if (!NAMES.includes(name) && !NAMES.some(known => name === `${known}.part`)) FAIL('live_ipc_unknown_file');
-      const item = await lstat(join(this.#directory, name));
+      const finalName = NAMES.find(known => name === `${known}.part`);
+      if (!NAMES.includes(name) && finalName === undefined) FAIL('live_ipc_unknown_file');
+      let item;
+      try { item = await lstat(join(this.#directory, name)); }
+      catch (error) {
+        if (error.code !== 'ENOENT' || finalName === undefined) throw error;
+        // The native writer publishes by rename. readdir can see its known
+        // .part immediately before lstat sees ENOENT. Accept only a final file
+        // that now passes the normal bounded identity/link checks. Its content
+        // still goes through the existing failure/event/schema/phase checks.
+        await readLocal(join(this.#directory, finalName), 4096);
+        published.add(finalName);
+        continue;
+      }
       if (!item.isFile() || item.isSymbolicLink() || item.nlink !== 1 || item.size > 4096) FAIL('live_ipc_file');
+      if (finalName === undefined) published.add(name);
     }
     for (const [name, bytes] of this.#observed) {
       if (!(await readLocal(join(this.#directory, name), 4096)).equals(bytes)) FAIL('live_ipc_changed');
     }
     const failure = await readNativeFailure(this.#directory);
+    if (published.has('failed.json') && failure === undefined) FAIL('live_ipc_file');
     if (failure) FAIL(failure);
     for (let phase = this.#phase + 1; phase < IN.length; phase++) {
+      if (published.has(IN[phase])) FAIL('live_ipc_early_phase');
       try { await lstat(join(this.#directory, IN[phase])); FAIL('live_ipc_early_phase'); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
+    return published;
   }
   async receive(phase, signal, timeoutMs = 180000) {
     if (phase !== this.#phase || !(signal instanceof AbortSignal)
@@ -82,12 +108,16 @@ export class LiveIpc {
     const file = join(this.#directory, IN[phase]);
     for (;;) {
       if (combined.aborted) FAIL(signal.aborted ? 'live_ipc_cancelled' : 'live_ipc_deadline');
-      await this.#tree();
+      const published = await this.#tree();
+      if (published.has('cancel.json')) FAIL('live_ipc_cancelled');
       try { await lstat(join(this.#directory, 'cancel.json')); FAIL('live_ipc_cancelled'); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
       let bytes;
       try { bytes = await readLocal(file, 4096); }
-      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      catch (error) {
+        if (published.has(IN[phase])) FAIL('live_ipc_file');
+        if (error.code !== 'ENOENT') throw error;
+      }
       if (bytes) {
         let value;
         try {

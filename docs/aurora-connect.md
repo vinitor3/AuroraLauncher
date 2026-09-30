@@ -105,6 +105,8 @@ O convidado usa o comando `guest` existente. Para este endpoint sintético, exec
 
 ## Ensaio em dois computadores — preparado, ainda não executado
 
+Há também um [roteiro curto por computador](aurora-connect-lan.md), com os dois blocos do convidado, hash fixado e encerramento, preparado para o computador do irmão do usuário. A conversa só controla este PC; copiar/iniciar o convidado requer alguém naquele computador. Os testes locais independentes continuam. O kit é ferramenta privada de ensaio, sem instalação/publicação, e não leva Minecraft/mods/credenciais.
+
 Impedimento observado: as ferramentas desta tarefa só têm acesso a este Windows; nenhum segundo host/rede autorizado está conectado. O teste local pode ser concluído aqui; LAN e redes distintas exigem o segundo endpoint. A ação humana mínima é disponibilizar um segundo Windows autorizado e copiar o executável debug preparado, sem instalar Rust ou programar. Somente participar do teste externo quando desejado; isto não constitui homologação de voz/jogo.
 
 Arquivo produzido pelo build local: `apps/connect-lab/target/debug/aurora-connect-lab.exe`. Copiar esse arquivo para `C:/AuroraConnectLab/aurora-connect-lab.exe` no computador convidado por um meio privado; o host usa o executável já compilado. O hash SHA-256 local deve ser comparado após a cópia. Nenhum segredo ou mod acompanha o arquivo. É ferramenta debug experimental de teste, não instalador/release pública. Nos comandos abaixo `$lab` aponta para esse executável; portas são escolhas explícitas do ensaio, não defaults dos mods.

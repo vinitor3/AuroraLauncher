@@ -221,6 +221,12 @@ Código de admissão aguarda TLS completo e não usa API de early data. A config
 
 CLI conserva plano/hash do host e exige `approve <digest>` após prévia no convidado, antes de listener/túnel. Prompts têm60s (aprovação limitada também pelo prazo restante), entrada até4096B mais BOM UTF-8/CRLF de framing. EOF parcial/entrada inválida recusa; Ctrl+C cancela. Uma thread de leitura stdin pode permanecer bloqueada até a saída do processo após prazo/cancelamento; não é task Tokio que impeça shutdown. Convidado encerra ao fechar a conexão host ou por stop/prazo. Sem escrita pessoal, credencial de conta, nuvem, nova dependência ou autorização de rede externa. [Execução/limites](../task-aur-r4-connect.md).
 
+### 8.2 Supervisor dos clientes de laboratório
+
+`apps/connect-client-lab/tunnel-session.mjs` usa convites para os perfis próprios game/SVC/Plasmo. O novo `invitation-gate.mjs` guarda snapshot do plano compilado, confere toda a prévia local e exige correspondência de pins, sessão, endereço, grants, digest e prazo do envelope. Não implementa Ed25519 em JavaScript: o agente Rust verifica a assinatura antes de emitir a revisão que o supervisor compara integralmente. A aprovação é consumível, com prazo máximo120s nesse caller e relógio monotônico; estado/erro/dispose não permitem reaprová-la. Fixtures Node puras comprovam somente esses gates de escrita. Testes com processos reais comprovam a composição com a CLI e o transporte.
+
+Eventos são limitados e ordenados em quatro fases por processo. Convite/revisão ficam só em RAM/stdin, fora do resultado e dos arquivos de evidência; referências consumidas e buffers próprios são limpos sem garantia de zeroização de strings V8. O callback recebe somente porta(s) loopback e sinal de cancelamento. A reserva UDP do convidado só é entregue imediatamente antes da aprovação. Cada par ainda corresponde a um host/convite próprio; duas chamadas não são dois participantes no mesmo host. Não acrescenta UI, conta, sinalização, endereço externo ou configuração pessoal. Resultados de Minecraft e de cada mod são registrados separadamente no task.
+
 ## 9. Experiência e evidências
 
 Fluxo: preparar servidor/mundo → criar sessão → autorizar convidado → negociar → validar jogo e serviços → entrar. Separar capacidade do transporte, estado do jogo e de cada mod; falha da voz não fecha jogo saudável. Cancelamento retorna estado real e limpa recursos.

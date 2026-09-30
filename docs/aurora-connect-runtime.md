@@ -2,6 +2,12 @@
 
 Estado: **PROTÓTIPO**, separado do launcher/UI e sem distribuição. Alvo existente na matriz: Minecraft **1.21.1**, Fabric **0.16.14**, Java **21**, protocolo **767**. Nenhum par Core/Skins é acrescentado ou alterado. Evidências atuais: STATUS/pong, dois clientes sintéticos até PLAY/chunks/presença recíproca e, em ensaios separados, controle/endereço SVC2.6.22 e Plasmo2.1.17 por TCP/UDP autenticados do Connect. Configuração própria `online-mode=false` autorizada; áudio, clientes gráficos/mistos, LAN e redes externas permanecem sem homologação. As seções abaixo conservam a sequência histórica das provas.
 
+## Convites no supervisor dos clientes — vigésimo nono incremento
+
+`withGameTunnel`, `withSvcTunnel` e `withPlasmoTunnel` usam agora a CLI de convite assinado. O supervisor confere plano/envelope/revisão antes de aprovar o digest; a assinatura é verificada pelo Rust. Perfis, portas, API dos callbacks e encerramento permanecem iguais. Nenhuma chave privada, convite ou revisão é retornada ao cliente de teste ou gravada como evidência. Limites e separação entre testes puros e processos reais estão na [spec](engineering/AURORA_CONNECT_SPEC.md#82-supervisor-dos-clientes-de-laboratório); [comandos e resultados reais](task-aur-r4-connect.md#vigésimo-nono-incremento--convites-nos-laboratórios-reais).
+
+Minecraft sem mods e cada perfil de voz continuam em execuções separadas e pastas novas, com `online-mode=false` autorizado. Não reutilizar pasta Java executada. O roteiro [LAN com dois computadores](aurora-connect-lan.md) usa o modo manual anterior: estes convites continuam limitados a loopback. A prova local não valida conexão externa nem dispensa os testes de GUI, contas mistas e áudio.
+
 ## Controle Plasmo pela ponte — vigésimo sexto incremento
 
 `live-writer.mjs plan-control/run-control` agora aceita `svc` ou `plasmo`, sempre com exercício pareado no digest. Plasmo usa o estágio de recursos intocado `prepared-6jQLQp`; cada execução cria uma cópia nativa nova. Revisar plano e apply, aguardar `voice_control_ready`, executar `node --max-old-space-size=512 apps/connect-client-lab/plasmo-smoke.mjs --offline-lab` em outro processo, enviar `stop` ao supervisor e aprovar separadamente o restore apresentado. Não inferir resultado do probe a partir do PASS de writer. [Comandos exatos executados](task-aur-r4-connect.md#vigésimo-sexto-incremento--controle-plasmo-real-pela-ponte).

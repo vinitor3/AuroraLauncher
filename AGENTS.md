@@ -45,6 +45,8 @@ Incremento27: convite manual Ed25519/≤4KiB/≤600s no laboratório, modo separ
 
 Incremento28: cinco testes reais de resumption exigem stream emissor0-RTT e status Accepted; replay/prova/peer/revogação/expiração recusados sem destinos TCP/UDP. Convite legítimo funciona após intrusões não consumidoras. Não é medição temporal pré-TLS ou desligamento global de early data. Nenhuma produção/dependência/binário alterados; fmt/clippy focado PASS. Evidências redigidas no task.
 
+Incremento29: caller Node usa convites assinados nos três perfis, com plano/review integral, TTL120s e aprovação única; Rust verifica assinatura. Minecraft com dois pares independentes e controles reais SVC/Plasmo passaram, inclusive stop/restore; sem áudio/GUI/contas mistas/LAN. Corrida IPC entre enumeração de `.part` e rename corrigida somente quando final conhecido passa leitura/identidade/schema/fase; erro restante redigido.289cliente+69supervisor PASS, sem rebuild de binário. Kit privado/guia LAN preparado e gates PowerShell5.1 testados8/8; teste em segundo PC ainda pendente. Não repetir suíte que inventaria stages durante execução/staging Java.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

@@ -101,7 +101,7 @@ test('invalid options and pre-cancellation never enter callback', { skip: !windo
   assert.equal(called, false);
 });
 
-test('real CLI pair forwards TCP bytes and both agents close normally', { skip: !windows }, async t => {
+test('real signed-invitation CLI pair forwards TCP bytes and both agents close normally', { skip: !windows }, async t => {
   const f = await fixture(t); if (!f) return;
   let port; let operationSignal;
   const payload = Buffer.alloc(128 * 1024, 0x39);
@@ -122,7 +122,7 @@ test('real CLI pair forwards TCP bytes and both agents close normally', { skip: 
   assert.ok(!JSON.stringify(result).includes('session'));
 });
 
-test('two concurrent calls create two independent real CLI pairs carrying separate bytes', { skip: !windows }, async t => {
+test('two concurrent calls create independent invited CLI pairs carrying separate bytes', { skip: !windows }, async t => {
   const f = await fixture(t); if (!f) return;
   const bothReady = deferred(); let ready = 0;
   const ports = []; const controller = new AbortController();
@@ -230,18 +230,22 @@ async function udpExchange(port, payload, signal) {
 }
 
 for (const [profile, port, tunnel] of [['SVC', 43002, withSvcTunnel], ['Plasmo', 43003, withPlasmoTunnel]]) {
-test(`${profile} control profile carries opaque UDP returns to two origins while TCP remains active`, { skip: !windows }, async t => {
+test(`${profile} signed invitation carries opaque UDP returns to two origins while TCP remains active`, { skip: !windows }, async t => {
   const f = await fixture(t); if (!f) return;
-  const udp = await udpFixture(t, port); const origins = new Set();
-  udp.on('message', (bytes, source) => { origins.add(source.port); udp.send(bytes, source.port, source.address); });
+  const udp = await udpFixture(t, port); const origins = new Set(); let received = 0;
+  udp.on('message', (bytes, source) => { received++; origins.add(source.port); udp.send(bytes, source.port, source.address); });
   const result = await tunnel(async context => {
     assert.equal(context.voicePort, 35554); assert.ok(context.maxDatagramPayload >= 128);
+    assert.equal(f.state.accepts, 0); assert.equal(received, 0);
+    // A ready bridge alone must not emit data to the destination. This canary
+    // observes packets, not the Host's private association count or mod auth.
+    await delay(20); assert.equal(received, 0); assert.equal(f.state.accepts, 0);
     const tcp = Buffer.alloc(96 * 1024, 0x42); const first = Buffer.alloc(83, 0x51); const second = Buffer.alloc(47, 0x72);
     const replies = await Promise.all([exchange(context.bridgePort, tcp, context.signal),
       udpExchange(context.voicePort, first, context.signal), udpExchange(context.voicePort, second, context.signal)]);
     assert.deepEqual(replies, [tcp, first, second]); return true;
   });
-  assert.equal(result.value, true); reaped(result.cleanup); assert.equal(origins.size, 2);
+  assert.equal(result.value, true); reaped(result.cleanup); assert.equal(origins.size, 2); assert.equal(received, 2);
   // Released guest UDP port can be rebound without touching the target fixture.
   const released = await udpFixture(t, 35554); assert.equal(released.address().port, 35554);
   assert.equal(f.server.listening, true); assert.equal(udp.address().port, port);
