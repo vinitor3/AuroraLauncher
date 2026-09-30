@@ -726,6 +726,22 @@ Revisão final37/38: QA independente encontrou que o teste poderia aguardar nova
 
 Supervisor privado preparado em `.aurora/connect-validation/external-boundary-host-session.ps1`: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .aurora/connect-validation/external-boundary-host-session.ps1 -RunGateFixtures` passou40/40 sobPS5.1,sem rede/filhos/configuração pessoal. IO do helper é limitado e stderr só contado; guest_identity JSON recusa duplicatas/extras/escapes; plano/hash/serviços são conferidos antes do peer. Não foi iniciada sessão externa nesta revisão. Revisões independentes de native/probe/PS/caller/guia e do teste após reparo não deixaram bloqueadores; Ctrl+C nativo permanece sem execução específica. Fontes/hash finais e gates preservam os estados37/38.
 
+Kit privado37/38 preparado após commit local revisado `1170d7930b3c989add308fc609cefb21747bbe66`, em `.aurora/connect-validation/connect-kit-38-67552e8c`:32arquivos,24fontes da crate exportadas desse commit, executável debugWindowsx64 SHA5c1f3b3e…2030, preflight SHAeb28b3ae…ff4ed, guiaLEIA-ME, instruções de rebuild e licença/avisos com cópiaGPL3 obtida do repositórioSPDX. `node .aurora/connect-validation/build-boundary-kit.mjs` conferiu cada arquivo. `Compress-Archive` criou ZIP novo e `System.IO.Compression.ZipFile::OpenRead` verificou nomes/quantidades/bytes/SHA256 de todas as entradas contra o manifesto, incluindo fonte e binário. ZIP8.075.392B,SHA256 `65c211a4815727d21d3a17f4c0e7199b3ced2f4123cef0fab5975205d1cd6342`,32/32PASS; recibos `boundary-kit-38-build.json` e `boundary-kit-38-zip-verification.json`. Kit32 permaneceu intacto. `testedTwoComputers=false` no kit novo: a prova básica33 não valida este probe novo. Nenhuma publicação, instalador, Java/JAR, conta, chave privada ou arquivo de transferência do anfitrião entrou no pacote.
+
+Intervenção necessária exclusivamente para o ensaio externo37, após toda preparação local:
+
+| Campo | Procedimento preparado |
+| --- | --- |
+| Impedimento observado | Ferramentas alcançam somente este PC; não há shell/controlador do convidado nesta conversa |
+| Por que não é resolvível aqui | Copiar e operar os terminais na outra internet exige acesso físico ou autorizado àquela máquina, indisponível ao agente |
+| Ação mínima / máquina | No computador convidado da outra internet, copiar o ZIP novo e extrair o conteúdo para pasta nova `C:/AuroraConnectLab38`; avisar quando estiver presente |
+| Procedimento exato | [Guia novo](aurora-connect-internet-boundary.md): agente reconfere/prepara anfitrião, plano e sessão; convidado usa primeiro bloco para guest, transfere somente identidade pública no canal privado indicado, aguarda autorização e ready; segundo bloco executa probe-boundary1264 |
+| Resultado esperado / retorno não secreto | boundary_probe_passed com quatroecos1264, duasorigens, zerooversize nos destinos e TCPconcorrente; depois guest_stopped. Devolver JSON redigido/código e confirmação de encerramento/redes distintas, sem IPs/pins/segredos/logs completos |
+| Encerramento / recuperação | Convidado stop; agente para host/echo próprios, aguarda reap e confere portas. Plano/evidências preservados; nenhuma configuração pessoal a restaurar |
+| Etapa desbloqueada | Fronteira UDP/carga TCP sintética nessa rota externa; Minecraft, áudio, mods e UI conservam seus gates próprios |
+
+Não foi iniciada escuta externa para esperar indefinidamente pelo participante. O supervisor privado está pronto e será iniciado numa janela combinada; convites/peers serão novos, nunca reutilizados de sessão encerrada. Enquanto essa presença não é confirmada, a pendência externa não promove estados nem bloqueia o trabalho local autorizado. Pós-check em 2026-09-30T14:53:14.4646876Z observou zero processos Connect desta worktree (`boundary-thirty-eight-post-stop.json`). Ponto de retomada: executar o helper privado com o kit novo; na frente local, resolver separadamente pacote integral de voz/capacidade dinâmica/endereço e integração experimental respeitando os gates existentes.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.
