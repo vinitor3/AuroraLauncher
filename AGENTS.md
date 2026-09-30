@@ -35,6 +35,8 @@ Incremento21: perfil `svc` executou boot e writer SVC2.6.22, UDP43002 pertencent
 
 Incremento22: perfil `plasmo` executou Plasmo2.1.17/Fabric API0.116.10+1.21.1 em stage novo, UDP43003 próprio, writer22chaves, STATUS pela ponte e stop normal/EULA restaurada. Update/tradução/debug permanecem false; host.public ausente. Resultado cobre boot/writer e mantém handshake/endereço/áudio/restore com writer vivo pendentes. Não misturar os perfis de voz ou publicar configuração gerada/server_id.
 
+Incremento24: SVC/Plasmo passaram separadamente por apply nativo→JVM/writer real→stop/close→restore reconciliado aprovado. `live-writer.mjs` cria só cópias nativas novas/preservadas, supervisiona ambos os filhos e exige duas aprovações. Helper é teste opt-in com recibo RAM/guard CIM; árvore exata inclui uma transação recovery com new/old vazios. Oracle Plasmo preserva whitespace interno do writer. IPC de erro só código estático, nunca config/log bruto. Não usar include-ignored geral, reutilizar pasta executada ou promover authUDP/áudio. Consultar domínio/runtime/task antes do próximo caller.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

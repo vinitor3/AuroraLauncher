@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 #[path = "connect_voice_generated_tests.rs"]
 mod generated;
 
+#[path = "connect_voice_live_tests.rs"]
+mod live;
+
 const ORIGINAL: &[u8] =
     b"# User comment\r\nport=24454\r\nvoice_host=old.example.invalid:24454\r\nmtu_size=1275\r\n";
 const SVC_DEFAULTS: &[u8] =
