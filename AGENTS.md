@@ -53,6 +53,8 @@ Incremento31: Plasmo `--offline-lab --keepalive` passou separadamente35s no mod2
 
 Incremento32: remove setter QNT0 ignorado no Iroh1.3, explicita observed reports false/false e NetReport minimal. QNT32/multipath8 permanecem ativos e podem operar antes do Hello Aurora; destinos de serviço continuam autorizados antes de abrir.83Rust+11callerPASS, smokes manual/convite-downstream PASS. Novo debug SHA7f8c7ed40e00826f58b5f482f80d1660941d5568d36a2983588488c84d0b9a40 repinado. Preflight PS somenteleitura31fixturesx64/31x86; guia externo35/35 e LAN8/8. Kit novo separado do antigo; leia docs/aurora-connect-internet.md antes do ensaio remoto. Candidato IPv6 não prova alcance; segundo PC ainda não executado. Sem UI, relay, mod/Java novo ou mudança de matriz/dependências.
 
+Incremento33: usuário executou kit32 em Windowsx64 de outra internet e devolveu guest_ready/probe_passed/guest_stopped. Direto com endereço inicial IPv6, TCP1MiB/direção e10UDP/2origens passou nessa amostra; teto negociado1264B, cleanup host/echo exit0, portas livres. Evidência remota é relato do usuário; host/cleanup observados aqui. Não prova NAT/CGNAT, MTU exata1264, TCP+UDP sob carga externa, jogo/voz ou regiões. Supervisor privado passou a aceitar guest_identity JSON após a primeira preparação recusar a linha completa. Kit/binário32 preservados; consulte task33 antes de repetir.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.
