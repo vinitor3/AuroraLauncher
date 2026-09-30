@@ -8,7 +8,9 @@ const controller = new AbortController(); const interrupt = () => controller.abo
 process.on('SIGINT', interrupt); process.on('SIGTERM', interrupt);
 let clientFailure;
 try {
-  if (process.argv.length !== 3 || process.argv[2] !== '--offline-lab') throw new Error('client_svc_usage');
+  if (process.argv[2] !== '--offline-lab' || ![3, 4].includes(process.argv.length)
+    || (process.argv.length === 4 && process.argv[3] !== '--keepalive')) throw new Error('client_svc_usage');
+  const keepalive = process.argv.length === 4;
   if (process.platform !== 'win32' || process.env.NODE_OPTIONS || process.env.DEBUG || globalThis.debugNMP) throw new Error('client_svc_environment');
   const root = join(repo, '.aurora/connect-validation'); await rejectLinkedParents(root);
   await mkdir(root, { recursive: true });
@@ -21,7 +23,7 @@ try {
   const { withSvcTunnel } = await import('./tunnel-session.mjs');
   const { observeSvcPlayer } = await import('./svc-play.mjs');
   const result = await withSvcTunnel(async ({ bridgePort, voicePort, signal }) => {
-    try { return await observeSvcPlayer(bridgePort, voicePort, { signal }); }
+    try { return await observeSvcPlayer(bridgePort, voicePort, { signal, keepalive }); }
     catch (error) { clientFailure = error; throw error; }
   }, { signal: controller.signal, timeoutMs: 90000 });
   process.stdout.write(`${JSON.stringify({ event: 'svc_control_probe', result: 'PASS', ...result.value,

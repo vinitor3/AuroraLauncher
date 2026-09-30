@@ -2,6 +2,10 @@
 
 Estado: **PROTÓTIPO**, separado do launcher/UI e sem distribuição. Alvo existente na matriz: Minecraft **1.21.1**, Fabric **0.16.14**, Java **21**, protocolo **767**. Nenhum par Core/Skins é acrescentado ou alterado. Evidências atuais: STATUS/pong, dois clientes sintéticos até PLAY/chunks/presença recíproca e, em ensaios separados, controle/endereço SVC2.6.22 e Plasmo2.1.17 por TCP/UDP autenticados do Connect. Configuração própria `online-mode=false` autorizada; áudio, clientes gráficos/mistos, LAN e redes externas permanecem sem homologação. As seções abaixo conservam a sequência histórica das provas.
 
+## Controle SVC durante35s — trigésimo incremento
+
+Ensaio SVC de manutenção do controle, opt-in no incremento30: após `voice_control_ready` do perfil `svc`, o comando `node --max-old-space-size=512 apps/connect-client-lab/svc-smoke.mjs --offline-lab --keepalive` conserva o cliente de teste durante uma janela programada35s após CheckAck. O modo rápido sem essa flag permanece disponível. Configuração/artefatos/serviços/plano do servidor são os mesmos; cada execução Java continua exigindo pasta nova, stop e aprovação separada de restore. Aceite, comandos efetivos e resultados estão no [task30](task-aur-r4-connect.md#trigésimo-incremento--keepalive-svc-além-do-prazo-udp). Essa flag não captura, produz ou valida áudio.
+
 ## Convites no supervisor dos clientes — vigésimo nono incremento
 
 `withGameTunnel`, `withSvcTunnel` e `withPlasmoTunnel` usam agora a CLI de convite assinado. O supervisor confere plano/envelope/revisão antes de aprovar o digest; a assinatura é verificada pelo Rust. Perfis, portas, API dos callbacks e encerramento permanecem iguais. Nenhuma chave privada, convite ou revisão é retornada ao cliente de teste ou gravada como evidência. Limites e separação entre testes puros e processos reais estão na [spec](engineering/AURORA_CONNECT_SPEC.md#82-supervisor-dos-clientes-de-laboratório); [comandos e resultados reais](task-aur-r4-connect.md#vigésimo-nono-incremento--convites-nos-laboratórios-reais).

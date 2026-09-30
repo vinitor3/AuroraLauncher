@@ -7,10 +7,14 @@ const code = error => /^(client|svc_control)_[a-z_]+$/.test(error?.message ?? ''
 
 // One synthetic game client, one private SVC control socket, no audio. Both
 // exist only in this standalone client process. Secrets never reach its caller.
-export async function observeSvcPlayer(bridgePort, voicePort, { signal, timeoutMs = 60000 } = {}) {
+export async function observeSvcPlayer(bridgePort, voicePort, options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)
+    || Object.keys(options).some(key => !['signal', 'timeoutMs', 'keepalive'].includes(key))) throw new Error('client_svc_arguments');
+  const { signal, timeoutMs = 60000, keepalive = false } = options;
   if (!Number.isSafeInteger(bridgePort) || bridgePort < 1 || bridgePort > 65535 || voicePort !== 35554
     || (signal !== undefined && !(signal instanceof AbortSignal))
-    || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000) throw new Error('client_svc_arguments');
+    || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000
+    || typeof keepalive !== 'boolean') throw new Error('client_svc_arguments');
   signal?.throwIfAborted();
   const controller = new AbortController(); const evidence = new PlayEvidence(0);
   let client; let closing = false; let failure; let resolveReady; let rejectFailed; let probeWork; let result;
@@ -37,7 +41,7 @@ export async function observeSvcPlayer(bridgePort, voicePort, { signal, timeoutM
     });
     if (signal?.aborted) abort();
     await Promise.race([ready, failed]);
-    probeWork = probeSvcControl(client, { approvedPort: voicePort, signal: controller.signal, timeoutMs: 10000 });
+    probeWork = probeSvcControl(client, { approvedPort: voicePort, signal: controller.signal, timeoutMs: 10000, keepalive });
     const voice = await Promise.race([probeWork, failed]);
     if (failure) throw failure;
     const state = evidence.summary();

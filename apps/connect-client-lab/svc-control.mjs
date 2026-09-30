@@ -9,7 +9,7 @@
 // upstream template. This clean control-only implementation uses node:crypto;
 // no upstream classes, audio codec, capture, playback or recording are included.
 import dgram from 'node:dgram';
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 
 const MAGIC = 0xff;
@@ -20,11 +20,14 @@ const MAX_PACKETS = 32;
 const MAX_BYTES = 8192;
 const MAX_SENDS = 16;
 const MAX_PENDING_SENDS = 4;
+const WATCH_MS = 35_000; const MAX_GAP_MS = 5000;
+const WATCH_PACKETS = 96; const WATCH_BYTES = 16 * 1024; const WATCH_SENDS = 96;
 const activeClients = new WeakSet();
 const allowedErrors = new Set(['arguments', 'unsafe_debug_environment', 'already_active', 'cancelled',
   'deadline', 'client_closed', 'client_failed', 'secret_packet', 'announcement', 'player_mismatch',
   'duplicate_secret', 'socket_failed', 'socket_closed', 'datagram', 'datagram_address',
-  'authentication', 'unexpected_packet', 'limits', 'send_queue', 'cleanup_failed', 'failed']);
+  'authentication', 'unexpected_packet', 'limits', 'send_queue', 'cleanup_failed', 'failed',
+  'keepalive_interval', 'keepalive_gap', 'keepalive_evidence', 'keepalive_replay', 'send_unconfirmed', 'clock']);
 
 export class SvcControlError extends Error {
   constructor(code) {
@@ -55,7 +58,7 @@ function lengthPrefix(length) {
   return Buffer.from([length]);
 }
 
-function parseSecret(bytes, expectedUuid, approvedPort) {
+function parseSecret(bytes, expectedUuid, approvedPort, keepalive) {
   if (!Buffer.isBuffer(bytes) || bytes.length < 56 || bytes.length > MAX_SECRET_PACKET) fail('secret_packet');
   // Fields preceding the bounded UTF string have a fixed width in the pinned mod.
   if (bytes.readInt32BE(16) !== 43002 || bytes[36] > 2
@@ -69,6 +72,7 @@ function parseSecret(bytes, expectedUuid, approvedPort) {
   catch { fail('secret_packet'); }
   if (announcement !== `127.0.0.1:${approvedPort}`) fail('announcement');
   if (!bytes.subarray(20, 36).equals(expectedUuid)) fail('player_mismatch');
+  if (keepalive && bytes.readInt32BE(49) !== 1000) fail('keepalive_interval');
   // Only our copies are erased on exit. The caller/library also owns its input
   // buffer; JS/native crypto cannot promise secure erasure of every transient.
   return { key: Buffer.from(bytes.subarray(0, 16)), uuid: Buffer.from(bytes.subarray(20, 36)) };
@@ -110,37 +114,64 @@ function serverDatagram(bytes, data) {
  * Opens one private UDP4 socket on loopback, only after the pinned SVC custom
  * payload advertises the exact approved local bridge port. No DNS is used.
  * Resolves only after authenticated AuthAck and ConnectionCheckAck and socket
- * closure. It does not keep a voice session alive, decode audio, establish that
+ * closure. The explicit keepalive mode samples exactly 35 seconds after the
+ * first CheckAck, answering authenticated type 8 controls (server interval must
+ * be 1000 ms). It does not decode audio, establish that
  * the listener is an Aurora bridge, or prove account authentication/audibility.
  * Retries each handshake phase at most three times at one-second intervals.
+ * timeoutMs bounds the handshake (at most 10 s). Keepalive mode has a separate
+ * total budget below 50 s including the 250 ms close allowance; event-loop/OS
+ * scheduling can delay cleanup, which must not turn an expired run into PASS.
+ * The scheduled sample window never expands to include late packets. GCM verifies
+ * packet authentication, not freshness, anti-replay or a correlated RTT.
  * All secret-bearing state remains inside this process/module, never in the
  * return value, diagnostics, an exported codec or a launcher-facing API.
  */
 export async function probeSvcControl(client, options = {}) {
   if (!options || typeof options !== 'object' || Array.isArray(options)
-    || Object.keys(options).some(key => !['approvedPort', 'signal', 'timeoutMs'].includes(key))) fail('arguments');
-  const { approvedPort, signal, timeoutMs = 5000 } = options;
+    || Object.keys(options).some(key => !['approvedPort', 'signal', 'timeoutMs', 'keepalive'].includes(key))) fail('arguments');
+  const { approvedPort, signal, timeoutMs = 5000, keepalive = false } = options;
   if (!client || typeof client !== 'object' || client.state !== 'play'
     || typeof client.on !== 'function' || typeof client.off !== 'function' || typeof client.write !== 'function'
     || typeof client.uuid !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(client.uuid)
     || !Number.isSafeInteger(approvedPort) || approvedPort < 1 || approvedPort > 65535
     || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10000
+    || typeof keepalive !== 'boolean'
     || (signal !== undefined && !(signal instanceof AbortSignal))) fail('arguments');
   if (process.env.DEBUG || process.env.NODE_OPTIONS || globalThis.debugNMP) fail('unsafe_debug_environment');
   if (signal?.aborted) fail('cancelled');
   if (activeClients.has(client)) fail('already_active');
+  const started = performance.now();
+  if (!Number.isFinite(started)) fail('clock');
   activeClients.add(client);
   const expectedUuid = Buffer.from(client.uuid.replaceAll('-', ''), 'hex');
-  const started = performance.now();
   const counts = { datagramsSent: 0, datagramsReceived: 0, bytesSent: 0, bytesReceived: 0 };
+  const maxPackets = keepalive ? WATCH_PACKETS : MAX_PACKETS;
+  const maxBytes = keepalive ? WATCH_BYTES : MAX_BYTES;
+  const maxSends = keepalive ? WATCH_SENDS : MAX_SENDS;
   let socket; let data; let phase = 'secret'; let finished = false; let socketClosed = false;
-  let retry; let deadline; let pendingSends = 0; let authAttempts = 0; let checkAttempts = 0;
+  let retry; let deadline; let totalDeadline; let watchTimer; let gapTimer;
+  let authAttempts = 0; let checkAttempts = 0;
+  const pendingSends = new Set();
+  const observedKeepalives = new Set();
+  let lastClock = started; let watchEnds; let lastKeepalive; let firstKeepalive;
+  let keepalivesReceived = 0; let keepaliveResponsesConfirmed = 0; let maxGap = 0;
+  const now = () => {
+    const value = performance.now();
+    if (!Number.isFinite(value) || value < lastClock) fail('clock');
+    lastClock = value;
+    // Timers alone cannot enforce a deadline when the event loop is delayed.
+    if ((keepalive && value >= started + 49_750)
+      || (['secret', 'binding', 'auth', 'check'].includes(phase) && value >= started + timeoutMs)) fail('deadline');
+    return value;
+  };
   let resolveProbe; let rejectProbe;
   const work = new Promise((resolve, reject) => { resolveProbe = resolve; rejectProbe = reject; });
   const finish = error => {
     if (finished) return;
     finished = true;
-    clearInterval(retry); clearTimeout(deadline);
+    clearInterval(retry); clearTimeout(deadline); clearTimeout(totalDeadline);
+    clearTimeout(watchTimer); clearTimeout(gapTimer);
     if (error) rejectProbe(redacted(error)); else resolveProbe();
   };
   const reject = code => finish(new SvcControlError(code));
@@ -149,17 +180,57 @@ export async function probeSvcControl(client, options = {}) {
   const clientEnded = () => reject('client_closed');
   const socketFailed = () => reject('socket_failed');
   const socketEnded = () => { socketClosed = true; if (!finished) reject('socket_closed'); };
+  const checkGap = time => {
+    const gap = time - lastKeepalive;
+    if (gap > MAX_GAP_MS) fail('keepalive_gap');
+    maxGap = Math.max(maxGap, gap);
+  };
+  const finishWatch = () => {
+    if (finished) return;
+    try {
+      const time = now();
+      if (time < watchEnds) { watchTimer = setTimeout(finishWatch, Math.ceil(watchEnds - time)); return; }
+      checkGap(time);
+      if (keepalivesReceived < 3 || lastKeepalive - firstKeepalive < 30_000) fail('keepalive_evidence');
+      if (pendingSends.size || keepaliveResponsesConfirmed !== keepalivesReceived) fail('send_unconfirmed');
+      phase = 'complete'; finish();
+    } catch (error) { finish(redacted(error)); }
+  };
+  const armGap = () => {
+    clearTimeout(gapTimer);
+    // A gap of exactly 5000 ms is permitted; no ACK can renew this timer.
+    const check = () => {
+      if (finished) return;
+      try {
+        const time = now(); checkGap(time);
+        gapTimer = setTimeout(check, Math.ceil(MAX_GAP_MS - (time - lastKeepalive)) + 1);
+      }
+      catch (error) { finish(redacted(error)); }
+    };
+    gapTimer = setTimeout(check, MAX_GAP_MS + 1);
+  };
   const send = type => {
     if (finished) return;
     let bytes;
     try {
-      if (pendingSends >= MAX_PENDING_SENDS) fail('send_queue');
+      now();
+      if (pendingSends.size >= MAX_PENDING_SENDS) fail('send_queue');
       bytes = clientDatagram(data, type);
-      if (++counts.datagramsSent > MAX_SENDS || (counts.bytesSent += bytes.length) > MAX_BYTES) fail('limits');
-      pendingSends++;
+      if (++counts.datagramsSent > maxSends || (counts.bytesSent += bytes.length) > maxBytes) fail('limits');
+      const pending = { bytes, watched: type === KEEP_ALIVE && phase === 'watching', done: false };
+      pendingSends.add(pending);
       socket.send(bytes, error => {
-        bytes.fill(0); pendingSends--;
-        if (error) reject('socket_failed');
+        if (pending.done) return;
+        pending.done = true; bytes.fill(0); pendingSends.delete(pending);
+        if (finished) return;
+        try {
+          const time = now();
+          if (error) fail('socket_failed');
+          if (pending.watched) {
+            if (time >= watchEnds) fail('send_unconfirmed');
+            checkGap(time); keepaliveResponsesConfirmed++;
+          }
+        } catch (error) { finish(redacted(error)); }
       });
     } catch (error) { bytes?.fill(0); finish(redacted(error)); }
   };
@@ -170,18 +241,40 @@ export async function probeSvcControl(client, options = {}) {
   const received = (bytes, remote) => {
     if (finished) return;
     try {
+      const time = now();
+      if (phase === 'watching') {
+        if (time >= watchEnds) { finishWatch(); return; }
+        checkGap(time);
+      }
       if (remote?.address !== '127.0.0.1' || remote?.port !== approvedPort || remote?.family !== 'IPv4') fail('datagram_address');
       if (!Buffer.isBuffer(bytes) || bytes.length > MAX_DATAGRAM) fail('datagram');
-      if (++counts.datagramsReceived > MAX_PACKETS || (counts.bytesReceived += bytes.length) > MAX_BYTES) fail('limits');
+      if (++counts.datagramsReceived > maxPackets || (counts.bytesReceived += bytes.length) > maxBytes) fail('limits');
       const type = serverDatagram(bytes, data);
       if (type === AUTH_ACK) {
         if (phase === 'auth') { phase = 'check'; sendPhase(); }
-        else if (phase !== 'check') fail('unexpected_packet');
+        else if (phase !== 'check' && phase !== 'watching') fail('unexpected_packet');
       } else if (type === CHECK_ACK) {
+        // Upstream also ignores repeated acknowledgments after connection.
+        // Neither acknowledgment counts as a keepalive or renews the window.
+        if (phase === 'watching') return;
         if (phase !== 'check') fail('unexpected_packet');
-        phase = 'complete'; finish();
+        if (!keepalive) { phase = 'complete'; finish(); }
+        else {
+          phase = 'watching'; clearInterval(retry); clearTimeout(deadline);
+          watchEnds = time + WATCH_MS; lastKeepalive = time;
+          watchTimer = setTimeout(finishWatch, WATCH_MS); armGap();
+        }
       } else {
-        if (phase !== 'check') fail('unexpected_packet');
+        if (phase !== 'check' && phase !== 'watching') fail('unexpected_packet');
+        if (phase === 'watching') {
+          // Bounded duplicate-wire rejection within this observation only.
+          // Can reject legitimate network duplication. This is not protocol
+          // freshness or a replay guarantee across runs; only digests remain.
+          const identity = createHash('sha256').update(bytes).digest('hex');
+          if (observedKeepalives.has(identity)) fail('keepalive_replay');
+          observedKeepalives.add(identity);
+          firstKeepalive ??= time; lastKeepalive = time; keepalivesReceived++; armGap();
+        }
         send(KEEP_ALIVE);
       }
     } catch (error) { finish(redacted(error)); }
@@ -189,22 +282,27 @@ export async function probeSvcControl(client, options = {}) {
   const payload = packet => {
     if (finished || packet?.channel !== 'voicechat:secret') return;
     try {
+      now();
       if (phase !== 'secret') fail('duplicate_secret');
-      data = parseSecret(packet.data, expectedUuid, approvedPort);
+      data = parseSecret(packet.data, expectedUuid, approvedPort, keepalive);
       phase = 'binding';
       socket = dgram.createSocket('udp4');
       socket.on('error', socketFailed); socket.on('close', socketEnded); socket.on('message', received);
+      now();
       socket.bind(0, '127.0.0.1', () => {
         if (finished) return;
         try {
+          now();
           socket.connect(approvedPort, '127.0.0.1', error => {
             if (finished) return;
             if (error) { reject('socket_failed'); return; }
-            phase = 'auth';
-            retry = setInterval(sendPhase, 1000);
-            sendPhase();
+            try {
+              now(); phase = 'auth';
+              retry = setInterval(sendPhase, 1000);
+              sendPhase();
+            } catch (error) { finish(redacted(error)); }
           });
-        } catch { reject('socket_failed'); }
+        } catch (error) { finish(error instanceof SvcControlError ? error : new SvcControlError('socket_failed')); }
       });
     } catch (error) { finish(redacted(error)); }
   };
@@ -213,40 +311,71 @@ export async function probeSvcControl(client, options = {}) {
     client.on('custom_payload', payload); client.on('error', clientFailed); client.on('end', clientEnded);
     signal?.addEventListener('abort', aborted, { once: true });
     deadline = setTimeout(() => reject('deadline'), timeoutMs);
+    if (keepalive) totalDeadline = setTimeout(() => reject('deadline'), 49_750);
     if (signal?.aborted) aborted();
     if (!finished) {
       // Announce only the one payload understood by this probe. Do not register
       // a library parser which might expose secret fields as a separate event.
-      client.write('custom_payload', { channel: 'minecraft:register', data: Buffer.from('voicechat:secret', 'ascii') });
-      if (!finished) client.write('custom_payload', { channel: 'voicechat:request_secret', data: Buffer.from([0, 0, 0, 20]) });
+      now(); client.write('custom_payload', { channel: 'minecraft:register', data: Buffer.from('voicechat:secret', 'ascii') });
+      if (!finished) { now(); client.write('custom_payload', { channel: 'voicechat:request_secret', data: Buffer.from([0, 0, 0, 20]) }); }
     }
     await work;
   } catch (error) { failure = redacted(error); finish(failure); await work.catch(() => {}); }
   finally {
-    finished = true; clearInterval(retry); clearTimeout(deadline);
+    finished = true; clearInterval(retry); clearTimeout(deadline); clearTimeout(totalDeadline);
+    clearTimeout(watchTimer); clearTimeout(gapTimer);
     signal?.removeEventListener('abort', aborted);
     client.off('custom_payload', payload); client.off('error', clientFailed); client.off('end', clientEnded);
     data?.key.fill(0); data?.uuid.fill(0); expectedUuid.fill(0); data = undefined;
     if (socket && !socketClosed) {
+      // Closing still runs when the operation failed or the clock is invalid.
+      // Do not apply handshake deadlines here: preserve the original failure
+      // while always attempting to release the socket.
+      const closeClock = () => {
+        const value = performance.now();
+        if (!Number.isFinite(value) || value < lastClock) fail('clock');
+        lastClock = value; return value;
+      };
+      let closeStarted;
+      if (keepalive) {
+        try { closeStarted = closeClock(); }
+        catch (error) { failure ??= redacted(error); }
+      }
       try {
         await new Promise((resolve, rejectClose) => {
           const timer = setTimeout(() => rejectClose(new SvcControlError('cleanup_failed')), 250);
-          try { socket.close(() => { clearTimeout(timer); resolve(); }); }
+          try { socket.close(() => {
+            clearTimeout(timer);
+            try {
+              if (keepalive && closeClock() - closeStarted > 250) fail('cleanup_failed');
+              resolve();
+            } catch (error) { rejectClose(redacted(error)); }
+          }); }
           catch (error) {
             clearTimeout(timer);
             if (error?.code === 'ERR_SOCKET_DGRAM_NOT_RUNNING') resolve(); else rejectClose(new SvcControlError('cleanup_failed'));
           }
         });
-      } catch { failure ??= new SvcControlError('cleanup_failed'); }
+      } catch (error) { failure ??= error instanceof SvcControlError ? error : new SvcControlError('cleanup_failed'); }
     }
     if (socketClosed) {
       socket.off('error', socketFailed); socket.off('close', socketEnded); socket.off('message', received);
     }
+    for (const pending of pendingSends) pending.bytes.fill(0);
+    pendingSends.clear(); observedKeepalives.clear();
     activeClients.delete(client);
+  }
+  let elapsedMs;
+  if (!failure) {
+    try { elapsedMs = Math.round(now() - started); }
+    catch (error) { failure = redacted(error); }
   }
   if (failure) throw failure;
   return Object.freeze({ mod: 'simple_voice_chat', version: '2.6.22', compatibility: 20,
     announcementMatched: true, authenticationAck: true, connectionCheckAck: true,
-    ...counts, elapsedMs: Math.round(performance.now() - started), udpSocketClosed: true,
+    ...counts, elapsedMs, udpSocketClosed: true,
+    ...(keepalive ? { keepaliveObserved: true, keepaliveWindowMs: WATCH_MS,
+      keepalivesReceived, keepaliveResponsesConfirmed,
+      keepaliveSpanMs: Math.floor(lastKeepalive - firstKeepalive), keepaliveMaxGapMs: Math.ceil(maxGap) } : {}),
     audio: 'not_tested', accountAuthentication: 'not_tested', runtimeHomologated: false });
 }

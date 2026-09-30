@@ -47,6 +47,8 @@ Incremento28: cinco testes reais de resumption exigem stream emissor0-RTT e stat
 
 Incremento29: caller Node usa convites assinados nos três perfis, com plano/review integral, TTL120s e aprovação única; Rust verifica assinatura. Minecraft com dois pares independentes e controles reais SVC/Plasmo passaram, inclusive stop/restore; sem áudio/GUI/contas mistas/LAN. Corrida IPC entre enumeração de `.part` e rename corrigida somente quando final conhecido passa leitura/identidade/schema/fase; erro restante redigido.289cliente+69supervisor PASS, sem rebuild de binário. Kit privado/guia LAN preparado e gates PowerShell5.1 testados8/8; teste em segundo PC ainda pendente. Não repetir suíte que inventaria stages durante execução/staging Java.
 
+Incremento30: SVC `--offline-lab --keepalive` passou35s no mod real com35controles autenticados/respostas locais, cliente PLAY, dois agentes/cleanup e restore normal. Janela35s, gap5s, span30s, orçamento96UDP/16KiB; clocks/deadlines também conferidos fora dos timers e close250ms.156testescliente focados após hardening PASS. Não mede entrega remota/RTT/áudio nem identidade da associação interna; duplicata exata pode causar recusa conservadora. Guia LAN registra dependência VCRUNTIME140 do binário, sem instalação automática.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

@@ -14,6 +14,8 @@ Binário debug Windows x64 verificado localmente, SHA-256:
 
 Fonte nesta worktree: `apps/connect-lab`, branch `codex/aur-r4-connect`; dependências fixadas em seu `Cargo.lock`. Esse hash identifica o artefato testado, não uma assinatura de distribuição. Se o hash divergir, não executar: conferir a cópia e o artefato revisado. Não baixar um substituto aleatório.
 
+A inspeção estática desse executável confirma Windows x64 e dependência do runtime Microsoft Visual C++ (`VCRUNTIME140.dll`), além das bibliotecas do Windows. Não exige Rust, mas a presença desse runtime no segundo PC ainda não foi verificada. Se a execução informar DLL ausente, parar e devolver somente o nome da DLL/código; não copiar DLL avulsa nem instalar algo por tentativa. O agente preparará o procedimento oficial caso essa ausência seja realmente observada. A inspeção não substitui a execução no segundo PC.
+
 ## Anfitrião — executado neste PC pelo agente
 
 1. Conferir hash, portas TCP42001/UDP42000/42002 livres e selecionar o IPv4 local da interface usada na mesma rede do convidado. Nenhum processo alheio é encerrado e nenhuma regra de firewall é alterada.
