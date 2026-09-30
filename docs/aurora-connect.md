@@ -43,6 +43,16 @@ Transporte é somente direto com endereço manual. Relay, descoberta pública, p
 
 ## Reproduzir neste computador
 
+Incremento35 acrescenta uma prova local da fronteira UDP, separada do probe antigo. Requer binário32 já revisado/hash fixado e Node24.8; desligada por padrão:
+
+```powershell
+node apps/connect-client-lab/boundary-smoke.mjs --local-lab
+$env:AURORA_CONNECT_BOUNDARY_TEST_REAL = '1'
+node --test --test-concurrency=1 apps/connect-client-lab/boundary-smoke.test.mjs
+```
+
+O helper cria somente plano novo ignorado e endpoints loopback próprios, confere hash/serviços exatos antes de autorizar o peer e inicia dois agentesCLI. Teto1264 é aprovado no serviço, não MTU física forçada. Quatro ecos1264B, duas tentativas1265B, zero chegada excessiva ao endpoint em janelas300ms, válido posterior em cada origem e TCP1MiB/direção durante UDP passaram. Encerramento normal e rebind das pontes comprovados;7testesPASS sem skip quando opt-in. Sem opt-in os três casos reais são skips explícitos. Não executa Minecraft/mod/áudio/rede externa; retorno acima do teto ainda é lacuna. Sem alvo/binário/path arbitrários, firewall ou configs pessoais; stop/cancel fecha apenas filhos/sockets próprios e preserva o plano. ReapOS pode exceder prazo de parada graciosa. [Evidência35](task-aur-r4-connect.md#trigésimo-quinto-incremento--fronteira-udp-e-tcp-concorrente-em-loopback).
+
 Diretório de execução:
 
 ```powershell
