@@ -59,6 +59,8 @@ Incremento34: inspector somenteleitura sinaliza configured_mtu_exceeds_transport
 
 Incremento35: `boundary-smoke.mjs --local-lab` passou teto explícito de serviço1264 em loopback com2agentesCLI; quatroechos1264/duasrecusas1265 sem chegada ao echo/continuidade,2origens eTCP1MiB/direção concorrente.7NodePASS0skip opt-in; cleanup normal/rebindports. Não é MTU física, externo ou áudio; retornooversize ainda pendente. Plano novo hash/approvedServices conferidos antes de autorizar peer, sem configuração pessoal. Helper tem prazo gracioso, reapOS pode excedê-lo; consulte task35 e domínioConnect. Não ampliar esse laboratório para destinatário/executável arbitrários.
 
+Incremento36: mesmo helper passou também retorno1265/1264 com perfil authorizedDownstream explicitamente aprovado, sem depender de crédito1:1. Quatroretornosoversize emitidos(callbackOS,nãoprovaentrega),zero no cliente,quatroválidosexatos eTCPativo; mantém ambos socketsabertos300ms após últimoecho.7NodePASS0skip/cleanup normal.35 preserva seu resultado histórico; comando atual inclui36. Não promove áudio, MTU física ou rede externa e não altera transportebinário32.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

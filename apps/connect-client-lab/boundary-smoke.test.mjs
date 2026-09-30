@@ -52,12 +52,14 @@ test('pre-cancellation and a verification deadline start no agents', { skip: !re
   });
 });
 
-test('real CLI pair proves exact echoes, endpoint absence, continuity, isolation and concurrent TCP', { skip: !real }, async () => {
+test('real CLI pair proves both size boundaries, exact echoes, continuity, isolation and concurrent TCP', { skip: !real }, async () => {
   const result = await runBoundarySmoke({ authorized: true });
   assert.equal(result.result, 'PASS'); assert.equal(result.servicePayloadCeiling, 1264); assert.equal(result.negotiatedPayload, 1264);
   assert.equal(result.tcpBytesEachDirection, 1048576); assert.equal(result.tcpConcurrentWithUdp, true);
   assert(result.tcpBytesForwardedDuringUdp > 0); assert.equal(result.udpLocalSources, 2); assert.equal(result.udpHostAssociationsObserved, 2);
   assert.equal(result.udpExactEchoes, 4); assert.equal(result.udpOversizeRequests, 2); assert.equal(result.udpOversizeReachedEndpoint, 0);
+  assert.equal(result.udpOversizeReturnsEmitted, 4); assert.equal(result.udpOversizeReturnsReachedGuest, 0);
+  assert.equal(result.udpAuthorizedDownstreamProfile, true);
   assert.equal(result.udpValidAfterRejection, 2); assert.equal(result.udpEndpointBytes, 5056);
   assert.equal(result.cleanup.agents, 2); assert.equal(result.cleanup.closed, 2); assert.equal(result.cleanup.forced, false);
   assert.equal(result.cleanup.ownEndpointsClosed, true); assert.equal(result.cleanup.guestPortsRebound, true); assert.equal(result.cleanup.stderrBytes, 0);

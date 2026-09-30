@@ -1,10 +1,10 @@
 # Compatibility Matrix
 
-## Aurora Connect V2 — laboratório local de 29/09/2026
+## Aurora Connect V2 — evidências até 30/09/2026
 
 Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, desligado para usuários. O núcleo desktop tem adaptadores de configuração SVC/Plasmo apenas opt-in/cópia de diagnóstico, sem comando ou interface. Base cumulativa alpha.14 (`5ac2f7e` sobre `6a107b8`), Core 1.1.5, Skins 0.3.1 e os nove pares preservados. Evidências e comandos no [task de execução](../task-aur-r4-connect.md); roteiro no [laboratório](../aurora-connect.md). A [matriz candidata por mod/versão/loader/hospedagem/rede](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) mantém os gates futuros. A matriz abaixo conserva todas as evidências anteriores; retransmissão Skins e testes sintéticos de transporte não homologam Connect em Minecraft.
 
-| Capacidade | Evidência local | Estado e fronteira |
+| Capacidade | Evidência observada | Estado e fronteira |
 | --- | --- | --- |
 | TCP | Bytes reais nos dois sentidos, 8 MiB/contrapressão, half-close, múltiplas conexões, autenticação/autorização, limites, expiração/revogação; protocolo Minecraft real | **PROTÓTIPO**; STATUS e dois clientes sintéticos até pacotes de mundo em loopback |
 | UDP | Fronteiras/retorno, três peers, duas sessões, dois serviços, MTU/oversize, replay/forja, quotas, ciclo de vida e carga TCP simultânea; downstream autorizado por plano/hash local e orçamento por peer/serviço | **PROTÓTIPO**; `host` mantém 1:1 e `host-plan` permite perfil explícito; nenhum mod/áudio homologado |
@@ -18,6 +18,8 @@ Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, desligado 
 Incremento34 confrontou teto1264B do ensaio externo33 com configurações reais intactas: SVC1275 gera incompatibilidade conservadora no inspector; Plasmo1024 continua sem orçamento UDP integral medido.38testesPASS com JARs fixados, sem áudio/configuração aplicada. O sucesso de transporte33 não preenche células de voz; [detalhes](../aurora-connect-voice.md#teto-udp-observado-na-outra-internet--incremento34).
 
 Incremento35 passou fronteira local com cap explícito1264:1264B eco exato,1265B sem entrega ao endpoint em300ms, válido posterior/duasorigens eTCP1MiB/direção concorrente;7testesPASS0skip,2agentes/cleanup normal. Cap de serviço não é MTU física ou prova externa; retornooversize permanece pendente nesse helper. Nenhuma célula de jogo/mod é promovida.
+
+Incremento36 completou o retorno nesse helper: perfil authorizedDownstream explícito, quatroemissões1265B/zero entrega ao guest observada e quatroecos1264B válidos;TCPativo, duasorigens,7testesPASS0skip/cleanup normal. A lacuna35 de retorno foi coberta em loopback, sem promover externamente ou medir áudio/MTU física.
 
 Baseline: 24/24 testes Rust (4 unitários, 9 adversariais, 11 de transporte), 55/55 resultados nas cinco repetições da suíte de transporte, fmt/clippy e 14/14 testes do inspector aprovados. Smoke: 1 MiB TCP por direção, dez UDP em duas origens, teto negociado de 1358 bytes e limpeza aprovada. Uma falha intermitente anterior de UDP sob carga TCP foi corrigida reservando 16 KiB do burst para datagramas; o histórico permanece no task. Esses resultados não garantem ausência de perda em UDP, justiça em redes externas ou SLA. Nenhuma linha de mod/loader/hospedagem recebe homologação por esses testes.
 

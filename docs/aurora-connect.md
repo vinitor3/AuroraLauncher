@@ -43,7 +43,7 @@ Transporte é somente direto com endereço manual. Relay, descoberta pública, p
 
 ## Reproduzir neste computador
 
-Incremento35 acrescenta uma prova local da fronteira UDP, separada do probe antigo. Requer binário32 já revisado/hash fixado e Node24.8; desligada por padrão:
+Incrementos35/36 acrescentam uma prova local da fronteira UDP nos dois sentidos, separada do probe antigo. Requer binário32 já revisado/hash fixado e Node24.8; desligada por padrão:
 
 ```powershell
 node apps/connect-client-lab/boundary-smoke.mjs --local-lab
@@ -51,7 +51,7 @@ $env:AURORA_CONNECT_BOUNDARY_TEST_REAL = '1'
 node --test --test-concurrency=1 apps/connect-client-lab/boundary-smoke.test.mjs
 ```
 
-O helper cria somente plano novo ignorado e endpoints loopback próprios, confere hash/serviços exatos antes de autorizar o peer e inicia dois agentesCLI. Teto1264 é aprovado no serviço, não MTU física forçada. Quatro ecos1264B, duas tentativas1265B, zero chegada excessiva ao endpoint em janelas300ms, válido posterior em cada origem e TCP1MiB/direção durante UDP passaram. Encerramento normal e rebind das pontes comprovados;7testesPASS sem skip quando opt-in. Sem opt-in os três casos reais são skips explícitos. Não executa Minecraft/mod/áudio/rede externa; retorno acima do teto ainda é lacuna. Sem alvo/binário/path arbitrários, firewall ou configs pessoais; stop/cancel fecha apenas filhos/sockets próprios e preserva o plano. ReapOS pode exceder prazo de parada graciosa. [Evidência35](task-aur-r4-connect.md#trigésimo-quinto-incremento--fronteira-udp-e-tcp-concorrente-em-loopback).
+O helper cria somente plano novo ignorado e endpoints loopback próprios, confere hash/serviços exatos antes de autorizar o peer e inicia dois agentesCLI. Teto1264 é aprovado no serviço, não MTU física forçada. Quatro ecos1264B, duas tentativas1265B, zero chegada excessiva ao endpoint em janelas300ms, válido posterior em cada origem e TCP1MiB/direção durante UDP passaram.36 usa perfil downstream explícito100000B/s e100datagramas/s: o endpoint próprio emite quatroretornos1265B seguidos dos ecos1264B; nenhum oversize chega ao cliente, enquanto os válidos passam, sem depender de crédito de resposta1:1. Ambos sockets permanecem abertos300ms após últimoecho. Callback de emissão não comprova entrega UDP e a prova não mede motivos de descarte individual. Encerramento normal e rebind das pontes comprovados;7testesPASS sem skip quando opt-in. Sem opt-in os três casos reais são skips explícitos. Não executa Minecraft/mod/áudio/rede externa. Sem alvo/binário/path arbitrários, firewall ou configs pessoais; stop/cancel fecha apenas filhos/sockets próprios e preserva o plano. ReapOS pode exceder prazo de parada graciosa. [Evidência35](task-aur-r4-connect.md#trigésimo-quinto-incremento--fronteira-udp-e-tcp-concorrente-em-loopback), [retorno36](task-aur-r4-connect.md#trigésimo-sexto-incremento--fronteira-de-retorno-sem-confusão-com-quota).
 
 Diretório de execução:
 

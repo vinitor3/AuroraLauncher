@@ -168,7 +168,7 @@ export async function runBoundarySmoke(options = {}) {
     } finally { clearTimeout(localTimer); }
   };
   const agents = []; const tcpSockets = new Set(); const udpSockets = [];
-  const endpoint = { tcpAccepts: 0, tcpBytes: 0, udpPackets: 0, udpBytes: 0, sources: new Set() };
+  const endpoint = { tcpAccepts: 0, tcpBytes: 0, udpPackets: 0, udpBytes: 0, oversizedReturnsEmitted: 0, sources: new Set() };
   const allowedPackets = new Map(); let tcpServer; let udpServer; let reservation; let planFile; let planHash; let bridges;
   let tcpWork; let result; let ownEndpointsClosed = false; let portsRebound = false;
   const closingSockets = [];
@@ -190,7 +190,14 @@ export async function runBoundarySmoke(options = {}) {
       const approved = allowedPackets.get(digest(bytes));
       if (source.address !== '127.0.0.1' || bytes.length !== CAP || !approved || approved.seen) { fail('boundary_endpoint_unexpected_datagram'); return; }
       approved.seen = true; approved.origin = source.port; endpoint.sources.add(source.port);
-      udpServer.send(bytes, source.port, source.address, error => { if (error) fail('boundary_udp_io'); });
+      // Owned opaque fixture: exercise the host return cap independently of
+      // reply credit, then send the exact valid echo on the same association.
+      // A local send callback records emission, never proof of UDP delivery.
+      udpServer.send(Buffer.alloc(CAP + 1, 0xa7), source.port, source.address, error => {
+        if (error) { fail('boundary_udp_io'); return; }
+        endpoint.oversizedReturnsEmitted++;
+        udpServer.send(bytes, source.port, source.address, error => { if (error) fail('boundary_udp_io'); });
+      });
     });
     await wait(new Promise(resolve => udpServer.bind({ address: '127.0.0.1', port: 0, exclusive: true }, resolve)));
     reservation = createSocket('udp4'); reservation.on('error', () => fail('boundary_udp_bind_failed'));
@@ -198,7 +205,8 @@ export async function runBoundarySmoke(options = {}) {
     const plan = { schemaVersion: 1, bind: `127.0.0.1:${reservation.address().port}`, durationSeconds: 60,
       services: [
         { serviceId: 'game', protocol: 'tcp', endpoint: `127.0.0.1:${tcpServer.address().port}`, revision: 1, requiredCapability: 'reliableStream', maxDatagramBytes: 1400, udpReturnPolicy: { type: 'replyBudget' } },
-        { serviceId: 'aux', protocol: 'udp', endpoint: `127.0.0.1:${udpServer.address().port}`, revision: 1, requiredCapability: 'datagram', maxDatagramBytes: CAP, udpReturnPolicy: { type: 'replyBudget' } },
+        { serviceId: 'aux', protocol: 'udp', endpoint: `127.0.0.1:${udpServer.address().port}`, revision: 1, requiredCapability: 'datagram', maxDatagramBytes: CAP,
+          udpReturnPolicy: { type: 'authorizedDownstream', bytesPerSecond: 100000, datagramsPerSecond: 100 } },
       ] };
     const planBytes = Buffer.from(`${JSON.stringify(plan)}\n`); planHash = digest(planBytes); planFile = join(directory, 'plan.json');
     await rejectLinkedParents(planFile); await writeFile(planFile, planBytes, { flag: 'wx' }); check();
@@ -248,11 +256,12 @@ export async function runBoundarySmoke(options = {}) {
       finally { controller.signal.removeEventListener('abort', abortTcp); }
     })();
     await wait(progressed.promise); const overlapBefore = { sent, received, endpoint: endpoint.tcpBytes };
-    let rejected = 0; let valid = 0;
+    let rejected = 0; let valid = 0; let oversizedReturnsReceived = 0;
     for (let source = 0; source < 2; source++) {
       const socket = createSocket('udp4'); udpSockets.push(socket); socket.on('error', () => fail('boundary_udp_io'));
       let expected; let replyDone;
       socket.on('message', bytes => {
+        if (bytes.length > CAP) oversizedReturnsReceived++;
         if (!expected || !bytes.equals(expected)) { fail('boundary_udp_integrity'); return; }
         expected = undefined; replyDone?.(); replyDone = undefined;
       });
@@ -273,17 +282,23 @@ export async function runBoundarySmoke(options = {}) {
       if (endpoint.udpPackets !== before.packets || endpoint.udpBytes !== before.bytes) invalid('boundary_oversize_delivered');
       if (await exact(2) !== origin) invalid('boundary_udp_association_changed'); rejected++;
     }
+    // Keep every source open after the last valid echo to observe delayed
+    // oversized returns, rather than letting cleanup hide a late delivery.
+    await wait(delay(SILENCE_MS, undefined, { signal: controller.signal })); check();
     const overlapAfter = { sent, received, endpoint: endpoint.tcpBytes };
     if (overlapAfter.sent <= overlapBefore.sent || overlapAfter.received <= overlapBefore.received || overlapAfter.endpoint <= overlapBefore.endpoint
       || overlapBefore.sent >= TCP_BYTES || overlapAfter.sent >= TCP_BYTES) invalid('boundary_tcp_overlap_missing');
     await wait(tcpWork); check();
     if (sent !== TCP_BYTES || received !== TCP_BYTES || endpoint.tcpBytes !== TCP_BYTES || endpoint.tcpAccepts !== 1
-      || endpoint.udpPackets !== 4 || endpoint.udpBytes !== 4 * CAP || endpoint.sources.size !== 2) invalid('boundary_summary_invalid');
+      || endpoint.udpPackets !== 4 || endpoint.udpBytes !== 4 * CAP || endpoint.sources.size !== 2
+      || endpoint.oversizedReturnsEmitted !== 4 || oversizedReturnsReceived !== 0) invalid('boundary_summary_invalid');
     result = { result: 'PASS', state: 'PROTÓTIPO', topology: 'same_machine_loopback', servicePayloadCeiling: CAP,
       negotiatedPayload: CAP, tcpBytesEachDirection: TCP_BYTES, tcpConcurrentWithUdp: true,
       tcpBytesForwardedDuringUdp: overlapAfter.endpoint - overlapBefore.endpoint,
       udpLocalSources: 2, udpHostAssociationsObserved: endpoint.sources.size, udpExactEchoes: valid,
       udpOversizeRequests: rejected, udpOversizeBytes: CAP + 1, udpOversizeReachedEndpoint: 0,
+      udpOversizeReturnsEmitted: endpoint.oversizedReturnsEmitted, udpOversizeReturnsReachedGuest: oversizedReturnsReceived,
+      udpAuthorizedDownstreamProfile: true,
       udpValidAfterRejection: 2, rejectionObservationMs: SILENCE_MS, udpEndpointBytes: endpoint.udpBytes,
       relay: false, minecraft: 'not_tested', voice: 'not_tested', externalNetwork: 'not_tested', physicalPathMtu: 'not_measured' };
   } catch (error) { fail(error instanceof BoundarySmokeError ? error.code : 'boundary_operation_failed'); }
