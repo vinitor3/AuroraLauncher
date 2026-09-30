@@ -1,4 +1,5 @@
 //! Explicit development CLI. No persisted keys, cloud services or launcher hooks.
+mod boundary_probe;
 use aurora_connect_lab::{
     Capability, EndpointAddr, EndpointId, Guest, GuestConfig, Host, HostConfig, Invitation, Lease,
     Limits, Protocol, Service, UdpReturnPolicy, generate_key, load_plan, unix_millis,
@@ -625,12 +626,17 @@ async fn main() {
                 Err(_) => Err("probe_timeout".into()),
             }
         }
+        Some("echo-boundary") => Box::pin(boundary_probe::echo(&args[1..])).await,
+        Some("probe-boundary") => Box::pin(boundary_probe::probe(&args[1..])).await,
         _ => {
             println!(
                 "EXPERIMENTAL - no launcher integration, keys only in memory\nhost <quic-bind> <approved-tcp-target> <approved-udp-target> <seconds>\nplan <local-service-plan.json>\nhost-plan <local-service-plan.json> <approved-sha256>\nguest <host-public-id> <host-direct-address> <session-id> <local-tcp> <local-udp> <seconds>\nguest-tcp <host-public-id> <host-direct-address> <session-id> <local-tcp> <seconds>\necho <loopback-tcp> <loopback-udp> <seconds>\nprobe <loopback-tcp> <loopback-udp>\nminecraft-status <loopback-tcp-bridge> <handshake-host> <handshake-port> <protocol-number>\necho-downstream / probe-downstream: same arguments, controlled asymmetric UDP test only\nUse stop on stdin or Ctrl+C to end. See docs/aurora-connect.md."
             );
             println!(
                 "host-invite-plan <reviewed-plan.json> <approved-sha256>\nguest-invite <pinned-host-public-id> <local-tcp> <local-udp> <seconds>\nguest-invite-tcp <pinned-host-public-id> <local-tcp> <seconds>\nInvitation commands are loopback-only, one admission, at most 600 seconds; interactive prompts expire."
+            );
+            println!(
+                "echo-boundary <loopback-tcp> <loopback-udp> <seconds>\nprobe-boundary <loopback-tcp> <loopback-udp> <expected-payload-1-to-1400>\nBoundary commands use an owned synthetic endpoint and require an approved authorizedDownstream service plan."
             );
             Ok(())
         }
@@ -648,6 +654,11 @@ async fn main() {
             .or_else(|| {
                 error
                     .downcast_ref::<aurora_connect_lab::MinecraftStatusError>()
+                    .map(ToString::to_string)
+            })
+            .or_else(|| {
+                error
+                    .downcast_ref::<boundary_probe::BoundaryError>()
                     .map(ToString::to_string)
             })
             .unwrap_or_else(|| "lab_operation_failed".into());

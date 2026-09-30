@@ -61,6 +61,10 @@ Incremento35: `boundary-smoke.mjs --local-lab` passou teto explícito de serviç
 
 Incremento36: mesmo helper passou também retorno1265/1264 com perfil authorizedDownstream explicitamente aprovado, sem depender de crédito1:1. Quatroretornosoversize emitidos(callbackOS,nãoprovaentrega),zero no cliente,quatroválidosexatos eTCPativo; mantém ambos socketsabertos300ms após últimoecho.7NodePASS0skip/cleanup normal.35 preserva seu resultado histórico; comando atual inclui36. Não promove áudio, MTU física ou rede externa e não altera transportebinário32.
 
+Incremento37: `echo-boundary`/`probe-boundary` acrescentam fixture/probe nativos para as pontes autorizadas existentes, sem mudar o transporte. Smoke PowerShell5.1 passou cap de serviço1264: quatro ecos exatos, duas tentativas1265 sem chegada ao endpoint, quatro retornos1265 emitidos e zero no convidado, duas origens e TCP1MiB/direção concorrente; janela500ms. Plano downstream/hash/serviços aprovados antes do peer; cleanup normal e rebind das pontes/host/echo. Suíte integrada93RustPASS0skip inclui cinco unitários/quatroCLI nativos e38; fmt/clippyalltargetsPASS. Consulta ao task37 é obrigatória para hash/kit e validação final; kits históricos permanecem preservados. Não é prova externa, MTU física, áudio ou saturação.
+
+Incremento38: teste `cfg(test)` em guest observa capacidade DATAGRAM, teto recebido na abertura, PMTU/probes do caminho e reabertura após TCP real. Na amostra focada, capacidade local Guest1414 ficou constante (`growth_not_observed`), resposta de abertura Host1358→1390; UDP1390 íntegro e tetoHost+1 recusado. Não exigir crescimento nem inferir medição direta do transporte host. Associação antiga conserva o teto de abertura; redução local é consultada dinamicamente. Cleanup libera todos os handles antes de rebind. Não houve mudança de produção; resultados completos e limites no task38.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

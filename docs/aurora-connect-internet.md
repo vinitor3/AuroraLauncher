@@ -1,5 +1,7 @@
 # Aurora Connect — ensaio privado entre redes diferentes
 
+Este roteiro permanece ligado ao kit32 e ao binário usados no ensaio33. O próximo teste de fronteira1264/1265 e TCP concorrente usa um kit novo e o [roteiro de fronteira](aurora-connect-internet-boundary.md), com hash próprio. Não combinar executáveis ou hashes dos dois kits.
+
 Estado: **PARCIAL**. Em 30/09/2026, um ensaio com dois Windows x64 em internets diferentes passou TCP/UDP, usando endereço inicial IPv6 e relay desligado. O convidado devolveu `guest_ready`, `probe_passed` e `guest_stopped`; anfitrião/echo encerraram com exit0 e portas livres observadas aqui. [Evidência, métricas e limites](task-aur-r4-connect.md#trigésimo-terceiro-incremento--conexão-direta-entre-duas-internets). Este roteiro testa bytes TCP/UDP; não instala launcher, Minecraft ou mods e não testa contas ou áudio. O laboratório continua experimental, sem relay/fallback e sem mudança automática de firewall/roteador. Para computadores na mesma rede, usar [o roteiro LAN](aurora-connect-lan.md).
 
 O agente controla somente o PC desta conversa, que será o **anfitrião**. O **convidado** fica na outra internet. Uma pessoa com autorização nesse computador precisa copiar a pasta de teste e abrir os terminais; não precisa programar, pesquisar ou fornecer acesso remoto/credenciais. Antes de iniciar uma sessão, combinar um intervalo de dez minutos com ambos presentes.

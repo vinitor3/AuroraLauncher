@@ -13,7 +13,7 @@ import { rejectLinkedParents, resolveExplicitLocalPath } from '../connect-voice-
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const PARENT = join(REPO, '.aurora', 'connect-validation');
 const EXECUTABLE = join(REPO, 'apps/connect-lab/target/debug/aurora-connect-lab.exe');
-const EXECUTABLE_SHA256 = '7f8c7ed40e00826f58b5f482f80d1660941d5568d36a2983588488c84d0b9a40';
+const EXECUTABLE_SHA256 = '5c1f3b3e61c2a975401d43f5c5d5568d9801a7252b7381451acb8026e6fd2030';
 const CAP = 1264;
 const TCP_BYTES = 1_048_576;
 const EVENT_BYTES = 8192;

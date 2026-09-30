@@ -43,7 +43,7 @@ Transporte é somente direto com endereço manual. Relay, descoberta pública, p
 
 ## Reproduzir neste computador
 
-Incrementos35/36 acrescentam uma prova local da fronteira UDP nos dois sentidos, separada do probe antigo. Requer binário32 já revisado/hash fixado e Node24.8; desligada por padrão:
+Incrementos35/36 acrescentam uma prova local da fronteira UDP nos dois sentidos, separada do probe antigo. Os ensaios originais usaram o binário32; o caller confere o hash da revisão atual, repinado e novamente testado no37. Requer esse binário revisado e Node24.8; desligada por padrão:
 
 ```powershell
 node apps/connect-client-lab/boundary-smoke.mjs --local-lab
@@ -52,6 +52,16 @@ node --test --test-concurrency=1 apps/connect-client-lab/boundary-smoke.test.mjs
 ```
 
 O helper cria somente plano novo ignorado e endpoints loopback próprios, confere hash/serviços exatos antes de autorizar o peer e inicia dois agentesCLI. Teto1264 é aprovado no serviço, não MTU física forçada. Quatro ecos1264B, duas tentativas1265B, zero chegada excessiva ao endpoint em janelas300ms, válido posterior em cada origem e TCP1MiB/direção durante UDP passaram.36 usa perfil downstream explícito100000B/s e100datagramas/s: o endpoint próprio emite quatroretornos1265B seguidos dos ecos1264B; nenhum oversize chega ao cliente, enquanto os válidos passam, sem depender de crédito de resposta1:1. Ambos sockets permanecem abertos300ms após últimoecho. Callback de emissão não comprova entrega UDP e a prova não mede motivos de descarte individual. Encerramento normal e rebind das pontes comprovados;7testesPASS sem skip quando opt-in. Sem opt-in os três casos reais são skips explícitos. Não executa Minecraft/mod/áudio/rede externa. Sem alvo/binário/path arbitrários, firewall ou configs pessoais; stop/cancel fecha apenas filhos/sockets próprios e preserva o plano. ReapOS pode exceder prazo de parada graciosa. [Evidência35](task-aur-r4-connect.md#trigésimo-quinto-incremento--fronteira-udp-e-tcp-concorrente-em-loopback), [retorno36](task-aur-r4-connect.md#trigésimo-sexto-incremento--fronteira-de-retorno-sem-confusão-com-quota).
+
+Incremento37 acrescenta os comandos nativos `echo-boundary <loopback-tcp> <loopback-udp> <seconds>` e `probe-boundary <loopback-tcp> <loopback-udp> <payload-esperado>`, dispensando Node no computador convidado. São uma fixture sintética e seu probe, limitados a endereços literais loopback; não recebem destinos pelo protocolo. O probe aceita payload1..1400 e só deve apontar às pontes de uma sessão autorizada. O endpoint exige serviço `authorizedDownstream` aprovado para emitir o retorno maior; executar diretamente contra o echo, sem filtro da ponte, falha em vez de produzir falso PASS.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/connect-boundary-smoke.ps1
+```
+
+O script compila offline/locked o laboratório; `-SkipBuild` usa o binário já compilado e revisado. Prepara plano novo ignorado, confere SHA256/serviços antes de autorizar o peer e recusa hash incorreto antes do host. Passou sob PowerShell5.1: TCP1048576B/direção,229376B encaminhados durante a janelaUDP; quatro ecos1264, duas tentativas1265 sem chegada ao endpoint e quatro retornos1265 emitidos sem chegada ao convidado. Observa ambas as origens por500ms, inclusive após os ecos; contadores do endpoint chegam pelo TCP confiável da fixture. Emissão no socket não comprova chegada UDP nem causa individual de descarte. Saída sanitizada e cleanup normal, rebind das pontes/host/echo, sem configuração pessoal ou relay. Ensaio6515ms é uma amostra com TCP cadenciado200ms, não benchmark/saturação. [Registro37](task-aur-r4-connect.md#trigésimo-sétimo-incremento--fronteira-nativa-para-preparação-externa). O [roteiro de fronteira entre redes](aurora-connect-internet-boundary.md) tem gate próprio de binário/hash; sua preparação não é execução externa.
+
+Incremento38 observa o orçamento real no teste `guest::mtu_observation_tests::udp_reopening_observes_current_budget_after_real_tcp_without_assuming_growth`. São dois agentes em loopback, TCP1MiB por direção, amostras da capacidade DATAGRAM do convidado antes/depois da consulta e teto que o host respondeu na abertura. Na amostra focada, capacidade1414B constante/PMTU local1452B/quatro probes; associação antiga manteve1358B e a nova recebeu1390B. UDP1390 foi íntegro,1391 foi recusado e rebind passou. Isso registra aumento na resposta de abertura do host, sem observar diretamente sua capacidade de transporte; outras execuções podem manter ou reduzir o teto. Não mede MTU física externa nem garante que os pacotes dos mods caberão. [Registro38](task-aur-r4-connect.md#trigésimo-oitavo-incremento--orçamento-observado-e-reabertura-udp).
 
 Diretório de execução:
 
