@@ -43,6 +43,8 @@ Incremento26: `plan-control/run-control` aceita também perfil Plasmo estritamen
 
 Incremento27: convite manual Ed25519/≤4KiB/≤600s no laboratório, modo separado `start_invited/connect_invited` +CLI host-invite-plan/guest-invite[-tcp]. Uma admissão, identidade TLS/prova/capacidades conferidas antes do consumo; replay após desconexão/ACK falho recusado. Estado sóRAM: chaves/sessão novas a cada execução, sem renovação. Manual anterior continua reconectável.76Rust+8CLI+204cliente PASS; smokes normais/downstream com2agentes e cleanup PASS. Binário revisado SHA2cc277150e942dab68ab8b2037a4b1791a8ed1e06a7cc2f6af8bc411be36caac fixado no callerNode. Nenhuma nuvem/conta/UI; convite sóloopback. Admissão aguardaTLScompleto; não afirmar0-RTTglobal desativado upstream. Consultar spec§8.1 antes de ampliar.
 
+Incremento28: cinco testes reais de resumption exigem stream emissor0-RTT e status Accepted; replay/prova/peer/revogação/expiração recusados sem destinos TCP/UDP. Convite legítimo funciona após intrusões não consumidoras. Não é medição temporal pré-TLS ou desligamento global de early data. Nenhuma produção/dependência/binário alterados; fmt/clippy focado PASS. Evidências redigidas no task.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

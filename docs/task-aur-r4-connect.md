@@ -481,6 +481,26 @@ Logs redigidos `.aurora/connect-validation/invitation-twenty-seven-{rust-suite,c
 
 Preservados alpha.14/Assistente/recuperação/CAS/Doctor,Core1.1.5/Skins0.3.1 e novepares. Diff protegido contra5ac2f7e vazio; sem push/deploy/billing/release/instalador. Rollback: stop/revogação/encerramento dos filhos próprios, plano novo preservado, nenhuma configuração pessoal a restaurar; código por revert local revisado, atualizar pin do artefato somente após recompilar/revisar. Nenhuma intervenção humana necessária. Próximo trabalho local: prova de resumption/earlydata ou integração do convite ao laboratório Minecraft conforme auditoria da API; redes externas e áudio continuam exigindo recursos próprios em etapa separada.
 
+### Vigésimo oitavo incremento — replay em retomada TLS real
+
+Base `886a10f`, mesma branch/worktree cumulativa. Arquivo novo exclusivo `apps/connect-lab/tests/invitation_resumption.rs`, sem alterações de produção, dependências, locks ou executável. Fonte Iroh1.3.0 `endpoint/connection.rs::test_0rtt` e configuração TLS local conferidos. Cada fixture mantém o mesmo Endpoint entre conexão inicial e retomada, exige ausência de ticket no início, stream emissor marcado0-RTT e `ZeroRttStatus::Accepted` na retomada. Ausência/rejeição de ticket falha explicitamente, sem fingir teste de early data via conexão normal.
+
+Cinco cenários: convite consumido, prova incorreta, identidade TLS incorreta, revogação e expiração. Enfileiram Hello, aberturas gameTCP/auxUDP e datagrama antes de aguardar handshake; depois conferem recusa, conexão encerrada e zero destinos/associações/datagramas via métricas e sockets-canário independentes. Prova/peer incorretos não consomem a admissão: convidado legítimo posterior completa ida/volta TCP e UDP. Nenhum payload/convite/key/endereço aparece nos asserts ou resumos. **Limite**: não aguardar handshake não comprova que ele ainda esteja pendente; o gate temporal `incoming.await` é evidência de código, não intervalo dinâmico medido por esses testes.
+
+Comandos realmente executados:
+
+~~~powershell
+cargo test --manifest-path apps/connect-lab/Cargo.toml --test invitation_resumption -- --nocapture
+cargo test --offline --locked --manifest-path apps/connect-lab/Cargo.toml --test invitation_resumption -- --nocapture
+cargo clippy --offline --locked --manifest-path apps/connect-lab/Cargo.toml --test invitation_resumption -- -D warnings
+cargo fmt --manifest-path apps/connect-lab/Cargo.toml --all -- --check
+git diff --check
+~~~
+
+Primeira execução do agente **5/5PASS**, compilação6,38s/testes2,10s. Revisão root leu fixture, wire e gate do Host, sem bloqueadores; repetição offline/locked **5/5PASS**, preparação0,57s/testes2,10s: revogação220ms, replay236ms, prova/peer277ms cada, expiração2098ms. Todos Accepted; zero canários recusados. Clippy focadoPASS1,00s e fmt/diffPASS. Nenhum Java, Minecraft, mod ou CLI multiprocesso foi executado neste incremento; provas anteriores continuam delimitadas. Logs `.aurora/connect-validation/invitation-twenty-eight-{resumption,clippy}.log`.
+
+TCP/UDP/direto/convite permanecem **PROTÓTIPO**, relay desligado, Minecraft sintético/controle de cada mod sem homologação de GUI/áudio/contas mistas/redes/R4. Base alpha.14, Assistente, Core/Skins e nove pares preservados. Rollback é revert local revisado do teste/docs; fixtures fecham endpoints e host, sem configuração pessoal ou estado persistido. Nenhuma intervenção humana necessária. Próximo incremento independente: integrar o convite verificado ao supervisor dos laboratórios reais Minecraft/SVC/Plasmo.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.

@@ -25,6 +25,8 @@ No convidado, iniciar `guest-invite <peer-publico-do-host> 127.0.0.1:42010 127.0
 
 Encerrar com `stop` primeiro no convidado, depois anfitrião e endpoint, aguardando eventos stopped/exit. EOF em prompt pendente recusa sem conexão; Ctrl+C cancela. Revogação/expiração do host também fecha o convidado. Porta ocupada falha, nunca encerra proprietário alheio. Reinício descarta chaves/convite; não reutilizar a mesma identidade host para tentar reconstruir consumo em memória. Nenhuma configuração de jogo, EULA ou mod muda neste ensaio. Convites completos e pins não pertencem a logs compartilhados; devolver somente PASS/código fixo/contagens/cleanup.
 
+Regressão de retomada: `cargo test --offline --locked --manifest-path apps/connect-lab/Cargo.toml --test invitation_resumption -- --nocapture`. Cinco casos usam Iroh real e exigem0-RTT aceito, recusando replay/credencial inválida/revogação/expiração sem atingir os canários TCP/UDP. O resumo não imprime convites/pins. O teste não mede a janela temporal pré-TLS; [limite da evidência](engineering/AURORA_CONNECT_SPEC.md#81-convite-manual-assinado--laboratório).
+
 ## O que este executável faz
 
 Dois agentes autenticam as chaves públicas esperadas usando Iroh 1.3.0 e QUIC cifrado. O host concede uma lease de laboratório ao peer convidado, sessão e serviços explícitos, com prazo e revogação. `guest` pede IDs `game` (TCP) e `aux` (UDP), revisão 1; `guest-tcp` pede somente `game`, anunciando apenas `reliableStream`. Os destinos aprovados são literais loopback do host; o convidado não escolhe IP/porta do destino.
