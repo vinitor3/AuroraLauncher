@@ -4,6 +4,8 @@ Estado: **PROTÓTIPO**, fora do desktop e desativado para usuários. Base alpha.
 
 Incremento20: três ensaios com Minecraft 1.21.1/Fabric real e dois clientes sintéticos passaram LOGIN/CONFIGURATION/PLAY, posição/chunks e presença recíproca. Cada ensaio usa quatro agentes em dois pares independentes, contagem 2→0 e encerramento normal; somente loopback, sem mods/GUI/contas. [Procedimento e limites](aurora-connect-runtime.md#dois-clientes-de-protocolo--vigésimo-incremento). Não homologa redes externas, clientes mistos ou R4.
 
+Incrementos25/26: SVC2.6.22 e Plasmo2.1.17 passaram separadamente pelo anúncio TCP e controle UDP real, cada um com um cliente sintético e dois agentes. SVC valida AuthAck/CheckAck AES-GCM; Plasmo valida Ping com credencial de sessão, sem MAC/AEAD próprio nesse pacote. QUIC mantém a cifra do transporte. Ambos tiveram stop normal e restauração nativa revisada; áudio e GUI continuam pendentes. [Execução atual](aurora-connect-runtime.md#controle-plasmo-pela-ponte--vigésimo-sexto-incremento).
+
 ## O que este executável faz
 
 Dois agentes autenticam as chaves públicas esperadas usando Iroh 1.3.0 e QUIC cifrado. O host concede uma lease de laboratório ao peer convidado, sessão e serviços explícitos, com prazo e revogação. `guest` pede IDs `game` (TCP) e `aux` (UDP), revisão 1; `guest-tcp` pede somente `game`, anunciando apenas `reliableStream`. Os destinos aprovados são literais loopback do host; o convidado não escolhe IP/porta do destino.

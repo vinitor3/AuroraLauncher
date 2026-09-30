@@ -39,6 +39,8 @@ Incremento24: SVC/Plasmo passaram separadamente por apply nativo→JVM/writer re
 
 Incremento25: `plan-control/run-control` aprova gameFiles sintéticos para SVC, mantendo ciclo nativo/restauração. `svc-smoke.mjs --offline-lab` executou um cliente em PLAY, anúncio correto e AuthAck/CheckAck AES-GCM pelo mod real através de dois agentes. Não é áudio/GUI/contas mistas nem prova Plasmo. Segredo somente no processo cliente de teste/mod; nunca em supervisor/launcher/log. `withSvcTunnel` fixaTCP43001/UDP43002/guest35554, recusaocupação e exige callbackcooperativo.112client+40runtime testes passaram; controle puro82 está incluído. Preservar relatórios separados do probe e do writer/restore.
 
+Incremento26: `plan-control/run-control` aceita também perfil Plasmo estritamente pareado. `plasmo-smoke.mjs --offline-lab` passou no mod2.1.17 real: Request/PlayerInfo, anúncio35554 e Ping UDP pela ponte43003, cliente PLAY, cleanup normal e restore nativo separado. Ping usa credencial simples, sem MAC/AEAD do mod ou RTT; QUIC externo permanece cifrado. Nenhum áudio/key de áudio é processado.204client+51supervisor PASS (11túnel sobrepostos),90controle puro incluídos. Instalar probe antes de PLAY; RSA nativa não é cancelável e cleanup aguarda callback. Não reutilizar pasta Java executada nem promover prova a GUI/contas mistas/LAN/R4.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.

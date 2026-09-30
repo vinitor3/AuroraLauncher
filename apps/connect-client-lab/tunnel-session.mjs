@@ -199,16 +199,21 @@ async function stopAgent(agent, fail) {
  * the ignored validation directory; personal configuration is never changed.
  */
 export async function withGameTunnel(operation, options = {}) {
-  return withTunnel(operation, options, false);
+  return withTunnel(operation, options);
 }
 
 // Test-only SVC control profile. The mod's announcement must select this exact
 // guest port. No caller can provide a destination or broaden the service set.
 export async function withSvcTunnel(operation, options = {}) {
-  return withTunnel(operation, options, true);
+  return withTunnel(operation, options, 'svc');
 }
 
-async function withTunnel(operation, options, voice) {
+export async function withPlasmoTunnel(operation, options = {}) {
+  return withTunnel(operation, options, 'plasmo');
+}
+
+async function withTunnel(operation, options, voiceProfile) {
+  const voice = voiceProfile !== undefined;
   if (typeof operation !== 'function' || !options || typeof options !== 'object' || Array.isArray(options)
     || Object.keys(options).some(key => !['signal', 'timeoutMs'].includes(key))
     || (options.signal !== undefined && !(options.signal instanceof AbortSignal))) invalid('game_tunnel_invalid_options');
@@ -252,7 +257,7 @@ async function withTunnel(operation, options, voice) {
     const service = { serviceId: 'game', protocol: 'tcp', endpoint: '127.0.0.1:43001',
       revision: 1, requiredCapability: 'reliableStream', maxDatagramBytes: 1400, udpReturnPolicy: { type: 'replyBudget' } };
     const services = [service];
-    if (voice) services.push({ serviceId: 'aux', protocol: 'udp', endpoint: '127.0.0.1:43002', revision: 1,
+    if (voice) services.push({ serviceId: 'aux', protocol: 'udp', endpoint: voiceProfile === 'svc' ? '127.0.0.1:43002' : '127.0.0.1:43003', revision: 1,
       requiredCapability: 'datagram', maxDatagramBytes: 1400,
       udpReturnPolicy: { type: 'authorizedDownstream', bytesPerSecond: 16384, datagramsPerSecond: 20 } });
     const plan = { schemaVersion: 1, bind: reservation.address, durationSeconds: LIFETIME_SECONDS, services };

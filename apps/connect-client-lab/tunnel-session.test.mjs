@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createConnection, createServer } from 'node:net';
 import { createSocket } from 'node:dgram';
 import { setTimeout as delay } from 'node:timers/promises';
-import { GameTunnelError, withGameTunnel, withSvcTunnel } from './tunnel-session.mjs';
+import { GameTunnelError, withGameTunnel, withSvcTunnel, withPlasmoTunnel } from './tunnel-session.mjs';
 
 const windows = process.platform === 'win32';
 const deferred = () => {
@@ -229,11 +229,12 @@ async function udpExchange(port, payload, signal) {
   }
 }
 
-test('SVC control profile carries opaque UDP returns to two origins while TCP remains active', { skip: !windows }, async t => {
+for (const [profile, port, tunnel] of [['SVC', 43002, withSvcTunnel], ['Plasmo', 43003, withPlasmoTunnel]]) {
+test(`${profile} control profile carries opaque UDP returns to two origins while TCP remains active`, { skip: !windows }, async t => {
   const f = await fixture(t); if (!f) return;
-  const udp = await udpFixture(t, 43002); const origins = new Set();
+  const udp = await udpFixture(t, port); const origins = new Set();
   udp.on('message', (bytes, source) => { origins.add(source.port); udp.send(bytes, source.port, source.address); });
-  const result = await withSvcTunnel(async context => {
+  const result = await tunnel(async context => {
     assert.equal(context.voicePort, 35554); assert.ok(context.maxDatagramPayload >= 128);
     const tcp = Buffer.alloc(96 * 1024, 0x42); const first = Buffer.alloc(83, 0x51); const second = Buffer.alloc(47, 0x72);
     const replies = await Promise.all([exchange(context.bridgePort, tcp, context.signal),
@@ -243,14 +244,15 @@ test('SVC control profile carries opaque UDP returns to two origins while TCP re
   assert.equal(result.value, true); reaped(result.cleanup); assert.equal(origins.size, 2);
   // Released guest UDP port can be rebound without touching the target fixture.
   const released = await udpFixture(t, 35554); assert.equal(released.address().port, 35554);
-  assert.equal(f.server.listening, true); assert.equal(udp.address().port, 43002);
+  assert.equal(f.server.listening, true); assert.equal(udp.address().port, port);
 });
 
-test('occupied SVC guest port refuses before agents and preserves the foreign listener', { skip: !windows }, async t => {
+test(`occupied ${profile} guest port refuses before agents and preserves the foreign listener`, { skip: !windows }, async t => {
   const foreign = await udpFixture(t, 35554); let called = false;
-  await assert.rejects(withSvcTunnel(() => { called = true; }), error => {
+  await assert.rejects(tunnel(() => { called = true; }), error => {
     assert.equal(error.code, 'game_tunnel_voice_port_in_use'); assert.equal(error.cleanup.agents, 0);
     assert.equal(error.cleanup.closed, 0); return true;
   });
   assert.equal(called, false); assert.equal(foreign.address().port, 35554);
 });
+}

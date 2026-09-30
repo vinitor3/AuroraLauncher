@@ -31,19 +31,21 @@ async function helperInfo(name) {
 
 export async function makeLivePlan(javaHome, prepared, profile, helperName, exercise = 'writer') {
   if (!['svc', 'plasmo'].includes(profile)) fail('live_profile');
-  if (!['writer', 'svc-control'].includes(exercise) || (exercise === 'svc-control' && profile !== 'svc')) fail('live_exercise');
+  if (!['writer', 'svc-control', 'plasmo-control'].includes(exercise)
+    || (exercise !== 'writer' && exercise !== `${profile}-control`)) fail('live_exercise');
   const server = await makeRunPlan(javaHome, prepared, profile);
   const resources = join(PARENT, prepared);
   const launchArgs = ['-Djava.io.tmpdir=.connect-run-temp', '-Duser.home=.connect-run-temp', '-XX:-UsePerfData',
     '-Xms256M', '-Xmx1536M', `-Dfabric.gameJarPath=${join(resources, 'server.jar')}`, '-cp',
     runtimeArtifacts(profile).filter(pin => pin.file.startsWith('libraries/')).map(pin => join(resources, pin.file)).join(';'),
     'net.fabricmc.loader.impl.launch.knot.KnotServer', 'nogui'];
-  const files = runtimeFiles(exercise === 'svc-control' ? 'play' : profile);
-  const gameFiles = Object.fromEntries(['server.properties', 'eula.txt', ...(exercise === 'svc-control' ? ['whitelist.json'] : [])]
+  const control = exercise !== 'writer';
+  const files = runtimeFiles(control ? 'play' : profile);
+  const gameFiles = Object.fromEntries(['server.properties', 'eula.txt', ...(control ? ['whitelist.json'] : [])]
     .map(file => [file, { contents: files[file], sha256: hash(files[file]) }]));
   return { schemaVersion: 1, purpose: 'aurora_connect_native_voice_writer_roundtrip', profile, exercise, gameFiles,
-    ...(exercise === 'svc-control' ? { clientExercise: { syntheticOfflineOnly: true, serverPort: 43001, voiceServerPort: 43002,
-      guestVoicePort: 35554, command: 'node --max-old-space-size=512 apps/connect-client-lab/svc-smoke.mjs --offline-lab',
+    ...(control ? { clientExercise: { syntheticOfflineOnly: true, serverPort: 43001, voiceServerPort: profile === 'svc' ? 43002 : 43003,
+      guestVoicePort: 35554, command: `node --max-old-space-size=512 apps/connect-client-lab/${profile}-smoke.mjs --offline-lab`,
       resultInSeparateClientReport: true, stopRequiredAfterProbe: true, audio: false } } : {}),
     resourceStage: prepared, resourceRunPlanSha256: runPlanDigest(server), java: server.java,
     artifacts: server.artifacts, tools: server.tools, helper: await helperInfo(helperName),
@@ -158,7 +160,7 @@ export async function runLiveWriter(javaHome, prepared, profile, helperName, app
   if (acceptedEula !== true) fail('live_eula_acceptance_required');
   if (typeof approval !== 'string' || !digestPattern.test(approval) || typeof onReview !== 'function'
     || (signal !== undefined && !(signal instanceof AbortSignal))) fail('live_approval');
-  if (exercise === 'svc-control' && typeof onReady !== 'function') fail('live_control_observer');
+  if (exercise !== 'writer' && typeof onReady !== 'function') fail('live_control_observer');
   if (onReady !== undefined && typeof onReady !== 'function') fail('live_control_observer');
   const plan = await makeLivePlan(javaHome, prepared, profile, helperName, exercise);
   if (livePlanDigest(plan) !== approval) fail('live_plan_changed');
@@ -277,14 +279,14 @@ export async function readApproval(input, expected, signal) {
 
 export async function main(args, { input = process.stdin, signal, emit = value => process.stdout.write(json(value)) } = {}) {
   if (args.length === 5 && ['plan', 'plan-control'].includes(args[0])) {
-    const plan = await makeLivePlan(...args.slice(1), args[0] === 'plan-control' ? 'svc-control' : 'writer');
+    const plan = await makeLivePlan(...args.slice(1), args[0] === 'plan-control' ? `${args[3]}-control` : 'writer');
     return { event: 'native_writer_plan', planSha256: livePlanDigest(plan), plan };
   }
   if (args.length === 7 && ['run', 'run-control'].includes(args[0]) && args[6] === '--user-accepted-minecraft-eula') {
     const control = args[0] === 'run-control';
-    return runLiveWriter(...args.slice(1, 5), args[5], true, { signal, exercise: control ? 'svc-control' : 'writer',
+    return runLiveWriter(...args.slice(1, 5), args[5], true, { signal, exercise: control ? `${args[3]}-control` : 'writer',
       ...(control ? { onReady: async ({ signal: childSignal, evidence }) => {
-        emit({ event: 'voice_control_ready', profile: 'svc', evidence, clientProbe: 'separate_process_required' });
+        emit({ event: 'voice_control_ready', profile: args[3], evidence, clientProbe: 'separate_process_required' });
         await waitForStop(input, childSignal);
       } } : {}),
       onReview: async (review, childSignal) => { emit({ event: 'voice_mutation_review', review }); return readApproval(input, review.digest, childSignal); } });

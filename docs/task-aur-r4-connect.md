@@ -410,6 +410,42 @@ Depois do probe, `stop` no supervisor e aprovação de restore `50960d4cc394fda6
 
 Estado: SVC **PARCIAL** para controle/endereço dedicados sóAurora em loopback. TCP/UDP reais e Minecraft sintético têm esta prova adicional, sem alterar seu estado de produto. Plasmo permanece na evidência independente de writer/restore24; seu controle não herda SVC. Direto somenteloopback; relaydesligado; convites/UI **NÃO IMPLEMENTADO**; voz audível, GUI/contas mistas, LAN, redes externas, MTU de áudio, contenção/carga/keepalive prolongado e R4 **PRECISA DE TESTE**. Zero custo, sem conta/crédito/billing/push/deploy/release/instalador. Rollback: encerrar os filhos próprios, fechar sockets/lease, stop/restore com revisão; falha/crash preserva diretório/journal sem autorestaurar recibo perdido. Revert local de código após revisão. Nenhuma intervenção humana necessária; próximo bloqueio local independente é controle/anúncio Plasmo separado.
 
+### Vigésimo sexto incremento — controle Plasmo real pela ponte
+
+Base local `bd83e9d`, branch `codex/aur-r4-connect`, mesma worktree exclusiva; Windows/Node24.8.0/JDK21.0.12.1/Fabric0.16.14/Minecraft1.21.1/Plasmo2.1.17/Fabric API0.116.10+1.21.1. Objetivo007/003/005/008: receber anúncio pelo Minecraft e comprovar controle UDP bidirecional do Plasmo pela ponte real. Não altera Rust, dependências, lockfiles, Core/Skins, matriz ativa, recovery, frontend ou comandos Tauri. QA independente dos callers não encontrou bloqueadores.
+
+Arquivos: `apps/connect-client-lab/{plasmo-control.mjs,plasmo-control.test.mjs,plasmo-play.mjs,plasmo-smoke.mjs,tunnel-session.mjs,tunnel-session.test.mjs}` e `apps/connect-runtime-tools/{live-writer.mjs,live-writer.test.mjs}`. Domínios, AGENTS, backlog, rastreabilidade e matriz documental atualizados sem apagar evidência histórica. `withPlasmoTunnel` aprova gameTCP43001/auxUDP43003 com downstream16384B/s20pps e guest35554. Perfis/exercícios cruzados recusados; portas ocupadas preservam listener alheio. Probe começa antes de PLAY, responde Request oficial com PlayerInfo/RSA2048/voz desativada, valida identidade/socket/anúncio e troca Pings privados. Não cria áudio ou altera algoritmo do mod. O Ping contém credencial de sessão sem MAC/AEAD próprio; cifra QUIC externa permanece. Config/listas apenas limitadas/contadas, chave privada não exportada, sem RTT/anti-replay de voz alegados. [Contrato e limites](aurora-connect-runtime.md#controle-plasmo-pela-ponte--vigésimo-sexto-incremento).
+
+Testes realmente executados:
+
+~~~powershell
+node --test apps/connect-client-lab/plasmo-control.test.mjs
+node --test --test-concurrency=1 apps/connect-client-lab/tunnel-session.test.mjs apps/connect-runtime-tools/live-writer.test.mjs apps/connect-runtime-tools/server.test.mjs
+node --test --test-concurrency=1 apps/connect-client-lab/*.test.mjs
+node --check apps/connect-client-lab/plasmo-control.mjs
+node --check apps/connect-client-lab/plasmo-control.test.mjs
+node --check apps/connect-client-lab/plasmo-play.mjs
+node --check apps/connect-client-lab/plasmo-smoke.mjs
+git diff --check
+~~~
+
+Controle **90/90PASS**,0ignored,0,545s (UDP em memória, RSA2048 real em um caso); supervisor **51/51PASS**,0ignored,6,882s (11túnel+12live+28server); suite cliente **204/204PASS**,0ignored,9,517s. As contagens se sobrepõem:90controle e11túnel integram204;11túnel integram51. Testes reais de túnel enviam TCP96KiB e datagramas opacos de83/47B com retorno isolado a duas origens, além da recusa de porta ocupada para ambos os perfis. Negativos de controle cobrem ordem/request/identidade/socket/anúncio/framing/credencial/limites/cancelamento/retries/callbacks/cleanup/redação. Syntax/diffcheck PASS; Rust não mudou, validações24 continuam evidência daquela implementação, sem alegar repetição.
+
+Execução real, em processos locais separados:
+
+~~~powershell
+node apps/connect-runtime-tools/live-writer.mjs plan-control 'C:/Program Files/Eclipse Adoptium/jdk-21.0.12.101-hotspot' prepared-6jQLQp plasmo aurora_launcher_core-977e96f36303eeb7.exe
+node apps/connect-runtime-tools/live-writer.mjs run-control 'C:/Program Files/Eclipse Adoptium/jdk-21.0.12.101-hotspot' prepared-6jQLQp plasmo aurora_launcher_core-977e96f36303eeb7.exe 1c8dce63040fd9fc142ad041b00b7d738068fce1e3ca0034a88541e44fbe6746 --user-accepted-minecraft-eula
+# Após voice_control_ready, em outro processo:
+node --max-old-space-size=512 apps/connect-client-lab/plasmo-smoke.mjs --offline-lab
+~~~
+
+Nova cópia `voice-roundtrip-J0s63R`, helperSHA `1cf119159312e99f47e06a9db01341bbb9b98074102b7a270257b57b3d41fb7c`, estágio de recursos somente leitura. Apply aprovado `adef5d6db6893499af555f8c482c2977a8736d97ef243dce793b7879b2ccdcb5`; readinessSTATUS767 e binds TCP/UDP próprios. **plasmo_control_probe PASS**: LOGIN/CONFIGURATION/PLAY,1posição,11chunks,3batches,93pacotes;5payloads/703B recebidos,1Request/1PlayerInfo,anúncio35554 correto,2UDP/87B enviados,1UDP/37B recebido;684ms de ciclo incluindo login, não RTT/benchmark/áudio. Um cliente sintético e uma sessão host, não dois peers ou computadores. SocketUDP fechado, clienteclosedtrue/forcedfalse;agentes2/2fechadossemkill,stdout1293B/stderr0.
+
+`stop` no supervisor seguido de aprovação restore `68f7c156cb72fbfa092068fae1e80ca6275a5cd5600b31872fadc4cd5a325df5`. **native_writer_roundtrip PASS** separado: native/Javaexit0,closedtrue,forcedfalse,stdout193/13010B,stderr0/0;writer3808B/24chaves SHA `69eb6e7e0a56797ff4fe8b0f898c32a67c57a4e6833d336b0057883d52aaa1e6`;restoreSHA `ed38716873dc48e03b4edc86db3d85e32b00aa7d81892ecb12824c0edf40ff1d`. Origem/arquivos alheios preservados,EULArestaurada,recursosrechecados. `Get-NetTCPConnection -LocalPort 43001 -State Listen`, `Get-NetUDPEndpoint -LocalPort 43003`/35554 e `Get-Process java,javaw`/aurora-connect-lab observaram zero; não encerraram processos. Evidências redigidas `.aurora/connect-validation/plasmo-twenty-six-{plan.json,supervisor-tests.log,client-suite.log,real-probe.log,post-stop.json}`; IPC/recuperação/mundo somente na raiz ignorada preservada.
+
+Estado: Plasmo **PARCIAL** para controle/endereço dedicado sóAurora em loopback; SVC mantém prova25 própria. TCP/UDP/direto loopback **PROTÓTIPO**; relay desligado; Minecraft sintético validado nesse alcance; convites/UI **NÃO IMPLEMENTADO**. Áudio/GUI/contas mistas/LAN/redes/carga/keepalive prolongado/MTU de áudio e R4 **PRECISA DE TESTE**. Zero custo, sem push/deploy/billing/release/instalador. Rollback operacional fecha filhos/sockets próprios, stop e restauração por revisão; crash preserva diretório/journal, recibo continuaRAM. Revert local revisado para código. Nenhuma intervenção humana necessária; próximo bloqueio local independente: convite manual com vínculo de chave/serviço/expiração, sem nuvem ou UI pública.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.

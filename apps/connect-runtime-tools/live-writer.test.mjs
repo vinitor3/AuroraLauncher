@@ -197,6 +197,7 @@ test('live EULA/approval gates precede JDK, helper and stage access', async () =
   await errorCode(main(['run']), 'live_eula_acceptance_required');
   await errorCode(main(['run-control']), 'live_eula_acceptance_required');
   await errorCode(makeLivePlan('PRIVATE', 'bad', 'plasmo', 'bad', 'svc-control'), 'live_exercise');
+  await errorCode(makeLivePlan('PRIVATE', 'bad', 'svc', 'bad', 'plasmo-control'), 'live_exercise');
   await errorCode(runLiveWriter('PRIVATE', 'bad', 'svc', 'bad', digest, true,
     { onReview: () => digest, exercise: 'svc-control' }), 'live_control_observer');
 });
