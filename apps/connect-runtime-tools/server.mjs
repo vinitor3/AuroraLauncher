@@ -4,13 +4,14 @@ import { createHash } from 'node:crypto';
 import { lstat, readdir, mkdir, mkdtemp } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { constants as osConstants } from 'node:os';
 import { EULA_URL } from './pins.mjs';
 import { runtimeFiles, runtimeArtifacts } from './play-profile.mjs';
 import { SVC_ARTIFACT, SVC_CONFIG_PATH, SVC_BASELINE_BYTES, validateSvcConfig } from './svc-profile.mjs';
 import { PLASMO_ARTIFACT, PLASMO_CONFIG_PATH, PLASMO_BASELINE_BYTES, validatePlasmoConfig } from './plasmo-profile.mjs';
 import { makePlan, planDigest } from './runtime.mjs';
 import { absent, hash, readLocal } from './files.mjs';
-import { withOwnedProcess } from './owned-process.mjs';
+import { OwnedProcessError, withOwnedProcess } from './owned-process.mjs';
 import { rejectLinkedParents, resolveExplicitLocalPath } from '../connect-voice-tools/local-path.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -95,17 +96,28 @@ export async function verifyPreparedFiles(basename, baseline, profile = 'status'
 
 export const runPlanDigest = plan => hash(json(plan));
 export async function makeRunPlan(javaHome, basename, profile = 'status') {
-  const baseline = await makePlan(javaHome, profile);
-  const stage = await verifyPreparedFiles(basename, baseline, profile);
+  const baselineProfile = profile === 'status-interactive' ? 'status' : profile;
+  const baseline = await makePlan(javaHome, baselineProfile);
+  const stage = await verifyPreparedFiles(basename, baseline, baselineProfile);
   const tools = await toolHashes();
+  return buildRunPlan(basename, baseline, stage, tools, profile);
+}
+
+// Pure assembly for review/tests, never execution authority. runServer always
+// reconstructs the baseline, verified stage and tool hashes via makeRunPlan.
+export function buildRunPlan(basename, baseline, stage, tools, profile = 'status') {
+  if (!['status', 'status-interactive', 'play', 'svc', 'plasmo'].includes(profile)) fail('runtime_profile');
+  const interactive = profile === 'status-interactive';
   return {
-    schemaVersion: 1, purpose: 'aurora_connect_disposable_server_execution',
+    schemaVersion: 1, purpose: interactive
+      ? 'aurora_connect_disposable_status_interactive_execution' : 'aurora_connect_disposable_server_execution',
     preparedBasename: basename, baselinePlanSha256: stage.baselineHash, java: baseline.java,
     artifacts: stage.verified, tools,
     probeEnvironment: 'fresh_sibling_probe_directory_not_prepared_stage',
     diff: { file: 'eula.txt', beforeSha256: hash(FALSE_EULA), afterSha256: hash(TRUE_EULA),
       before: 'eula=false', after: 'eula=true', restore: 'exact_applied_bytes_only' },
     propertiesSha256: hash(baseline.files['server.properties']),
+    ...(interactive ? { profile: 'status-interactive' } : {}),
     ...(profile === 'play' ? { profile: 'play', whitelistSha256: hash(baseline.files['whitelist.json']),
       clientLimits: 'two_synthetic_offline_players_no_compression_or_secure_profile' } : {}),
     ...(profile === 'svc' ? { profile: 'svc', voiceMod: { ...baseline.voiceMod, artifactSha256: SVC_ARTIFACT.digest },
@@ -125,7 +137,7 @@ export async function makeRunPlan(javaHome, basename, profile = 'status') {
     evidence: { endpoint: 'loopback_43001', protocol: 767, ownProcessBindRequired: true,
       statusAndPongOnly: true, twoAgentSmoke: 'separate_caller_operation', runtimeHomologated: false,
       worldJoined: false, voice: 'not_tested', accountAuthentication: 'not_tested' },
-    limits: { lifetimeSeconds: 300, readinessSeconds: 180, bindProbeSeconds: 10, statusProbeSeconds: 6,
+    limits: { lifetimeSeconds: interactive ? 900 : 300, readinessSeconds: 180, bindProbeSeconds: 10, statusProbeSeconds: 6,
       stopSeconds: 5, outputBytes: 4 * 1024 * 1024,
       reuse: false, personalInstanceAccess: false, relay: false, mods: ['svc', 'plasmo'].includes(profile) },
   };
@@ -185,9 +197,9 @@ export async function runServer(javaHome, basename, approval, acceptedEula, { si
   const transaction = await withPreparedEula(basename, approval, async ownedRoot => {
     const temp = join(ownedRoot, '.connect-run-temp'); await mkdir(temp);
     return withOwnedProcess({ executable: plan.launch.executable, args: plan.launch.args, cwd: ownedRoot,
-      env: minimalEnvironment(temp), signal, timeoutMs: 300000, stopTimeoutMs: 5000, outputLimitBytes: 4 * 1024 * 1024 },
+      env: minimalEnvironment(temp), signal, timeoutMs: plan.limits.lifetimeSeconds * 1000, stopTimeoutMs: 5000, outputLimitBytes: 4 * 1024 * 1024 },
     async ({ signal: childSignal, ownsProcessId }) => {
-      const evidence = await ready(ownedRoot, probeHome, childSignal, ownsProcessId, profile).catch(error => {
+      const evidence = await ready(ownedRoot, probeHome, childSignal, ownsProcessId, profile === 'status-interactive' ? 'status' : profile).catch(error => {
         if (['server_probe_failed', 'server_probe_deadline', 'server_probe_output_limit', 'server_bind_probe_invalid', 'server_bind_not_owned',
           'server_status_invalid', 'server_readiness_deadline'].includes(error?.message)) readinessFailure = error.message;
         if (error?.message === 'server_bind_not_owned') bindObservation = error.bindObservation;
@@ -220,27 +232,49 @@ export async function runServer(javaHome, basename, approval, acceptedEula, { si
 }
 
 export async function main(args, { input = process.stdin, emit = value => process.stdout.write(json(value)), signal } = {}) {
-  if (args.length === 3 && ['run-plan', 'run-plan-play', 'run-plan-svc', 'run-plan-plasmo'].includes(args[0])) {
+  if (args.length === 3 && ['run-plan', 'run-plan-play', 'run-plan-svc', 'run-plan-plasmo', 'run-plan-status-interactive'].includes(args[0])) {
     const plan = await makeRunPlan(args[1], args[2], args[0] === 'run-plan' ? 'status' : args[0].slice(9));
     return { event: 'server_run_plan', runPlanSha256: runPlanDigest(plan), plan };
   }
-  if (args.length === 5 && ['run', 'run-play', 'run-svc', 'run-plasmo'].includes(args[0]) && args[4] === '--user-accepted-minecraft-eula') {
+  if (args.length === 5 && ['run', 'run-play', 'run-svc', 'run-plasmo', 'run-status-interactive'].includes(args[0]) && args[4] === '--user-accepted-minecraft-eula') {
     return runServer(args[1], args[2], args[3], true, { signal, profile: args[0] === 'run' ? 'status' : args[0].slice(4),
       onReady: async ({ signal: childSignal, evidence, runPlanSha256 }) => {
         emit({ event: 'server_ready', runPlanSha256, evidence, runtimeHomologated: false, worldJoined: false, voice: 'not_tested' });
         await waitForStop(input, childSignal);
       } });
   }
-  if (['run', 'run-play', 'run-svc', 'run-plasmo'].includes(args[0])) fail('server_eula_acceptance_required');
+  if (['run', 'run-play', 'run-svc', 'run-plasmo', 'run-status-interactive'].includes(args[0])) fail('server_eula_acceptance_required');
   fail('server_usage');
 }
+
+const processFields = ['spawned', 'closed', 'exitCode', 'signal', 'forced', 'stdoutBytes', 'stderrBytes'];
+const processSignals = new Set(Object.keys(osConstants.signals));
+function permittedProcessSummary(error) {
+  if (!(error instanceof OwnedProcessError)) return undefined;
+  const source = Object.getOwnPropertyDescriptor(error, 'process')?.value;
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return undefined;
+  const fields = Object.getOwnPropertyDescriptors(source);
+  const summary = Object.fromEntries(processFields.map(key => [key, fields[key]?.value]));
+  if (['spawned', 'closed', 'forced'].some(key => typeof summary[key] !== 'boolean')
+    || !(summary.exitCode === null || (Number.isSafeInteger(summary.exitCode)
+      && summary.exitCode >= -2147483648 && summary.exitCode <= 4294967295))
+    || !(summary.signal === null || processSignals.has(summary.signal))
+    || ['stdoutBytes', 'stderrBytes'].some(key => !Number.isSafeInteger(summary[key]) || summary[key] < 0)) return undefined;
+  return summary;
+}
+
+export function serverFailureReport(error) {
+  const code = /^(server|owned_process|runtime)_[a-z_]+$/.test(error?.message) ? error.message : 'server_io_or_process_failed';
+  const processSummary = permittedProcessSummary(error);
+  return { event: 'failed', code, readinessFailure: error?.readinessFailure,
+    bindObservation: error?.bindObservation, ...(processSummary ? { process: processSummary } : {}) };
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const controller = new AbortController();
   const interrupt = () => controller.abort(); process.on('SIGINT', interrupt); process.on('SIGTERM', interrupt);
   try { process.stdout.write(json(await main(process.argv.slice(2), { signal: controller.signal }))); }
   catch (error) {
-    const code = /^(server|owned_process|runtime)_[a-z_]+$/.test(error.message) ? error.message : 'server_io_or_process_failed';
-    process.stdout.write(json({ event: 'failed', code, readinessFailure: error.readinessFailure,
-      bindObservation: error.bindObservation })); process.exitCode = 1;
+    process.stdout.write(json(serverFailureReport(error))); process.exitCode = 1;
   } finally { process.off('SIGINT', interrupt); process.off('SIGTERM', interrupt); }
 }

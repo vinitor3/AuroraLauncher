@@ -11,8 +11,8 @@ import { planDigest } from './runtime.mjs';
 import { runtimeFiles, runtimeArtifacts } from './play-profile.mjs';
 import { SVC_ARTIFACT, SVC_CONFIG_PATH, SVC_BASELINE_BYTES } from './svc-profile.mjs';
 import { PLASMO_ARTIFACT, FABRIC_API_ARTIFACT, PLASMO_CONFIG_PATH, PLASMO_BASELINE_BYTES } from './plasmo-profile.mjs';
-import { withOwnedProcess } from './owned-process.mjs';
-import { verifyPreparedFiles, withPreparedEula, runPlanDigest, runServer, requireOwnedBind, waitForStop, main } from './server.mjs';
+import { OwnedProcessError, withOwnedProcess } from './owned-process.mjs';
+import { verifyPreparedFiles, withPreparedEula, buildRunPlan, runPlanDigest, runServer, requireOwnedBind, waitForStop, main, serverFailureReport } from './server.mjs';
 
 // Synthetic files only. No real prepared runtime is read/written by this suite,
 // no JAR is downloaded/executed, and the true EULA text below is a transaction
@@ -59,6 +59,115 @@ async function fixture(t, profile = 'status') {
   return { root, basename, baseline, ready };
 }
 async function expectCode(promise, code) { await assert.rejects(promise, error => error.message === code); }
+
+test('interactive STATUS plan changes only its explicit purpose, profile and approved fixed lifetime', () => {
+  const baseline = { java: { version: 'synthetic_java_21' }, files: runtimeFiles('status'),
+    launch: { executable: 'SYNTHETIC_JAVA_NOT_EXECUTED', args: ['-Xms256M', '-Xmx1536M', 'FIXED_ENTRYPOINT'] } };
+  const stage = { baselineHash: approved, verified: [] }; const tools = { synthetic: true };
+  const original = buildRunPlan('prepared-Abc123', baseline, stage, tools);
+  assert.deepEqual(original, buildRunPlan('prepared-Abc123', baseline, stage, tools, 'status'));
+  assert.equal(original.purpose, 'aurora_connect_disposable_server_execution');
+  assert.equal(Object.hasOwn(original, 'profile'), false);
+  assert.deepEqual(original.limits, { lifetimeSeconds: 300, readinessSeconds: 180, bindProbeSeconds: 10,
+    statusProbeSeconds: 6, stopSeconds: 5, outputBytes: 4 * 1024 * 1024,
+    reuse: false, personalInstanceAccess: false, relay: false, mods: false });
+  const interactive = buildRunPlan('prepared-Abc123', baseline, stage, tools, 'status-interactive');
+  assert.equal(interactive.purpose, 'aurora_connect_disposable_status_interactive_execution');
+  assert.equal(interactive.profile, 'status-interactive');
+  assert.equal(interactive.limits.lifetimeSeconds, 900);
+  const comparison = structuredClone(interactive);
+  delete comparison.profile;
+  comparison.purpose = original.purpose; comparison.limits.lifetimeSeconds = 300;
+  assert.deepEqual(comparison, original);
+  assert.notEqual(runPlanDigest(interactive), runPlanDigest(original));
+  const changed = structuredClone(interactive); changed.limits.lifetimeSeconds = 901;
+  assert.notEqual(runPlanDigest(changed), runPlanDigest(interactive));
+  for (const profile of ['play', 'svc', 'plasmo']) {
+    const plan = buildRunPlan('prepared-Abc123', { ...baseline, files: runtimeFiles(profile) }, stage, tools, profile);
+    assert.equal(plan.limits.lifetimeSeconds, 300);
+    assert.equal(plan.purpose, original.purpose);
+  }
+  for (const profile of ['interactive', 'status-interactive-901', 'svc-interactive', 900, null]) {
+    assert.throws(() => buildRunPlan('prepared-Abc123', baseline, stage, tools, profile), /runtime_profile/);
+  }
+});
+
+test('interactive STATUS CLI preserves consent and digest gates and refuses an arbitrary lifetime argument', async () => {
+  await expectCode(main(['run-status-interactive', 'PRIVATE_JDK', 'prepared-Abc123', approved]), 'server_eula_acceptance_required');
+  await expectCode(main(['run-status-interactive', 'PRIVATE_JDK', 'prepared-Abc123', 'wrong', '--user-accepted-minecraft-eula']), 'server_run_approval');
+  await expectCode(main(['run-status-interactive', 'PRIVATE_JDK', 'prepared-Abc123', approved,
+    '--user-accepted-minecraft-eula', '901']), 'server_eula_acceptance_required');
+  await expectCode(main(['run-plan-status-interactive', 'PRIVATE_JDK', 'prepared-Abc123', '901']), 'server_usage');
+  await expectCode(main(['run-status-interactive-901']), 'server_usage');
+  await expectCode(main(['run-svc-interactive']), 'server_usage');
+  await expectCode(runServer('PRIVATE_JDK', 'prepared-Abc123', approved, false,
+    { profile: 'status-interactive' }), 'server_eula_acceptance_required');
+});
+
+test('server failure report copies only permitted process primitives from OwnedProcessError', () => {
+  const expected = { spawned: true, closed: true, exitCode: 7, signal: null, forced: false, stdoutBytes: 21, stderrBytes: 22 };
+  const source = { ...expected, pid: 'PRIVATE_PID', cwd: 'PRIVATE_PATH', args: ['PRIVATE_ARGUMENT'],
+    env: { PRIVATE_ENV: 'PRIVATE_VALUE' }, stdout: 'PRIVATE_STDOUT', stderr: 'PRIVATE_STDERR',
+    toJSON() { throw new Error('PRIVATE_SERIALIZER_MUST_NOT_RUN'); } };
+  const error = new OwnedProcessError('owned_process_child_exit_nonzero', source);
+  error.cause = new Error('PRIVATE_CAUSE');
+  const report = serverFailureReport(error);
+  assert.equal(report.event, 'failed'); assert.equal(report.code, error.code);
+  assert.deepEqual(report.process, expected); assert.notEqual(report.process, source);
+  assert.deepEqual(Object.keys(report.process).sort(), Object.keys(expected).sort());
+  assert.doesNotMatch(JSON.stringify(report), /PRIVATE|pid|cwd|args|env|cause|toJSON/);
+});
+
+test('server failure report preserves errors without summaries and ignores untrusted or malformed process data', () => {
+  const plain = new Error('server_usage');
+  assert.deepEqual(JSON.parse(JSON.stringify(serverFailureReport(plain))), { event: 'failed', code: 'server_usage' });
+  assert.deepEqual(JSON.parse(JSON.stringify(serverFailureReport(new Error('PRIVATE_PATH')))),
+    { event: 'failed', code: 'server_io_or_process_failed' });
+  const valid = { spawned: true, closed: true, exitCode: null, signal: 'SIGKILL', forced: true, stdoutBytes: 0, stderrBytes: 0 };
+  const imitation = Object.assign(new Error('owned_process_deadline'), { name: 'OwnedProcessError', process: valid });
+  assert.equal(Object.hasOwn(serverFailureReport(imitation), 'process'), false);
+  assert.equal(Object.hasOwn(serverFailureReport(new OwnedProcessError('owned_process_cancelled')), 'process'), false);
+  for (const patch of [{ spawned: 1 }, { closed: 'true' }, { forced: null }, { exitCode: 'PRIVATE' },
+    { exitCode: Number.MAX_SAFE_INTEGER }, { signal: 'SIGPRIVATE' }, { stdoutBytes: -1 },
+    { stdoutBytes: Infinity }, { stderrBytes: 0.5 }, { stderrBytes: 'PRIVATE' }]) {
+    assert.equal(Object.hasOwn(serverFailureReport(new OwnedProcessError('owned_process_deadline', { ...valid, ...patch })), 'process'), false);
+  }
+  const getter = { ...valid };
+  Object.defineProperty(getter, 'stdoutBytes', { get() { assert.fail('must not invoke a process summary accessor'); } });
+  assert.equal(Object.hasOwn(serverFailureReport(new OwnedProcessError('owned_process_deadline', getter)), 'process'), false);
+  assert.deepEqual(serverFailureReport(new OwnedProcessError('owned_process_deadline', valid)).process, valid);
+  const readiness = Object.assign(new Error('owned_process_operation_failed'), { readinessFailure: 'server_bind_not_owned',
+    bindObservation: { rows: 1, allOwned: false, ipv4Loopback: 1, ipv4MappedLoopback: 0, wildcard: 0 } });
+  assert.equal(serverFailureReport(readiness).readinessFailure, readiness.readinessFailure);
+  assert.deepEqual(serverFailureReport(readiness).bindObservation, readiness.bindObservation);
+});
+
+test('server failure report retains actual reaped Node exit and forced deadline without exposing child data', async () => {
+  // Uses only this test's Node children and pipes, with no files, stages, Java,
+  // network or EULA transaction. Waiting for abort keeps the callback cooperative.
+  const wait = ({ signal }) => new Promise(resolvePromise => {
+    if (signal.aborted) resolvePromise(); else signal.addEventListener('abort', resolvePromise, { once: true });
+  });
+  const prefix = "process.stdout.write('PRIVATE_STDOUT'); process.stderr.write('PRIVATE_STDERR');";
+  for (const deadline of [false, true]) {
+    const source = prefix + (deadline ? 'setInterval(() => {}, 1000);' : 'setTimeout(() => process.exit(7), 25);');
+    await assert.rejects(withOwnedProcess({ executable: process.execPath, args: ['-e', source],
+      cwd: resolve(dirname(fileURLToPath(import.meta.url))), env: { AURORA_TEST_PRIVATE: 'PRIVATE_ENV' },
+      timeoutMs: deadline ? 1500 : 3000, stopTimeoutMs: 500, outputLimitBytes: 1024 }, wait), error => {
+      assert.ok(error instanceof OwnedProcessError);
+      const report = serverFailureReport(error);
+      assert.equal(report.code, deadline ? 'owned_process_deadline' : 'owned_process_child_exit_nonzero');
+      assert.deepEqual(report.process, error.process);
+      assert.equal(report.process.spawned, true); assert.equal(report.process.closed, true);
+      assert.equal(report.process.forced, deadline);
+      if (!deadline) assert.equal(report.process.exitCode, 7);
+      assert.equal(report.process.stdoutBytes, Buffer.byteLength('PRIVATE_STDOUT'));
+      assert.equal(report.process.stderrBytes, Buffer.byteLength('PRIVATE_STDERR'));
+      assert.doesNotMatch(JSON.stringify(report), /PRIVATE|pid|path|args|env|cause|stack/);
+      return true;
+    });
+  }
+});
 
 test('verifier accepts complete synthetic stage, both published algorithms and observed SHA256 without mutation', async t => {
   const f = await fixture(t); const before = await readdir(f.root);
