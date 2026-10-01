@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 01/10/2026
 
+Incremento43 implementa supervisorPowerShell para um terminal/uma identidade, kit38 fixado e STATUS automático20s/até45consultas, com resumo redigido persistido.600s preparação/900s sessão/1500s total são limites operacionais, sem ampliarJava/lease.139fixturesPowerShell5.1PASS sem filhosConnect/Java/rede; smoke posterior no mesmo PC/IPv6 próprio passou nove STATUS reais/stop e negativos com cleanup/evidência, separando snapshots7182/e48e no [registro43](../task-aur-r4-connect.md#quadragésimo-terceiro-incremento--supervisor-do-convidado-e-resumo-persistido). Sem GUI ou nova evidência externa. O erro apagado da tentativaGUI41.2 continua sem causa confirmada; não repetir a solicitação. Nenhuma célula abaixo é promovida por implementação ou STATUS periódico.
+
 Incremento42: lifecycle da CLI manual passou idle/revogação/stop/prazo e liberaçãoTCP+UDP em testes locais;98Rust/18NodePASS,sem novoJava/voz/redeexterna. GUI41 teve duas tentativas não aprovadas, preservadas com cleanup normal. Os estados de homologação abaixo permanecem.
 
 Preparação41: perfil GUI separado com nomes revisados/whitelist offline e900s, para cliente Aurora1.21.1/Fabric em outro computador. Servidor continua sem mods; cliente pode carregar Core/Skins. [Roteiro e recuperação](../aurora-connect-internet-minecraft-gui.md). Entrada no mundo ainda **PRECISA DE TESTE**; a preparação não promove nenhuma célula abaixo.

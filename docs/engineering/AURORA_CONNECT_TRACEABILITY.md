@@ -4,6 +4,8 @@ Data: **29/09/2026**. [Reconciliação de fontes e IDs](AURORA_CONNECT_REVIEW.md
 
 ## Convenções e histórico
 
+Incremento43/005/008/T-UX-02/04/T-LIFE parcial: supervisorPowerShell mantém convidado com uma identidade, confirmação após autorização, STATUS20s/até45consultas e resumo redigido persistido. Kit38 fixado;600/900/1500s operacionais, sem alterarJava/lease.139fixturesPowerShell5.1PASS sem filhosConnect/Java/rede; smoke posterior no mesmo PC/IPv6 próprio passou nove STATUS reais/stop e negativos de autorização/cancelamento/host ausente/jogo ausente. Seis relatos com cleanup/evidência salva, incluindo reteste e48e de host ausente após margem15s; demais casos pertencem ao snapshot7182. [Registro43](../task-aur-r4-connect.md#quadragésimo-terceiro-incremento--supervisor-do-convidado-e-resumo-persistido). Não comprova nova rede externa/mundo/GUI/voz e não recupera a causa apagada da tentativaGUI41.2.
+
 Incremento42/008/T-LIFE: cinco regressõesCLI reais cobrem ociosidade/revogação/stop/prazo e cleanupTCP+UDP; completo98Rust e18NodePASS. Fecha prontidão manual obsoleta após QUIC, sem inferir a causa dos errosGUI41 ou aprovar mundo externo. [Registro42](../task-aur-r4-connect.md#quadragésimo-segundo-incremento--encerramento-observável-da-cli-manual).
 
 Preparação41 de005/T-MC-02: [perfil e roteiro GUI](../aurora-connect-internet-minecraft-gui.md) acrescentam whitelist revisada e plano900s separado. Nenhum resultado gráfico inferido da implementação ou do STATUS40; evidência própria será registrada no [task41](../task-aur-r4-connect.md#quadragésimo-primeiro-incremento--preparação-para-cliente-gráfico-externo).

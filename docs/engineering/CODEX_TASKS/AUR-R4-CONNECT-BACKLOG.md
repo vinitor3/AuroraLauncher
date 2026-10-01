@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 01/10/2026
 
+Supervisor43/005/008: operação experimental em um terminal/uma identidade, STATUS20s/até45consultas e resumo redigido CreateNew por tentativa, sobre kit38 fixado. Limites600/900/1500s não renovamJava/lease;139fixturesPowerShell5.1PASS. Smoke real no mesmo PC/IPv6 próprio passou nove STATUS/stop e negativos com cleanup/evidência; o [registro43](../../task-aur-r4-connect.md#quadragésimo-terceiro-incremento--supervisor-do-convidado-e-resumo-persistido) separa os snapshots7182/e48e e o reteste de host ausente com margem15s. Duas tentativasGUI41 não aprovaram mundo; saída apagada da segunda mantém causa não recuperada, sem nova solicitação desse erro. O [guia](../../aurora-connect-internet-minecraft-gui.md) preserva códigos manuais históricos e prioriza o supervisor. Nenhuma célula de voz/rede externa/GUI é promovida por esse fluxo.
+
 Robustez42/008: CLI manual deixa de conservar prontidão após QUIC fechado; cleanup aguardado e código fixo, com98Rust/18NodePASS. Não conclui008 ou GUI005; as falhas41 têm registros próprios, sem diagnóstico causal inventado. [Comandos/hash/rollback](../../task-aur-r4-connect.md#quadragésimo-segundo-incremento--encerramento-observável-da-cli-manual).
 
 Próximo ensaio005/T-MC-02: [GUI41](../../aurora-connect-internet-minecraft-gui.md), com perfil descartável900s e whitelist de nomes explicitamente revisados. Preparação e testes locais não aprovam entrada no mundo; os estados abaixo permanecem até a evidência externa correspondente.
