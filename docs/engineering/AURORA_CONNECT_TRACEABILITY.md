@@ -4,6 +4,8 @@ Data: **29/09/2026**. [Reconciliação de fontes e IDs](AURORA_CONNECT_REVIEW.md
 
 ## Convenções e histórico
 
+Incremento42/008/T-LIFE: cinco regressõesCLI reais cobrem ociosidade/revogação/stop/prazo e cleanupTCP+UDP; completo98Rust e18NodePASS. Fecha prontidão manual obsoleta após QUIC, sem inferir a causa dos errosGUI41 ou aprovar mundo externo. [Registro42](../task-aur-r4-connect.md#quadragésimo-segundo-incremento--encerramento-observável-da-cli-manual).
+
 Preparação41 de005/T-MC-02: [perfil e roteiro GUI](../aurora-connect-internet-minecraft-gui.md) acrescentam whitelist revisada e plano900s separado. Nenhum resultado gráfico inferido da implementação ou do STATUS40; evidência própria será registrada no [task41](../task-aur-r4-connect.md#quadragésimo-primeiro-incremento--preparação-para-cliente-gráfico-externo).
 
 - `REQ-V2-01..27` conservam o significado do pacote `docs` em `d6f31db6bd1bd0e9b9e2f8bbc2ebf1a6e653af5d`; esta tabela traduz os IDs de tarefa para o backlog canônico.

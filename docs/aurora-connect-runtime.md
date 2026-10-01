@@ -4,6 +4,8 @@ Estado: **PROTÓTIPO**, separado do launcher/UI e sem distribuição. Alvo exist
 
 ## Cliente gráfico externo — preparação41
 
+As duas primeiras tentativasGUI41 não aprovaram entrada no mundo; ambas tiveram encerramento local normal/EULA exata. A correção42 da CLI manual observa o fechamentoQUIC e publica `closed` após cleanup, evitando prontidão obsoleta. Ela não identifica retrospectivamente a causa das falhas41. O kit38 remoto continua histórico; um novo binário exige pin e seleção explícitos. [Resultados e limites](task-aur-r4-connect.md#quadragésimo-segundo-incremento--encerramento-observável-da-cli-manual).
+
 Perfil `gui` separado, para testar entrada no mundo com o cliente gráfico de outro computador. Mantém os nove artefatos existentes, Minecraft1.21.1/Fabric0.16.14/Java21 e servidor sem mods. Somente uma pasta nova recebe `online-mode=false`, whitelist ativa, compressão desativada e `enforce-secure-profile=false`. Nomes públicos explicitamente revisados substituem as identidades sintéticas do perfil `play`; esse perfil antigo permanece intacto.
 
 Aceita um ou dois nomes de3–16 caracteres ASCII alfanuméricos/underscore, preserva maiúsculas/minúsculas e recusa duplicatas ou colisões sem distinção de caixa. O UUID offline é MD5 dos bytesUTF8 de `OfflinePlayer:<nick-exato>`, com bits de versão/variante UUID; é compatibilidade de identidade do Minecraft, não criptografia do transporte. Não usar o UUID gerado pelo perfil desktop. Nomes, UUIDs e bytes da whitelist entram no plano local e nos hashes; não publicar esses dados pessoais emGit.

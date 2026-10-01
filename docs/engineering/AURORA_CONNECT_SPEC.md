@@ -4,6 +4,8 @@ Reconciliação: 29/09/2026, base cumulativa alpha.14 em `5ac2f7e288e77fbb0d5c0d
 
 ## 1. Escopo e autoridade
 
+Lifecycle42: fechamento do transporte termina a CLI manual depois de aguardar recursosTCP/UDP, com código estático`closed`/exit1. Stop/prazo locais e contrato dos convites são preservados. Essa distinção informa disponibilidade, sem atribuir causaNAT/inatividade ou imprimir motivo remoto bruto. [Evidências42](../task-aur-r4-connect.md#quadragésimo-segundo-incremento--encerramento-observável-da-cli-manual).
+
 O incremento41 prepara um perfil GUI descartável, separado dos clientes sintéticos: nomes públicos revisados entram na whitelist e nos hashes; plano900s explícito e reuso recusado. Consulte o [contrato runtime](../aurora-connect-runtime.md#cliente-gráfico-externo--preparação41). A prontidão do executor permanece STATUS/bind; mundo renderizado exige relato gráfico correlacionado à presença no servidor, sem promover automaticamente Core/Skins, voz ou contas mistas.
 
 “Aurora Connect” é nome de trabalho da conectividade R4. Os requisitos V2 são normativos. O incremento local usa um contrato único de laboratório; os fluxos futuros de produto permanecem candidatos e não são liberados por esse experimento. Referências externas demonstram possibilidades upstream, não homologação do Aurora. A solicitação atual autoriza implementar/testar localmente por incrementos consecutivos.

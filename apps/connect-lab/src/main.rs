@@ -429,20 +429,23 @@ async fn run_guest_bridges(
             json!({"event":"guest_ready", "tcp":tcp_bridge.local_addr().to_string(), "mode":"tcp", "experimental":true, "next":"enter stop to close"}),
         );
     }
-    if invited {
-        tokio::select! {
-            _ = until_stop(seconds) => {},
-            _ = guest.connection().closed() => {},
-        }
-    } else {
-        until_stop(seconds).await;
-    }
+    // A bridge task also watches QUIC closure. The CLI must not retain a stale
+    // ready state until its longer interactive deadline after that task exits.
+    let transport_closed = tokio::select! {
+        _ = until_stop(seconds) => false,
+        _ = guest.connection().closed() => true,
+    };
     guest.shutdown().await;
     if let Some(bridge) = udp_bridge {
         bridge.shutdown().await;
     }
     tcp_bridge.shutdown().await;
     event(json!({"event":"guest_stopped"}));
+    if transport_closed && !invited {
+        // Preserve the invited caller's existing stop contract. For a manual
+        // session, report only a fixed failure after cleanup, never QUIC text.
+        return Err(aurora_connect_lab::Error::Closed.into());
+    }
     Ok(())
 }
 

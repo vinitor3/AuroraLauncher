@@ -45,7 +45,11 @@ if ($LASTEXITCODE -ne 0) { throw 'LAB_GUEST_FAILED' }
 }
 ```
 
-Enviar a linha pública `guest_identity` ao agente e manter o mesmo terminal aberto. Repetir o código gera outra identidade. Somente após a confirmação de autorização do anfitrião, digitar **`ready`** e Enter. Confirmar o evento `guest_ready`, com `mode=tcp` e `tcp=127.0.0.1:42010`. `guest_ready` é a resposta, não o comando a digitar.
+Enviar a linha pública `guest_identity` ao agente e manter o mesmo terminal aberto. Repetir o código gera outra identidade. O agente pode fornecer o mesmo bloco com os dois valores públicos já preenchidos para a sessão atual; nunca copiar valores de tentativas encerradas.
+
+Preparar o segundo PowerShell e o código2 abaixo **antes** de digitar `ready`. Somente após a confirmação de autorização do anfitrião, digitar **`ready`** e Enter no primeiro terminal. Conferir o evento `guest_ready`, com `mode=tcp` e `tcp=127.0.0.1:42010`, e executar a consulta preparada imediatamente. Não é necessário esperar outra mensagem do agente entre esse evento e a consulta. `guest_ready` é a resposta, não o comando a digitar.
+
+Os900s são o prazo máximo da sessão, não uma garantia de prontidão ociosa: o transporte tem limite de inatividade120s. O kit38 pode continuar mostrando uma mensagem antiga após perder a conexão; uma consulta posterior deve verificar disponibilidade novamente. Essa limitação foi encontrada por auditoria de código e não identifica sozinha a causa de uma falha remota. Não mudar timeouts, autorizações ou configuração para contorná-la.
 
 ## Convidado — consulta e entrada no mundo
 

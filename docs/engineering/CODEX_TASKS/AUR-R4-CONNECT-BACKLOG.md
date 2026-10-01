@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 01/10/2026
 
+Robustez42/008: CLI manual deixa de conservar prontidão após QUIC fechado; cleanup aguardado e código fixo, com98Rust/18NodePASS. Não conclui008 ou GUI005; as falhas41 têm registros próprios, sem diagnóstico causal inventado. [Comandos/hash/rollback](../../task-aur-r4-connect.md#quadragésimo-segundo-incremento--encerramento-observável-da-cli-manual).
+
 Próximo ensaio005/T-MC-02: [GUI41](../../aurora-connect-internet-minecraft-gui.md), com perfil descartável900s e whitelist de nomes explicitamente revisados. Preparação e testes locais não aprovam entrada no mundo; os estados abaixo permanecem até a evidência externa correspondente.
 
 | Tarefa/capacidade | Estado comprovado | Trabalho ainda necessário |
