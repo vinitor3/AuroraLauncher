@@ -1,6 +1,6 @@
 # Aurora Connect — fronteira UDP e TCP entre duas internets
 
-Estado: **PRECISA DE TESTE** externo. O teste nativo foi validado localmente com dois agentes e endpoint próprio; a execução em duas internets ainda não ocorreu nesta revisão. Complementa o ensaio33 de bytes, sem promover jogo/voz/R4. Transporte experimental, autenticação obrigatória, relay desligado. Sem Minecraft, contas, Java/mods, firewall/roteador, instalação ou configuração pessoal.
+Estado: **PARCIAL** — um caso externo passou em01/10/2026, com confirmação do usuário de dois computadores em internets diferentes e encerramento do convidado. O probe nativo passou cap1264/1265 nos dois sentidos, duas origens e TCP1MiB/direção concorrente com cadência200ms; anfitrião/echo encerraram normalmente e portas locais ficaram livres. [Evidência39 e limites](task-aur-r4-connect.md#trigésimo-nono-incremento--fronteira-udp-externa-com-tcp-cadenciado): resultado remoto informado pelo usuário, cleanup local observado pelo agente; não mede saturação, MTU física, caminhos/migração, NAT/CGNAT, jogo ou voz. Complementa33 sem promover R4; transporte experimental, autenticação obrigatória e relay desligado. Kit38 original e seu manifesto de criação permanecem imutáveis.
 
 ## Preparação — responsabilidade do agente
 

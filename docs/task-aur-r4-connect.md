@@ -742,6 +742,35 @@ Intervenção necessária exclusivamente para o ensaio externo37, após toda pre
 
 Não foi iniciada escuta externa para esperar indefinidamente pelo participante. O supervisor privado está pronto e será iniciado numa janela combinada; convites/peers serão novos, nunca reutilizados de sessão encerrada. Enquanto essa presença não é confirmada, a pendência externa não promove estados nem bloqueia o trabalho local autorizado. Pós-check em 2026-09-30T14:53:14.4646876Z observou zero processos Connect desta worktree (`boundary-thirty-eight-post-stop.json`). Ponto de retomada: executar o helper privado com o kit novo; na frente local, resolver separadamente pacote integral de voz/capacidade dinâmica/endereço e integração experimental respeitando os gates existentes.
 
+### Trigésimo nono incremento — fronteira UDP externa com TCP cadenciado
+
+Data01/10/2026, base documental `6a37057`, mesma worktree/branch e base cumulativa alpha.14. O usuário confirmou explicitamente outro computador em outra internet, o resultado `boundary_probe_passed` e `guest_stopped`. Este incremento executa o roteiro preparado no37/38; não altera fontes, binário, pins, kit, dependências, locks, configurações pessoais, Assistente ou os nove pares Core/Skins.
+
+Artefato utilizado: kit38 com executável Windowsx64 SHA256 `5c1f3b3e61c2a975401d43f5c5d5568d9801a7252b7381451acb8026e6fd2030`, fonte `1170d7930b3c989add308fc609cefb21747bbe66`. Kit, ZIP e manifesto originais permanecem imutáveis. Seu `testedTwoComputers=false` registra o momento da criação e não é reescrito com o resultado posterior. A prova39 fica separada em `.aurora/connect-validation/boundary-external-result-39.json`, redigida, com fontes remota/local explicitadas. Endereços e pins não entram neste documento.
+
+Comando executado pelo agente no anfitrião: `& 'C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe' -NoProfile -ExecutionPolicy Bypass -File .aurora/connect-validation/external-boundary-host-session.ps1`, sem outros argumentos. Sessão própria `external-boundary-ccf10d82300643ed85534cd9c22d5a95`: plano novo/hash/serviços revisados, transporte iniciado por endereçoIPv6 manual, gameTCP e auxUDP loopback, cap1264 e orçamento `AuthorizedDownstream` explícito do roteiro. O usuário salvou a identidade pública do convidado no arquivo indicado antes da autorização do peer; chaves privadas não foram solicitadas ou registradas. Não houve alteração de firewall, roteador ou relay.
+
+No convidado, o usuário executou o [roteiro de fronteira](aurora-connect-internet-boundary.md) e reportou `boundary_probe_passed`,elapsed7284ms,experimentaltrue,expectedPayload1264. TCP1048576B em cada direção,553898B encaminhados duranteUDP,tcpConcurrentWithUdptrue,cadência200ms. UDP: quatro ecos exatos/5056B noendpoint, duas origens locais e duas associaçõeshost observadas; duas tentativas1265up e zero chegada aoendpoint; quatro retornos1265 emitidos e zero chegada aoguest; dois válidos após recusa e janela500ms. Relayfalse,Minecraft/voicenot_tested,physicalPathMtunot_measured. O campo `externalNetwork=not_inferred` do probe é preservado: o programa não identifica topologia; a confirmação de dois PCs/internets distintos veio explicitamente do usuário.
+
+O usuário confirmou `guest_stopped`. O agente criou `stop.txt` com CreateNew somente na pasta exata da sessão própria, aguardou o supervisor e leu `closed.json`:elapsed236642ms, três filhos `plan-review`, `host-agent` e `boundary-echo`, todosreaped/exit0/stderr0/forcedfalse,failedfalse. EchoPortsReboundtrue e portaUDP dohost observadalivre. `completedTest=false` desse snapshot permanece intacto porque o supervisor não observa o probe remoto; não representa falha do teste informado nem pode ser convertido em observação automática do guest. O resultado agregado combina o relato remoto com evidências locais distintas.
+
+Pós-check somenteleitura do agente, por CIM/Get-NetTCPConnection/Get-NetUDPEndpoint, em `2026-10-01T12:13:43.6750742Z`: zero processosConnect, zero listenersTCP42001 e UDP42000/42002. Não foi capturado inventário remoto pelas ferramentas; o encerramento do convidado é confirmação do usuário. Nenhum processo próprio ficou escutando à espera de outro teste.
+
+Limites: passou a fronteira de serviço1264/1265 nessa rota com TCP cadenciado concorrente. Emissão pelo socket não comprova chegadaUDP; a janela500ms não exclui toda entrega tardia possível nem identifica a causa individual de descarte. Elapsed7284ms não é benchmark, latência de áudio, taxa máxima ou prova de saturação. Endereço inicialIPv6 manual não demonstra caminho imutável, migração, NAT/CGNAT, hole punching, geografia ou MTU física. Não houve Minecraft, entrada no mundo, clientes gráficos, mod ou áudio; não ampliar a matriz nem promover R4.
+
+| Capacidade | Estado após39 |
+| --- | --- |
+| TCP | **PROTÓTIPO**;1MiB/direção externo com progresso duranteUDP e cadência200ms nesta amostra |
+| UDP | **PROTÓTIPO**;fronteira1264/1265 nos dois sentidos, duas origens/retorno correto e continuidade neste caso externo |
+| Conexão direta | **PARCIAL**;ensaios33/39, endereço inicialIPv6 manual; caminhos/migração e demais topologias pendentes |
+| Relay | **NÃO IMPLEMENTADO** no laboratório;desligado,sem serviço externo novo |
+| Minecraft | **PROTÓTIPO** pelas provas locais anteriores;nenhuma evidência adicional neste ensaio |
+| Convites/interface | Convite **PROTÓTIPO** somenteloopback/RAM;interface social **NÃO IMPLEMENTADO**,sem avanço39 |
+| Simple Voice Chat | **PARCIAL** pelos controles locais anteriores;UDP integral de áudio/endereçamento/homologação externa **PRECISA DE TESTE** |
+| Plasmo Voice | **PARCIAL** pelos controles locais anteriores;UDP integral de áudio/endereçamento/homologação externa **PRECISA DE TESTE** |
+
+Arquivos versionados deste registro: AGENTS, task, domínioConnect, primeiro parágrafo do roteiroexterno, spec, rastreabilidade, backlog e matriz. Validação documental proporcional, sem recompilar ou repetir suites de fontes inalteradas. Nenhum custo, push, deploy, publicação, release, instalador ou operação destrutiva. Rollback operacional já concluído por stop/reap/portaslivres; não existe configuração pessoal a restaurar. Registro versionado pode ser revertido por commit local revisado, sem apagar evidências, kits ou outras worktrees. O pedido de participação humana deste ensaio foi atendido; nenhuma ação adicional é necessária para concluir39. Trabalho local autorizado e gates futuros continuam independentes.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.

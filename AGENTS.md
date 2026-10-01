@@ -65,6 +65,8 @@ Incremento37: `echo-boundary`/`probe-boundary` acrescentam fixture/probe nativos
 
 Incremento38: teste `cfg(test)` em guest observa capacidade DATAGRAM, teto recebido na abertura, PMTU/probes do caminho e reabertura após TCP real. Na amostra focada, capacidade local Guest1414 ficou constante (`growth_not_observed`), resposta de abertura Host1358→1390; UDP1390 íntegro e tetoHost+1 recusado. Não exigir crescimento nem inferir medição direta do transporte host. Associação antiga conserva o teto de abertura; redução local é consultada dinamicamente. Cleanup libera todos os handles antes de rebind. Não houve mudança de produção; resultados completos e limites no task38.
 
+Incremento39 (01/10/2026): usuário confirmou outro PC/outra internet, `boundary_probe_passed` e `guest_stopped` com kit38/binário5c1f3b3e…2030. Cap1264 passou nos dois sentidos, duas tentativas1265up sem chegar ao endpoint, quatro emissões1265down sem chegar ao guest; quatro ecos/duas origens e TCP1MiB/direção com553898B duranteUDP, cadência200ms/janela500ms. Host/echo/review encerraram exit0 semforçar e portas locais ficaram livres. Fontes da prova remota e local são distintas; direto continua PARCIAL nesse caso, sem medir caminhos/migração/NAT/CGNAT/MTU física/saturação/jogo/voz. Preservar kit/source1170d79 e manifest `testedTwoComputers=false` como snapshot de criação; resultado39 é registro separado, sem reescrever `completedTest=false` do supervisor.
+
 - `apps/desktop/src`: React, autenticação, instâncias, catálogo, guarda-roupa e Assistente.
 - `apps/desktop/src-tauri/src`: comandos Tauri e engine Rust.
 - `apps/edge-proxy`: Worker atual de produção.
