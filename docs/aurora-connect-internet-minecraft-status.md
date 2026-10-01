@@ -8,9 +8,11 @@ Usa o mesmo kit38 já copiado para `C:/AuroraConnectLab38`, executável Windows 
 
 O agente prepara uma pasta descartável nova com os nove artefatos fixados de Minecraft1.21.1/Fabric0.16.14/Java21, sem mods, total55.582.631B. Revisa plano/hash, argumentos, ambiente mínimo e diffEULA; a aceitação dos termos já foi dada pelo usuário. O executor existente exige hashes atuais, snapshot da EULA, marcador sem reuso, bindTCP127.0.0.1:43001 pertencente ao próprio Java e STATUS/pong767 antes de readiness. `online-mode=false` é a preferência autorizada para este servidor próprio; whitelist permanece ativa e nenhuma conta é usada nessa consulta.
 
-Depois de `server_ready`, inicia o helper privado `external-minecraft-host-session.ps1` com o PID do Java próprio observado localmente. O helper confere novamente a propriedade do bind e aprova somente `game/tcp`, revisão1/capability reliableStream, destino127.0.0.1:43001. Transporte em IPv6 candidato atual/UDP42000, sem serviço UDP de aplicação. Plano/hash/serviços são conferidos antes de autorizar o peer. O helper nunca inicia nem encerra Java; o executor do servidor conserva essa responsabilidade.
+Primeiro inicia o helper privado `external-minecraft-host-session.ps1 -PrepareBeforeRuntime`, ainda com Java desligado. Ele prepara identidade e plano, mas não abre o transporte nem autoriza o convidado. O agente fornece ANFITRIAO.txt e aguarda a nova identidade em guest-peer.txt. Isso evita gastar a janela do servidor durante a troca de dados.
 
-O prazo operacional do Java é300s, incluindo boot; o encerramento e a liberação pelo sistema operacional são aguardados e podem ultrapassar esse prazo. Por isso os dois participantes devem estar presentes antes do início. O agente aguarda a identidade pública do convidado pelo arquivo privado `guest-peer.txt`, confirma `host_ready` e só então manda digitar `ready`. Se o prazo acabar, encerrar e preparar outra pasta/sessão; não reutilizar o estágio executado ou os peers.
+Depois de receber o peer, o agente inicia o executor Minecraft até `server_ready`. Cria então `runtime-owner.json` exclusivamente na pasta dessa sessão, com quatro inteiros: schemaVersion1, PID do Java próprio, instante de criação em ticksUTC e instante da observação em UnixMs. UTF8 semBOM/CreateNew, sem converter ticks por JavaScriptNumber. O helper só consome registro de até30s e confere propriedade do bind/PID/instante novamente; não deve aceitar nome de processo como prova de readiness. O executor separado fornece essa prova. Somente então autoriza `game/tcp`, revisão1/capability reliableStream, destino127.0.0.1:43001. Transporte em IPv6 candidato atual/UDP42000, sem serviço UDP de aplicação. Plano/hash/serviços são conferidos antes da autorização; o helper nunca inicia nem encerra Java.
+
+O prazo operacional do Java é300s, incluindo boot; o encerramento e a liberação pelo sistema operacional são aguardados e podem ultrapassar esse prazo. A preparação das identidades tem teto600s e o helper inteiro900s. O agente confirma `host_ready` e só então manda digitar `ready`. Aguarda ainda a confirmação de `guest_ready` antes de liberar a consulta no segundo terminal. Se o prazo acabar, encerrar e preparar outra pasta/sessão; não reutilizar o estágio executado ou os peers.
 
 ## Convidado — primeiro terminal
 
@@ -37,7 +39,7 @@ if ($LASTEXITCODE -ne 0) { throw 'LAB_GUEST_FAILED' }
 }
 ```
 
-Salvar a linha `guest_identity` no arquivo privado indicado. Aguardar confirmação do agente e então digitar `ready`. Esperar `guest_ready` com `mode=tcp` e `tcp=127.0.0.1:42010`. Falha interrompe o ensaio; não executar a consulta sem esse evento.
+Salvar a linha `guest_identity` no arquivo privado indicado. Aguardar confirmação do agente e então digitar **somente `ready`**, pressionando Enter. `guest_ready` é a resposta do programa, não o comando que se digita. Esperar essa resposta com `mode=tcp` e `tcp=127.0.0.1:42010` e confirmá-la ao agente antes do segundo terminal. `guest_identity` sozinho ainda não abriu a ponte. Falha interrompe o ensaio; não executar a consulta sem `guest_ready`.
 
 ## Convidado — segundo terminal
 
