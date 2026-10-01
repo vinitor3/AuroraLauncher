@@ -4,6 +4,8 @@ Reconciliação: 29/09/2026, base cumulativa alpha.14 em `5ac2f7e288e77fbb0d5c0d
 
 ## 1. Escopo e autoridade
 
+O incremento41 prepara um perfil GUI descartável, separado dos clientes sintéticos: nomes públicos revisados entram na whitelist e nos hashes; plano900s explícito e reuso recusado. Consulte o [contrato runtime](../aurora-connect-runtime.md#cliente-gráfico-externo--preparação41). A prontidão do executor permanece STATUS/bind; mundo renderizado exige relato gráfico correlacionado à presença no servidor, sem promover automaticamente Core/Skins, voz ou contas mistas.
+
 “Aurora Connect” é nome de trabalho da conectividade R4. Os requisitos V2 são normativos. O incremento local usa um contrato único de laboratório; os fluxos futuros de produto permanecem candidatos e não são liberados por esse experimento. Referências externas demonstram possibilidades upstream, não homologação do Aurora. A solicitação atual autoriza implementar/testar localmente por incrementos consecutivos.
 
 O host compartilha um servidor ou mundo com convidados autorizados; o servidor Minecraft continua autoritativo. P2P descreve o caminho de rede. O computador anfitrião e seu agente precisam permanecer disponíveis; não há hospedagem oficial 24 horas. Não se acessa um servidor privado sem cooperação do responsável.

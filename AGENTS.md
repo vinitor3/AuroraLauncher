@@ -29,6 +29,8 @@ O laboratório descartável `apps/connect-runtime-tools` já executou Minecraft 
 
 ## Mapa do repositório
 
+Preparação Connect41: perfil `gui` separado recebe1–2 nicks públicos exatos, whitelist com UUID offlineMinecraft, plano/hash próprios e900s fixos. Não usar UUID desktop nem registrar nicks reais emGit. `play` sintético e outros perfis preservados; stage novo porJava e EULA/restauração obrigatórios. O [roteiro GUI](docs/aurora-connect-internet-minecraft-gui.md) separa prontidãoSTATUS, relato gráfico e população0→1→0; preparação não homologa mundo, Core/Skins, voz ou contas mistas. HelperGUI privado é separado do STATUS histórico; nenhum helper da ponte encerraJava.
+
 Incremento20: dois clientes de protocolo sintéticos observaram LOGIN/CONFIGURATION/PLAY, chunks e presença recíproca por dois pares Host/Guest independentes, em três ensaios reais aprovados. Não são clientes gráficos ou contas originais/offline mistas homologadas. `apps/connect-client-lab/smoke.mjs --offline-lab` exige perfil play descartável já pronto; conferir `docs/aurora-connect-runtime.md`. O ensaio corrigiu deadlock do FrameGuard com entrada aberta; preservar as duas regressões e o flush serializer→framer→socket no encerramento. Não promover esse resultado a Core/Skins/voz/R4.
 
 Incremento21: perfil `svc` executou boot e writer SVC2.6.22, UDP43002 pertencente ao Java criado e stop normal. Windows usa a forma exata `::ffff:127.0.0.1` nesse bind; ela é aceita somente no gate UDP explicitamente selecionado e registrado no plano. Não há prova de handshake/anúncio/áudio nem roundtrip do adaptador com JVM viva. Manter perfil separado, pinModrinth exato e conferência de árvore/configuração.

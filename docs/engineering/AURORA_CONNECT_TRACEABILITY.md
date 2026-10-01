@@ -4,6 +4,8 @@ Data: **29/09/2026**. [Reconciliação de fontes e IDs](AURORA_CONNECT_REVIEW.md
 
 ## Convenções e histórico
 
+Preparação41 de005/T-MC-02: [perfil e roteiro GUI](../aurora-connect-internet-minecraft-gui.md) acrescentam whitelist revisada e plano900s separado. Nenhum resultado gráfico inferido da implementação ou do STATUS40; evidência própria será registrada no [task41](../task-aur-r4-connect.md#quadragésimo-primeiro-incremento--preparação-para-cliente-gráfico-externo).
+
 - `REQ-V2-01..27` conservam o significado do pacote `docs` em `d6f31db6bd1bd0e9b9e2f8bbc2ebf1a6e653af5d`; esta tabela traduz os IDs de tarefa para o backlog canônico.
 - `EST-01..12`, `DOC-01..03` e `CHG-01..11` continuam registros daquele pacote; consulta integral por `git show d6f31db:docs/engineering/AURORA_CONNECT_TRACEABILITY.md`. Não são execuções desta implementação.
 - `INV-01..06`, `T-*` e `C-*` vêm do pacote `review` em `5ac2f7e`. INV são leituras históricas; T são critérios; C são células candidatas. Nenhum implica teste aprovado por existência.

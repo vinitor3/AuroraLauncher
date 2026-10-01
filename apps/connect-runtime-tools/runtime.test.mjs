@@ -131,6 +131,62 @@ test('play profile is explicit, two fixed offline identities, no compression and
   assert.throws(() => offlineUuid('arbitrary'), /runtime_play_identity/);
 });
 
+test('GUI staging plan binds one or two case-sensitive names and whitelist bytes without changing existing profiles', async t => {
+  const root = await fixture(t); const home = await fakeJdk(root); const before = await stagingSnapshot();
+  const play = await makePlan(home, 'play');
+  const names = ['AuroraGuiA']; const gui = await makePlan(home, 'gui', names);
+  names[0] = 'IndependentEdit';
+  assert.equal(gui.purpose, 'aurora_connect_disposable_gui_lab'); assert.equal(gui.profile, 'gui');
+  assert.deepEqual(gui.playerNames, ['AuroraGuiA']);
+  assert.equal(gui.files['whitelist.json'], runtimeFiles('gui', ['AuroraGuiA'])['whitelist.json']);
+  assert.deepEqual(gui.artifacts, play.artifacts); assert.equal(gui.artifacts.length, 9);
+  const comparison = structuredClone(gui);
+  delete comparison.profile; delete comparison.playerNames;
+  comparison.purpose = play.purpose; comparison.files['whitelist.json'] = play.files['whitelist.json'];
+  assert.deepEqual(comparison, play);
+  const pair = await makePlan(home, 'gui', ['AuroraGuiA', 'AuroraGuiB']);
+  const changedCase = await makePlan(home, 'gui', ['auroraguia']);
+  assert.equal(new Set([gui, pair, changedCase, play, await makePlan(home)].map(planDigest)).size, 5);
+  assert.equal(gui.limits.voiceMods, false); assert.equal(gui.limits.coreSkins, false);
+  assert.deepEqual(await stagingSnapshot(), before);
+});
+
+test('GUI preparation CLI validates names, consent and name-bound approval before network or stage creation', async t => {
+  const root = await fixture(t); const home = await fakeJdk(root); const before = await stagingSnapshot();
+  const gui = await makePlan(home, 'gui', ['AuroraGuiA']);
+  const originalFetch = globalThis.fetch; let fetched = 0;
+  globalThis.fetch = () => { fetched++; throw new Error('test_network_forbidden'); };
+  try {
+    const result = await main(['plan-gui', home, 'AuroraGuiA']);
+    assert.deepEqual(result, { event: 'runtime_plan', planSha256: planDigest(gui), plan: gui });
+    assert.equal((await main(['plan-gui', home, 'AuroraGuiA', 'AuroraGuiB'])).plan.playerNames.length, 2);
+    for (const names of [['auroraguia'], ['AuroraGuiB'], ['AuroraGuiA', 'AuroraGuiB']]) {
+      await assert.rejects(stageRuntime(home, planDigest(gui), true, 'gui', names), /runtime_plan_approval/);
+    }
+    await assert.rejects(stageRuntime(home, planDigest(await makePlan(home, 'play')), true, 'gui', ['AuroraGuiA']), /runtime_plan_approval/);
+    await assert.rejects(stageRuntime(home, planDigest(gui), true, 'play'), /runtime_plan_approval/);
+    await assert.rejects(main(['stage-gui', home, planDigest(gui), 'AuroraGuiA']), /runtime_eula_acceptance_required/);
+    await assert.rejects(main(['stage-gui', home, '0'.repeat(64), 'AuroraGuiA', '--user-accepted-minecraft-eula']), /runtime_plan_approval/);
+    for (const args of [
+      ['plan-gui', 'PRIVATE_ABSENT_JDK', 'abc\n'],
+      ['plan-gui', 'PRIVATE_ABSENT_JDK', 'AuroraGuiA', 'auroraguia'],
+      ['stage-gui', 'PRIVATE_ABSENT_JDK', '0'.repeat(64), '--other', '--user-accepted-minecraft-eula'],
+    ]) await assert.rejects(main(args), /runtime_gui_names/);
+    for (const args of [
+      ['plan-gui', home], ['plan-gui', home, 'AuroraGuiA', 'AuroraGuiB', 'AuroraGuiC'],
+      ['stage-gui', home, planDigest(gui), '--user-accepted-minecraft-eula'],
+      ['stage-gui', home, planDigest(gui), 'AuroraGuiA', 'AuroraGuiB', '901', '--user-accepted-minecraft-eula'],
+    ]) await assert.rejects(main(args), /runtime_usage/);
+  } finally { globalThis.fetch = originalFetch; }
+  const planned = await childCli(['plan-gui', home, 'AuroraGuiA']);
+  assert.equal(planned.code, 0); assert.equal(planned.stderr, '');
+  assert.equal(JSON.parse(planned.stdout).planSha256, planDigest(gui));
+  const blocked = await childCli(['plan-gui', 'PRIVATE_ABSENT_JDK', 'PRIVATE bad name']);
+  assert.equal(blocked.code, 1); assert.equal(blocked.stderr, '');
+  assert.deepEqual(JSON.parse(blocked.stdout), { event: 'failed', code: 'runtime_gui_names' });
+  assert.equal(fetched, 0); assert.deepEqual(await stagingSnapshot(), before);
+});
+
 test('SVC profile has one exact voice artifact and isolated files without changing status or play', async t => {
   const root = await fixture(t); const home = await fakeJdk(root);
   const before = await stagingSnapshot();

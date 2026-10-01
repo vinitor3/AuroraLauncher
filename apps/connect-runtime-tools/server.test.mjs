@@ -23,7 +23,7 @@ const trueEula = Buffer.from(`# ${EULA_URL}\neula=true\n`);
 const json = value => `${JSON.stringify(value, null, 2)}\n`;
 const approved = 'a'.repeat(64);
 async function exists(file) { try { await lstat(file); return true; } catch (e) { if (e.code === 'ENOENT') return false; throw e; } }
-async function fixture(t, profile = 'status') {
+async function fixture(t, profile = 'status', guiNames) {
   const metadata = await lstat(parent);
   assert.ok(metadata.isDirectory() && !metadata.isSymbolicLink());
   const root = await mkdtemp(join(parent, 'prepared-')); const basename = root.slice(parent.length + 1);
@@ -49,7 +49,8 @@ async function fixture(t, profile = 'status') {
     await writeFile(join(root, pin.file), bytes, { flag: 'wx' });
   }
   const baseline = { schemaVersion: 1, purpose: 'synthetic_test_only', artifacts,
-    files: runtimeFiles(profile) };
+    ...(profile === 'gui' ? { profile: 'gui', playerNames: [...guiNames] } : {}),
+    files: runtimeFiles(profile, guiNames) };
   const baselineHash = planDigest(baseline);
   const ready = { planSha256: baselineHash, verified, javaExecuted: false, runtimeHomologated: false };
   await writeFile(join(root, 'plan.json'), json(baseline), { flag: 'wx' });
@@ -102,6 +103,75 @@ test('interactive STATUS CLI preserves consent and digest gates and refuses an a
   await expectCode(main(['run-svc-interactive']), 'server_usage');
   await expectCode(runServer('PRIVATE_JDK', 'prepared-Abc123', approved, false,
     { profile: 'status-interactive' }), 'server_eula_acceptance_required');
+});
+
+test('GUI run plan contains the reviewed names and whitelist bytes, with a distinct fixed 900-second approval', () => {
+  const baseline = { java: { version: 'synthetic_java_21' }, playerNames: ['AuroraGuiA'], files: runtimeFiles('gui', ['AuroraGuiA']),
+    launch: { executable: 'SYNTHETIC_JAVA_NOT_EXECUTED', args: ['-Xms256M', '-Xmx1536M', 'FIXED_ENTRYPOINT'] } };
+  const stage = { baselineHash: approved, verified: [] }; const tools = { synthetic: true };
+  const gui = buildRunPlan('prepared-Abc123', baseline, stage, tools, 'gui');
+  assert.equal(gui.purpose, 'aurora_connect_disposable_gui_execution'); assert.equal(gui.profile, 'gui');
+  assert.equal(gui.limits.lifetimeSeconds, 900); assert.equal(gui.limits.mods, false);
+  assert.deepEqual(gui.playerNames, ['AuroraGuiA']);
+  assert.equal(gui.whitelistJson, baseline.files['whitelist.json']);
+  assert.equal(gui.whitelistSha256, hash(gui.whitelistJson));
+  assert.equal(gui.evidence.worldJoined, false); assert.equal(gui.evidence.runtimeHomologated, false);
+  for (const profile of ['status', 'status-interactive', 'play', 'svc', 'plasmo']) {
+    const other = buildRunPlan('prepared-Abc123', { ...baseline, files: runtimeFiles(profile === 'status-interactive' ? 'status' : profile) }, stage, tools, profile);
+    assert.notEqual(runPlanDigest(gui), runPlanDigest(other));
+    assert.equal(other.limits.lifetimeSeconds, profile === 'status-interactive' ? 900 : 300);
+    const comparison = { ...gui.limits, lifetimeSeconds: other.limits.lifetimeSeconds, mods: other.limits.mods };
+    assert.deepEqual(comparison, other.limits);
+  }
+  for (const names of [['auroraguia'], ['AuroraGuiB'], ['AuroraGuiA', 'AuroraGuiB']]) {
+    const changed = buildRunPlan('prepared-Abc123', { ...baseline, playerNames: names, files: runtimeFiles('gui', names) }, stage, tools, 'gui');
+    assert.notEqual(runPlanDigest(changed), runPlanDigest(gui));
+  }
+});
+
+test('GUI server CLI rejects malformed names, missing consent and arbitrary lifetime before selected filesystem access', async () => {
+  await expectCode(main(['run-gui', 'PRIVATE_JDK', 'prepared-Abc123', approved, 'AuroraGuiA']), 'server_eula_acceptance_required');
+  await expectCode(main(['run-gui', 'PRIVATE_JDK', 'prepared-Abc123', 'wrong', 'AuroraGuiA', '--user-accepted-minecraft-eula']), 'server_run_approval');
+  for (const names of [['ab'], ['AuroraGuiA', 'auroraguia'], ['abc\n']]) {
+    await expectCode(main(['run-plan-gui', 'PRIVATE_JDK', 'prepared-Abc123', ...names]), 'runtime_gui_names');
+    await expectCode(main(['run-gui', 'PRIVATE_JDK', 'prepared-Abc123', approved, ...names, '--user-accepted-minecraft-eula']), 'runtime_gui_names');
+  }
+  for (const args of [
+    ['run-plan-gui', 'PRIVATE_JDK', 'prepared-Abc123'],
+    ['run-plan-gui', 'PRIVATE_JDK', 'prepared-Abc123', 'AuroraGuiA', 'AuroraGuiB', '901'],
+    ['run-gui', 'PRIVATE_JDK', 'prepared-Abc123', approved, '--user-accepted-minecraft-eula'],
+    ['run-gui', 'PRIVATE_JDK', 'prepared-Abc123', approved, 'AuroraGuiA', 'AuroraGuiB', '901', '--user-accepted-minecraft-eula'],
+  ]) await expectCode(main(args), 'server_usage');
+  await expectCode(runServer('PRIVATE_JDK', 'prepared-Abc123', approved, false,
+    { profile: 'gui', guiNames: ['AuroraGuiA'] }), 'server_eula_acceptance_required');
+});
+
+test('GUI stage verification reconstructs exact whitelist and properties from reviewed names, never supplied JSON', async t => {
+  const names = ['AuroraGuiA', 'AuroraGuiB']; const f = await fixture(t, 'gui', names);
+  assert.equal((await verifyPreparedFiles(f.basename, f.baseline, 'gui', names)).verified.length, 9);
+  for (const changedNames of [['AuroraGuiA'], ['auroraguia', 'AuroraGuiB'], ['AuroraGuiB', 'AuroraGuiA']]) {
+    await expectCode(verifyPreparedFiles(f.basename, f.baseline, 'gui', changedNames), 'server_gui_baseline');
+  }
+  for (const profile of ['status', 'play', 'svc', 'plasmo']) {
+    await assert.rejects(verifyPreparedFiles(f.basename, f.baseline, profile));
+  }
+  for (const variation of ['uuid', 'extraPlayer', 'onlineMode', 'bind', 'whitelistOff', 'extraArtifact', 'playerNames']) {
+    const changed = structuredClone(f.baseline);
+    if (variation === 'uuid') changed.files['whitelist.json'] = changed.files['whitelist.json'].replace('56e1d47e', '00000000');
+    if (variation === 'extraPlayer') changed.files['whitelist.json'] = runtimeFiles('play')['whitelist.json'];
+    if (variation === 'onlineMode') changed.files['server.properties'] = changed.files['server.properties'].replace('online-mode=false', 'online-mode=true');
+    if (variation === 'bind') changed.files['server.properties'] = changed.files['server.properties'].replace('127.0.0.1', '0.0.0.0');
+    if (variation === 'whitelistOff') changed.files['server.properties'] = changed.files['server.properties'].replace('white-list=true', 'white-list=false');
+    if (variation === 'extraArtifact') changed.artifacts.push({ ...changed.artifacts[0], file: 'mods/unreviewed.jar' });
+    if (variation === 'playerNames') changed.playerNames = ['IndependentEdit'];
+    await assert.rejects(verifyPreparedFiles(f.basename, changed, 'gui', names));
+  }
+  const original = await readFile(join(f.root, 'whitelist.json'));
+  await writeFile(join(f.root, 'whitelist.json'), Buffer.concat([original, Buffer.from('\n')]));
+  await expectCode(verifyPreparedFiles(f.basename, f.baseline, 'gui', names), 'server_config_changed');
+  assert.deepEqual(await readFile(join(f.root, 'eula.txt')), falseEula);
+  assert.equal(await exists(join(f.root, 'run-used.json')), false);
+  assert.equal(await exists(join(f.root, 'run-eula-before.txt')), false);
 });
 
 test('server failure report copies only permitted process primitives from OwnedProcessError', () => {

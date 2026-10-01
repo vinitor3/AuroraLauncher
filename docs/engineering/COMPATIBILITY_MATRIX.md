@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 01/10/2026
 
+Preparação41: perfil GUI separado com nomes revisados/whitelist offline e900s, para cliente Aurora1.21.1/Fabric em outro computador. Servidor continua sem mods; cliente pode carregar Core/Skins. [Roteiro e recuperação](../aurora-connect-internet-minecraft-gui.md). Entrada no mundo ainda **PRECISA DE TESTE**; a preparação não promove nenhuma célula abaixo.
+
 Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, desligado para usuários. O núcleo desktop tem adaptadores de configuração SVC/Plasmo apenas opt-in/cópia de diagnóstico, sem comando ou interface. Base cumulativa alpha.14 (`5ac2f7e` sobre `6a107b8`), Core 1.1.5, Skins 0.3.1 e os nove pares preservados. Evidências e comandos no [task de execução](../task-aur-r4-connect.md); roteiro no [laboratório](../aurora-connect.md). A [matriz candidata por mod/versão/loader/hospedagem/rede](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) mantém os gates futuros. A matriz abaixo conserva todas as evidências anteriores; retransmissão Skins e testes sintéticos de transporte não homologam Connect em Minecraft.
 
 | Capacidade | Evidência observada | Estado e fronteira |

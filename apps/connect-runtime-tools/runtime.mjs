@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EULA_URL } from './pins.mjs';
 import { runtimeFiles, runtimeArtifacts } from './play-profile.mjs';
+import { validateGuiNames } from './gui-profile.mjs';
 import { hash, fail, readLocal, absent, downloadVerified } from './files.mjs';
 import { rejectLinkedParents, resolveExplicitLocalPath } from '../connect-voice-tools/local-path.mjs';
 
@@ -10,8 +11,9 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const json = value => `${JSON.stringify(value, null, 2)}\n`;
 export const planDigest = plan => hash(json(plan));
 
-export async function makePlan(javaHome, profile = 'status') {
-  const files = runtimeFiles(profile);
+export async function makePlan(javaHome, profile = 'status', guiNames) {
+  const playerNames = profile === 'gui' ? validateGuiNames(guiNames) : guiNames;
+  const files = runtimeFiles(profile, playerNames);
   if (process.platform !== 'win32') fail('runtime_windows_only');
   const home = resolveExplicitLocalPath(javaHome);
   const release = await readLocal(join(home, 'release'), 64 * 1024);
@@ -30,6 +32,7 @@ export async function makePlan(javaHome, profile = 'status') {
   const artifacts = runtimeArtifacts(profile);
   return {
     schemaVersion: 1, purpose: `aurora_connect_disposable_${profile}_lab`,
+    ...(profile === 'gui' ? { profile: 'gui', playerNames } : {}),
     target: { minecraft: '1.21.1', loader: 'fabric', loaderVersion: '0.16.14', javaMajor: 21, protocol: 767 },
     ...(profile === 'svc' ? { voiceMod: { id: 'voicechat', version: '2.6.22' } } : {}),
     ...(profile === 'plasmo' ? { voiceMod: { id: 'plasmovoice', version: '2.1.17', fabricApi: '0.116.10+1.21.1' } } : {}),
@@ -56,9 +59,10 @@ async function ensurePlainDirectory(path) {
 
 // The only production entry accepts a fresh plan derived from fixed code and the
 // explicitly selected JDK. Never load URLs, paths or commands from a plan file.
-export async function stageRuntime(javaHome, approval, acceptedEula, profile = 'status') {
+export async function stageRuntime(javaHome, approval, acceptedEula, profile = 'status', guiNames) {
   if (acceptedEula !== true) fail('runtime_eula_acceptance_required');
-  const plan = await makePlan(javaHome, profile);
+  const playerNames = profile === 'gui' ? validateGuiNames(guiNames) : guiNames;
+  const plan = await makePlan(javaHome, profile, playerNames);
   if (typeof approval !== 'string' || !/^[a-f0-9]{64}$/.test(approval) || approval !== planDigest(plan)) fail('runtime_plan_approval');
   const aurora = resolveExplicitLocalPath(join(REPO, '.aurora'));
   await ensurePlainDirectory(aurora);
@@ -84,7 +88,7 @@ export async function stageRuntime(javaHome, approval, acceptedEula, profile = '
       verified.push(await downloadVerified(pin, join(root, pin.file), { signal: controller.signal }));
     }
     // Recheck the selected files before declaring the staging complete.
-    if (planDigest(await makePlan(javaHome, profile)) !== approval) fail('runtime_java_changed');
+    if (planDigest(await makePlan(javaHome, profile, playerNames)) !== approval) fail('runtime_java_changed');
     controller.signal.throwIfAborted();
     for (const [file, bytes] of Object.entries(plan.files)) await writeNew(file, bytes);
     await writeNew('ready.json', json({ planSha256: approval, verified, javaExecuted: false, runtimeHomologated: false }));
@@ -98,6 +102,15 @@ export async function stageRuntime(javaHome, approval, acceptedEula, profile = '
 }
 
 export async function main(args) {
+  if (args[0] === 'plan-gui' && [3, 4].includes(args.length)) {
+    const plan = await makePlan(args[1], 'gui', validateGuiNames(args.slice(2)));
+    return { event: 'runtime_plan', planSha256: planDigest(plan), plan };
+  }
+  if (args[0] === 'stage-gui') {
+    if (args.at(-1) !== '--user-accepted-minecraft-eula') fail('runtime_eula_acceptance_required');
+    if (![5, 6].includes(args.length)) fail('runtime_usage');
+    return stageRuntime(args[1], args[2], true, 'gui', validateGuiNames(args.slice(3, -1)));
+  }
   if (args.length === 2 && ['plan', 'plan-play', 'plan-svc', 'plan-plasmo'].includes(args[0])) {
     const plan = await makePlan(args[1], args[0] === 'plan' ? 'status' : args[0].slice(5));
     return { event: 'runtime_plan', planSha256: planDigest(plan), plan };

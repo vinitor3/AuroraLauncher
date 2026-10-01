@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { constants as osConstants } from 'node:os';
 import { EULA_URL } from './pins.mjs';
 import { runtimeFiles, runtimeArtifacts } from './play-profile.mjs';
+import { validateGuiNames } from './gui-profile.mjs';
 import { SVC_ARTIFACT, SVC_CONFIG_PATH, SVC_BASELINE_BYTES, validateSvcConfig } from './svc-profile.mjs';
 import { PLASMO_ARTIFACT, PLASMO_CONFIG_PATH, PLASMO_BASELINE_BYTES, validatePlasmoConfig } from './plasmo-profile.mjs';
 import { makePlan, planDigest } from './runtime.mjs';
@@ -59,14 +60,18 @@ async function exactTree(root, fixedPaths) {
 // Read-only verifier, also exercised with synthetic hashes by unit tests. Its
 // return is never accepted as execution authority: makeRunPlan/runServer always
 // reconstruct the baseline themselves from makePlan and compiled artifactPins.
-export async function verifyPreparedFiles(basename, baseline, profile = 'status') {
+export async function verifyPreparedFiles(basename, baseline, profile = 'status', guiNames) {
+  const fixedFiles = runtimeFiles(profile, guiNames);
+  if (profile !== 'gui' && baseline?.profile === 'gui') fail('server_gui_baseline');
   const root = await preparedDirectory(basename);
   await absent(join(root, 'run-used.json'));
   const files = baseline?.files;
-  const fixedFiles = runtimeFiles(profile);
   if (!files || Object.keys(files).sort().join(',') !== Object.keys(fixedFiles).sort().join(',')
     || typeof files['server.properties'] !== 'string' || files['eula.txt'] !== FALSE_EULA.toString()
     || Object.values(files).some(value => typeof value !== 'string')) fail('server_baseline');
+  if (profile === 'gui' && (baseline.profile !== 'gui'
+    || JSON.stringify(baseline.playerNames) !== JSON.stringify(validateGuiNames(guiNames))
+    || Object.entries(fixedFiles).some(([file, content]) => files[file] !== content))) fail('server_gui_baseline');
   const names = runtimeArtifacts(profile).map(pin => pin.file);
   if (!baseline || !Array.isArray(baseline.artifacts) || baseline.artifacts.length !== names.length
     || baseline.artifacts.some((pin, i) => pin.file !== names[i]
@@ -95,10 +100,11 @@ export async function verifyPreparedFiles(basename, baseline, profile = 'status'
 }
 
 export const runPlanDigest = plan => hash(json(plan));
-export async function makeRunPlan(javaHome, basename, profile = 'status') {
+export async function makeRunPlan(javaHome, basename, profile = 'status', guiNames) {
   const baselineProfile = profile === 'status-interactive' ? 'status' : profile;
-  const baseline = await makePlan(javaHome, baselineProfile);
-  const stage = await verifyPreparedFiles(basename, baseline, baselineProfile);
+  const playerNames = profile === 'gui' ? validateGuiNames(guiNames) : guiNames;
+  const baseline = await makePlan(javaHome, baselineProfile, playerNames);
+  const stage = await verifyPreparedFiles(basename, baseline, baselineProfile, playerNames);
   const tools = await toolHashes();
   return buildRunPlan(basename, baseline, stage, tools, profile);
 }
@@ -106,10 +112,11 @@ export async function makeRunPlan(javaHome, basename, profile = 'status') {
 // Pure assembly for review/tests, never execution authority. runServer always
 // reconstructs the baseline, verified stage and tool hashes via makeRunPlan.
 export function buildRunPlan(basename, baseline, stage, tools, profile = 'status') {
-  if (!['status', 'status-interactive', 'play', 'svc', 'plasmo'].includes(profile)) fail('runtime_profile');
+  if (!['status', 'status-interactive', 'play', 'svc', 'plasmo', 'gui'].includes(profile)) fail('runtime_profile');
   const interactive = profile === 'status-interactive';
+  const gui = profile === 'gui';
   return {
-    schemaVersion: 1, purpose: interactive
+    schemaVersion: 1, purpose: gui ? 'aurora_connect_disposable_gui_execution' : interactive
       ? 'aurora_connect_disposable_status_interactive_execution' : 'aurora_connect_disposable_server_execution',
     preparedBasename: basename, baselinePlanSha256: stage.baselineHash, java: baseline.java,
     artifacts: stage.verified, tools,
@@ -118,6 +125,9 @@ export function buildRunPlan(basename, baseline, stage, tools, profile = 'status
       before: 'eula=false', after: 'eula=true', restore: 'exact_applied_bytes_only' },
     propertiesSha256: hash(baseline.files['server.properties']),
     ...(interactive ? { profile: 'status-interactive' } : {}),
+    ...(gui ? { profile: 'gui', playerNames: validateGuiNames(baseline.playerNames),
+      whitelistJson: baseline.files['whitelist.json'], whitelistSha256: hash(baseline.files['whitelist.json']),
+      clientLimits: 'one_or_two_reviewed_offline_gui_players_no_compression_or_secure_profile' } : {}),
     ...(profile === 'play' ? { profile: 'play', whitelistSha256: hash(baseline.files['whitelist.json']),
       clientLimits: 'two_synthetic_offline_players_no_compression_or_secure_profile' } : {}),
     ...(profile === 'svc' ? { profile: 'svc', voiceMod: { ...baseline.voiceMod, artifactSha256: SVC_ARTIFACT.digest },
@@ -137,7 +147,7 @@ export function buildRunPlan(basename, baseline, stage, tools, profile = 'status
     evidence: { endpoint: 'loopback_43001', protocol: 767, ownProcessBindRequired: true,
       statusAndPongOnly: true, twoAgentSmoke: 'separate_caller_operation', runtimeHomologated: false,
       worldJoined: false, voice: 'not_tested', accountAuthentication: 'not_tested' },
-    limits: { lifetimeSeconds: interactive ? 900 : 300, readinessSeconds: 180, bindProbeSeconds: 10, statusProbeSeconds: 6,
+    limits: { lifetimeSeconds: interactive || gui ? 900 : 300, readinessSeconds: 180, bindProbeSeconds: 10, statusProbeSeconds: 6,
       stopSeconds: 5, outputBytes: 4 * 1024 * 1024,
       reuse: false, personalInstanceAccess: false, relay: false, mods: ['svc', 'plasmo'].includes(profile) },
   };
@@ -176,10 +186,11 @@ export async function waitForStop(input, signal) {
   });
 }
 
-export async function runServer(javaHome, basename, approval, acceptedEula, { signal, onReady, profile = 'status' } = {}) {
+export async function runServer(javaHome, basename, approval, acceptedEula, { signal, onReady, profile = 'status', guiNames } = {}) {
   if (acceptedEula !== true) fail('server_eula_acceptance_required');
   if (typeof approval !== 'string' || !digestPattern.test(approval)) fail('server_run_approval');
-  const plan = await makeRunPlan(javaHome, basename, profile);
+  const playerNames = profile === 'gui' ? validateGuiNames(guiNames) : guiNames;
+  const plan = await makeRunPlan(javaHome, basename, profile, playerNames);
   if (approval !== runPlanDigest(plan)) fail('server_run_approval');
   signal?.throwIfAborted();
   const root = await preparedDirectory(basename);
@@ -191,7 +202,7 @@ export async function runServer(javaHome, basename, approval, acceptedEula, { si
   if ((await listeners(root, probeHome, signal)).length !== 0) fail('server_port_in_use');
   if (['svc', 'plasmo'].includes(profile) && (await listeners(root, probeHome, signal, profile)).length !== 0) fail('server_voice_port_in_use');
   // Rebuild after the preflight OS query, before marker/snapshot/EULA mutation.
-  if (runPlanDigest(await makeRunPlan(javaHome, basename, profile)) !== approval) fail('server_run_plan_changed');
+  if (runPlanDigest(await makeRunPlan(javaHome, basename, profile, playerNames)) !== approval) fail('server_run_plan_changed');
   signal?.throwIfAborted();
   let readinessFailure; let bindObservation;
   const transaction = await withPreparedEula(basename, approval, async ownedRoot => {
@@ -232,6 +243,19 @@ export async function runServer(javaHome, basename, approval, acceptedEula, { si
 }
 
 export async function main(args, { input = process.stdin, emit = value => process.stdout.write(json(value)), signal } = {}) {
+  if (args[0] === 'run-plan-gui' && [4, 5].includes(args.length)) {
+    const plan = await makeRunPlan(args[1], args[2], 'gui', validateGuiNames(args.slice(3)));
+    return { event: 'server_run_plan', runPlanSha256: runPlanDigest(plan), plan };
+  }
+  if (args[0] === 'run-gui') {
+    if (args.at(-1) !== '--user-accepted-minecraft-eula') fail('server_eula_acceptance_required');
+    if (![6, 7].includes(args.length)) fail('server_usage');
+    return runServer(args[1], args[2], args[3], true, { signal, profile: 'gui', guiNames: validateGuiNames(args.slice(4, -1)),
+      onReady: async ({ signal: childSignal, evidence, runPlanSha256 }) => {
+        emit({ event: 'server_ready', runPlanSha256, evidence, runtimeHomologated: false, worldJoined: false, voice: 'not_tested' });
+        await waitForStop(input, childSignal);
+      } });
+  }
   if (args.length === 3 && ['run-plan', 'run-plan-play', 'run-plan-svc', 'run-plan-plasmo', 'run-plan-status-interactive'].includes(args[0])) {
     const plan = await makeRunPlan(args[1], args[2], args[0] === 'run-plan' ? 'status' : args[0].slice(9));
     return { event: 'server_run_plan', runPlanSha256: runPlanDigest(plan), plan };

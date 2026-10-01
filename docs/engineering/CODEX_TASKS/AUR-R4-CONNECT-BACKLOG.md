@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 01/10/2026
 
+Próximo ensaio005/T-MC-02: [GUI41](../../aurora-connect-internet-minecraft-gui.md), com perfil descartável900s e whitelist de nomes explicitamente revisados. Preparação e testes locais não aprovam entrada no mundo; os estados abaixo permanecem até a evidência externa correspondente.
+
 | Tarefa/capacidade | Estado comprovado | Trabalho ainda necessário |
 | --- | --- | --- |
 | 001 inventário/decisão | Reconciliados contratos/IDs/base; Iroh 1.3.0 fixado somente no laboratório | Gates de integração/distribuição, termos de qualquer infraestrutura futura |
