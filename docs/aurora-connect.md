@@ -1,6 +1,6 @@
 # Aurora Connect — laboratório local executável
 
-Estado: **PROTÓTIPO**, fora do desktop e desativado para usuários. Base alpha.14, Core 1.1.5/Skins 0.3.1 preservados. [Execução/evidências](task-aur-r4-connect.md), [contrato canônico](engineering/AURORA_CONNECT_SPEC.md), [voz](aurora-connect-voice.md).
+Estado: **PROTÓTIPO**, com laboratório isolado e [integração desktop experimental](aurora-connect-desktop.md) desligada por padrão. Base alpha.14, Core 1.1.5/Skins 0.3.1 preservados. [Execução/evidências](task-aur-r4-connect.md), [contrato canônico](engineering/AURORA_CONNECT_SPEC.md), [voz](aurora-connect-voice.md). O [ensaio47 de novos convites](aurora-connect-internet-invitations.md) conserva a mesma identidade para testar replay e distingue revogação de expiração; provas locais não substituem execução em outra internet.
 
 Incremento20: três ensaios com Minecraft 1.21.1/Fabric real e dois clientes sintéticos passaram LOGIN/CONFIGURATION/PLAY, posição/chunks e presença recíproca. Cada ensaio usa quatro agentes em dois pares independentes, contagem 2→0 e encerramento normal; somente loopback, sem mods/GUI/contas. [Procedimento e limites](aurora-connect-runtime.md#dois-clientes-de-protocolo--vigésimo-incremento). Não homologa redes externas, clientes mistos ou R4.
 

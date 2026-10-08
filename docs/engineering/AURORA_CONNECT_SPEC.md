@@ -318,6 +318,12 @@ STATUS é ação explícita do Guest conectado, com contrato de laboratório1.21
 
 Stop, expiração e fechamento remoto aguardam filhos de transporte e consulta antes de indicar cleanup completo. Cancelar um dial registra intenção e aguarda a conclusão/cleanup do futuro que possui o endpoint; um sucesso tardio não publica listener. Preparar nova tentativa depende da liberação anterior. Trocar de seção recupera snapshot/revisão ao voltar, sem encerrar conexão. Sair da conta encerra Connect; saída efetiva do aplicativo bloqueia novas preparações e aguarda shutdown. Ocultar na bandeja preserva o comportamento existente. Nenhum fluxo encerra Java, escreve configuração de voz ou toca instância pessoal. [Procedimento e limites](../aurora-connect-desktop.md).
 
+### 9.4 Runner de auditoria de convites — incremento47
+
+O binário separado `aurora-connect-invite-audit` permite observar o contrato45 sem trocar a identidade nos negativos. Guest conserva chave/convite em RAM após disconnect; retry-replay e retry-revoked mantêm os mesmos bytes/peer. Host conserva endpoint após revoke e fornece contadores; somente erro local do Guest não comprova recusa remota. A prova correlaciona denied0→1→2, semnovo destino/byte após o positivo. Expiração agrega fechamento nos dois lados e validação local posterior identificada como tal. TTL máximo600s sem renovação, prompts60s, quatrotrials,32comandos, linhas4096B e filaunitária. Não muda envelope, ALPN, serviços ou comportamento das CLIs anteriores.
+
+O runner autoriza somente game/TCP com contrato exato; modos externos e loopback são separados. Nada é persistido automaticamente, nenhuma chave privada é exibida. Convite/peers dos eventos operacionais não pertencem ao diagnóstico compartilhável. EOF/Ctrl+C/stop/prazo aguardam recursos próprios; bind que nunca foi adquirido não autoriza rebind de outro processo. [Procedimento, ensaios separados e recuperação](../aurora-connect-internet-invitations.md). Provas locais não homologam redes distintas.
+
 ## 10. Validação, incrementalidade e liberação
 
 Ordem candidata: inventário/ADR → TCP autenticado → UDP simultâneo controlado → redes reais/relay verificado → Minecraft/convites/estados → SVC e Plasmo separadamente → robustez, manifesto e liberação. Reordenar se código/evidência mostrar incremento já pronto ou bloqueio mais importante; não refazer recovery/Doctor/Tools alpha.14. Testes completos e tarefas estão no [backlog](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md).

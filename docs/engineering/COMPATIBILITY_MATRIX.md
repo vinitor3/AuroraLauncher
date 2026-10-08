@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 08/10/2026
 
+Incremento47 valida localmente convite com identidade RAM conservada: TCP1MiB/direção, replay e revogação distinguíveis com host vivo/denied0→1→2, expiração e cleanup. Doisprocessos não equivalem a doiscomputadores; amostra IPv6 próprio continua nestePC. [Convites entre redes](../aurora-connect-internet-invitations.md) **PRECISA DE TESTE**. Sem mudança de Minecraft, mod, loader, Java, conta, áudio ou homologação da interface.
+
 Incremento46 acrescenta caller/painel desktop **PROTÓTIPO**, feature `connect-lab` desligada por padrão, convites com revisão/confirmar, conexão/STATUS/encerramento reais, sem estado de mundo presumido. Default e combinação com `connect-voice-lab` têm verificações separadas; o [registro46](../task-aur-r4-connect.md#quadragésimo-sexto-incremento--caller-desktop-e-ipv4-próprio) contém comandos, correções e limites. Não homologa interface Tauri, jogo, voz ou convites entre redes. O ensaio em IPv4 próprio deste PC passou TCP1MiB/direção, UDP512B de duas origens, revogação e rebind2TCP/6UDP; escopo é mesmo computador, sem provaLAN/NAT/CGNAT. Nenhuma linha Minecraft/loader/Java ou par Core/Skins foi ampliado.
 
 Incremento45 acrescenta modo separado de convite com endereço inicial IPv6 externo filtrado; os comandos padrão continuam loopback. Não equivale a ensaio entre duas internets, não altera a evidência gráfica44 e não amplia homologação de mods. [Contrato](AURORA_CONNECT_SPEC.md#811-modo-externo-ipv6-explícito--incremento45) e [comandos/resultados45](../task-aur-r4-connect.md#quadragésimo-quinto-incremento--convites-com-ipv6-inicial-explícito).
