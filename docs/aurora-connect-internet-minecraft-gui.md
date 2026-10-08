@@ -1,8 +1,18 @@
 # Aurora Connect — entrada no mundo entre duas internets
 
-Estado: **PRECISA DE TESTE**. O incremento40 comprovou STATUS e pong externos; este procedimento exige um cliente gráfico entrar no mundo. Recursos continuam experimentais e desativados no produto. Não homologa dois jogadores, contas mistas, Core/Skins, voz, estabilidade ou a matriz inteira.
+Estado: **PARCIAL**. Em 08/10/2026, o fluxo manual do incremento 44 teve entrada no mundo, caminhada e terreno normal relatados pelo convidado em outro computador/outra internet. O agente observou separadamente a população do mesmo servidor passar de 0 para 1 e voltar a 0; convidado, host e Java encerraram, com EULA restaurada e portas livres locais. Recursos continuam experimentais e desativados no produto. A versão exata do cliente, loader e Core/Skins não foi observada; não homologa dois jogadores, contas mistas, voz, estabilidade ou a matriz inteira. [Evidências e limites do incremento 44](task-aur-r4-connect.md#quadragésimo-quarto-incremento--entrada-externa-no-mundo-pelo-fluxo-manual).
 
-As duas tentativasGUI41 não aprovaram entrada no mundo. Na segunda, o usuário apagou a saída do erro; código e causa não foram recuperados. Não solicitar novamente esse erro nem substituí-lo pela falha da primeira tentativa. O supervisor43 abaixo mantém uma identidade e resumo persistido. Passou139fixtures e smoke no mesmo PC/IPv6 próprio, com nove STATUS reais, stop e negativos; snapshots7182/e48e e seus limites estão no [registro43](task-aur-r4-connect.md#quadragésimo-terceiro-incremento--supervisor-do-convidado-e-resumo-persistido). Esse ensaio não usou outro computador/internet ou cliente gráfico; a entrada externa no mundo continua pendente.
+O fluxo manual abaixo é o procedimento validado nessa amostra. O supervisor 43 passou testes locais, mas teve duas falhas externas antes de `guest_ready`, ambas com `timed_out` e zero STATUS. A segunda durou 13278 ms de sessão, com cleanup relatado. O agente encerrou somente a ponte, manteve o mesmo Java em execução e preparou nova identidade/autorização para o teste manual que passou; não reiniciou o estágio nem renovou o prazo do Java. Duas auditorias não determinaram a causa da diferença. Não atribuir a falha ao wrapper, firewall ou relay por essa comparação; o supervisor continua **PROTÓTIPO**.
+
+Histórico preservado: as duas tentativas GUI 41 não aprovaram entrada no mundo. Na segunda, o usuário apagou a saída do erro; código e causa não foram recuperados. Não solicitar novamente esse erro nem substituí-lo pela falha da primeira tentativa. O supervisor 43 mantém uma identidade e resumo persistido. Passou 139 fixtures e smoke no mesmo PC/IPv6 próprio, com nove STATUS reais, stop e negativos; snapshots 7182/e48e e seus limites estão no [registro 43](task-aur-r4-connect.md#quadragésimo-terceiro-incremento--supervisor-do-convidado-e-resumo-persistido). Esse ensaio local não usou outro computador/internet ou cliente gráfico; naquele ponto, a entrada externa no mundo ainda estava pendente.
+
+Em 08/10, a tentativa externa com o supervisor 43 falhou com `mg_native_failed`/`timed_out` antes de `guest_ready`, zero STATUS. O convidado relatou resumo salvo e cleanup do filho sem forçar; host e Java tiveram encerramento normal, EULA exata e portas livres observados localmente. O ping remoto respondeu 3/3, 145–150 ms, média de 147 ms, mas isso comprova somente ICMP. IPv6 candidato no preflight e permissão UDP correspondente na auditoria somente leitura do firewall Private do host não comprovam entrega UDP ao processo.
+
+No diagnóstico seguinte, os helpers PktMon 1 e 2 recusaram antes do monitoramento, respectivamente por nome de filtro truncado e parsing LF que não aceitava CRLF. O agente comparou exatamente o filtro próprio e recuperou monitor parado/filtros vazios. A versão 3, com nome curto e parsing corrigido, passou três grupos de fixtures PowerShell 5.1 e QA independente. Foi executada somente com contadores de interfaces, IPv6/UDP42000: o usuário enviou quatro datagramas, 64/1200/64/1200 B, total de 2528 B de payload. A janela observou Rx de quatro pacotes/2776 B em dois componentes e Tx zero; são os mesmos quatro, não oito. Sem listener ou resposta esperada, isso comprova chegada UDP à interface, não recebimento pelo processo ou QUIC/TLS/Hello. A parada normal ocorreu em 95103 ms, com monitor parado/filtro próprio removido, sem conflito, ETL, payload armazenado ou mudança de firewall.
+
+Na segunda amostra externa de 08/10, somente do transporte autenticado, o convidado usou `guest-tcp` do kit 38 e o host usou `host-plan` do binário 42, com prazo de 300 s. Apenas `game/tcp` para `127.0.0.1:43001` estava aprovado, sem Java ou listener nesse destino. O usuário retornou `guest_ready` em modo TCP, listener `127.0.0.1:42010`, e depois `guest_stopped`; o agente observou separadamente o host encerrar normalmente com exit 0. O PktMon versão 4 observou Rx/Tx em todos os componentes, com filtro IPv6/UDP42000 e somente contadores. Parou normalmente em 104240 ms, com monitor parado/filtro removido, sem conflito, ETL ou mudança de firewall. Os contadores não comprovam bytes TCP de aplicação ou UDP de aplicação, nem devem ser somados entre componentes como tráfego único. Não houve consulta STATUS ou entrada no mundo nesse ensaio.
+
+A causa do timeout anterior continua indeterminada; a prontidão posterior não demonstra correção de firewall ou relay. Relay permaneceu desligado. Esse diagnóstico foi seguido pelo ensaio manual do incremento 44 descrito no início do guia; seus resultados não alteram os snapshots anteriores. Não repetir identidades ou executar o roteiro GUI com dados de uma sessão encerrada.
 
 ## Preparação do convidado
 
@@ -22,9 +32,15 @@ O helper privado GUI prepara identidades antes de iniciar o Java. O agente forne
 
 Não usar identidades, aprovações, estágios ou arquivos de uma sessão anterior. O helper da ponte não inicia nem encerra Java. O executor do servidor mantém essa responsabilidade e seu rollback.
 
-## Convidado — fluxo preferencial com um terminal
+<a id="convidado--fluxo-preferencial-com-um-terminal"></a>
+
+## Convidado — supervisor 43 experimental
+
+Este é o fluxo de um terminal preparado no incremento 43, preservado para investigação. As falhas externas acima continuam abertas; para o procedimento validado no incremento 44, usar o fluxo manual adiante quando o agente preparar uma nova sessão. Não executar os dois fluxos com a mesma identidade ou autorização.
 
 O agente prepara e entrega a cópia revisada de [connect-minecraft-guest-lab.ps1](../scripts/connect-minecraft-guest-lab.ps1), junto do hash correspondente, para a pasta `C:/AuroraConnectLab38`. Não substituir o executável do kit38: o supervisor exige SHA256 `5c1f3b3e61c2a975401d43f5c5d5568d9801a7252b7381451acb8026e6fd2030` antes de cada filho. O debug posterior42 tem outro hash e não é aceito silenciosamente. O script é experimental; execução remota depende de sua validação e entrega pelo agente, não apenas de existir este roteiro.
+
+A cópia recebida em 08/10 foi conferida separadamente: 26384 B, SHA-256 `cbfa1c7652c3f9b003536cd7cfd5038f901433af51d822c9e6d40a56a02e6636`, somente terminadores CRLF no lugar de LF, sem BOM; 139 fixtures PowerShell 5.1 PASS. O script LF original mantém o hash e48e registrado no task. Não desativar a conferência de hash ou aceitar outras diferenças por analogia; o executável do kit não mudou.
 
 Com o arquivo entregue/conferido e o Minecraft no menu, abrir Windows PowerShell64bits com console interativo e executar uma única vez:
 
@@ -40,9 +56,11 @@ Limites operacionais fixos: preparação600s, sessão900s e total1500s, com clea
 
 Para encerrar normalmente, sair do mundo e avisar o agente; depois digitar `stop` e Enter no mesmo terminal. Antes de `ready`, `stop` ou Ctrl+C cancela. O resumo final `minecraft_guest_closed` registra resultado/cleanup, códigos fixos, contagens e a última consulta numérica; fica salvo por criação exclusiva em `attempt-<id>/summary.json` dentro do kit. Ele não inclui IP, peer, nick, credenciais ou saída bruta, e mantém `worldJoined=false`/`guiObserved=false`: a observação humana fica separada. Devolver esse resumo redigido e o relato de entrada/saída; não é preciso recuperar rolagem apagada do console. Parada forçada, falha ou resumo não salvo continuam explícitos, sem transformar cleanup em sucesso do jogo.
 
-## Alternativa manual histórica — código1 no PowerShell
+<a id="alternativa-manual-histórica--código1-no-powershell"></a>
 
-Os códigos1/2 abaixo preservam o procedimento usado nas tentativas41 e seu contexto. O supervisor43 é o fluxo preferencial após validação; não executar ambos na mesma tentativa nem abrir outra identidade para substituir uma sessão em andamento.
+## Fluxo manual — código 1 no PowerShell
+
+Os códigos 1/2 preservam o procedimento das tentativas 41 e foram usados em uma nova sessão validada no incremento 44. O histórico de falhas permanece registrado. Executar somente após o agente preparar identidade, autorização e servidor atuais; não combinar com o supervisor 43 na mesma tentativa ou abrir outra identidade para substituir uma sessão em andamento.
 
 O kit38 já existente em `C:/AuroraConnectLab38` é suficiente. Executar uma única vez, quando o agente fornecer dados novos:
 
@@ -73,7 +91,9 @@ Preparar o segundo PowerShell e o código2 abaixo **antes** de digitar `ready`. 
 
 Os900s são o prazo máximo da sessão, não uma garantia de prontidão ociosa: o transporte tem limite de inatividade120s. O kit38 pode continuar mostrando uma mensagem antiga após perder a conexão; uma consulta posterior deve verificar disponibilidade novamente. Essa limitação foi encontrada por auditoria de código e não identifica sozinha a causa de uma falha remota. Não mudar timeouts, autorizações ou configuração para contorná-la.
 
-## Alternativa manual histórica — consulta e entrada no mundo
+<a id="alternativa-manual-histórica--consulta-e-entrada-no-mundo"></a>
+
+## Fluxo manual — consulta e entrada no mundo
 
 Depois de `guest_ready`, executar o código2 em outro PowerShell:
 
@@ -99,10 +119,10 @@ Se houver desconexão, informar só a mensagem curta visível e a fase: antes de
 
 ## Encerramento e recuperação
 
-**Convidado:** depois da observação, sair do servidor pelo menu do jogo e avisar. O agente confere a contagem voltar a zero. No fluxo43, digitar `stop` no único PowerShell e aguardar `minecraft_guest_closed`/resumo salvo com cleanup; cancelamento pré-ready não comprova `guest_stopped`. Na alternativa manual histórica, digitar `stop` no primeiro PowerShell e aguardar `guest_stopped`; se cancelar antes de `ready`, usar Ctrl+C e confirmar o retorno ao prompt.
+**Convidado:** depois da observação, sair do servidor pelo menu do jogo e avisar. O agente confere a contagem voltar a zero. No fluxo manual validado, digitar `stop` no primeiro PowerShell e aguardar `guest_stopped`; se cancelar antes de `ready`, usar Ctrl+C e confirmar o retorno ao prompt. No supervisor 43 experimental, digitar `stop` no único PowerShell e aguardar `minecraft_guest_closed`/resumo salvo com cleanup; cancelamento pré-ready não comprova `guest_stopped`.
 
 **Anfitrião:** o agente solicita stop ao supervisor da ponte, aguarda seus filhos próprios e envia `stop` ao executor Minecraft. Confere `server_stopped`, processo recolhido, EULA restaurada exatamente, portas43001TCP/42000UDP livres e ausência dos próprios agentes. Nunca encerra um processo alheio para liberar porta. Conflito de restauração preserva snapshot/evidências para revisão.
 
 O mundo e os arquivos gerados ficam na pasta descartável preservada, sem reuso. O cliente pode ficar no menu principal ou ser fechado pelo usuário. Nenhuma configuração de firewall, roteador, conta ou instância pessoal é alterada pelo agente. Prazo, falha ou parada forçada continuam sendo falhas mesmo com limpeza posterior.
 
-Devolver somente: resumo redigido da tentativa43, se entrou e conseguiu caminhar/ver o terreno, versão do cliente/loader/Core/Skins se disponível, confirmação de saída/encerramento e de que usou outro computador/outra internet. Na alternativa histórica, informar resultadoSTATUS/eventos disponíveis. Não enviar IPs/peers novamente depois da troca inicial, credenciais, mundo ou logs brutos. A causa da segunda tentativa41 continua não confirmada; não é necessário responder novamente sobre a saída já apagada.
+Devolver somente: resultado STATUS/eventos disponíveis, se entrou e conseguiu caminhar/ver o terreno, versão do cliente/loader/Core/Skins se disponível, confirmação de saída/encerramento e de que usou outro computador/outra internet. Se estiver usando o supervisor 43 em ensaio autorizado, devolver seu resumo redigido. Não enviar IPs/peers novamente depois da troca inicial, credenciais, mundo ou logs brutos. A causa da segunda tentativa 41 continua não confirmada; não é necessário responder novamente sobre a saída já apagada.
