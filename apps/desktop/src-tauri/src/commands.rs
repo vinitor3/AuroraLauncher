@@ -233,6 +233,50 @@ struct RunningInstance {
 #[derive(Default)]
 pub struct RunningInstances(Mutex<BTreeMap<u32, RunningInstance>>);
 
+#[cfg(all(windows, feature = "connect-lab"))]
+impl RunningInstances {
+    /// Select only a live child launched by this process. The caller cannot
+    /// provide a PID, process name, command line or arbitrary process handle.
+    pub(crate) fn connect_owned_child(
+        &self,
+        instance_id: &str,
+    ) -> Result<
+        aurora_launcher_core::engine::connect_discovery::OwnedChildProof,
+        aurora_launcher_core::engine::connect_discovery::DiscoveryError,
+    > {
+        use aurora_launcher_core::engine::connect_discovery::{DiscoveryError, OwnedChildProof};
+        if instance_id.is_empty() || instance_id.len() > 128 {
+            return Err(DiscoveryError::InvalidRequest);
+        }
+        let mut processes = self.0.lock().map_err(|_| DiscoveryError::Internal)?;
+        let mut selected = None;
+        for (process_id, process) in processes.iter_mut() {
+            if process.instance_id != instance_id {
+                continue;
+            }
+            if process
+                .child
+                .try_wait()
+                .map_err(|_| DiscoveryError::ProcessChanged)?
+                .is_some()
+            {
+                continue;
+            }
+            if selected.replace(*process_id).is_some() {
+                return Err(DiscoveryError::Busy);
+            }
+        }
+        let process = processes
+            .get_mut(&selected.ok_or(DiscoveryError::ProcessChanged)?)
+            .ok_or(DiscoveryError::ProcessChanged)?;
+        let (_, run_id) = process
+            .doctor
+            .as_ref()
+            .ok_or(DiscoveryError::ProcessChanged)?;
+        OwnedChildProof::from_child(&mut process.child, &process.instance_id, run_id)
+    }
+}
+
 /// Configuração pública do Firebase, guardada fora do código empacotado.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

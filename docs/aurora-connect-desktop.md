@@ -1,12 +1,12 @@
 # Aurora Connect no desktop — laboratório experimental
 
-Este documento descreve o caller local acrescentado no incremento46. O [task](task-aur-r4-connect.md) registra os comandos executados e seus resultados; instruções abaixo não constituem prova de execução gráfica. Todos os gates de [R4](engineering/MASTER_ROADMAP.md), nove pares Core/Skins, Assistente desktop e recovery/CAS/Doctor permanecem válidos.
+Este documento descreve o caller local acrescentado no incremento46 e a descoberta de portas do incremento48. O [task](task-aur-r4-connect.md) registra os comandos executados e seus resultados; instruções abaixo não constituem prova de execução gráfica. Todos os gates de [R4](engineering/MASTER_ROADMAP.md), nove pares Core/Skins, Assistente desktop e recovery/CAS/Doctor permanecem válidos.
 
 ## Disponibilidade e limites
 
 A feature Rust `connect-lab` é opcional e desligada por padrão. O build normal registra os comandos estreitos, mas não compila nem instancia o transporte; `connect_capabilities.available=false` mantém a navegação Connect oculta. A feature independente `connect-voice-lab` não habilita voz neste painel. Não foi criado instalador ou alterada versão de release.
 
-O caller usa diretamente a biblioteca real `apps/connect-lab`, sem subprocesso PowerShell, chave privada no frontend, Firebase social, persistência de convites ou processo Java. Autoriza somente `game/tcp`, revisão1 e `reliableStream`, com destino loopback selecionado explicitamente pelo anfitrião. Digitar uma porta não comprova que pertence ao Minecraft ou a uma instância gerenciada. Descoberta de porta, mundo LAN, início do servidor e entrada automática no jogo permanecem incrementos próprios.
+O caller usa diretamente a biblioteca real `apps/connect-lab`, sem subprocesso PowerShell, chave privada no frontend, Firebase social ou persistência de convites. Autoriza somente `game/tcp`, revisão1 e `reliableStream`, com destino loopback selecionado explicitamente pelo anfitrião. Digitar uma porta não comprova que pertence ao Minecraft ou a uma instância gerenciada. A alternativa Windows de descoberta confere o processo filho já iniciado pelo Aurora, conforme o contrato abaixo. Connect não inicia Java, abre o mundo para LAN ou entra automaticamente no jogo.
 
 Há uma tentativa por processo/janela principal do launcher. As chaves privadas e o estado de consumo permanecem somente na memória do backend. O proprietário deriva da janela Tauri, não de argumento enviado pelo frontend. Essa propriedade local não equivale a autenticação Microsoft, identidade de jogador ou amizade Aurora.
 
@@ -33,6 +33,20 @@ Navegar para outra seção desmonta o painel, sem encerrar a sessão; ao retorna
 
 Sair da conta aguarda o encerramento da tentativa atual. Fechar a janela pela barra mantém o comportamento de bandeja existente. Sair efetivamente do aplicativo aguarda `shutdown_all`, bloqueia preparações novas e encerra somente recursos Connect. Nenhum desses fluxos mata Java do usuário ou restaura configuração de mod automaticamente. Encerramento forçado do processo perde chaves em RAM e os sockets são liberados pelo sistema; não há retomada de convite consumido.
 
+## Descoberta de porta da instância — incremento48
+
+No Windows, a mesma feature experimental oferece **Jogo aberto pelo Aurora · mundo LAN**. O usuário abre o mundo para LAN no Minecraft e pede a busca. A lista vem dos filhos vivos mantidos por esta execução do launcher; servidores iniciados fora dele conservam a seleção manual. Não há busca por nome de processo, PID fornecido pelo frontend, leitura de linha de comando, broadcast, varredura de rede ou alteração da configuração do jogo.
+
+A camada nativa duplica um handle do `Child` já próprio e vincula PID, horário de criação, instância e execução. Consulta as tabelas TCP de escuta IPv4/IPv6 e conserva somente linhas daquele processo. São aceitos binds loopback e wildcard; wildcard é apresentado como tal e convertido em destino loopback para a consulta/ponte, sem mudar o bind original. Inventário não envia pacotes. Há no máximo32candidatos, tabelas limitadas a1MiB/16384linhas e duas tentativas de tamanho.
+
+Cada escolha produz revisão própria. **Autorizar consulta e selecionar porta** consome seu digest, confere processo/escuta antes e depois de STATUS/pong e retorna uma seleção opaca de uso único. A consulta continua restrita ao protocolo767/1.21.1, agora com a porta descoberta no handshake; resposta não comprova compatibilidade com outro protocolo, mundo ou jogador. Não é leitura/análise de logs do Minecraft.
+
+Inventário/seleção valem30s. Preparar o anfitrião consome a seleção dentro desse prazo e conserva a prova de processo; não recebe um PID arbitrário nem troca o destino. Depois valem os prazos próprios de preparação60s e convite/sessão600s. A revisão do anfitrião identifica origem, instância e execução; digest também vincula a identidade privada observada do processo. Antes de abrir o transporte e, durante a sessão, em verificações a cada1s, o backend reconfere a escuta e o processo. Perda da origem encerra Connect com `connect_source_changed`, aguardando liberação. Java permanece independente e nunca é encerrado pelo Connect.
+
+Limite: observação antes/depois e monitor periódico não tornam atômicas a identidade do processo e uma conexão TCP. Outro processo local pode disputar a porta no intervalo; não há proteção prometida contra usuário local comprometido. Porta escutando também não significa mundo pronto, e uma consulta bem-sucedida não é homologação de LAN. Testes usam filho Rust próprio com servidor STATUS sintético; ensaio de LAN real, janela Tauri e os nove pares permanecem separados.
+
+O painel invalida seleção ao trocar de papel, ignora respostas tardias após desmontagem e exige nova escolha após revisão vencida. Desligar a feature mantém a descoberta indisponível. Não há arquivos/configurações pessoais a recuperar; o rollback operacional encerra somente Connect e preserva o jogo.
+
 ## Desenvolvimento e validação
 
 Com dependências locais e nesta worktree, o comando preparado para desenvolvimento é:
@@ -51,7 +65,7 @@ Rollback operacional: Encerrar Connect, aguardar recursos liberados e sair pelo 
 | --- | --- | --- |
 | Convites entre duas internets | APIs assinadas45 reutilizadas | Entrada, expiração, revogação com host vivo e replay da mesma identidade no novo fluxo externo |
 | Integração no launcher | Caller nativo e painel com revisão, conectar, STATUS e encerrar | Exercício gráfico Tauri e entre computadores; estado de jogador depende de produtor de jogo confiável |
-| Ciclo de jogo | Destino explicitamente aprovado, sessão limitada e cleanup | Descoberta por processo/instância, dedicado/LAN, sessões longas com contrato próprio |
+| Ciclo de jogo | Porta manual ou descoberta por processo próprio com revisão/STATUS, monitor de origem e cleanup | Minecraft LAN real, dedicado supervisionado, sessões longas com contrato próprio |
 | Simple Voice Chat | Mantém adaptador, controles e provas locais anteriores | Tamanho UDP integral, áudio real, anúncio por participante e recovery integrado |
 | Plasmo Voice | Mantém adaptador, controles e provas locais anteriores | Ensaio separado de áudio/tamanho/anúncio/recovery |
 | Redes e conjunto | Amostra IPv4 próprio documentada separadamente | LAN/IPv4 externo/NAT/CGNAT/relay elegível; dois jogadores, contas mistas, Core/Skins, quedas/estabilidade; manifesto/updater antes de sincronização |

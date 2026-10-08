@@ -324,6 +324,14 @@ O binário separado `aurora-connect-invite-audit` permite observar o contrato45 
 
 O runner autoriza somente game/TCP com contrato exato; modos externos e loopback são separados. Nada é persistido automaticamente, nenhuma chave privada é exibida. Convite/peers dos eventos operacionais não pertencem ao diagnóstico compartilhável. EOF/Ctrl+C/stop/prazo aguardam recursos próprios; bind que nunca foi adquirido não autoriza rebind de outro processo. [Procedimento, ensaios separados e recuperação](../aurora-connect-internet-invitations.md). Provas locais não homologam redes distintas.
 
+### 9.5 Descoberta de porta de processo próprio — incremento48
+
+No Windows com `connect-lab`, `RunningInstances` entrega somente um `Child` vivo já iniciado por esta execução do launcher, com instância/run conhecidos. A prova duplica seu handle não herdável e conserva PID/horário de criação; não aceita PID, nome de processo ou linha de comando do frontend. Leitura limitada das tabelas TCP IPv4/IPv6 conserva listeners daquele processo, loopback ou wildcard convertido em destino loopback. Inventário não envia pacotes, não varre a rede e não muda configuração. Limites: 32 candidatos, 1 MiB/16384 linhas por tabela, duas tentativas de tamanho.
+
+Seleção exige revisão/digest e autorização explícita de STATUS767/localhost na porta encontrada. Processo/listener são conferidos antes e depois da consulta; inventário e seleção têm 30s, com relógio monotônico rechecado também após consultas ao sistema. A seleção opaca só pode ser consumida uma vez, pelo mesmo proprietário, para preparar exatamente aquele destino. O ator conserva a prova de processo na revisão e sessão; confere novamente antes de abrir o endpoint e a cada 1s enquanto hospeda. Perda da origem fecha Connect com `connect_source_changed`, aguardando recursos próprios e preservando Java.
+
+O prazo30s limita a preparação da seleção, não a duração do jogo: depois continuam os prazos60s/600s do ator46. Não há renovação implícita ou mudança do STATUS do Guest, que continua com o contrato767/localhost43001. Identidade/escuta não são atômicas em relação ao connect TCP; existe intervalo de disputa por outro processo local. Testes com filho Rust e STATUS sintético não homologam Minecraft LAN, janela Tauri ou os nove pares. [Fluxo e rollback](../aurora-connect-desktop.md#descoberta-de-porta-da-instância--incremento48).
+
 ## 10. Validação, incrementalidade e liberação
 
 Ordem candidata: inventário/ADR → TCP autenticado → UDP simultâneo controlado → redes reais/relay verificado → Minecraft/convites/estados → SVC e Plasmo separadamente → robustez, manifesto e liberação. Reordenar se código/evidência mostrar incremento já pronto ou bloqueio mais importante; não refazer recovery/Doctor/Tools alpha.14. Testes completos e tarefas estão no [backlog](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md).

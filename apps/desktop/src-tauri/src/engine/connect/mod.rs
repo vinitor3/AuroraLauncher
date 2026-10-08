@@ -40,6 +40,7 @@ pub struct ConnectCapabilities {
     pub status_protocol: i32,
     pub status_handshake_host: &'static str,
     pub status_handshake_port: u16,
+    pub owned_instance_discovery: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,6 +79,9 @@ pub struct ConnectReview {
     pub status_protocol: i32,
     pub status_handshake_host: &'static str,
     pub status_handshake_port: u16,
+    pub target_source: Option<&'static str>,
+    pub instance_id: Option<String>,
+    pub run_id: Option<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -175,6 +179,8 @@ pub enum ConnectError {
     Cancelled,
     #[error("connect_internal")]
     Internal,
+    #[error("connect_source_changed")]
+    SourceChanged,
 }
 impl ConnectError {
     pub fn code(self) -> &'static str {
@@ -192,6 +198,7 @@ impl ConnectError {
             Self::StatusFailed => "connect_status_failed",
             Self::Cancelled => "connect_cancelled",
             Self::Internal => "connect_internal",
+            Self::SourceChanged => "connect_source_changed",
         }
     }
 }
@@ -213,6 +220,7 @@ impl ConnectManager {
             status_protocol: 767,
             status_handshake_host: "localhost",
             status_handshake_port: 43001,
+            owned_instance_discovery: cfg!(all(windows, feature = "connect-lab")),
         }
     }
     pub fn snapshot(&self, owner: &str) -> Result<ConnectSnapshot, ConnectError> {
@@ -240,6 +248,15 @@ impl ConnectManager {
             let _ = (owner, request);
             Err(ConnectError::Disabled)
         }
+    }
+    #[cfg(all(windows, feature = "connect-lab"))]
+    pub fn prepare_host_discovered(
+        &self,
+        owner: &str,
+        request: HostRequest,
+        target: super::connect_discovery::ApprovedTarget,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        self.live.prepare_host_discovered(owner, request, target)
     }
     pub fn review_host(
         &self,

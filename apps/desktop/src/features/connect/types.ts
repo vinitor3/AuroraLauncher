@@ -5,6 +5,7 @@ export type ConnectCapabilities = {
   available: boolean; experimental: true; maxLifetimeSeconds: number;
   modes: ConnectMode[]; services: string[]; voiceEnabled: false; relayEnabled: false;
   statusProtocol: 767; statusHandshakeHost: "localhost"; statusHandshakePort: 43001;
+  ownedInstanceDiscovery?: boolean;
 };
 export type ConnectStatusSummary = {
   requestedProtocol: number; reportedProtocol: number; protocolMatchesRequested: boolean;
@@ -29,6 +30,8 @@ export type ConnectReview = {
   services: { serviceId: "game"; protocol: "tcp"; revision: 1; requiredCapability: "reliableStream" }[];
   expiresAtMs: number; invitationExpiresAtMs: number; lifetimeSeconds: number;
   statusProtocol: 767; statusHandshakeHost: "localhost"; statusHandshakePort: 43001;
+  targetSource?: "manual" | "ownedInstance" | null;
+  instanceId?: string | null; runId?: string | null;
 };
 export type ConnectExport = { invitation: string; hostPublicId: string; expiresAtMs: number };
 
@@ -46,6 +49,18 @@ const ERROR_TEXT: Record<string, string> = {
   connect_status_failed: "O servidor não respondeu à consulta pela conexão desta tentativa.",
   connect_cancelled: "A operação foi cancelada.",
   connect_internal: "Não foi possível concluir a operação. Consulte o estado e tente novamente.",
+  connect_source_changed: "O jogo ou sua porta mudou. Encerre esta tentativa e selecione o servidor novamente.",
+  discovery_unavailable: "A descoberta de portas não está habilitada nesta versão.",
+  discovery_invalid_request: "Selecione uma instância aberta pelo Aurora e repita a busca.",
+  discovery_process_changed: "O jogo selecionado foi encerrado ou mudou. Repita a busca.",
+  discovery_listener_changed: "A porta selecionada mudou. Repita a busca antes de compartilhar.",
+  discovery_inventory_limit: "O inventário excedeu o limite desta integração experimental.",
+  discovery_stale_review: "A seleção de porta expirou. Repita a busca.",
+  discovery_owner_mismatch: "Esta seleção pertence a outra janela do launcher.",
+  discovery_wrong_digest: "A revisão da porta mudou. Selecione e revise novamente.",
+  discovery_busy: "Aguarde a consulta de porta em andamento.",
+  discovery_status_failed: "A porta selecionada não respondeu à consulta Minecraft.",
+  discovery_internal: "Não foi possível conferir a porta. Repita a busca.",
 };
 export function connectError(cause: unknown): string {
   return typeof cause === "string" && Object.hasOwn(ERROR_TEXT, cause)
@@ -67,6 +82,7 @@ const invalid = (): never => { throw new Error("Invalid Connect projection"); };
 
 export function capabilitiesFrom(value: unknown): ConnectCapabilities {
   if (!record(value) || typeof value.available !== "boolean" || value.experimental !== true
+    || !(value.ownedInstanceDiscovery === undefined || typeof value.ownedInstanceDiscovery === "boolean")
     || value.maxLifetimeSeconds !== 600 || value.voiceEnabled !== false || value.relayEnabled !== false || !statusContract(value)
     || !Array.isArray(value.modes) || value.modes.length !== 2 || !value.modes.every(mode)
     || new Set(value.modes).size !== 2 || !Array.isArray(value.services)
@@ -106,6 +122,13 @@ export function reviewFrom(value: unknown): ConnectReview {
     || !integer(value.expiresAtMs) || !integer(value.invitationExpiresAtMs) || value.expiresAtMs > value.invitationExpiresAtMs
     || !statusContract(value) || !integer(value.lifetimeSeconds) || value.lifetimeSeconds < 1 || value.lifetimeSeconds > 600
     || !Array.isArray(value.services) || value.services.length !== 1) return invalid();
+  if (value.targetSource !== undefined) {
+    if (value.targetSource === null) {
+      if (value.role !== "guest" || value.instanceId !== null || value.runId !== null) return invalid();
+    } else if (!["manual", "ownedInstance"].includes(value.targetSource as string)) return invalid();
+    if (value.targetSource === "ownedInstance" && (value.role !== "host" || !text(value.instanceId) || !text(value.runId))) return invalid();
+    if (value.targetSource === "manual" && (value.instanceId !== null || value.runId !== null)) return invalid();
+  }
   const service = value.services[0];
   if (!record(service) || service.serviceId !== "game" || service.protocol !== "tcp" || service.revision !== 1 || service.requiredCapability !== "reliableStream") return invalid();
   return value as ConnectReview;

@@ -107,8 +107,13 @@ fn main() {
         .manage(manual_downloads::ManualDownloads::default())
         .manage(aurora_launcher_core::engine::ai_tools::AiToolBroker::default())
         .manage(aurora_launcher_core::engine::connect::ConnectManager::default())
+        .manage(aurora_launcher_core::engine::connect_discovery::DiscoveryManager::default())
         .invoke_handler(tauri::generate_handler![
             connect_commands::connect_capabilities,
+            connect_commands::connect_discover_instance,
+            connect_commands::connect_review_discovered,
+            connect_commands::connect_confirm_discovered_status,
+            connect_commands::connect_prepare_discovered_host,
             connect_commands::connect_snapshot,
             connect_commands::connect_prepare_host,
             connect_commands::connect_review_host,

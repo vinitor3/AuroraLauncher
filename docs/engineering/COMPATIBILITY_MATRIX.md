@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 08/10/2026
 
+Incremento48 acrescenta descoberta Windows de porta de filho próprio com revisão e STATUS sintético, seleção consumível e encerramento Connect quando a origem desaparece. **PROTÓTIPO** desligado por padrão; ensaios locais usam filho Rust, não Minecraft LAN ou interface Tauri. Mantém nove pares, versões de Java/loaders/mods e todas as homologações anteriores. [Contrato e limites](../aurora-connect-desktop.md#descoberta-de-porta-da-instância--incremento48).
+
 Incremento47 valida localmente convite com identidade RAM conservada: TCP1MiB/direção, replay e revogação distinguíveis com host vivo/denied0→1→2, expiração e cleanup. Doisprocessos não equivalem a doiscomputadores; amostra IPv6 próprio continua nestePC. [Convites entre redes](../aurora-connect-internet-invitations.md) **PRECISA DE TESTE**. Sem mudança de Minecraft, mod, loader, Java, conta, áudio ou homologação da interface.
 
 Incremento46 acrescenta caller/painel desktop **PROTÓTIPO**, feature `connect-lab` desligada por padrão, convites com revisão/confirmar, conexão/STATUS/encerramento reais, sem estado de mundo presumido. Default e combinação com `connect-voice-lab` têm verificações separadas; o [registro46](../task-aur-r4-connect.md#quadragésimo-sexto-incremento--caller-desktop-e-ipv4-próprio) contém comandos, correções e limites. Não homologa interface Tauri, jogo, voz ou convites entre redes. O ensaio em IPv4 próprio deste PC passou TCP1MiB/direção, UDP512B de duas origens, revogação e rebind2TCP/6UDP; escopo é mesmo computador, sem provaLAN/NAT/CGNAT. Nenhuma linha Minecraft/loader/Java ou par Core/Skins foi ampliado.

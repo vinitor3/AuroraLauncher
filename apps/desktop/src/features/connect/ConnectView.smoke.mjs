@@ -245,3 +245,90 @@ test("STATUS preserves the native signed protocol mismatch without claiming comp
   assert.equal(button("Encerrar Connect").disabled, false);
   assert.throws(() => types.snapshotFrom({ ...snapshot, statusSummary: { ...snapshot.statusSummary, requestedProtocol: 47 } }));
 });
+
+const discoveryCandidate = { candidateId: "candidate-fixture", target: "127.0.0.1:45432", bindKind: "wildcard" };
+const discoveryInventory = { inventoryId: "inventory-fixture", instanceId: "managed-fixture", runId: "run-fixture", expiresAtMs: 1800000030000, candidates: [discoveryCandidate] };
+const discoveryReview = { reviewId: "review-fixture", digest, inventoryId: discoveryInventory.inventoryId, candidate: discoveryCandidate,
+  instanceId: discoveryInventory.instanceId, runId: discoveryInventory.runId, expiresAtMs: discoveryInventory.expiresAtMs,
+  statusProtocol: 767, handshakeHost: "localhost", handshakePort: 45432 };
+const discoverySelected = { selectionId: "selection-fixture", target: discoveryCandidate.target, instanceId: discoveryInventory.instanceId,
+  runId: discoveryInventory.runId, expiresAtMs: discoveryInventory.expiresAtMs, verifiedBeforeAfter: true, worldState: "notVerified",
+  summary: { requestedProtocol: 767, reportedProtocol: 767, protocolMatchesRequested: true, reportedPlayersOnline: 1,
+    reportedPlayersMax: 8, connectMicros: 1, statusMicros: 2, pingMicros: 3, totalMicros: 6 } };
+function discoveryFixtures() {
+  capabilities.ownedInstanceDiscovery = true;
+  handlers.set("list_running_instances", () => [{ instanceId: "managed-fixture", processId: 123 }]);
+  handlers.set("connect_discover_instance", () => discoveryInventory);
+  handlers.set("connect_review_discovered", () => discoveryReview);
+  handlers.set("connect_confirm_discovered_status", () => discoverySelected);
+  handlers.set("connect_prepare_discovered_host", () => {
+    snapshot = { ...idle(), operationId, generation: 1, role: "host", phase: "hostPrepared", preparation, expiresAtMs: preparation.expiresAtMs };
+    return preparation;
+  });
+}
+async function chooseManaged() {
+  const select = [...container.querySelectorAll("select")].find(el => el.querySelector('option[value="ownedInstance"]'));
+  assert.ok(select);
+  await act(async () => {
+    for (const option of select.querySelectorAll("option")) option.selected = option.value === "ownedInstance";
+    assert.equal(select.value, "ownedInstance");
+    select.dispatchEvent(new window.Event("change", { bubbles: true }));
+  });
+}
+async function discoveryToReview() {
+  await chooseManaged();
+  await click("Buscar jogos abertos pelo Aurora");
+  await click("Ver portas de managed-fixture");
+  await click("Revisar 127.0.0.1:45432");
+}
+test("owned discovery sends no STATUS or host preparation before separate explicit actions", async () => {
+  discoveryFixtures(); await render(); await chooseManaged();
+  assert.equal(count("list_running_instances"), 0);
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  await click("Buscar jogos abertos pelo Aurora");
+  await click("Ver portas de managed-fixture");
+  assert.deepEqual(calls.find(c => c.command === "connect_discover_instance").args, { instanceId: "managed-fixture" });
+  assert.equal(count("connect_confirm_discovered_status"), 0);
+  await click("Revisar 127.0.0.1:45432");
+  assert.equal(count("connect_confirm_discovered_status"), 0);
+  await click("Autorizar consulta e selecionar porta");
+  assert.deepEqual(calls.find(c => c.command === "connect_confirm_discovered_status").args, { reviewId: "review-fixture", digest });
+  assert.equal(count("connect_prepare_discovered_host"), 0);
+  await submit();
+  assert.deepEqual(calls.find(c => c.command === "connect_prepare_discovered_host").args, {
+    request: { mode: "loopback", bindAddress: "127.0.0.1:42000", gameTarget: "127.0.0.1:45432", lifetimeSeconds: 600 }, selectionId: "selection-fixture",
+  });
+  assert.equal(count("connect_prepare_host"), 0);
+  assert.equal(count("connect_confirm"), 0);
+});
+test("discovery ignores a pending response after switching to guest and requires a new selection", async () => {
+  discoveryFixtures(); await render(); await discoveryToReview();
+  let complete;
+  handlers.set("connect_confirm_discovered_status", () => new Promise(resolve => { complete = resolve; }));
+  await click("Autorizar consulta e selecionar porta");
+  await click("Convidado");
+  await act(async () => complete(discoverySelected));
+  await click("Anfitrião");
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  assert.doesNotMatch(container.textContent, /Servidor respondeu em/);
+  assert.equal(count("connect_prepare_discovered_host"), 0);
+});
+test("stale discovery refuses preparation and never displays a raw native failure", async () => {
+  discoveryFixtures(); await render(); await discoveryToReview();
+  handlers.set("connect_confirm_discovered_status", () => Promise.reject("discovery_stale_review"));
+  await click("Autorizar consulta e selecionar porta");
+  assert.match(container.textContent, /seleção de porta expirou/);
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  assert.equal(count("connect_prepare_discovered_host"), 0);
+  assert.throws(() => types.reviewFrom({ ...review, targetSource: "ownedInstance", instanceId: null, runId: null }));
+  assert.throws(() => types.reviewFrom({ ...review, role: "guest", targetSource: "ownedInstance", instanceId: "fixture", runId: "fixture" }));
+  assert.equal(types.reviewFrom({ ...review, role: "guest", targetSource: null, instanceId: null, runId: null }).targetSource, null);
+});
+test("discovery rejects a native target changed between review and STATUS", async () => {
+  discoveryFixtures(); await render(); await discoveryToReview();
+  handlers.set("connect_confirm_discovered_status", () => ({ ...discoverySelected, target: "127.0.0.1:9999" }));
+  await click("Autorizar consulta e selecionar porta");
+  assert.match(container.textContent, /Não foi possível concluir/);
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  assert.equal(count("connect_prepare_discovered_host"), 0);
+});

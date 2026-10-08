@@ -3,6 +3,9 @@ use aurora_launcher_core::engine::connect::{
     ConnectCapabilities, ConnectManager, ConnectPreparation, ConnectReview, ConnectSnapshot,
     GuestRequest, HostRequest, InvitationExport,
 };
+use aurora_launcher_core::engine::connect_discovery::{
+    DiscoveryManager, Inventory, TargetReview, TargetStatus,
+};
 use tauri::{State, WebviewWindow};
 
 fn owner(window: &WebviewWindow) -> Result<&str, &'static str> {
@@ -10,6 +13,98 @@ fn owner(window: &WebviewWindow) -> Result<&str, &'static str> {
         return Err("connect_owner_mismatch");
     }
     Ok(window.label())
+}
+
+#[tauri::command]
+pub fn connect_discover_instance(
+    window: WebviewWindow,
+    running: State<'_, crate::commands::RunningInstances>,
+    discovery: State<'_, DiscoveryManager>,
+    instance_id: String,
+) -> Result<Inventory, &'static str> {
+    let owner = owner(&window)?;
+    #[cfg(all(windows, feature = "connect-lab"))]
+    {
+        let proof = running
+            .connect_owned_child(&instance_id)
+            .map_err(|error| error.code())?;
+        discovery
+            .inventory(owner, proof)
+            .map_err(|error| error.code())
+    }
+    #[cfg(not(all(windows, feature = "connect-lab")))]
+    {
+        let _ = (owner, running, discovery, instance_id);
+        Err("discovery_unavailable")
+    }
+}
+
+#[tauri::command]
+pub fn connect_review_discovered(
+    window: WebviewWindow,
+    discovery: State<'_, DiscoveryManager>,
+    inventory_id: String,
+    candidate_id: String,
+) -> Result<TargetReview, &'static str> {
+    let owner = owner(&window)?;
+    #[cfg(all(windows, feature = "connect-lab"))]
+    {
+        discovery
+            .review(owner, &inventory_id, &candidate_id)
+            .map_err(|error| error.code())
+    }
+    #[cfg(not(all(windows, feature = "connect-lab")))]
+    {
+        let _ = (owner, discovery, inventory_id, candidate_id);
+        Err("discovery_unavailable")
+    }
+}
+
+#[tauri::command]
+pub async fn connect_confirm_discovered_status(
+    window: WebviewWindow,
+    discovery: State<'_, DiscoveryManager>,
+    review_id: String,
+    digest: String,
+) -> Result<TargetStatus, &'static str> {
+    let owner = owner(&window)?;
+    #[cfg(all(windows, feature = "connect-lab"))]
+    {
+        discovery
+            .confirm_status(owner, &review_id, &digest)
+            .await
+            .map_err(|error| error.code())
+    }
+    #[cfg(not(all(windows, feature = "connect-lab")))]
+    {
+        let _ = (owner, discovery, review_id, digest);
+        Err("discovery_unavailable")
+    }
+}
+
+#[tauri::command]
+pub fn connect_prepare_discovered_host(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    discovery: State<'_, DiscoveryManager>,
+    selection_id: String,
+    request: HostRequest,
+) -> Result<ConnectPreparation, &'static str> {
+    let owner = owner(&window)?;
+    #[cfg(all(windows, feature = "connect-lab"))]
+    {
+        let target = discovery
+            .take_target(owner, &selection_id)
+            .map_err(|error| error.code())?;
+        manager
+            .prepare_host_discovered(owner, request, target)
+            .map_err(|error| error.code())
+    }
+    #[cfg(not(all(windows, feature = "connect-lab")))]
+    {
+        let _ = (owner, manager, discovery, selection_id, request);
+        Err("discovery_unavailable")
+    }
 }
 
 #[tauri::command]

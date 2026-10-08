@@ -1125,6 +1125,37 @@ Rollback: stopconvidado→stophost→stopecho próprios, conferir códigos/clean
 
 Empacotamento privado47 concluído: ZIP15673540B, SHA256 `a609fd6f31afa2d5a8748eef2b7cf6d26864252c9457aa524c871d961991a2f5`. Os sete arquivos internos foram conferidos por hash sem extrair. ManifestoSHA `febeef5cd56d58b25cfec12d4d9392f140733111ba5e7357625ff9ec058aac7c`. A rodada final dos helpers foi `node .aurora/connect-validation/connect-invite-kit-47-check.mjs`,8/8PASS, log de mesmo nome `.log`. Ao usuário foi solicitada somente cópia/extração do kit no outroPC e aviso de prontidão, pois a transferência remota não está acessível às ferramentas; nenhum endpoint externo foi iniciado durante essa espera.
 
+## Quadragésimo oitavo incremento — descoberta de porta do jogo próprio
+
+Base `2b18e69`, branch `codex/aur-r4-connect`, em08/10/2026. A implementação acrescenta ao caller46 uma alternativa Windows para selecionar a porta de um jogo iniciado pelo próprio Aurora. Preserva alpha.14, os nove pares Core1.1.5/Skins0.3.1, Assistente, recovery/CAS/Doctor e todos os gates do roadmap. Transporte UDP49 e correção operacional47b foram desenvolvidos em paralelo, com ownership separado e testes compartilhados identificados; não são homologação deste fluxo.
+
+**Implementação e revisão.** `RunningInstances` seleciona um único filho vivo com instância/run conhecidos; `OwnedChildProof` duplica o handle não herdável e vincula PID/criação. `connect_discovery` lê tabelas TCP IPv4/IPv6 limitadas, mantém apenas listeners próprios loopback/wildcard e exige revisão/digest antes de STATUS767 na porta encontrada. Não recebe PID arbitrário, lê argumentos/logs, inicia Java, drena IPC novamente ou faz scan. Seleção opaca vale30s e é consumível uma vez; o ator vincula a prova à revisão e reconfere a origem antes do endpoint e a cada1s, encerrando somente Connect quando ela desaparece. TTL60s/600s do caller46 permanece. Observação antes/depois não elimina disputa local por porta.
+
+Quatro comandos Tauri estreitos e `DiscoveryPicker` compõem lista → porta → revisão → consulta explicitamente autorizada → preparar anfitrião. O frontend ignora conclusões antigas/desmontadas e recusa projeções divergentes de instância/run/porta. QA corrigiu rechecagem monotônica após consultas ao sistema e o parser frontend para `targetSource=null` legítimo no Guest. Não criar teste artificial que transforme STATUS em presença de jogador.
+
+**Arquivos.** Desktop Rust: Cargo.toml/lock, `commands.rs`, `connect_commands.rs`, `main.rs`, `engine/mod.rs`, `engine/connect/{mod,live}.rs` e novo `engine/connect_discovery/{mod,windows,tests}.rs`. React: novo `features/connect/DiscoveryPicker.tsx`, `ConnectView.tsx`, `types.ts` e `ConnectView.smoke.mjs`. Documentação: domínio desktop, spec9.5, proposta ADR, backlog, matriz, AGENTS e este task. Única mudança de lock é a aresta direta opcional para `windows-sys0.61.2`, já presente; nenhuma versão/checksum/pacote alterado.
+
+Comandos executados na worktree, usando `CARGO_BUILD_JOBS=2` somente no processo quando aplicável:
+
+```powershell
+cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --all-features
+cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --features connect-lab --lib engine::connect_discovery:: -- --test-threads=1
+cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --features connect-lab --lib engine::connect:: -- --test-threads=1
+cargo clippy --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo clippy --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+node --test --test-concurrency=1 apps/desktop/src/features/connect/ConnectView.smoke.mjs
+npm --prefix apps/desktop run build
+```
+
+**Resultados observados.** Padrão:259PASS/5ignored, soma13,59s de runtime; combinação das features:301PASS/21ignored, soma21,21s. A fixture filha marcada ignored é invocada explicitamente pelo teste pai para possuir o processo; isso não executa os opt-ins de voz/Java. Focados discovery:5PASS/1fixture ignorada na seleção,1,23s; ator:6PASS,13,09s, incluídos no total combinado. Dois managers reais ligam descoberta → convite → ponte → STATUS sintético → perda do processo → cleanup; cobrem dono/digest/seleção vencida/destino divergente, IPv4/IPv6/wildcard e rebind. Esses processos Rust não são Minecraft.
+
+Frontend:14DOMPASS/0skip,831,7491ms, incluindo quatro regressões de descoberta; build356módulos PASS, aviso de chunk>500kB preservado. Clippy all-targets padrão e all-features PASS, respectivamente13,87s/17,13s; `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check` e `git diff --check` PASS. Revisão independente final não encontrou bloqueador nos wrappers, frontend ou ownership; limite TOCTOU permanece explícito. Logs ignorados `connect-discovery-{desktop-default,desktop-features,focused,actor-focused,actor-final,dom,dom-retest,ui-build,ui-build-final,clippy-default,clippy-features}.log`. Não rodar opt-ins de voz por filtro genérico.
+
+**Estados, limites e rollback.** TCP/UDP continuam **PROTÓTIPO**, direto externo **PARCIAL** pelas provas anteriores. Minecraft mantém a amostra44; descoberta/LAN real e janela Tauri **PRECISA DE TESTE**. Convites/UI continuam **PROTÓTIPO**; novo convite externo, presença confiável de jogador e sessão longa pendentes. Relay mantém-se desligado; SVC/Plasmo preservam provas separadas de controle/configuração e áudio pendente. Servidor dedicado fora do launcher continua com porta manual. Contas mistas, dois jogadores, Core/Skins, estabilidade e sync seguro não recebem aprovação.
+
+Rollback operacional: Encerrar Connect, aguardar seus recursos e preservar o jogo. Nenhuma configuração pessoal foi escrita; não há Java a matar ou configuração a restaurar. Rollback de código por revert local revisado deste incremento; build sem feature mantém indisponibilidade. Sem push, release, instalador, conta ou gasto.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.

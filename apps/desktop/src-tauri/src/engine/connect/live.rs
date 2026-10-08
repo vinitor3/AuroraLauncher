@@ -9,12 +9,54 @@ use std::{
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+enum TargetGuard {
+    Manual,
+    #[cfg(windows)]
+    Owned(Arc<super::super::connect_discovery::ActiveOwnedTarget>),
+}
+struct TargetProjection {
+    kind: &'static str,
+    instance_id: Option<String>,
+    run_id: Option<String>,
+    fingerprint: Option<(u32, u64, String)>,
+}
+impl TargetGuard {
+    fn recheck(&self) -> Result<Option<SocketAddr>, ConnectError> {
+        match self {
+            Self::Manual => Ok(None),
+            #[cfg(windows)]
+            Self::Owned(target) => target
+                .recheck_owned()
+                .map(Some)
+                .map_err(|_| ConnectError::SourceChanged),
+        }
+    }
+    fn projection(&self) -> TargetProjection {
+        match self {
+            Self::Manual => TargetProjection {
+                kind: "manual",
+                instance_id: None,
+                run_id: None,
+                fingerprint: None,
+            },
+            #[cfg(windows)]
+            Self::Owned(target) => TargetProjection {
+                kind: "ownedInstance",
+                instance_id: Some(target.instance_id().into()),
+                run_id: Some(target.run_id().into()),
+                fingerprint: Some(target.fingerprint()),
+            },
+        }
+    }
+}
+
 enum Draft {
     Host {
         request: HostRequest,
         key: lab::SecretKey,
         bind: SocketAddr,
         service: lab::Service,
+        source: TargetGuard,
     },
     Guest {
         request: GuestRequest,
@@ -281,6 +323,30 @@ impl Manager {
         owner: &str,
         request: HostRequest,
     ) -> Result<ConnectPreparation, ConnectError> {
+        self.prepare_host_internal(owner, request, TargetGuard::Manual)
+    }
+    #[cfg(windows)]
+    pub(super) fn prepare_host_discovered(
+        &self,
+        owner: &str,
+        request: HostRequest,
+        target: super::super::connect_discovery::ApprovedTarget,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        let target = target.activate().map_err(|error| {
+            if error == super::super::connect_discovery::DiscoveryError::Stale {
+                ConnectError::PlanExpired
+            } else {
+                ConnectError::SourceChanged
+            }
+        })?;
+        self.prepare_host_internal(owner, request, TargetGuard::Owned(Arc::new(target)))
+    }
+    fn prepare_host_internal(
+        &self,
+        owner: &str,
+        request: HostRequest,
+        source: TargetGuard,
+    ) -> Result<ConnectPreparation, ConnectError> {
         if request.lifetime_seconds == 0 || request.lifetime_seconds > 600 {
             return Err(ConnectError::InvalidRequest);
         }
@@ -288,6 +354,9 @@ impl Manager {
         policy(request.mode, bind)?;
         let target = canonical(&request.game_target)?;
         policy(ConnectMode::Loopback, target)?;
+        if source.recheck()?.is_some_and(|observed| observed != target) {
+            return Err(ConnectError::InvalidRequest);
+        }
         let key = lab::generate_key();
         let public = key.public().to_string();
         self.prepare(
@@ -297,6 +366,7 @@ impl Manager {
                 key,
                 bind,
                 service: game(target),
+                source,
             },
             "host",
             public,
@@ -319,6 +389,18 @@ impl Manager {
         deadline: Instant,
     ) -> Result<ConnectReview, ConnectError> {
         a.snapshot.generation = a.snapshot.generation.saturating_add(1);
+        let (source, instance_id, run_id, fingerprint) = match &draft {
+            Draft::Host { source, .. } => {
+                let projection = source.projection();
+                (
+                    Some(projection.kind),
+                    projection.instance_id,
+                    projection.run_id,
+                    projection.fingerprint,
+                )
+            }
+            Draft::Guest { .. } => (None, None, None, None),
+        };
         let (mode, host_public_id, guest_public_id, target, lifetime) = match &draft {
             Draft::Host {
                 request,
@@ -382,8 +464,12 @@ impl Manager {
             status_protocol: 767,
             status_handshake_host: "localhost",
             status_handshake_port: 43001,
+            target_source: source,
+            instance_id,
+            run_id,
         };
-        let bytes = serde_json::to_vec(&review).map_err(|_| ConnectError::Internal)?;
+        let bytes =
+            serde_json::to_vec(&(fingerprint, &review)).map_err(|_| ConnectError::Internal)?;
         review.digest = Sha256::digest(bytes)
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -418,11 +504,16 @@ impl Manager {
             key,
             bind,
             service,
+            source,
         } = &draft
         else {
             a.draft = Some(draft);
             return Err(ConnectError::InvalidRequest);
         };
+        if let Err(error) = source.recheck() {
+            a.draft = Some(draft);
+            return Err(error);
+        }
         let deadline = Instant::now() + Duration::from_secs(request.lifetime_seconds.into());
         let expires = lab::unix_millis() + u64::from(request.lifetime_seconds) * 1000;
         let issue = match request.mode {
@@ -716,7 +807,12 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
             key,
             bind,
             service,
+            source,
         } => {
+            if source.recheck().is_err() {
+                close_operation(&state, &id, &cancel, Some(ConnectError::SourceChanged)).await;
+                return;
+            }
             let lease = invitation.lease();
             let lease_id = lease.lease_id.clone();
             let config = lab::HostConfig {
@@ -748,6 +844,7 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                 return;
             };
             let host = Arc::new(host);
+            let mut source_error = None;
             if !cancel.is_cancelled() && Instant::now() < deadline {
                 update(&state, &id, |a| {
                     if a.snapshot.phase != "closing" {
@@ -763,11 +860,15 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                 });
                 let mut interval = tokio::time::interval(Duration::from_millis(100));
                 let mut admitted = false;
+                let mut source_checked = Instant::now();
                 loop {
                     tokio::select! {
                         _=cancel.cancelled()=>break,
                         _=tokio::time::sleep_until(deadline.into())=>break,
                         _ = interval.tick() => {
+                            if source_checked.elapsed()>=Duration::from_secs(1){source_checked=Instant::now();
+                                #[cfg(windows)] if let TargetGuard::Owned(target)=&source {let target=target.clone();if !matches!(tokio::task::spawn_blocking(move||target.recheck_owned()).await,Ok(Ok(_))){source_error=Some(ConnectError::SourceChanged);break;}}
+                            }
                             let consumed = host.invitation_consumed(&lease_id);
                             let active = host.metrics().active_peers > 0;
                             if consumed && !admitted {
@@ -783,6 +884,9 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                         }
                     }
                 }
+                if let Some(error) = source_error {
+                    update(&state, &id, |a| a.snapshot.error_code = Some(error.code()));
+                }
             }
             cancel.cancel();
             update(&state, &id, |a| {
@@ -793,7 +897,8 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
             host.revoke(&lease_id);
             host.shutdown().await;
             drop(host);
-            close_operation(&state, &id, &cancel, None).await;
+            let source_error = source_error.or_else(|| source.recheck().err());
+            close_operation(&state, &id, &cancel, source_error).await;
         }
         Draft::Guest { request, key, .. } => {
             // Do not select/drop/abort the connect future: it owns an endpoint
