@@ -2,6 +2,7 @@
 
 pub mod ai_history;
 pub mod ai_tools;
+pub mod connect;
 #[cfg(feature = "connect-voice-lab")]
 pub mod connect_voice;
 pub mod diagnostic_lab;

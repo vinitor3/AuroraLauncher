@@ -616,6 +616,10 @@ h2 { margin-bottom: .35rem; font-size: 1.18rem; letter-spacing: -.025em; }
 .workspace.active-appearance .workspace-grid, .workspace.active-java .workspace-grid { grid-template-columns: minmax(0, 1fr); }
 .workspace.active-appearance .side-stack { grid-template-columns: minmax(0, 1fr); }
 .workspace.active-java .side-stack { grid-template-columns: minmax(0, 1fr) minmax(245px, .43fr); }
+.workspace.active-connect .workspace-grid { grid-template-columns: minmax(0, 1fr); }
+.workspace.active-connect .section-instances, .workspace.active-connect .section-discover,
+.workspace.active-connect .section-java, .workspace.active-connect .section-appearance,
+.workspace.active-connect .side-stack { display: none; }
 
 footer { display: flex; justify-content: space-between; gap: 1rem; margin-top: auto; padding: 1rem .1rem .05rem; color: #968da8; font-size: .72rem; }
 code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,0 +1,31 @@
+.connect-view { display: grid; gap: 1.2rem; max-width: 1040px; color: #eee7f7; }
+.connect-view h2, .connect-view h3, .connect-view p { margin: 0; }
+.connect-view h2 { font-size: 1.35rem; }
+.connect-view h3 { font-size: 1rem; }
+.connect-view p, .connect-view label, .connect-view small { font-size: .85rem; line-height: 1.6; }
+.connect-view p, .connect-view small { color: #bfb4cb; }
+.connect-heading, .connect-card > header, .connect-status > header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .8rem; }
+.connect-heading > div { display: grid; gap: .35rem; }
+.connect-badge { border: 1px solid #dfc69660; border-radius: 999px; padding: .2rem .65rem; font-size: .7rem; color: #efddb9; }
+.connect-card, .connect-status { display: grid; gap: 1rem; padding: 1.2rem; border: 1px solid #c7aaff2b; border-radius: 14px; background: #b391ff08; min-width: 0; }
+.connect-tabs, .connect-actions { display: flex; flex-wrap: wrap; gap: .55rem; align-items: center; }
+.connect-tabs button[aria-pressed="true"] { background: #ad86db30; border-color: #c8a2fb; color: #fff; }
+.connect-form { display: grid; gap: .95rem; }
+.connect-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem; }
+.connect-form label, .connect-output { display: grid; gap: .3rem; min-width: 0; }
+.connect-view input, .connect-view textarea, .connect-view select { width: 100%; min-width: 0; box-sizing: border-box; }
+.connect-view textarea { resize: vertical; min-height: 6rem; }
+.connect-output textarea, .connect-view code { font-family: ui-monospace, Consolas, monospace; font-size: .76rem; overflow-wrap: anywhere; }
+.connect-output textarea { min-height: 4rem; }
+.connect-review { border-color: #cfabfd70; background: #b391ff10; }
+.connect-review dl, .connect-status dl { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(0, 2fr); gap: .5rem 1rem; margin: 0; font-size: .82rem; line-height: 1.5; }
+.connect-view dt { color: #bfb4cb; }
+.connect-view dd { margin: 0; overflow-wrap: anywhere; }
+.connect-view .connect-consent { display: flex; gap: .6rem; align-items: flex-start; }
+.connect-view .connect-consent input { width: 16px; height: 16px; flex: 0 0 16px; margin-top: .3rem; }
+.connect-error, .connect-warning, .connect-message { padding: .75rem .9rem; border-radius: 8px; border: 1px solid #dfb9a145; }
+.connect-view .connect-error { color: #f0c4cc; border-color: #ec8c9d50; background: #af41551a; }
+.connect-view .connect-warning { color: #e2cfad; background: #a5894312; }
+.connect-view .connect-message { color: #d6c8ec; background: #9773b917; }
+.connect-status-summary { border-top: 1px solid #ffffff12; padding-top: .8rem; display: grid; gap: .35rem; }
+@media (max-width: 680px) { .connect-fields { grid-template-columns: 1fr; } .connect-review dl, .connect-status dl { grid-template-columns: 1fr; gap: .2rem; } .connect-view dd { margin-bottom: .55rem; } }

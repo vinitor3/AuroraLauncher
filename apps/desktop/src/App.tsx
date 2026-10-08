@@ -48,6 +48,8 @@ import { UpdateReviewDialog } from "./features/content-updates/UpdateReviewDialo
 import { DoctorView } from "./features/doctor/DoctorView";
 import { RecoveryView } from "./features/recovery/RecoveryView";
 import { DiagnosticLabView } from "./features/diagnostic-lab/DiagnosticLabView";
+import { ConnectView } from "./features/connect/ConnectView";
+import { capabilitiesFrom, snapshotFrom } from "./features/connect/types";
 import type { DoctorReport, DoctorRun } from "./features/doctor/types";
 import { publicAiError } from "../../../shared/aiErrors";
 import type { AiToolAdvice, AiToolContext } from "../../../shared/aiTools";
@@ -205,7 +207,7 @@ type ContentArtworkMigration = {
   fallback?: ContentArtworkEntry;
 };
 type LoaderChoice = "fabric" | "forge";
-type LauncherSection = "instances" | "discover" | "appearance" | "java";
+type LauncherSection = "instances" | "discover" | "appearance" | "java" | "connect";
 type CatalogSource = "modrinth" | "curseforge";
 type LaunchSummary = {
   processId: number;
@@ -1054,6 +1056,44 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const libraryLoadGeneration = useRef(0);
   const [instanceFilter, setInstanceFilter] = useState("");
   const [activeSection, setActiveSection] = useState<LauncherSection>("instances");
+  const [connectAvailable, setConnectAvailable] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const signOutPending = useRef(false);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
+    void invoke("connect_capabilities").then(capabilitiesFrom).then((capabilities) => {
+      if (active) setConnectAvailable(capabilities.available);
+    }).catch(() => { if (active) setConnectAvailable(false); });
+    return () => { active = false; };
+  }, []);
+  async function signOutWithConnectCleanup() {
+    if (signOutPending.current) return;
+    signOutPending.current = true;
+    setSigningOut(true);
+    try {
+      if (isTauri()) {
+        const capabilities = capabilitiesFrom(await invoke("connect_capabilities"));
+        if (capabilities.available) {
+          const current = snapshotFrom(await invoke("connect_snapshot"));
+          if (current.operationId) {
+            const stopped = snapshotFrom(await invoke("connect_stop", { operationId: current.operationId }));
+            if (stopped.cleanupState !== "complete") throw new Error("Connect cleanup incomplete");
+          }
+        }
+      }
+      await logoutAuroraUser(services);
+      setProfile(undefined);
+      setSessionStartup({ phase: "signed-out" });
+    } catch {
+      const message = "Não foi possível encerrar a conexão e sair da conta. Confira o Aurora Connect e tente novamente.";
+      setNotice(message);
+      if (sessionStartup.phase === "error") setSessionStartup({ phase: "error", error: message });
+    } finally {
+      signOutPending.current = false;
+      setSigningOut(false);
+    }
+  }
   const [catalogSource, setCatalogSource] = useState<CatalogSource>("modrinth");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
@@ -3451,10 +3491,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   if (sessionStartup.phase === "loading") return <StartupScreen />;
   if (sessionStartup.phase === "error") return <StartupScreen error={sessionStartup.error}
     onRetry={() => { setSessionStartup({ phase: "loading" }); setSessionRetry((value) => value + 1); }}
-    onSignOut={() => { void logoutAuroraUser(services).then(() => {
-      setProfile(undefined);
-      setSessionStartup({ phase: "signed-out" });
-    }).catch(() => setSessionStartup({ phase: "error", error: "Não foi possível sair da sessão. Tente novamente." })); }}
+    onSignOut={() => { void signOutWithConnectCleanup(); }}
   />;
   if (sessionStartup.phase === "ready" && (!profile
     || profile.uid !== sessionStartup.profile.uid
@@ -3475,6 +3512,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     discover: "Descobrir",
     appearance: "Guarda-roupa",
     java: "Java & engine",
+    connect: "Aurora Connect · experimental",
   };
   const selectedContentFiles = contentType === "mod"
     ? instanceContent.mods
@@ -3546,10 +3584,16 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
               <span aria-hidden="true">{icon}</span>{label}
             </button>
           ))}
+          {connectAvailable && <button
+            aria-current={activeSection === "connect" ? "page" : undefined}
+            className={activeSection === "connect" ? "nav-item active" : "nav-item"}
+            onClick={() => setActiveSection("connect")}
+            type="button"
+          ><span aria-hidden="true">⇄</span>Connect · experimental</button>}
         </nav>
         <div className="sidebar-bottom">
           <button className={assistantOpen ? "compact sidebar-action" : "secondary compact sidebar-action"} onClick={() => setAssistantOpen((current) => !current)} type="button">Assistente</button>
-          <button className="text-button sidebar-action" onClick={() => logoutAuroraUser(services)} type="button">Sair da conta</button>
+          <button className="text-button sidebar-action" disabled={signingOut} onClick={() => void signOutWithConnectCleanup()} type="button">{signingOut ? "Encerrando conexão…" : "Sair da conta"}</button>
         </div>
       </aside>
       <section className={`workspace active-${activeSection}`}>
@@ -3566,6 +3610,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         </aside>}
         <section className="workspace-grid">
           <div className="workspace-main">
+        {activeSection === "connect" && connectAvailable && <div className="section-connect" inert={signingOut}><ConnectView /></div>}
         <article className="panel instances section-instances">
           <div className="panel-heading">
             <div>

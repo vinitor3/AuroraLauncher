@@ -24,6 +24,10 @@ Em01/10, o [ensaio externo de fronteira39](task-aur-r4-connect.md#trigésimo-non
 
 O [incremento40](task-aur-r4-connect.md#quadragésimo-incremento--statuspong-minecraft-aprovado-e-encerramento) acrescentou uma consulta ao Minecraft real por `game` TCP sobre QUIC entre outro computador e outra internet, confirmados pelo usuário. Na terceira tentativa, o convidado reportou `guest_ready`, STATUS com protocolo767 correspondente, pong exato e `guest_stopped`; o servidor informou zero jogadores/máximo dois. Java e filhos Connect locais encerraram normalmente, EULA foi restaurada exatamente e portas ficaram livres. O [modo STATUS interativo](aurora-connect-runtime.md#status-interativo-e-relatório-de-falha--preparação40) usa plano próprio de900s; o padrão continua300s. Total884644µs e ping165646µs medem a aplicação nessa amostra, sem constituir benchmark de rede. Direto externo segue **PARCIAL** e Minecraft **PROTÓTIPO**: não houve login, entrada no mundo, GUI, contas, Core/Skins ou voz nesse ensaio. Falhas das duas primeiras tentativas e kit original permanecem preservados; o [guia STATUS externo](aurora-connect-internet-minecraft-status.md) separa os papéis e o encerramento.
 
+## Integração experimental no desktop — incremento46
+
+O caller e painel opcionais são descritos em [Aurora Connect no desktop](aurora-connect-desktop.md). A feature `connect-lab` permanece desligada por padrão. Reutiliza o transporte real, com revisão/digest antes de conectar, STATUS separado de entrada no mundo e encerramento aguardado. Não torna a CLI histórica ou seus kits obsoletos, não renova o TTL600s e não homologa voz/GUI/redes externas. Comandos/testes efetivamente executados e avisos de dependências ficam no registro46 do task.
+
 ## Convite manual assinado — experimental e somente loopback
 
 Esta seção descreve os comandos padrão. O modo IPv6 externo exige os comandos separados da seção seguinte; endereço recebido em um convite nunca ativa esse modo automaticamente.

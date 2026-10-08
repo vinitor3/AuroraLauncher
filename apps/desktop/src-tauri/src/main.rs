@@ -5,6 +5,7 @@
 )]
 
 mod commands;
+mod connect_commands;
 mod doctor_runs;
 mod launcher_sessions;
 mod manual_downloads;
@@ -17,6 +18,13 @@ use tauri::{
 };
 
 const MAIN_TRAY_ID: &str = "aurora-main-tray";
+
+#[cfg(feature = "connect-lab")]
+#[derive(Default)]
+struct ConnectExitState {
+    closing: std::sync::atomic::AtomicBool,
+    ready: std::sync::atomic::AtomicBool,
+}
 
 fn show_launcher(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -70,6 +78,8 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            #[cfg(feature = "connect-lab")]
+            app.manage(ConnectExitState::default());
             if create_launcher_tray(app).is_err() {
                 // On systems without a tray, retain normal closing behavior
                 // instead of hiding the only way to reach the launcher.
@@ -96,7 +106,18 @@ fn main() {
         .manage(doctor_runs::DoctorRuns::default())
         .manage(manual_downloads::ManualDownloads::default())
         .manage(aurora_launcher_core::engine::ai_tools::AiToolBroker::default())
+        .manage(aurora_launcher_core::engine::connect::ConnectManager::default())
         .invoke_handler(tauri::generate_handler![
+            connect_commands::connect_capabilities,
+            connect_commands::connect_snapshot,
+            connect_commands::connect_prepare_host,
+            connect_commands::connect_review_host,
+            connect_commands::connect_prepare_guest,
+            connect_commands::connect_review_guest,
+            connect_commands::connect_confirm,
+            connect_commands::connect_export_invitation,
+            connect_commands::connect_probe_status,
+            connect_commands::connect_stop,
             launcher_sessions::launcher_auth_scope,
             player_profiles::lookup_player_skin,
             commands::engine_status,
@@ -179,6 +200,32 @@ fn main() {
             commands::load_firebase_config,
             commands::save_firebase_config,
         ])
-        .run(tauri::generate_context!())
-        .expect("erro ao executar o Aurora Smart Launcher");
+        .build(tauri::generate_context!())
+        .expect("erro ao preparar o Aurora Smart Launcher")
+        .run(|app, event| {
+            #[cfg(feature = "connect-lab")]
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                use std::sync::atomic::Ordering;
+                let exit = app.state::<ConnectExitState>();
+                if exit.ready.load(Ordering::Acquire) {
+                    return;
+                }
+                api.prevent_exit();
+                if !exit.closing.swap(true, Ordering::AcqRel) {
+                    let app = app.clone();
+                    let exit_code = code.unwrap_or(0);
+                    tauri::async_runtime::spawn(async move {
+                        app.state::<aurora_launcher_core::engine::connect::ConnectManager>()
+                            .shutdown_all()
+                            .await;
+                        app.state::<ConnectExitState>()
+                            .ready
+                            .store(true, Ordering::Release);
+                        app.exit(exit_code);
+                    });
+                }
+            }
+            #[cfg(not(feature = "connect-lab"))]
+            let _ = (app, event);
+        });
 }

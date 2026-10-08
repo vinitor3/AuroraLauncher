@@ -170,6 +170,14 @@ impl Host {
     pub fn metrics(&self) -> MetricsSnapshot {
         self.state.metrics.snapshot()
     }
+    /// Cumulative one-use decision, including an admitted peer that disconnected
+    /// before a caller could sample active_peers. Contains no peer/key material.
+    pub fn invitation_consumed(&self, lease_id: &str) -> bool {
+        let _admission = self.state.active_leases.lock().unwrap();
+        self.state.leases.get(lease_id).is_some_and(|lease| {
+            lease.invitation.is_some() && lease.consumed.load(Ordering::Acquire)
+        })
+    }
     pub fn revoke(&self, lease_id: &str) -> bool {
         // Linearize revocation with admission and its single-use decision.
         let _admission = self.state.active_leases.lock().unwrap();
