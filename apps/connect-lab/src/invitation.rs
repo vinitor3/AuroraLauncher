@@ -18,6 +18,53 @@ pub const MAX_INVITATION_BYTES: usize = 4096;
 pub const MAX_INVITATION_LIFETIME: Duration = Duration::from_secs(600);
 const DOMAIN: &[u8] = b"aurora/connect-lab/invitation/v1\0";
 
+#[derive(Clone, Copy)]
+pub(crate) enum InvitationAddressMode {
+    Loopback,
+    ExternalIpv6,
+}
+
+/// Conservative classification of an explicitly selected initial address only.
+/// No reachability/translation/tunnel detection or restriction of Iroh's other
+/// internal paths is implied. This function opens no socket or lookup.
+pub fn validate_external_invitation_address(address: SocketAddr) -> Result<()> {
+    let SocketAddr::V6(address) = address else {
+        return Err(Error::Configuration);
+    };
+    let s = address.ip().segments();
+    if address.port() == 0
+        || address.scope_id() != 0
+        || address.flowinfo() != 0
+        || s[0] & 0xe000 != 0x2000
+        || (s[0] == 0x2001 && s[1] & 0xfe00 == 0)
+        || (s[0] == 0x2001 && s[1] == 0x0db8)
+        || s[0] == 0x2002
+        || (s[0] == 0x2620 && s[1] == 0x004f && s[2] == 0x8000)
+        || (s[0] == 0x3fff && s[1] & 0xf000 == 0)
+        || (matches!(s[4], 0 | 0x0200) && s[5] == 0x5efe)
+    {
+        return Err(Error::Configuration);
+    }
+    Ok(())
+}
+
+impl InvitationAddressMode {
+    pub(crate) fn validate(self, address: SocketAddr) -> Result<()> {
+        match self {
+            Self::Loopback => {
+                if address.port() == 0
+                    || !address.ip().is_loopback()
+                    || matches!(address, SocketAddr::V6(address) if address.flowinfo() != 0 || address.scope_id() != 0)
+                {
+                    return Err(Error::Configuration);
+                }
+                Ok(())
+            }
+            Self::ExternalIpv6 => validate_external_invitation_address(address),
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Envelope {
@@ -210,6 +257,47 @@ impl Invitation {
         services: &[Service],
         expires_at_unix_ms: u64,
     ) -> Result<Self> {
+        Self::issue_in_mode(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            expires_at_unix_ms,
+            InvitationAddressMode::Loopback,
+        )
+    }
+
+    /// Explicit external IPv6 mode. All envelope, grant and expiry rules match
+    /// the loopback invitation; the address is serialized canonically and signed.
+    pub fn issue_external_ipv6(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        expires_at_unix_ms: u64,
+    ) -> Result<Self> {
+        Self::issue_in_mode(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            expires_at_unix_ms,
+            InvitationAddressMode::ExternalIpv6,
+        )
+    }
+
+    fn issue_in_mode(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        expires_at_unix_ms: u64,
+        mode: InvitationAddressMode,
+    ) -> Result<Self> {
         let now = unix_millis();
         let body = Body {
             schema_version: 1,
@@ -223,9 +311,15 @@ impl Invitation {
             direct_address: direct,
             services: grants(services)?,
         };
-        Self::validate_body(&body, host.public(), guest, now)?;
+        Self::validate_body(&body, host.public(), guest, now, mode)?;
         let signature = hex(&host.sign(&signed_bytes(&body)?).to_bytes());
-        Self::from_envelope(Envelope { body, signature }, host.public(), guest, now)
+        Self::from_envelope(
+            Envelope { body, signature },
+            host.public(),
+            guest,
+            now,
+            mode,
+        )
     }
 
     /// Verify only after the operator obtained expected_host through an
@@ -234,11 +328,42 @@ impl Invitation {
     pub fn verify(encoded: &str, expected_host: EndpointId, guest: EndpointId) -> Result<Self> {
         Self::verify_at(encoded, expected_host, guest, unix_millis())
     }
+
+    /// Explicit opt-in; does not allow an old loopback API to accept this value.
+    pub fn verify_external_ipv6(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+    ) -> Result<Self> {
+        Self::verify_at_in_mode(
+            encoded,
+            expected_host,
+            guest,
+            unix_millis(),
+            InvitationAddressMode::ExternalIpv6,
+        )
+    }
     fn verify_at(
         encoded: &str,
         expected_host: EndpointId,
         guest: EndpointId,
         now: u64,
+    ) -> Result<Self> {
+        Self::verify_at_in_mode(
+            encoded,
+            expected_host,
+            guest,
+            now,
+            InvitationAddressMode::Loopback,
+        )
+    }
+
+    fn verify_at_in_mode(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+        now: u64,
+        mode: InvitationAddressMode,
     ) -> Result<Self> {
         if encoded.is_empty() || encoded.len() > MAX_INVITATION_BYTES {
             return Err(Error::Limit);
@@ -247,13 +372,14 @@ impl Invitation {
         if encode(&envelope)? != encoded {
             return Err(Error::Protocol);
         }
-        Self::from_envelope(envelope, expected_host, guest, now)
+        Self::from_envelope(envelope, expected_host, guest, now, mode)
     }
     fn validate_body(
         body: &Body,
         expected_host: EndpointId,
         guest: EndpointId,
         now: u64,
+        mode: InvitationAddressMode,
     ) -> Result<()> {
         let host_key = EndpointId::from_bytes(&decode_hex::<32>(&body.host_key)?)
             .map_err(|_| Error::Protocol)?;
@@ -263,15 +389,10 @@ impl Invitation {
         if host_key != expected_host || guest_key != guest || host_key == guest_key {
             return Err(Error::Unauthorized);
         }
-        if body.schema_version != 1
-            || body.generation != 1
-            || !valid_id(&body.session_id)
-            || body.direct_address.port() == 0
-            || !body.direct_address.ip().is_loopback()
-            || matches!(body.direct_address, SocketAddr::V6(address) if address.flowinfo() != 0 || address.scope_id() != 0)
-        {
+        if body.schema_version != 1 || body.generation != 1 || !valid_id(&body.session_id) {
             return Err(Error::Configuration);
         }
+        mode.validate(body.direct_address)?;
         let ttl = body
             .expires_at_unix_ms
             .checked_sub(body.issued_at_unix_ms)
@@ -290,8 +411,9 @@ impl Invitation {
         expected_host: EndpointId,
         guest: EndpointId,
         now: u64,
+        mode: InvitationAddressMode,
     ) -> Result<Self> {
-        Self::validate_body(&envelope.body, expected_host, guest, now)?;
+        Self::validate_body(&envelope.body, expected_host, guest, now, mode)?;
         let signature = Signature::from_bytes(&decode_hex::<64>(&envelope.signature)?);
         expected_host
             .verify(&signed_bytes(&envelope.body)?, &signature)
@@ -379,7 +501,17 @@ impl Invitation {
     pub(crate) fn remaining(&self) -> Duration {
         self.deadline.saturating_duration_since(Instant::now())
     }
+    pub(crate) fn check_address_mode(&self, mode: InvitationAddressMode) -> Result<()> {
+        mode.validate(self.direct_addr())
+    }
     pub(crate) fn check_host(&self, config: &HostConfig) -> Result<()> {
+        self.check_host_in_mode(config, InvitationAddressMode::Loopback)
+    }
+    pub(crate) fn check_host_external_ipv6(&self, config: &HostConfig) -> Result<()> {
+        self.check_host_in_mode(config, InvitationAddressMode::ExternalIpv6)
+    }
+    fn check_host_in_mode(&self, config: &HostConfig, mode: InvitationAddressMode) -> Result<()> {
+        self.check_address_mode(mode)?;
         self.check_current()?;
         let expected = self.lease();
         if config.secret_key.public() != self.host

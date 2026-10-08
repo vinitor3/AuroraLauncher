@@ -177,12 +177,17 @@ async fn host_plan(args: &[String]) -> Result<()> {
     run_host(plan.bind, plan.seconds, plan.services, Some(plan.hash)).await
 }
 
-async fn host_invite_plan(args: &[String]) -> Result<()> {
+async fn host_invite_plan(args: &[String], external_ipv6: bool) -> Result<()> {
     if args.len() != 2 {
         return Err(aurora_connect_lab::Error::Configuration.into());
     }
     let plan = load_plan(&args[0], Some(&args[1]))?;
-    if !plan.bind.ip().is_loopback() || plan.seconds > 600 {
+    if plan.seconds > 600 {
+        return Err(aurora_connect_lab::Error::Configuration.into());
+    }
+    if external_ipv6 {
+        aurora_connect_lab::validate_external_invitation_address(plan.bind)?;
+    } else if !plan.bind.ip().is_loopback() {
         return Err(aurora_connect_lab::Error::Configuration.into());
     }
     let secret_key = generate_key();
@@ -195,28 +200,41 @@ async fn host_invite_plan(args: &[String]) -> Result<()> {
         .await?
         .parse()
         .map_err(|_| aurora_connect_lab::Error::Unauthorized)?;
-    let invitation = Invitation::issue(
-        &secret_key,
-        peer,
-        &session_id,
-        plan.bind,
-        &plan.services,
-        unix_millis().saturating_add(plan.seconds * 1000),
-    )?;
+    let expires = unix_millis().saturating_add(plan.seconds * 1000);
+    let invitation = if external_ipv6 {
+        Invitation::issue_external_ipv6(
+            &secret_key,
+            peer,
+            &session_id,
+            plan.bind,
+            &plan.services,
+            expires,
+        )
+    } else {
+        Invitation::issue(
+            &secret_key,
+            peer,
+            &session_id,
+            plan.bind,
+            &plan.services,
+            expires,
+        )
+    }?;
     let lease = invitation.lease();
     let lease_id = lease.lease_id.clone();
-    let host = Host::start_invited(
-        HostConfig {
-            secret_key,
-            bind_addr: plan.bind,
-            session_id,
-            services: plan.services,
-            leases: vec![lease],
-            limits: Limits::default(),
-        },
-        &invitation,
-    )
-    .await?;
+    let config = HostConfig {
+        secret_key,
+        bind_addr: plan.bind,
+        session_id,
+        services: plan.services,
+        leases: vec![lease],
+        limits: Limits::default(),
+    };
+    let host = if external_ipv6 {
+        Host::start_invited_external_ipv6(config, &invitation).await
+    } else {
+        Host::start_invited(config, &invitation).await
+    }?;
     // Public invitation travels only to the intended guest. No private key,
     // internal destination, account token or persisted invitation is emitted.
     event(
@@ -234,7 +252,7 @@ async fn host_invite_plan(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-async fn guest_invite(args: &[String], tcp_only: bool) -> Result<()> {
+async fn guest_invite(args: &[String], tcp_only: bool, external_ipv6: bool) -> Result<()> {
     if args.len() != if tcp_only { 3 } else { 4 } {
         return Err(aurora_connect_lab::Error::Configuration.into());
     }
@@ -259,7 +277,11 @@ async fn guest_invite(args: &[String], tcp_only: bool) -> Result<()> {
     );
     // 4096 signed bytes plus optional UTF-8 BOM and CRLF framing.
     let encoded = invitation_input(4101, Duration::from_secs(60)).await?;
-    let invitation = Invitation::verify(&encoded, host, secret_key.public())?;
+    let invitation = if external_ipv6 {
+        Invitation::verify_external_ipv6(&encoded, host, secret_key.public())
+    } else {
+        Invitation::verify(&encoded, host, secret_key.public())
+    }?;
     let lease = invitation.lease();
     if !lease.services.contains("game") || lease.services.contains("aux") != udp.is_some() {
         return Err(aurora_connect_lab::Error::ServiceDenied.into());
@@ -280,7 +302,11 @@ async fn guest_invite(args: &[String], tcp_only: bool) -> Result<()> {
     {
         return Err(aurora_connect_lab::Error::Unauthorized.into());
     }
-    let guest = Guest::connect_invited(secret_key, &invitation, Limits::default()).await?;
+    let guest = if external_ipv6 {
+        Guest::connect_invited_external_ipv6(secret_key, &invitation, Limits::default()).await
+    } else {
+        Guest::connect_invited(secret_key, &invitation, Limits::default()).await
+    }?;
     run_guest_bridges(guest, tcp, udp, seconds, true).await
 }
 
@@ -610,11 +636,14 @@ async fn main() {
         Some("host") => host(&args[1..]).await,
         Some("plan") => plan(&args[1..]),
         Some("host-plan") => host_plan(&args[1..]).await,
-        Some("host-invite-plan") => host_invite_plan(&args[1..]).await,
+        Some("host-invite-plan") => host_invite_plan(&args[1..], false).await,
+        Some("host-invite-plan-external-ipv6") => host_invite_plan(&args[1..], true).await,
         Some("guest") => guest(&args[1..], false).await,
         Some("guest-tcp") => guest(&args[1..], true).await,
-        Some("guest-invite") => guest_invite(&args[1..], false).await,
-        Some("guest-invite-tcp") => guest_invite(&args[1..], true).await,
+        Some("guest-invite") => guest_invite(&args[1..], false, false).await,
+        Some("guest-invite-tcp") => guest_invite(&args[1..], true, false).await,
+        Some("guest-invite-external-ipv6") => guest_invite(&args[1..], false, true).await,
+        Some("guest-invite-external-ipv6-tcp") => guest_invite(&args[1..], true, true).await,
         Some("minecraft-status") => minecraft_status(&args[1..]).await,
         Some("echo") => echo(&args[1..], false).await,
         Some("echo-downstream") => echo(&args[1..], true).await,
@@ -636,7 +665,10 @@ async fn main() {
                 "EXPERIMENTAL - no launcher integration, keys only in memory\nhost <quic-bind> <approved-tcp-target> <approved-udp-target> <seconds>\nplan <local-service-plan.json>\nhost-plan <local-service-plan.json> <approved-sha256>\nguest <host-public-id> <host-direct-address> <session-id> <local-tcp> <local-udp> <seconds>\nguest-tcp <host-public-id> <host-direct-address> <session-id> <local-tcp> <seconds>\necho <loopback-tcp> <loopback-udp> <seconds>\nprobe <loopback-tcp> <loopback-udp>\nminecraft-status <loopback-tcp-bridge> <handshake-host> <handshake-port> <protocol-number>\necho-downstream / probe-downstream: same arguments, controlled asymmetric UDP test only\nUse stop on stdin or Ctrl+C to end. See docs/aurora-connect.md."
             );
             println!(
-                "host-invite-plan <reviewed-plan.json> <approved-sha256>\nguest-invite <pinned-host-public-id> <local-tcp> <local-udp> <seconds>\nguest-invite-tcp <pinned-host-public-id> <local-tcp> <seconds>\nInvitation commands are loopback-only, one admission, at most 600 seconds; interactive prompts expire."
+                "host-invite-plan <reviewed-plan.json> <approved-sha256>\nguest-invite <pinned-host-public-id> <local-tcp> <local-udp> <seconds>\nguest-invite-tcp <pinned-host-public-id> <local-tcp> <seconds>\nThe three commands above are loopback-only, one admission, at most 600 seconds; interactive prompts expire."
+            );
+            println!(
+                "EXPERIMENTAL explicit external IPv6 invitation commands (no reachability claim):\nhost-invite-plan-external-ipv6 <reviewed-plan.json> <approved-sha256>\nguest-invite-external-ipv6 <pinned-host-public-id> <local-tcp> <local-udp> <seconds>\nguest-invite-external-ipv6-tcp <pinned-host-public-id> <local-tcp> <seconds>\nInitial IPv6 address must pass the conservative filter; application endpoints remain loopback. Same one-use signed envelope and whole-session lifetime at most 600 seconds; no renewal/lookup/relay."
             );
             println!(
                 "echo-boundary <loopback-tcp> <loopback-udp> <seconds>\nprobe-boundary <loopback-tcp> <loopback-udp> <expected-payload-1-to-1400>\nBoundary commands use an owned synthetic endpoint and require an approved authorizedDownstream service plan."

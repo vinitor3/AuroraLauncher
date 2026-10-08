@@ -10,7 +10,9 @@ mod wire;
 
 pub use guest::{Guest, TcpBridge, UdpAssociation, UdpBridge};
 pub use host::Host;
-pub use invitation::{Invitation, MAX_INVITATION_BYTES, MAX_INVITATION_LIFETIME};
+pub use invitation::{
+    Invitation, MAX_INVITATION_BYTES, MAX_INVITATION_LIFETIME, validate_external_invitation_address,
+};
 pub use iroh::{EndpointAddr, EndpointId, SecretKey};
 pub use minecraft_status::{
     MAX_MINECRAFT_STATUS_JSON_BYTES, MAX_MINECRAFT_STATUS_TIMEOUT,

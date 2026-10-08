@@ -1,4 +1,5 @@
 use crate::{
+    invitation::InvitationAddressMode,
     model::{Metrics, valid_id},
     transport::{self, Bucket, Budget},
     wire::{self, Hello, InvitationProof, OpenRequest, Operation, Reply, SequenceWindow},
@@ -59,15 +60,45 @@ impl Guest {
         invitation: &Invitation,
         limits: Limits,
     ) -> Result<Self> {
+        Self::connect_invited_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            InvitationAddressMode::Loopback,
+        )
+        .await
+    }
+    /// Explicit external IPv6 mode; transport binds [::]:0, application bridges
+    /// remain loopback. Never derives this opt-in merely from Invitation's type.
+    pub async fn connect_invited_external_ipv6(
+        secret_key: SecretKey,
+        invitation: &Invitation,
+        limits: Limits,
+    ) -> Result<Self> {
+        Self::connect_invited_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            InvitationAddressMode::ExternalIpv6,
+        )
+        .await
+    }
+    async fn connect_invited_in_mode(
+        secret_key: SecretKey,
+        invitation: &Invitation,
+        limits: Limits,
+        mode: InvitationAddressMode,
+    ) -> Result<Self> {
+        invitation.check_address_mode(mode)?;
         if secret_key.public() != invitation.guest_key() {
             return Err(Error::Unauthorized);
         }
         invitation.check_current()?;
         let direct = invitation.direct_addr();
-        let bind_addr = if direct.is_ipv4() {
-            "127.0.0.1:0"
-        } else {
-            "[::1]:0"
+        let bind_addr = match mode {
+            InvitationAddressMode::ExternalIpv6 => "[::]:0",
+            InvitationAddressMode::Loopback if direct.is_ipv4() => "127.0.0.1:0",
+            InvitationAddressMode::Loopback => "[::1]:0",
         }
         .parse()
         .map_err(|_| Error::Configuration)?;
@@ -167,6 +198,9 @@ impl Guest {
     }
     pub fn id(&self) -> EndpointId {
         self.inner.endpoint.id()
+    }
+    pub fn bound_sockets(&self) -> Vec<SocketAddr> {
+        self.inner.endpoint.bound_sockets()
     }
     pub fn connection(&self) -> &Connection {
         &self.inner.connection

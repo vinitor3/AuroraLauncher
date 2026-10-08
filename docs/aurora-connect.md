@@ -8,6 +8,8 @@ Incrementos25/26: SVC2.6.22 e Plasmo2.1.17 passaram separadamente pelo anúncio 
 
 ## Preparação de dois computadores
 
+O [incremento44](task-aur-r4-connect.md#quadragésimo-quarto-incremento--entrada-externa-no-mundo-pelo-fluxo-manual) passou entrada gráfica, terreno/movimento e saída de um convidado pelo fluxo manual, com população local 0 → 1 → 0 e encerramento normal. Minecraft está **PARCIAL** nessa amostra. O supervisor43 teve duas falhas externas antes de `guest_ready`, de causa indeterminada; para novo ensaio supervisionado, o fluxo manual validado tem prioridade. Os parágrafos40–43 abaixo conservam a evidência de cada incremento, sem substituir o resultado44.
+
 Incremento42: a CLI manual agora encerra quando QUIC fecha, aguarda a liberação dos listeners e relata `closed`/exit1. Stop e prazo locais continuam normais; o fluxo de convite preserva seu contrato anterior.98Rust+18NodePASS, incluindo cinco regressões novas e pares reaisTCP/UDP; sem homologação externa adicional. [Registro e hash atual](task-aur-r4-connect.md#quadragésimo-segundo-incremento--encerramento-observável-da-cli-manual). Kits históricos continuam com seus binários originais.
 
 Após o STATUS externo40, o [roteiro GUI41](aurora-connect-internet-minecraft-gui.md) prepara entrada no mundo com whitelist de nomes públicos revisados e perfil descartável separado. Duas tentativas não aprovaram entrada; na segunda o erro foi apagado, com causa não recuperada. A consulta não comprova mundo; relato gráfico e contagem0→1→0 têm fontes distintas. Core/Skins, voz e contas mistas permanecem pendentes.
@@ -23,6 +25,8 @@ Em01/10, o [ensaio externo de fronteira39](task-aur-r4-connect.md#trigésimo-non
 O [incremento40](task-aur-r4-connect.md#quadragésimo-incremento--statuspong-minecraft-aprovado-e-encerramento) acrescentou uma consulta ao Minecraft real por `game` TCP sobre QUIC entre outro computador e outra internet, confirmados pelo usuário. Na terceira tentativa, o convidado reportou `guest_ready`, STATUS com protocolo767 correspondente, pong exato e `guest_stopped`; o servidor informou zero jogadores/máximo dois. Java e filhos Connect locais encerraram normalmente, EULA foi restaurada exatamente e portas ficaram livres. O [modo STATUS interativo](aurora-connect-runtime.md#status-interativo-e-relatório-de-falha--preparação40) usa plano próprio de900s; o padrão continua300s. Total884644µs e ping165646µs medem a aplicação nessa amostra, sem constituir benchmark de rede. Direto externo segue **PARCIAL** e Minecraft **PROTÓTIPO**: não houve login, entrada no mundo, GUI, contas, Core/Skins ou voz nesse ensaio. Falhas das duas primeiras tentativas e kit original permanecem preservados; o [guia STATUS externo](aurora-connect-internet-minecraft-status.md) separa os papéis e o encerramento.
 
 ## Convite manual assinado — experimental e somente loopback
+
+Esta seção descreve os comandos padrão. O modo IPv6 externo exige os comandos separados da seção seguinte; endereço recebido em um convite nunca ativa esse modo automaticamente.
 
 Os comandos `host-invite-plan`, `guest-invite` e `guest-invite-tcp` são um fluxo separado do pin/lease manual anterior. Um convite autoriza **uma admissão**, com chave do convidado, sessão, serviços e prazo até10min, assinatura Ed25519 e aprovação do digest. Receber o JSON não substitui possuir a chave privada do convidado. Reentrar exige novas execuções/chaves/convite; não há persistência ou identidade social. [Contrato e limites](engineering/AURORA_CONNECT_SPEC.md#81-convite-manual-assinado--laboratório).
 
@@ -42,6 +46,14 @@ No convidado, iniciar `guest-invite <peer-publico-do-host> 127.0.0.1:42010 127.0
 Encerrar com `stop` primeiro no convidado, depois anfitrião e endpoint, aguardando eventos stopped/exit. EOF em prompt pendente recusa sem conexão; Ctrl+C cancela. Revogação/expiração do host também fecha o convidado. Porta ocupada falha, nunca encerra proprietário alheio. Reinício descarta chaves/convite; não reutilizar a mesma identidade host para tentar reconstruir consumo em memória. Nenhuma configuração de jogo, EULA ou mod muda neste ensaio. Convites completos e pins não pertencem a logs compartilhados; devolver somente PASS/código fixo/contagens/cleanup.
 
 Regressão de retomada: `cargo test --offline --locked --manifest-path apps/connect-lab/Cargo.toml --test invitation_resumption -- --nocapture`. Cinco casos usam Iroh real e exigem0-RTT aceito, recusando replay/credencial inválida/revogação/expiração sem atingir os canários TCP/UDP. O resumo não imprime convites/pins. O teste não mede a janela temporal pré-TLS; [limite da evidência](engineering/AURORA_CONNECT_SPEC.md#81-convite-manual-assinado--laboratório).
+
+## Convite com endereço inicial IPv6 externo — incremento45
+
+Estado **PROTÓTIPO**, explicitamente opt-in e sem interface no launcher. `host-invite-plan-external-ipv6`, `guest-invite-external-ipv6` e `guest-invite-external-ipv6-tcp` ampliam somente a política do endereço inicial assinado. O host continua exigindo plano revisado/hash, chave pública do convidado e serviços aprovados. O convidado continua exigindo pin obtido separadamente, envelope canônico válido e `approve <digest>` antes da conexão. Nunca trocar o executável dos kits históricos por um debug novo; usar o hash e a evidência do [registro45](task-aur-r4-connect.md#quadragésimo-quinto-incremento--convites-com-ipv6-inicial-explícito).
+
+O filtro numérico conservador aceita somente IPv6 de `2000::/3`, porta não zero e scope/flow zero, excluindo os prefixos especiais e IID ISATAP descritos na [spec §8.1.1](engineering/AURORA_CONNECT_SPEC.md#811-modo-externo-ipv6-explícito--incremento45). Não comprova alcance, caminho nativo ou ausência de toda tradução/túnel. Apenas o transporte do convidado usa `[::]:0`; listeners de aplicação e destinos de serviços continuam loopback. Relay, lookup, portmapper, renovação e persistência de consumo permanecem desligados/ausentes.
+
+Mantém uma admissão, expiração máxima de600s para a sessão inteira, revogação e barreira TLS antes da admissão. Os prompts continuam com60s, limitados também pela expiração quando já existe convite. Nenhum prazo é ampliado durante a troca manual. Os comandos padrão continuam loopback, com teto de600s; os callers Node permanecem loopback e limitados a120s. Não aceitam silenciosamente um convite externo verificado por outra API. Ensaio no IPv6 próprio deste PC não substitui validação do novo modo entre duas internets. Minecraft e voz têm homologação separada.
 
 ## O que este executável faz
 

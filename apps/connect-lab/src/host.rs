@@ -61,6 +61,15 @@ impl Host {
         invitation.check_host(&config)?;
         Self::start_inner(config, Some(invitation.clone())).await
     }
+    /// Explicit external IPv6 initial bind only; grants and one-use admission
+    /// are identical to the loopback mode. No discovery, relay or renewal.
+    pub async fn start_invited_external_ipv6(
+        config: HostConfig,
+        invitation: &Invitation,
+    ) -> Result<Self> {
+        invitation.check_host_external_ipv6(&config)?;
+        Self::start_inner(config, Some(invitation.clone())).await
+    }
     async fn start_inner(config: HostConfig, mut invitation: Option<Invitation>) -> Result<Self> {
         config.limits.validate()?;
         if !valid_id(&config.session_id)
