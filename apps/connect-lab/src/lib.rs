@@ -1,4 +1,6 @@
-//! Experimental transport lab. No desktop integration, discovery, relay or port mapping.
+//! Experimental transport library. Direct-only endpoints; no relay or port mapping.
+mod bridge;
+mod fragment;
 mod guest;
 mod host;
 mod invitation;
@@ -8,7 +10,9 @@ mod plan;
 mod transport;
 mod wire;
 
-pub use guest::{Guest, TcpBridge, UdpAssociation, UdpBridge};
+pub use bridge::MAX_FRAGMENT_FRAME_BYTES;
+pub use fragment::Completed as ReassembledDatagram;
+pub use guest::{FragmentedUdpAssociation, Guest, TcpBridge, UdpAssociation, UdpBridge};
 pub use host::Host;
 pub use invitation::{
     Invitation, MAX_INVITATION_BYTES, MAX_INVITATION_LIFETIME, validate_external_invitation_address,

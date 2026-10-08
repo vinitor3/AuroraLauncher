@@ -1,4 +1,5 @@
 use crate::{
+    bridge, fragment,
     model::{ActiveGuard, ActiveKind, Metrics, valid_id},
     transport::{self, Bucket, Budget},
     wire::{self, Hello, OpenRequest, Operation, Reply, SequenceWindow},
@@ -31,6 +32,8 @@ struct LeaseState {
     cancel: CancellationToken,
     udp_limiters: Mutex<HashMap<u32, Arc<Mutex<UdpLimiter>>>>,
     downstream_limiters: Mutex<HashMap<u32, Arc<Mutex<UdpLimiter>>>>,
+    fragment_ingress: Arc<Mutex<UdpLimiter>>,
+    fragment_memory: fragment::PeerBudget,
 }
 struct State {
     session_id: String,
@@ -87,7 +90,12 @@ impl Host {
                 datagrams_per_second,
             } = service.udp_return_policy
                 && (service.protocol != Protocol::Udp
-                    || bytes_per_second < DATAGRAM_HEADER_LEN as u32
+                    || bytes_per_second
+                        < (if service.required_capability == Capability::FragmentedDatagram {
+                            fragment::HEADER_LEN
+                        } else {
+                            DATAGRAM_HEADER_LEN
+                        }) as u32
                     || bytes_per_second > config.limits.udp_bytes_per_second
                     || datagrams_per_second == 0
                     || datagrams_per_second > config.limits.datagrams_per_second)
@@ -102,7 +110,12 @@ impl Host {
                 || (service.protocol == Protocol::Tcp
                     && service.required_capability != Capability::ReliableStream)
                 || (service.protocol == Protocol::Udp
-                    && service.required_capability != Capability::Datagram)
+                    && !matches!(
+                        service.required_capability,
+                        Capability::Datagram | Capability::FragmentedDatagram
+                    ))
+                || (service.required_capability == Capability::FragmentedDatagram
+                    && service.max_datagram_bytes > fragment::MAX_DATAGRAM)
                 || services.contains_key(&service.service_id)
             {
                 return Err(Error::Configuration);
@@ -125,6 +138,8 @@ impl Host {
             leases.insert(
                 lease.lease_id.clone(),
                 LeaseState {
+                    fragment_memory: bridge::peer_budget(lease.peer),
+                    fragment_ingress: Arc::new(Mutex::new(UdpLimiter::new(&config.limits))),
                     value: lease,
                     invitation: invitation.take(),
                     consumed: AtomicBool::new(false),
@@ -266,7 +281,7 @@ async fn handshake(connection: &Connection, state: &Arc<State>) -> Result<(Hello
         if hello.schema_version != SCHEMA_VERSION
             || hello.session_id != state.session_id
             || !valid_id(&hello.lease_id)
-            || hello.capabilities.len() > 2
+            || hello.capabilities.len() > 3
         {
             return Err(Error::Unauthorized);
         }
@@ -339,7 +354,33 @@ struct Association {
     return_policy: UdpReturnPolicy,
     first_forwarded: AtomicBool,
     first_forwarded_notify: Notify,
+    fragmented: Option<Mutex<fragment::Reassembler>>,
+    lease_cancel: CancellationToken,
+    lease_unix_deadline: u64,
+    lease_deadline: Instant,
 }
+impl Association {
+    fn fragment_authorized(&self) -> bool {
+        fragment_authority_valid(
+            &self.cancel,
+            &self.lease_cancel,
+            self.lease_unix_deadline,
+            self.lease_deadline,
+        )
+    }
+}
+fn fragment_authority_valid(
+    cancel: &CancellationToken,
+    lease: &CancellationToken,
+    unix_deadline: u64,
+    monotonic_deadline: Instant,
+) -> bool {
+    !cancel.is_cancelled()
+        && !lease.is_cancelled()
+        && unix_millis() < unix_deadline
+        && Instant::now() < monotonic_deadline
+}
+
 struct UdpLimiter {
     packets: Bucket,
     bytes: Bucket,
@@ -388,6 +429,7 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
         remaining = remaining.min(invitation.remaining());
     }
     let cancel = state.cancel.child_token();
+    let lease_deadline = Instant::now() + remaining;
     let tcp = Arc::new(Semaphore::new(state.limits.max_tcp_per_peer));
     let associations: Associations = Arc::new(Mutex::new(HashMap::new()));
     let mut tasks = JoinSet::new();
@@ -409,6 +451,7 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
         state.clone(),
         associations.clone(),
         cancel.clone(),
+        lease.fragment_ingress.clone(),
     ));
     let mut last_request = 0;
     let mut control = Bucket::new(state.limits.control_per_second, state.limits.control_burst);
@@ -483,7 +526,9 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
                     Protocol::Udp => {
                         if associations.lock().unwrap().len() >= state.limits.max_udp_per_peer { let _ = reject(&mut send, Error::Limit, &state).await; continue; }
                         let Ok(permit) = state.udp.clone().try_acquire_owned() else { let _ = reject(&mut send, Error::Limit, &state).await; continue; };
-                        let Some(max_payload) = transport::payload_limit(&connection, service.max_datagram_bytes) else { let _ = reject(&mut send, Error::CapabilityUnavailable, &state).await; continue; };
+                        let fragmented = request.operation == Operation::OpenFragmented;
+                        let maximum = if fragmented { bridge::payload_capacity(&connection, service.max_datagram_bytes) } else { transport::payload_limit(&connection, service.max_datagram_bytes) };
+                        let Some(max_payload) = maximum else { let _ = reject(&mut send, Error::CapabilityUnavailable, &state).await; continue; };
                         let bind = if service.endpoint.is_ipv4() { "127.0.0.1:0" } else { "[::1]:0" };
                         let socket = match UdpSocket::bind(bind).await { Ok(s) => s, Err(_) => { let _ = reject(&mut send, Error::Destination, &state).await; continue; } };
                         if socket.connect(service.endpoint).await.is_err() { let _ = reject(&mut send, Error::Destination, &state).await; continue; }
@@ -493,9 +538,11 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
                             limiter: lease.udp_limiters.lock().unwrap().entry(handle).or_insert_with(|| Arc::new(Mutex::new(UdpLimiter::new(&state.limits)))).clone(),
                             downstream_limiter: lease.downstream_limiters.lock().unwrap().entry(handle).or_insert_with(|| Arc::new(Mutex::new(UdpLimiter::downstream(service.udp_return_policy, &state.limits)))).clone(),
                             return_policy: service.udp_return_policy, first_forwarded: AtomicBool::new(false), first_forwarded_notify: Notify::new(),
+                            fragmented: fragmented.then(|| Mutex::new(fragment::Reassembler::new(fragment::Scope { service_handle: handle, association_id: request.request_id, generation: service.revision }, lease.fragment_memory.clone()))),
+                            lease_cancel: lease.cancel.clone(), lease_unix_deadline: lease.value.expires_at_unix_ms, lease_deadline,
                         });
                         associations.lock().unwrap().insert(request.request_id, association.clone());
-                        let response = Reply { service_handle: handle, association_id: request.request_id, generation: service.revision, max_payload: Some(max_payload), ..Default::default() };
+                        let response = Reply { service_handle: handle, association_id: request.request_id, generation: service.revision, max_payload: Some(max_payload), fragment_version: fragmented.then_some(2), ..Default::default() };
                         if reply(&mut send, &response, &state).await.is_err() { associations.lock().unwrap().remove(&request.request_id); continue; }
                         let _ = send.finish();
                         state.metrics.udp_associations_opened.fetch_add(1, Ordering::Relaxed);
@@ -546,6 +593,18 @@ fn validate_open<'a>(
     if !hello.capabilities.contains(&service.required_capability) {
         return Err(Error::CapabilityUnavailable);
     }
+    match request.operation {
+        Operation::OpenFragmented
+            if service.protocol != Protocol::Udp
+                || service.required_capability != Capability::FragmentedDatagram =>
+        {
+            return Err(Error::CapabilityUnavailable);
+        }
+        Operation::Open if service.required_capability == Capability::FragmentedDatagram => {
+            return Err(Error::CapabilityUnavailable);
+        }
+        _ => (),
+    }
     Ok((*handle, service))
 }
 
@@ -568,9 +627,33 @@ async fn receive_datagrams(
     state: Arc<State>,
     associations: Associations,
     cancel: CancellationToken,
+    fragment_ingress: Arc<Mutex<UdpLimiter>>,
 ) {
+    let mut expiry = tokio::time::interval(Duration::from_millis(25));
+    expiry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        let data = tokio::select! { _ = cancel.cancelled() => break, data = connection.read_datagram() => match data { Ok(d) => d, Err(_) => break } };
+        let data = tokio::select! {
+            _ = cancel.cancelled() => break,
+            _ = expiry.tick() => {
+                for a in associations.lock().unwrap().values() {
+                    if let Some(r) = &a.fragmented { r.lock().unwrap().expire(Instant::now()); }
+                }
+                continue;
+            },
+            data = connection.read_datagram() => match data { Ok(d) => d, Err(_) => break },
+        };
+        if data.first() != Some(&1) {
+            // Debit every V2/unknown frame before decoding, including bad scope,
+            // replay and malformed framing. The socket is reached only on completion.
+            let allowed = fragment_ingress.lock().unwrap().take(data.len());
+            let aggregate = state.budget.lock().unwrap().take(data.len());
+            if !allowed || !aggregate || data.len() > bridge::MAX_FRAGMENT_FRAME_BYTES {
+                state.metrics.udp_dropped.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            receive_fragment(&connection, &state, &associations, &cancel, &data).await;
+            continue;
+        }
         let frame = match DatagramFrame::decode(data) {
             Ok(f) => f,
             Err(_) => {
@@ -588,6 +671,7 @@ async fn receive_datagrams(
             continue;
         };
         if cancel.is_cancelled()
+            || a.fragmented.is_some()
             || a.cancel.is_cancelled()
             || a.activity.lock().unwrap().elapsed() >= state.limits.udp_idle_timeout
             || a.service_handle != frame.service_handle
@@ -639,6 +723,81 @@ async fn receive_datagrams(
     }
 }
 
+async fn receive_fragment(
+    connection: &Connection,
+    state: &State,
+    associations: &Associations,
+    cancel: &CancellationToken,
+    data: &[u8],
+) {
+    let accepted = (|| {
+        let frame = fragment::Frame::decode(data).ok()?;
+        let a = associations
+            .lock()
+            .unwrap()
+            .get(&frame.scope.association_id)
+            .cloned()?;
+        if cancel.is_cancelled()
+            || !a.fragment_authorized()
+            || a.activity.lock().unwrap().elapsed() >= state.limits.udp_idle_timeout
+            || frame.scope.service_handle != a.service_handle
+            || frame.scope.generation != a.generation
+            || frame.total as usize > a.max_payload
+            || connection.close_reason().is_some()
+        {
+            return None;
+        }
+        let reassembler = a.fragmented.as_ref()?;
+        if !a.limiter.lock().unwrap().take(data.len()) {
+            return None;
+        }
+        let output = {
+            let mut reassembler = reassembler.lock().unwrap();
+            if !a.fragment_authorized() || cancel.is_cancelled() {
+                return None;
+            }
+            reassembler.push(frame, Instant::now()).ok()?
+        };
+        Some((
+            a,
+            output,
+            frame.total as u64 + frame.count as u64 * fragment::HEADER_LEN as u64,
+        ))
+    })();
+    let Some((a, output, credit)) = accepted else {
+        state.metrics.udp_dropped.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
+    let fragment::Progress::Complete(payload) = output else {
+        return;
+    };
+    if !a.fragment_authorized() {
+        return;
+    }
+    let delivered = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return,
+        _ = a.cancel.cancelled() => return,
+        _ = a.lease_cancel.cancelled() => return,
+        _ = tokio::time::sleep_until(tokio::time::Instant::from_std(a.lease_deadline)) => return,
+        result = tokio::time::timeout(Duration::from_millis(40), a.socket.send(payload.as_ref())) => result,
+    };
+    if matches!(delivered, Ok(Ok(n)) if n == payload.as_ref().len()) {
+        *a.activity.lock().unwrap() = Instant::now();
+        let _ = a
+            .credit
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                Some(n.saturating_add(credit).min(65536))
+            });
+        a.first_forwarded.store(true, Ordering::Release);
+        a.first_forwarded_notify.notify_one();
+        state.metrics.udp_forwarded.fetch_add(1, Ordering::Relaxed);
+    } else {
+        state.metrics.udp_dropped.fetch_add(1, Ordering::Relaxed);
+    }
+    // payload's RAII memory reservation stays alive through the awaited UDP send.
+}
+
 async fn udp_return(
     connection: Connection,
     state: Arc<State>,
@@ -651,6 +810,7 @@ async fn udp_return(
     // A full UDP-family buffer detects oversized payloads without forwarding a truncated prefix.
     let mut buffer = vec![0u8; 65536];
     let mut sequence = 0u32;
+    let mut message_ids = fragment::MessageIds::default();
     loop {
         let idle_deadline = tokio::time::Instant::from_std(*a.activity.lock().unwrap())
             + state.limits.udp_idle_timeout;
@@ -678,8 +838,14 @@ async fn udp_return(
                     }
                 }
                 if a.cancel.is_cancelled() || a.activity.lock().unwrap().elapsed() >= state.limits.udp_idle_timeout { break; }
-                let Some(max) = transport::payload_limit(&connection, a.max_payload) else { break; };
+                let Some(max) = (if a.fragmented.is_some() { bridge::payload_capacity(&connection, a.max_payload) } else { transport::payload_limit(&connection, a.max_payload) }) else { break; };
                 if size > max { state.metrics.udp_oversize.fetch_add(1, Ordering::Relaxed); continue; }
+                if a.fragmented.is_some() {
+                    let result = send_fragmented_return(&connection, &state, &a, id, &buffer[..size], &mut message_ids);
+                    if result.is_ok() { state.metrics.udp_returned.fetch_add(1, Ordering::Relaxed); }
+                    else { state.metrics.udp_dropped.fetch_add(1, Ordering::Relaxed); }
+                    continue;
+                }
                 let cost = (size + DATAGRAM_HEADER_LEN) as u64;
                 let permitted = match a.return_policy {
                     UdpReturnPolicy::ReplyBudget => a.credit.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(cost)).is_ok()
@@ -699,5 +865,97 @@ async fn udp_return(
         }
     }
     a.cancel.cancel();
+    if let Some(r) = &a.fragmented {
+        r.lock().unwrap().clear();
+    }
     associations.lock().unwrap().remove(&id);
+}
+
+fn send_fragmented_return(
+    connection: &Connection,
+    state: &State,
+    a: &Association,
+    id: u64,
+    payload: &[u8],
+    ids: &mut fragment::MessageIds,
+) -> Result<()> {
+    let capacity = bridge::wire_capacity(connection).ok_or(Error::CapabilityUnavailable)?;
+    let message = ids.take().map_err(bridge::error)?;
+    let scope = fragment::Scope {
+        service_handle: a.service_handle,
+        association_id: id,
+        generation: a.generation,
+    };
+    let count = payload
+        .len()
+        .div_ceil(capacity - fragment::HEADER_LEN)
+        .max(1);
+    let cost = payload.len() + count * fragment::HEADER_LEN;
+    // Reserve the whole response budget before emitting any prefix. A failed send
+    // does not refund credit and cannot amplify later traffic.
+    if matches!(a.return_policy, UdpReturnPolicy::ReplyBudget)
+        && a.credit
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                n.checked_sub(cost as u64)
+            })
+            .is_err()
+    {
+        return Err(Error::Limit);
+    }
+    for frame in
+        fragment::Fragments::new(scope, message, payload, capacity).map_err(bridge::error)?
+    {
+        let bytes = frame.payload.len() + fragment::HEADER_LEN;
+        let permitted = match a.return_policy {
+            UdpReturnPolicy::ReplyBudget => a.limiter.lock().unwrap().take(bytes),
+            UdpReturnPolicy::AuthorizedDownstream { .. } => {
+                a.downstream_limiter.lock().unwrap().take(bytes)
+            }
+        };
+        let aggregate = state.budget.lock().unwrap().take(bytes);
+        if !permitted || !aggregate || !a.fragment_authorized() {
+            return Err(Error::Limit);
+        }
+        bridge::send_fragment(connection, frame, capacity)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod fragment_authority_tests {
+    use super::*;
+    #[test]
+    fn original_lease_token_and_both_clocks_are_enforced_before_watcher_runs() {
+        let downstream = CancellationToken::new();
+        let original = CancellationToken::new();
+        let unix = unix_millis() + 60_000;
+        let monotonic = Instant::now() + Duration::from_secs(60);
+        assert!(fragment_authority_valid(
+            &downstream,
+            &original,
+            unix,
+            monotonic
+        ));
+        original.cancel();
+        assert!(!downstream.is_cancelled(), "watcher_was_not_run");
+        assert!(!fragment_authority_valid(
+            &downstream,
+            &original,
+            unix,
+            monotonic
+        ));
+        let original = CancellationToken::new();
+        assert!(!fragment_authority_valid(
+            &downstream,
+            &original,
+            unix_millis(),
+            monotonic
+        ));
+        assert!(!fragment_authority_valid(
+            &downstream,
+            &original,
+            unix,
+            Instant::now()
+        ));
+    }
 }

@@ -1156,6 +1156,30 @@ Frontend:14DOMPASS/0skip,831,7491ms, incluindo quatro regressões de descoberta;
 
 Rollback operacional: Encerrar Connect, aguardar seus recursos e preservar o jogo. Nenhuma configuração pessoal foi escrita; não há Java a matar ou configuração a restaurar. Rollback de código por revert local revisado deste incremento; build sem feature mantém indisponibilidade. Sem push, release, instalador, conta ou gasto.
 
+## Quadragésimo nono incremento — UDP completo por fragmentos autorizados
+
+Implementação iniciada sobre `0e7eaa3`, validada junto de47b e48; commit preparado após `f40647a`, em08/10/2026. O [domínio49](aurora-connect-fragmented-udp.md) registra contrato completo, layout, APIs, comandos/logs, correções e limites. A biblioteca real passa a oferecer serviço UDP explícito `fragmentedDatagram/openFragmented`, até4096B original em até8frames completos≤1264B, sem retransmissão. V1/TCP preservados; nenhum CLI/convite/painel seleciona V2 neste incremento. Não há mod/configuração/Java/áudio ou dependência nova.
+
+**Arquivos.** `apps/connect-lab/src/{fragment,bridge,model,wire,lib,host,guest}.rs`, `tests/fragmented_transport.rs`; apenas pin atualizado nos callers Node `tunnel-session.mjs` e `boundary-smoke.mjs`. Domínio49, domínioConnect/voz, spec5.2, ADR, backlog, matriz, AGENTS e este task documentam a decisão. Fonte de relay isolada em preparação não pertence ao incremento.
+
+**QA.** Revisão independente corrigiu cancelar depois de limpar no Guest e depender do watcher da lease no Host. Regressões causais retêm o lock de remontagem, verificam token original cancelado mesmo sem propagação e os dois relógios separadamente. Guards de reserva sobrevivem à fila/recv/envio, inclusive reconexão da mesma identidade; limites medem payload reservado, não RSS. Autorização/escopo precedem alocação e I/O; bytes wire recusados também são cobrados. Testes de redução de capacidade são puros, sem alegar PMTU real induzida.
+
+Comandos finais efetivamente executados:
+
+```powershell
+cargo test --offline --locked --manifest-path apps/connect-lab/Cargo.toml -- --test-threads=1
+cargo fmt --manifest-path apps/connect-lab/Cargo.toml --all -- --check
+cargo clippy --offline --locked --manifest-path apps/connect-lab/Cargo.toml --all-targets -- -D warnings
+cargo build --offline --locked --manifest-path apps/connect-lab/Cargo.toml --bins
+node --test --test-concurrency=1 apps/connect-client-lab/tunnel-session.test.mjs apps/connect-client-lab/boundary-smoke.test.mjs
+```
+
+Suíte final conjunta **147PASS/4ignored/0FAIL**, com as correções49 e dois unitários47b novos incluídos, não somados novamente. Oito testes reais V2 cobrem duas direções, tamanhos0/1427/2108/4096B, dois peers/serviços, TCP1MiB por direção concorrente, ordem/duplicata/perda/TTL, escopo/revisão/capability, oversize4097, políticas de retorno e cleanup/rebind. Estatísticas QUIC observaram≥9frames/direção/peer para quatro mensagens, distintas dos contadores de datagramas lógicos. Fmt/clippyalltargets/build PASS; rodadas anteriores144 e19focados permanecem históricas no domínio. Gate47b próprio de61s é evidência separada, não teste V2 externo.
+
+Debug principal24050688B, SHA256 `005b55c43f2b08fd9bb5f32f7c17a81de1eccd50a34e920b95a545c580c5f973`, revisado e repinado somente nos dois callers. Runner47b23326720B, `7d3403b25ee66e1759adf87fe7d64bec65031d9574cc325b9ed64f09408b3e16`, pertence à correção operacional separada; build compartilhado não produz kit limpo de release. Kits históricos preservados. Callers **18PASS/0skip/0FAIL**,7624,1379ms, com `AURORA_CONNECT_BOUNDARY_TEST_REAL=1` somente no processo; fronteiras V1 e pontes CLI reais, sem mods. Log `connect-fragment-final-callers.log`; demais logs finais identificados no domínio49.
+
+**Estado/rollback.** TCP/UDP **PROTÓTIPO**, direto externo permanece **PARCIAL**, relay desligado. Minecraft mantém44 e UI mantém48; nenhum novo cliente gráfico. SVC/Plasmo mantêm controles/configuração parciais, áudio/endereço runtime separados e pendentes. Nenhuma ampliação dos nove pares, contas mistas, estabilidade ou liberaçãoR4. Rollback: não selecionar V2, aguardar shutdown e descartar guards próprios; não há configuração aplicada para recuperar. Revert local revisado inclui pins coerentes, sem alterar kits antigos, outras worktrees ou dados pessoais.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.

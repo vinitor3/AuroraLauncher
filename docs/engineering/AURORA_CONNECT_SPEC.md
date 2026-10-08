@@ -154,6 +154,16 @@ Justificativa de engenharia: proteção QUIC contra reflexão limita envio antes
 
 Evidência do segundo incremento: dez casos novos em `tests/downstream.rs` e `tests/downstream_qa.rs`, com respostas múltiplas/maiores, preservação do padrão 1:1, quotas compartilhadas/isoladas, reconexão, origem estrangeira, tentativa de política pelo peer, inatividade, revogação e expiração absoluta. O snapshot 34/34 e fmt foi preservado no [task](../task-aur-r4-connect.md); o terceiro incremento amplia para 45/45 conforme §3.1. São datagramas sintéticos opacos; não executam mod, resolvem seu anúncio ou homologam áudio. Tetos observados de 1358 e 1390 bytes em smokes distintos são resultados de negociação dinâmica, não pin do contrato ou garantia de payload para um mod.
 
+### 5.2 Envelope UDP V2 explicitamente autorizado — incremento49
+
+O transporte acrescenta `fragmentedDatagram`/`openFragmented` somente por opt-in de serviço UDP na API. APIs V1 preservam contrato; plano CLI e convite legados recusam a nova capability. `fragmentVersion:2` aparece apenas na resposta V2, cujo `maxPayload` limita o datagrama original a4096B. Não há fallback automático, retransmissão ou interpretação de áudio. TCP permanece independente.
+
+Header big-endian32B: versão2/flags0, handle de serviço, associação, geração, mensagem, total, índice, quantidade e comprimento do fragmento. Escopo de peer/sessão deriva da conexão autenticada. Frame completo≤min(capacidade QUIC atual,1264B), até8 partes equilibradas, sequência por direção sem wrap, remontagem inteira ou descarte, janela64IDs e prazo250ms desde o primeiro fragmento. Duplicata não renova prazo; redução de capacidade abandona a mensagem sem reutilizar seu ID. Datagrama vazio é preservado. Esses1264B incluem headerV2 e não são uma medida de MTU física.
+
+Autorização/capability/revisão/escopo precedem alocação. Reservas de payload:8mensagens/32KiB por associação,64KiB por identidade autenticada no processo,1MiB global; guards completos conservam a reserva durante fila/recv/envio local. Cada fragmento cobra bytes de wire e quota de datagramas, inclusive recusados. Crédito ReplyBudget só nasce após encaminhar mensagem completa; AuthorizedDownstream continua aprovação explícita. Revogação/prazos original e monotônico são conferidos diretamente antes de remontagem/I/O; cleanup cancela antes de limpar filas.
+
+[Contrato completo e evidências49](../aurora-connect-fragmented-udp.md) especificam layout, quotas, ambiguidades e APIs. Testes reais transportaram bytes sintéticos0/1427/2108/4096B em ambos os sentidos, dois peers/serviços e TCP concorrente, sem áudio. V2 externo, seleção em convite/CLI/UI, anúncio dos mods e áudio bilateral SVC/Plasmo continuam separados; não promover o codec a homologação de voz.
+
 ## 6. NAT, caminhos e política de custo
 
 Preferir direto e permitir relay gratuito **verificado e autorizado para o uso pretendido**. Sem contratação, cobrança automática, cartão/billing ativado, VPS obrigatória, promoção temporária, contas rotativas ou contorno de quota. Software livre não garante servidor gratuito. Alerta/contador/spend cap não comprovado não bloqueia cobrança. Se nenhum relay atende distribuição, liberar no máximo modo direto homologado com limitação clara; demais capacidades seguem experimentais e desligadas.

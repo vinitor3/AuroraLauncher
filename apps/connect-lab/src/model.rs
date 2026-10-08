@@ -25,6 +25,8 @@ pub enum Protocol {
 pub enum Capability {
     ReliableStream,
     Datagram,
+    /// Explicit laboratory V2 opt-in; never inferred from ordinary Datagram.
+    FragmentedDatagram,
 }
 
 /// Host-approved behavior for a UDP service; never supplied by a remote peer.

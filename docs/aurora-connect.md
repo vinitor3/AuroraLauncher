@@ -8,6 +8,8 @@ Incrementos25/26: SVC2.6.22 e Plasmo2.1.17 passaram separadamente pelo anúncio 
 
 ## Preparação de dois computadores
 
+O [incremento49](aurora-connect-fragmented-udp.md) acrescenta UDP fragmentado explicitamente autorizado apenas na API de biblioteca, com bytes reais e limites de remontagem em loopback. Não amplia automaticamente planos/convites/CLIs nem os kits históricos; áudio e anúncio dos mods continuam com validação separada.
+
 O [incremento44](task-aur-r4-connect.md#quadragésimo-quarto-incremento--entrada-externa-no-mundo-pelo-fluxo-manual) passou entrada gráfica, terreno/movimento e saída de um convidado pelo fluxo manual, com população local 0 → 1 → 0 e encerramento normal. Minecraft está **PARCIAL** nessa amostra. O supervisor43 teve duas falhas externas antes de `guest_ready`, de causa indeterminada; para novo ensaio supervisionado, o fluxo manual validado tem prioridade. Os parágrafos40–43 abaixo conservam a evidência de cada incremento, sem substituir o resultado44.
 
 Incremento42: a CLI manual agora encerra quando QUIC fecha, aguarda a liberação dos listeners e relata `closed`/exit1. Stop e prazo locais continuam normais; o fluxo de convite preserva seu contrato anterior.98Rust+18NodePASS, incluindo cinco regressões novas e pares reaisTCP/UDP; sem homologação externa adicional. [Registro e hash atual](task-aur-r4-connect.md#quadragésimo-segundo-incremento--encerramento-observável-da-cli-manual). Kits históricos continuam com seus binários originais.

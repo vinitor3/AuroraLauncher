@@ -25,6 +25,7 @@ pub(crate) struct InvitationProof {
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Operation {
     Open,
+    OpenFragmented,
     CloseUdp,
 }
 #[derive(Serialize, Deserialize)]
@@ -46,6 +47,8 @@ pub(crate) struct Reply {
     pub association_id: u64,
     pub generation: u32,
     pub max_payload: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fragment_version: Option<u8>,
 }
 impl Reply {
     pub fn error(error: Error) -> Self {
