@@ -55,14 +55,31 @@ pub struct Host {
 }
 impl Host {
     pub async fn start(config: HostConfig) -> Result<Self> {
-        Self::start_inner(config, None).await
+        Self::start_inner(config, None, transport::EndpointMode::Direct).await
+    }
+    /// Explicit owned loopback relay fixture. No address lookup, IP transport,
+    /// provider account or change to peer/session/service authorization.
+    #[cfg(feature = "local-relay-lab")]
+    pub async fn start_local_relay(config: HostConfig, ticket: &LocalRelayTicket) -> Result<Self> {
+        ticket.check_host(&config)?;
+        Self::start_inner(
+            config,
+            None,
+            transport::EndpointMode::LocalRelay(ticket.clone()),
+        )
+        .await
     }
     /// One explicit invited lease, separate from the reconnectable manual mode.
     /// The caller must create fresh host/session keys each run: replay state is
     /// local to this Host and is neither persisted nor reconstructed from tokens.
     pub async fn start_invited(config: HostConfig, invitation: &Invitation) -> Result<Self> {
         invitation.check_host(&config)?;
-        Self::start_inner(config, Some(invitation.clone())).await
+        Self::start_inner(
+            config,
+            Some(invitation.clone()),
+            transport::EndpointMode::Direct,
+        )
+        .await
     }
     /// Explicit external IPv6 initial bind only; grants and one-use admission
     /// are identical to the loopback mode. No discovery, relay or renewal.
@@ -71,9 +88,18 @@ impl Host {
         invitation: &Invitation,
     ) -> Result<Self> {
         invitation.check_host_external_ipv6(&config)?;
-        Self::start_inner(config, Some(invitation.clone())).await
+        Self::start_inner(
+            config,
+            Some(invitation.clone()),
+            transport::EndpointMode::Direct,
+        )
+        .await
     }
-    async fn start_inner(config: HostConfig, mut invitation: Option<Invitation>) -> Result<Self> {
+    async fn start_inner(
+        config: HostConfig,
+        mut invitation: Option<Invitation>,
+        mode: transport::EndpointMode,
+    ) -> Result<Self> {
         config.limits.validate()?;
         if !valid_id(&config.session_id)
             || config.services.is_empty()
@@ -150,7 +176,8 @@ impl Host {
             );
         }
         let endpoint =
-            transport::endpoint(config.secret_key, config.bind_addr, &config.limits).await?;
+            transport::endpoint_in_mode(config.secret_key, config.bind_addr, &config.limits, mode)
+                .await?;
         let state = Arc::new(State {
             session_id: config.session_id,
             services,

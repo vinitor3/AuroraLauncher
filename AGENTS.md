@@ -29,6 +29,8 @@ O laboratório descartável `apps/connect-runtime-tools` já executou Minecraft 
 
 ## Mapa do repositório
 
+Connect 50 acrescenta somente relay próprio loopback sob `local-relay-lab`, off por padrão. Ticket fechado deriva do listener próprio, recusa proxy herdado/Windows não verificado e não aceita relay público. Stop/Drop invalidam clones; fechar endpoints antes do listener e cancelar online pendente são invariantes. Não ampliar API para URL arbitrária ou ligar feature no desktop sem novo contrato. Leia `docs/aurora-connect-local-relay.md`; bytes sintéticos em relay local não homologam NAT, mod, áudio ou custo de operador externo.
+
 Connect 51 acrescenta loader e emissão/verificação de convites explicitamente fragmentados, schema 1 e TTL 600s preservados. Perfis de transporte e endereço são escolhas separadas; Host/Guest antigos recusam objeto V2 antes de I/O. Admissão Host/Guest/CLI V2 ainda pendente neste incremento. Leia `docs/aurora-connect-fragmented-invitations.md` antes de integrar; plano 10..3600s não amplia convite 600s. Sem homologação de voz/rede/UI, dependência nova ou mudança dos kits.
 
 Connect47b corrige operação humana com aliases audit host/guest-external-ipv6-interactive e preparação600s; antigos60s/Hello10s/TTL≤600s preservados. Input confere prazo antes/depois do await, aprovação nunca renova lease. Kit47b7d3403…3e16 é separado do47. Se o terminal mostrar PS>, não mandar colar JSON/approve: o nativo já saiu; criar tentativa nova após cleanup. Teste próprio com os mesmos dois processos aguardou61s e passou; tentativa externa47 com parse do shell não aprova conexão nem diagnostica NAT. Consulte domínio convites/task47b e não reutilize peers antigos.

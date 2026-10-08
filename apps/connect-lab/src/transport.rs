@@ -14,6 +14,69 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+pub(crate) enum EndpointMode {
+    Direct,
+    #[cfg(feature = "local-relay-lab")]
+    LocalRelay(crate::LocalRelayTicket),
+}
+
+pub(crate) async fn endpoint_in_mode(
+    key: SecretKey,
+    bind: SocketAddr,
+    limits: &Limits,
+    mode: EndpointMode,
+) -> Result<Endpoint> {
+    match mode {
+        EndpointMode::Direct => endpoint(key, bind, limits).await,
+        #[cfg(feature = "local-relay-lab")]
+        EndpointMode::LocalRelay(ticket) => {
+            let creation = ticket.begin_endpoint()?;
+            let config = quic_config(limits)?;
+            let online_deadline = ticket.online_deadline(limits.handshake_timeout)?;
+            let mut report = NetReportConfig::minimal();
+            // With QAD disabled, this is necessary to select the home relay.
+            // The sole URL is our HTTP loopback fixture; no captive-portal check,
+            // public DNS endpoint, TLS/ACME service or other relay is configured.
+            report.https_probes = true;
+            // No bind_addr: that would re-add an IP transport. The only route
+            // is the owned loopback fixture, without QAD, DNS or publication.
+            let endpoint = Endpoint::builder(presets::Minimal)
+                .clear_ip_transports()
+                .clear_relay_transports()
+                .clear_address_lookup()
+                .relay_mode(RelayMode::Custom(ticket.map()))
+                .net_report_config(report)
+                .secret_key(key)
+                .alpns(vec![ALPN.to_vec()])
+                .keylog(false)
+                .transport_config(config)
+                .bind()
+                .await
+                .map_err(|_| Error::Transport)?;
+            if let Err(error) = creation.register(&endpoint) {
+                endpoint.close().await;
+                return Err(error);
+            }
+            // Explicit readiness for this fixture; it is not an Aurora peer
+            // admission or an application-service proof.
+            let ready = tokio::select! {
+                biased;
+                _ = ticket.cancelled() => Err(Error::Expired),
+                result = tokio::time::timeout_at(online_deadline.into(), endpoint.online()) => result.map_err(|_| Error::Timeout),
+            };
+            if let Err(error) = ready {
+                endpoint.close().await;
+                return Err(error);
+            }
+            if let Err(error) = ticket.check_current() {
+                endpoint.close().await;
+                return Err(error);
+            }
+            Ok(endpoint)
+        }
+    }
+}
+
 fn quic_config(limits: &Limits) -> Result<QuicTransportConfig> {
     limits.validate()?;
     Ok(QuicTransportConfig::builder()

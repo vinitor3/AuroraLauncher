@@ -94,6 +94,8 @@ Medição posterior, somente leitura, com `w32tm /stripchart /computer:time.wind
 
 Registrar separadamente relato remoto, topologia confirmada pelo usuário, observações locais, bins/hashes, prazo, bytes, contadores e cleanup. Se falhar, conservar o código/último evento, encerrar recursos próprios e preparar nova tentativa; não atribuir causa a NAT/firewall sem evidência. Não pedir senhas, tokens, chaves privadas ou gravações.
 
+Após autorização específica e aceite do UAC pelo usuário, a correção pontual foi executada no anfitrião: -75,8641067s, seguida de três offsets 0,0154518/0,0172183/0,0171261s. Helper/filho saíram 0, mutex liberado, configurações preservadas e nenhum rollback necessário. Snapshot, plano e resultado foram gravados em pasta privada nova. Isso corrige o relógio observado; ainda não aprova a nova tentativa de convite nem sincronização permanente.
+
 Este ensaio comprova apenas convites e TCP sintético. UDP mantém suas provas anteriores; Minecraft, interface Tauri, SVC, Plasmo, contas mistas, NAT/CGNAT, relay e estabilidade exigem seus próprios testes. [Contrato](engineering/AURORA_CONNECT_SPEC.md), [estado e comandos executados](task-aur-r4-connect.md), [integração desktop](aurora-connect-desktop.md).
 
 Rollback operacional: `stop` em cada runner próprio e no echo, seguido da conferência de liberação. EOF/Ctrl+C também encerram recursos, mas não substituem a comprovação do teste planejado. Não há configuração pessoal a restaurar; conservar kit/evidências. Rollback de código é revert local revisado somente do incremento, sem reset/clean ou substituição de artefatos históricos.

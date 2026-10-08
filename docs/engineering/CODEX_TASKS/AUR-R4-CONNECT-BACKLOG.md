@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 08/10/2026
 
+Incremento 50/004/008: relay próprio em loopback, explicitamente selecionado, passou TCP/UDP reais, caminho exclusivamente relay, quota, autorização e cleanup. **PROTÓTIPO** desligado por padrão. Gates de proxy, ticket invalidado e cancelamento online protegem o fixture local; não habilitam relay público ou fallback, não homologam NAT/CGNAT e não concluem 004. [Provas e limites 50](../../aurora-connect-local-relay.md). Custo local zero; condições de serviços externos permanecem separadas.
+
 Incremento 51/003/005/006/007 prepara planos e convites V2 assinados por APIs explícitas, mantendo o legado recusado antes de I/O. **PROTÓTIPO** com 55 PASS focados e perfil/endereço separados; admissão Host/Guest/CLI V2 é o próximo componente, sem concluir qualquer gate de áudio ou rede externa. [Contrato 51](../../aurora-connect-fragmented-invitations.md). Este registro atualiza a limitação histórica 49 quanto a emissão/verificação, preservando pendências de execução e UI.
 
 Correção47b/005/008 amplia somente preparação humana para600s em aliases explícitos do runner, mantendo lease≤600s e defaults antigos. Prova real com dois processos esperou61s e passou; novo kit preparado. A primeira tentativa remota47 não conectou: usuário colou convite/approve no shell após saída nativa não observada, host teve zero peers/destinos/bytes e cleanup normal. Causa nativa não foi inferida; convites externos continuam **PRECISA DE TESTE** até nova evidência. [Procedimento](../../aurora-connect-internet-invitations.md).

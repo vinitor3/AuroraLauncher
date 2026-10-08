@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 08/10/2026
 
+Incremento 50 comprova TCP/UDP por relay próprio em loopback, incluindo duas origens UDP, autorização, quota observada e cleanup, com feature desligada por padrão. **PROTÓTIPO**, sem relay público ou nova rede atendida. [Contrato 50](../aurora-connect-local-relay.md). Minecraft, convites externos, SVC/Plasmo, áudio e nove pares permanecem com suas provas separadas.
+
 Incremento 51 acrescenta plano e convite explicitamente fragmentados, assinatura dos limites e recusa pelos caminhos antigos antes de I/O. **PROTÓTIPO**, 55 testes focados aprovados; admissão Host/Guest/CLI V2 permanece pendente. [Contrato 51](../aurora-connect-fragmented-invitations.md). Nenhuma nova prova de Minecraft, voz, interface, rede externa ou par Core/Skins.
 
 Correção47b dá600s de preparação humana em aliases explícitos, com prova local de61s e kit separado. A tentativa externa47 não teve admissão/tráfego: JSON/approve foram interpretados pelo PowerShell após saída nativa não observada. Cleanup local passou, mas causa e resultado nativo remoto não foram recuperados; nenhuma homologação de convite entre redes é inferida.

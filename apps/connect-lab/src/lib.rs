@@ -1,9 +1,11 @@
-//! Experimental transport library. Direct-only endpoints; no relay or port mapping.
+//! Experimental transport library. Defaults are direct-only, without port mapping.
 mod bridge;
 mod fragment;
 mod guest;
 mod host;
 mod invitation;
+#[cfg(feature = "local-relay-lab")]
+mod local_relay;
 mod minecraft_status;
 mod model;
 mod plan;
@@ -18,6 +20,10 @@ pub use invitation::{
     Invitation, MAX_INVITATION_BYTES, MAX_INVITATION_LIFETIME, validate_external_invitation_address,
 };
 pub use iroh::{EndpointAddr, EndpointId, SecretKey};
+#[cfg(feature = "local-relay-lab")]
+pub use local_relay::{
+    LocalRelayCounters, LocalRelayError, LocalRelayFixture, LocalRelayProfile, LocalRelayTicket,
+};
 pub use minecraft_status::{
     MAX_MINECRAFT_STATUS_JSON_BYTES, MAX_MINECRAFT_STATUS_TIMEOUT,
     MAX_MINECRAFT_STATUS_UTF16_UNITS, MinecraftStatusError, MinecraftStatusRequest,

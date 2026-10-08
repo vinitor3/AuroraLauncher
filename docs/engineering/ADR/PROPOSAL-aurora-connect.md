@@ -6,6 +6,10 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento 50 — fixture real de relay local
+
+Antes de selecionar infraestrutura externa, validar a mesma biblioteca de relay Iroh 1.3.0 em listener próprio loopback, com identidades permitidas e perfil explícito sem transporte IP. A feature fica desligada por padrão e não é ativada pelo desktop. Este caminho permite testar TCP/UDP, indisponibilidade controlada e quotas sem aceitar termos de terceiros, contratar conta ou alterar configuração. Sonda local necessária para selecionar home relay exigiu gates de proxy; nenhuma alteração global de ambiente é autorizada. Ticket/lifetime pertencem ao fixture e sua parada fecha os endpoints antes do listener. [Evidência, limites e rollback](../../aurora-connect-local-relay.md). A prova não homologa relay externo, NAT/CGNAT ou voz.
+
 ### Incremento 51 — autorização explícita de UDP fragmentado
 
 Decisão experimental em 08/10/2026: selecionar fragmentação e endereço externo por APIs independentes. O envelope assinado schema 1 já vincula capability, limites e política; reutilizá-lo evita uma segunda representação de autoridade. O perfil exige game/TCP e aux/UDP V2, enquanto os caminhos legados recusam esse objeto antes de I/O. O incremento implementa plano/emissão/verificação, ainda sem admissão Host/Guest/CLI V2. TTL 600s preservado, sem renovação implícita. [Contrato, provas e rollback](../../aurora-connect-fragmented-invitations.md); nenhum gate de voz, rede externa ou produto é promovido.

@@ -184,6 +184,12 @@ Registro da conexão upstream oferece candidatos após TLS e antes de Hello/leas
 
 O [preflight/roteiro IPv6 externo](../aurora-connect-internet.md) somente prepara o teste de dois PCs; candidato com rota não prova alcance. [Comandos, fontes e revisão32](../task-aur-r4-connect.md#trigésimo-segundo-incremento--configuração-efetiva-e-preparação-entre-redes). Gates de caminho/voz/UI e política de custos permanecem.
 
+### 6.2 Relay próprio exclusivamente loopback — incremento 50
+
+Feature opcional `local-relay-lab`, desligada por padrão, oferece `LocalRelayFixture` e APIs explícitas `Host::start_local_relay`/`Guest::connect_local_relay`. Ticket privado deriva do listener HTTP efêmero em 127.0.0.1, dois peers permitidos, quatro conexões admitidas/dois por peer, prazo monotônico 60s, sem IP transport, QAD, lookup, TLS/ACME ou métricas HTTP do relay. QUIC/TLS autenticado entre agentes permanece. É fixture local, não servidor público protegido contra accepts sem autenticação.
+
+Sonda de seleção de relay usa exclusivamente seu HTTP loopback. Gates somente leitura recusam proxy herdado e ProxyEnable Windows não comprovadamente desligado, antes do fixture/bind; macOS recusado. Stop/Drop invalidam tickets, encerram endpoints próprios antes de liberar listener e cancelam online pendente; shutdown aguarda cleanup e rebind. Prazo inicia encerramento, não promete cleanup instantâneo do SDK. [Contrato, dependências, testes e limites 50](../aurora-connect-local-relay.md). Caminhos diretos antigos não aceitam relay automaticamente; nenhum operador público, fallback pago, NAT/CGNAT ou áudio foi aprovado.
+
 ## 7. Simple Voice Chat e Plasmo Voice
 
 Diagnóstico local34: teto de áudio configurado acima do payload útil negociado válido já exige recusa conservadora (`configured_mtu_exceeds_transport_payload` no inspector). Valor igual/menor não substitui orçamento integral UDP, protocolo/cifra e teste de áudio por mod; valores inseguros/desconhecidos ficam não resolvidos. Não abaixar MTU automaticamente ou tratar o teto1264B de uma sessão como constante do transporte. [Evidência e limites](../task-aur-r4-connect.md#trigésimo-quarto-incremento--diagnóstico-de-mtu-após-o-ensaio-externo).

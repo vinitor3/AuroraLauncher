@@ -54,7 +54,23 @@ pub struct Guest {
 
 impl Guest {
     pub async fn connect(config: GuestConfig) -> Result<Self> {
-        Self::connect_inner(config, None).await
+        Self::connect_inner(config, None, transport::EndpointMode::Direct).await
+    }
+    /// Explicit owned loopback relay fixture; never enables a public relay or
+    /// falls back to an IP transport. Aurora authentication is unchanged.
+    #[cfg(feature = "local-relay-lab")]
+    pub async fn connect_local_relay(
+        mut config: GuestConfig,
+        ticket: &LocalRelayTicket,
+    ) -> Result<Self> {
+        ticket.check_guest(&config)?;
+        config.host = EndpointAddr::new(config.host.id).with_relay_url(ticket.url());
+        Self::connect_inner(
+            config,
+            None,
+            transport::EndpointMode::LocalRelay(ticket.clone()),
+        )
+        .await
     }
     /// Derive every peer/session/grant field from an already verified invitation.
     /// Validate our private key's public identity before opening any endpoint.
@@ -117,12 +133,14 @@ impl Guest {
                 limits,
             },
             Some(invitation.proof()),
+            transport::EndpointMode::Direct,
         )
         .await
     }
     async fn connect_inner(
         config: GuestConfig,
         invitation: Option<InvitationProof>,
+        mode: transport::EndpointMode,
     ) -> Result<Self> {
         config.limits.validate()?;
         if !valid_id(&config.session_id)
@@ -131,18 +149,25 @@ impl Guest {
         {
             return Err(Error::Configuration);
         }
-        // Direct-address laboratory: never accept relay or custom transport addresses in tickets.
-        if config.host.addrs.is_empty()
-            || config
-                .host
-                .addrs
-                .iter()
-                .any(|a| !matches!(a, iroh::TransportAddr::Ip(_)))
-        {
-            return Err(Error::Configuration);
+        // The existing APIs keep their direct-only gate even with this feature.
+        match &mode {
+            transport::EndpointMode::Direct => {
+                if config.host.addrs.is_empty()
+                    || config
+                        .host
+                        .addrs
+                        .iter()
+                        .any(|a| !matches!(a, iroh::TransportAddr::Ip(_)))
+                {
+                    return Err(Error::Configuration);
+                }
+            }
+            #[cfg(feature = "local-relay-lab")]
+            transport::EndpointMode::LocalRelay(ticket) => ticket.check_guest(&config)?,
         }
         let endpoint =
-            transport::endpoint(config.secret_key, config.bind_addr, &config.limits).await?;
+            transport::endpoint_in_mode(config.secret_key, config.bind_addr, &config.limits, mode)
+                .await?;
         let fragmented_capability = config
             .capabilities
             .contains(&Capability::FragmentedDatagram);
