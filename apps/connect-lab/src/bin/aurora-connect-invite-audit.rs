@@ -17,13 +17,20 @@ const COMMAND_LIMIT: usize = 32;
 enum Mode {
     Loopback,
     ExternalIpv6,
+    ExternalIpv6Interactive,
 }
 impl Mode {
     fn name(self) -> &'static str {
         match self {
             Self::Loopback => "loopback",
-            Self::ExternalIpv6 => "externalIpv6",
+            Self::ExternalIpv6 | Self::ExternalIpv6Interactive => "externalIpv6",
         }
+    }
+    fn preparation_timeout(self) -> Duration {
+        Duration::from_secs(match self {
+            Self::ExternalIpv6Interactive => 600,
+            Self::Loopback | Self::ExternalIpv6 => 60,
+        })
     }
     fn address(self, address: SocketAddr) -> Result {
         match self {
@@ -34,8 +41,10 @@ impl Mode {
             {
                 Ok(())
             }
-            Self::ExternalIpv6 => lab::validate_external_invitation_address(address)
-                .map_err(|_| "invalid_configuration"),
+            Self::ExternalIpv6 | Self::ExternalIpv6Interactive => {
+                lab::validate_external_invitation_address(address)
+                    .map_err(|_| "invalid_configuration")
+            }
             _ => Err("invalid_configuration"),
         }
     }
@@ -47,7 +56,9 @@ impl Mode {
     ) -> lab::Result<lab::Invitation> {
         match self {
             Self::Loopback => lab::Invitation::verify(text, host, guest),
-            Self::ExternalIpv6 => lab::Invitation::verify_external_ipv6(text, host, guest),
+            Self::ExternalIpv6 | Self::ExternalIpv6Interactive => {
+                lab::Invitation::verify_external_ipv6(text, host, guest)
+            }
         }
     }
     async fn connect(
@@ -59,7 +70,7 @@ impl Mode {
             Self::Loopback => {
                 lab::Guest::connect_invited(key, invitation, lab::Limits::default()).await
             }
-            Self::ExternalIpv6 => {
+            Self::ExternalIpv6 | Self::ExternalIpv6Interactive => {
                 lab::Guest::connect_invited_external_ipv6(key, invitation, lab::Limits::default())
                     .await
             }
@@ -138,15 +149,24 @@ impl Input {
         Self { lines }
     }
     async fn prompt(&mut self, limit: Instant) -> Result<String> {
-        tokio::select! {
+        // A buffered line cannot win a select race against an expired prompt.
+        // Recheck after wake-up as well, before interpreting any input.
+        if Instant::now() >= limit {
+            return Err("timed_out");
+        }
+        let result = tokio::select! {
             line=self.lines.recv()=>line.ok_or("input_closed")?,
             _=tokio::time::sleep_until(limit.into())=>Err("timed_out"),
             _=tokio::signal::ctrl_c()=>Err("cancelled"),
+        };
+        if Instant::now() >= limit {
+            return Err("timed_out");
         }
+        result
     }
 }
-fn prompt_deadline() -> Instant {
-    Instant::now() + Duration::from_secs(60)
+fn prompt_deadline(mode: Mode) -> Instant {
+    Instant::now() + mode.preparation_timeout()
 }
 fn invitation_deadline(invitation: &lab::Invitation) -> Result<Instant> {
     let remaining = invitation
@@ -205,15 +225,18 @@ async fn approve(
     guest: lab::EndpointId,
     addresses: (Option<SocketAddr>, Option<SocketAddr>),
 ) -> Result {
+    let limit = prompt_deadline(mode).min(invitation_deadline(invitation)?);
+    let input_expires = (lab::unix_millis() + mode.preparation_timeout().as_millis() as u64)
+        .min(invitation.expires_at_unix_ms());
     // This intentional local review is not a shareable diagnostic event. It
     // omits the invitation nonce/session and all private-key material.
     event(
         json!({"event":"audit_review","role":role,"mode":mode.name(),"digest":invitation.digest(),
         "hostPublicId":host.to_string(),"guestPublicId":guest.to_string(),"directAddress":invitation.direct_addr().to_string(),
         "gameTarget":addresses.0.map(|a|a.to_string()),"localTcpBind":addresses.1.map(|a|a.to_string()),"services":["game"],"singleAdmission":true,
-        "expiresAtMs":invitation.expires_at_unix_ms(),"next":"approve <digest>"}),
+        "expiresAtMs":invitation.expires_at_unix_ms(),"inputExpiresAtMs":input_expires,
+        "preparationTimeoutSeconds":mode.preparation_timeout().as_secs(),"next":"approve <digest>"}),
     );
-    let limit = prompt_deadline().min(invitation_deadline(invitation)?);
     if input.prompt(limit).await? != format!("approve {}", invitation.digest()) {
         return Err("approval_mismatch");
     }
@@ -239,17 +262,21 @@ async fn host(args: &[String], mode: Mode) -> Result {
     let mut input = Input::new();
     let key = lab::generate_key();
     let host_id = key.public();
+    let input_deadline = prompt_deadline(mode);
+    let seconds = mode.preparation_timeout().as_secs();
     event(
-        json!({"event":"audit_host_identity","peer":host_id.to_string(),"next":"guest public ID within 60 seconds"}),
+        json!({"event":"audit_host_identity","peer":host_id.to_string(),
+        "preparationTimeoutSeconds":seconds,"inputExpiresAtMs":lab::unix_millis()+seconds*1000,
+        "next":format!("guest public ID within {seconds} seconds")}),
     );
-    let guest = peer(&input.prompt(prompt_deadline()).await?)?;
+    let guest = peer(&input.prompt(input_deadline).await?)?;
     let expires = lab::unix_millis() + plan.seconds * 1000;
     let session = host_id.to_string();
     let invitation = match mode {
         Mode::Loopback => {
             lab::Invitation::issue(&key, guest, &session, plan.bind, &plan.services, expires)
         }
-        Mode::ExternalIpv6 => lab::Invitation::issue_external_ipv6(
+        Mode::ExternalIpv6 | Mode::ExternalIpv6Interactive => lab::Invitation::issue_external_ipv6(
             &key,
             guest,
             &session,
@@ -281,7 +308,9 @@ async fn host(args: &[String], mode: Mode) -> Result {
     };
     let host = match mode {
         Mode::Loopback => lab::Host::start_invited(config, &invitation).await,
-        Mode::ExternalIpv6 => lab::Host::start_invited_external_ipv6(config, &invitation).await,
+        Mode::ExternalIpv6 | Mode::ExternalIpv6Interactive => {
+            lab::Host::start_invited_external_ipv6(config, &invitation).await
+        }
     }
     .map_err(native)?;
     let bound = host.bound_sockets();
@@ -395,10 +424,14 @@ async fn guest(args: &[String], mode: Mode) -> Result {
     let key = lab::generate_key();
     let guest_id = key.public();
     let mut input = Input::new();
+    let input_deadline = prompt_deadline(mode);
+    let seconds = mode.preparation_timeout().as_secs();
     event(
-        json!({"event":"audit_guest_identity","peer":guest_id.to_string(),"next":"invitation within 60 seconds"}),
+        json!({"event":"audit_guest_identity","peer":guest_id.to_string(),
+        "preparationTimeoutSeconds":seconds,"inputExpiresAtMs":lab::unix_millis()+seconds*1000,
+        "next":format!("invitation within {seconds} seconds")}),
     );
-    let text = input.prompt(prompt_deadline()).await?;
+    let text = input.prompt(input_deadline).await?;
     let invitation = mode.verify(&text, host_id, guest_id).map_err(native)?;
     drop(text);
     game_only(&invitation)?;
@@ -514,8 +547,14 @@ async fn run() -> Result {
     match args.first().map(String::as_str) {
         Some("host") => host(&args[1..], Mode::Loopback).await,
         Some("host-external-ipv6") => host(&args[1..], Mode::ExternalIpv6).await,
+        Some("host-external-ipv6-interactive") => {
+            host(&args[1..], Mode::ExternalIpv6Interactive).await
+        }
         Some("guest") => guest(&args[1..], Mode::Loopback).await,
         Some("guest-external-ipv6") => guest(&args[1..], Mode::ExternalIpv6).await,
+        Some("guest-external-ipv6-interactive") => {
+            guest(&args[1..], Mode::ExternalIpv6Interactive).await
+        }
         _ => Err("invalid_arguments"),
     }
 }
@@ -530,6 +569,44 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn interactive_preparation_preserves_default_authentication_and_lease_limits() {
+        assert_eq!(
+            Mode::Loopback.preparation_timeout(),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            Mode::ExternalIpv6.preparation_timeout(),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            Mode::ExternalIpv6Interactive.preparation_timeout(),
+            Duration::from_secs(600)
+        );
+        assert_eq!(
+            lab::Limits::default().handshake_timeout,
+            Duration::from_secs(10)
+        );
+        assert_eq!(lab::MAX_INVITATION_LIFETIME, Duration::from_secs(600));
+        assert!(
+            Mode::ExternalIpv6Interactive
+                .address("127.0.0.1:42000".parse().unwrap())
+                .is_err()
+        );
+    }
+    #[tokio::test]
+    async fn expired_prompt_refuses_buffered_input_without_consuming_it() {
+        let (send, lines) = mpsc::channel(1);
+        send.send(Ok("approve fixture".into())).await.unwrap();
+        let mut input = Input { lines };
+        assert_eq!(input.prompt(Instant::now()).await, Err("timed_out"));
+        assert_eq!(input.lines.try_recv().unwrap().unwrap(), "approve fixture");
+        let deadline = Instant::now() + Duration::from_millis(5);
+        assert_eq!(input.prompt(deadline).await, Err("timed_out"));
+        send.send(Ok("stop".into())).await.unwrap();
+        assert_eq!(input.prompt(deadline).await, Err("timed_out"));
+        assert_eq!(input.lines.try_recv().unwrap().unwrap(), "stop");
+    }
     #[test]
     fn game_projection_requires_the_single_exact_tcp_contract() {
         let valid = json!({"services":[{"serviceId":"game","protocol":"tcp","revision":1,"requiredCapability":"reliableStream"}]});

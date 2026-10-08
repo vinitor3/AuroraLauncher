@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 08/10/2026
 
+Correção47b dá600s de preparação humana em aliases explícitos, com prova local de61s e kit separado. A tentativa externa47 não teve admissão/tráfego: JSON/approve foram interpretados pelo PowerShell após saída nativa não observada. Cleanup local passou, mas causa e resultado nativo remoto não foram recuperados; nenhuma homologação de convite entre redes é inferida.
+
 Incremento49 acrescenta modo de biblioteca UDP V2 explicitamente autorizado, com remontagem inteira ou descarte até4096B e testes reais em loopback. Padrões sintéticos0/1427/2108/4096B, dois peers/serviços, TCP concorrente, isolamento/quotas/revogação não são áudio de mod ou prova externa. [Evidência e limites](../aurora-connect-fragmented-udp.md). SVC/Plasmo e nove pares conservam seus estados; plano/convite/CLI/UI V2 permanecem separados.
 
 Incremento48 acrescenta descoberta Windows de porta de filho próprio com revisão e STATUS sintético, seleção consumível e encerramento Connect quando a origem desaparece. **PROTÓTIPO** desligado por padrão; ensaios locais usam filho Rust, não Minecraft LAN ou interface Tauri. Mantém nove pares, versões de Java/loaders/mods e todas as homologações anteriores. [Contrato e limites](../aurora-connect-desktop.md#descoberta-de-porta-da-instância--incremento48).

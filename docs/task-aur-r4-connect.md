@@ -1125,6 +1125,30 @@ Rollback: stopconvidado→stophost→stopecho próprios, conferir códigos/clean
 
 Empacotamento privado47 concluído: ZIP15673540B, SHA256 `a609fd6f31afa2d5a8748eef2b7cf6d26864252c9457aa524c871d961991a2f5`. Os sete arquivos internos foram conferidos por hash sem extrair. ManifestoSHA `febeef5cd56d58b25cfec12d4d9392f140733111ba5e7357625ff9ec058aac7c`. A rodada final dos helpers foi `node .aurora/connect-validation/connect-invite-kit-47-check.mjs`,8/8PASS, log de mesmo nome `.log`. Ao usuário foi solicitada somente cópia/extração do kit no outroPC e aviso de prontidão, pois a transferência remota não está acessível às ferramentas; nenhum endpoint externo foi iniciado durante essa espera.
 
+### Correção47b — prazo humano explícito e tentativa externa não aprovada
+
+Em08/10/2026, usuário confirmou kit47 por hashes no outro computador. Host usou o runner47 fixado no caminho do próprio executável de build, coberto por regra de firewall já existente, inventariada somente para leitura. Antes da cópia temporária, o debug posterior foi preservado em arquivo novo; ao encerrar foi restaurado e teve hash `88df23f2cd5dcf7f895783fc3b538cb2fa7a1d4932a56e24d7399beccbe944b0` conferido. Não houve criação/edição de regra, renomeação para outro programa, configuração pessoal ou descarte de artefato.
+
+Plano externo explícito game/TCP/300s foi revisado e aprovado, host recebeu o peer relatado e emitiu convite. O usuário devolveu erros ParserError/approve não reconhecido, mostrando que o texto foi interpretado pelo PowerShell. A saída/código nativo anterior não foi observada, portanto não concluir timeout nativo, falha de rede, NAT ou rejeição de credencial. Não houve `audit_guest_ready` ou probe relatados; host observou zero peers, zero recusas, zero destinos e zero bytes. A limitação60s de preparação motivou correção operacional, sem ser apresentada como causa nativa comprovada.
+
+Host venceu a lease e encerrou exit0/rebindtrue; echo encerrou exit0, aceitou zero conexões e liberou a porta. Root confirmouTCP42010/43001 eUDP42000 livres. Evidência nova `closed.json` na pasta privada da tentativa conserva `NOT_APPROVED`, cleanup/restauração do build e causa não inferida. Snapshot `prepared.json`, manifesto e ZIP47 permanecem inalterados. Comandos efetivos: principal47 `plan`, audit47 `host-external-ipv6` com plano/hash, echoNode47, `stats`/`stop` próprios; argumentos operacionais privados não são reproduzidos neste documento.
+
+**Correção concreta.** Dois aliases `*-external-ipv6-interactive` selecionam preparação fixa600s; comandos anteriores60s, handshake10s, lease≤600s, game/TCP e quotas permanecem. Eventos expõem o prazo; aprovação usa min(preparação,lease) e `Input::prompt` revalida relógio antes/depois do await. Dois novos unitários exercitam seleção de perfil e linha enfileirada vencida. Teste opt-in real mantém dois processos/chaves originais aguardando61s antes do convite e depois transfereTCP1MiB por direção, correlaciona replay/revoke com denied0→1→2 e faz cleanup/rebind.
+
+Após revalidar endereço IPv6 próprioPreferred/bind local, foi executado:
+
+```powershell
+cargo test --manifest-path apps/connect-lab/Cargo.toml --offline --locked --test invite_audit_cli own_ipv6_interactive_two_original_processes_wait_past_sixty_seconds -- --ignored --exact --nocapture --test-threads=1
+```
+
+`AURORA_CONNECT_OWN_EXTERNAL_IPV6_TEST_ADDR` foi fornecida somente ao processo e restaurada; log não registra endereço. **1PASS/0FAIL**,62,15s, espera61s, escopo mesmoPC; `connect-invite-forty-seven-b-own-ipv6.log`. Full147PASS/4ignored, fmt/clippy/build em conjunto com49 incluem os dois novos unitários, sem somá-los novamente. QA independente do runner/teste não encontrou bloqueadores. Fontes runner/teste SHA256 `5a5056f3359fc006795ede384e1fd17c641e756442b2f14e8783ed5765ad20f1`/`16e632c94d9d1a38624bef4e59d1866565d84e0ff6ea7b79d6cf01b5b4a45abb`.
+
+**Kit privado novo47b.** Runner23326720B SHA256 `7d3403b25ee66e1759adf87fe7d64bec65031d9574cc325b9ed64f09408b3e16`; principal24050688B `005b55c43f2b08fd9bb5f32f7c17a81de1eccd50a34e920b95a545c580c5f973`. `guest-47b.ps1`2013B/SHA `a84e845f5ab51ffcf98fdbdc3480fec31a9a0fbdae295aca82e9f2d425ecc008` preserva console/stdin, pin.NET e uma identidade; avisa antes/depois da execução para não colar no shell. Quatro checks PS5 passaram: pin ausente/inválido, argumento adicional, nativo fixado/uma identidade/EOF/aviso final, sem endpoints. Probe/echo são byte a byte iguais47 e conservam seus seis checks relevantes anteriores. Echo começa somente após receber identidade remota, preservando sua janela720s.
+
+ZIP `connect-invite-kit-47b-7d3403b2.zip`,15797985B, SHA `d84ab12742f4a2b1125975b6f4ac2852567582d318e96455afd833c5bf0dbe1e`; sete entradas verificadas por hash, manifesto `db6cf5d80ef58ae55a54dd6a739f2a76470c056286b80789b28feff81d714f7e`. Manifesto mantém `testedTwoComputers=false`, identifica checkout com mudanças e não se apresenta como release. O usuário recebeu apenas solicitação de copiar/extrair nova pasta no PC remoto; nenhuma nova sessão remota foi iniciada no empacotamento.
+
+**Estado/rollback.** Novo convite externo continua **PRECISA DE TESTE**. TCP/UDP, Minecraft44, UI48, voz, relay e matriz não são promovidos. Encerrar processos próprios e conferir cleanup; não reutilizar identidades nem substituir kits anteriores. Transferência/terminal remoto dependem do usuário porque ferramentas só alcançam o anfitrião. Implementação local independente continua. Sem custo, instalador, publicação ou configuração pessoal.
+
 ## Quadragésimo oitavo incremento — descoberta de porta do jogo próprio
 
 Base `2b18e69`, branch `codex/aur-r4-connect`, em08/10/2026. A implementação acrescenta ao caller46 uma alternativa Windows para selecionar a porta de um jogo iniciado pelo próprio Aurora. Preserva alpha.14, os nove pares Core1.1.5/Skins0.3.1, Assistente, recovery/CAS/Doctor e todos os gates do roadmap. Transporte UDP49 e correção operacional47b foram desenvolvidos em paralelo, com ownership separado e testes compartilhados identificados; não são homologação deste fluxo.

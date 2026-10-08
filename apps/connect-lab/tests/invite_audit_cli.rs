@@ -226,7 +226,7 @@ struct Pair {
 impl Pair {
     fn new(echo: SocketAddr, ttl: u64) -> Self {
         let reservation = UdpSocket::bind("127.0.0.1:0").expect("owned host reservation");
-        Self::from_reservation(echo, ttl, reservation, "host", "guest")
+        Self::from_reservation(echo, ttl, reservation, "host", "guest", Duration::ZERO)
     }
     fn from_reservation(
         echo: SocketAddr,
@@ -234,6 +234,7 @@ impl Pair {
         reservation: UdpSocket,
         host_command: &str,
         guest_command: &str,
+        preparation_wait: Duration,
     ) -> Self {
         let bind = reservation.local_addr().expect("host address");
         let plan = Plan::new(bind, echo, ttl);
@@ -248,12 +249,52 @@ impl Pair {
             "127.0.0.1:0".into(),
         ]);
         let guest_identity = guest.event("audit_guest_identity");
+        let preparation_seconds = if host_command.ends_with("-interactive") {
+            600
+        } else {
+            60
+        };
+        assert!(
+            host_identity["preparationTimeoutSeconds"] == preparation_seconds
+                && guest_identity["preparationTimeoutSeconds"] == preparation_seconds,
+            "both roles expose the fixed preparation profile"
+        );
+        let waiting = Instant::now();
+        if !preparation_wait.is_zero() {
+            println!(
+                "{}",
+                json!({"event":"audit_preparation_wait","seconds":preparation_wait.as_secs(),"processes":2})
+            );
+        }
+        while waiting.elapsed() < preparation_wait {
+            thread::sleep(
+                Duration::from_secs(1).min(preparation_wait.saturating_sub(waiting.elapsed())),
+            );
+            assert!(
+                host.child.try_wait().expect("owned host state").is_none()
+                    && guest.child.try_wait().expect("owned guest state").is_none(),
+                "both original processes remain at their first prompt"
+            );
+        }
+        assert!(
+            matches!(host.output.try_recv(), Err(mpsc::TryRecvError::Empty))
+                && matches!(guest.output.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "no unsolicited event or replacement identity during preparation"
+        );
         host.line(
             guest_identity["peer"]
                 .as_str()
                 .expect("public guest fixture ID"),
         );
         let review = host.event("audit_review");
+        assert!(
+            review["preparationTimeoutSeconds"] == preparation_seconds
+                && review["inputExpiresAtMs"]
+                    .as_u64()
+                    .expect("host input deadline")
+                    <= review["expiresAtMs"].as_u64().expect("host lease deadline"),
+            "host approval never extends the invitation deadline"
+        );
         drop(reservation);
         host.line(&format!(
             "approve {}",
@@ -267,6 +308,16 @@ impl Pair {
                 .expect("fixture invitation"),
         );
         let review = guest.event("audit_review");
+        assert!(
+            review["preparationTimeoutSeconds"] == preparation_seconds
+                && review["inputExpiresAtMs"]
+                    .as_u64()
+                    .expect("guest input deadline")
+                    <= review["expiresAtMs"]
+                        .as_u64()
+                        .expect("guest lease deadline"),
+            "guest approval never extends the invitation deadline"
+        );
         assert!(
             review["localTcpBind"] == "127.0.0.1:0",
             "guest reviews its explicit local listener"
@@ -402,6 +453,25 @@ fn check_replay_revocation(pair: &mut Pair) {
 #[test]
 #[ignore = "requires explicit own global IPv6; binds locally before dial; not an internet test"]
 fn own_ipv6_two_processes_replay_revocation_cleanup() {
+    let reservation = own_ipv6_reservation();
+    let echo = Echo::new();
+    let mut pair = Pair::from_reservation(
+        echo.address,
+        90,
+        reservation,
+        "host-external-ipv6",
+        "guest-external-ipv6",
+        Duration::ZERO,
+    );
+    check_replay_revocation(&mut pair);
+    drop(pair);
+    drop(echo);
+    println!(
+        "{}",
+        json!({"event":"audit_own_ipv6_sample","scope":"same_computer","passed":true,"tcpBytesEachDirection":1048576,"negativeTrials":2,"hostDenied":2,"cleanup":true})
+    );
+}
+fn own_ipv6_reservation() -> UdpSocket {
     let supplied = std::env::var("AURORA_CONNECT_OWN_EXTERNAL_IPV6_TEST_ADDR")
         .expect("explicit own IPv6 required");
     let ip: std::net::Ipv6Addr = supplied
@@ -411,23 +481,32 @@ fn own_ipv6_two_processes_replay_revocation_cleanup() {
     assert!(ip.to_string() == supplied, "canonical own IPv6");
     aurora_connect_lab::validate_external_invitation_address(SocketAddr::from((ip, 1)))
         .expect("external IPv6 policy");
-    let reservation = UdpSocket::bind(SocketAddr::from((ip, 0)))
+    UdpSocket::bind(SocketAddr::from((ip, 0)))
         .map_err(|_| "own IPv6 bind failed")
-        .expect("bind before dial");
+        .expect("bind before dial")
+}
+#[test]
+#[ignore = "requires explicit own global IPv6 and 61s preparation; binds before dial; not internet"]
+fn own_ipv6_interactive_two_original_processes_wait_past_sixty_seconds() {
+    let reservation = own_ipv6_reservation();
     let echo = Echo::new();
+    let started = Instant::now();
     let mut pair = Pair::from_reservation(
         echo.address,
         90,
         reservation,
-        "host-external-ipv6",
-        "guest-external-ipv6",
+        "host-external-ipv6-interactive",
+        "guest-external-ipv6-interactive",
+        Duration::from_secs(61),
     );
     check_replay_revocation(&mut pair);
     drop(pair);
     drop(echo);
     println!(
         "{}",
-        json!({"event":"audit_own_ipv6_sample","scope":"same_computer","passed":true,"tcpBytesEachDirection":1048576,"negativeTrials":2,"hostDenied":2,"cleanup":true})
+        json!({"event":"audit_interactive_preparation_sample","scope":"same_computer","passed":true,
+        "elapsedMs":started.elapsed().as_millis(),"preparationWaitSeconds":61,"preparationTimeoutSeconds":600,
+        "tcpBytesEachDirection":1048576,"negativeTrials":2,"hostDenied":2,"cleanup":true})
     );
 }
 #[test]
@@ -475,6 +554,12 @@ fn malformed_mode_pin_listener_and_input_are_refused_without_network() {
         vec!["guest".into(), pin.clone(), "0.0.0.0:0".into()],
         vec!["guest".into(), "BAD".into(), "127.0.0.1:0".into()],
         vec!["guest-unknown".into()],
+        vec![
+            "guest-external-ipv6-interactive".into(),
+            pin.clone(),
+            "127.0.0.1:0".into(),
+            "601".into(),
+        ],
     ] {
         let mut child = Process::start(&args);
         let error = child.event("audit_failed");
@@ -553,6 +638,11 @@ fn foreign_signer_and_explicit_external_mode_reject_before_connection() {
     for (command, wrong_signer, expected) in [
         ("guest", true, "unauthorized"),
         ("guest-external-ipv6", false, "invalid_configuration"),
+        (
+            "guest-external-ipv6-interactive",
+            false,
+            "invalid_configuration",
+        ),
     ] {
         let mut guest = Process::start(&[
             command.into(),

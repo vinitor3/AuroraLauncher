@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 08/10/2026
 
+Correção47b/005/008 amplia somente preparação humana para600s em aliases explícitos do runner, mantendo lease≤600s e defaults antigos. Prova real com dois processos esperou61s e passou; novo kit preparado. A primeira tentativa remota47 não conectou: usuário colou convite/approve no shell após saída nativa não observada, host teve zero peers/destinos/bytes e cleanup normal. Causa nativa não foi inferida; convites externos continuam **PRECISA DE TESTE** até nova evidência. [Procedimento](../../aurora-connect-internet-invitations.md).
+
 Incremento49/003/006/007: API UDP V2 opt-in remonta até4096B com quotas/prazo/isolamento e bytes reais em loopback, dois peers/serviços e TCP concorrente. **PROTÓTIPO**, sem configuração de voz ou áudio. Plano/convite/CLI/UI ainda recusam a capability nova; anúncio e áudio SVC/Plasmo exigem provas separadas. [Contrato49](../../aurora-connect-fragmented-udp.md). Não conclui T-UDP, T-VOICE ou R4 por teste sintético.
 
 Incremento48/005 acrescenta descoberta Windows de porta do processo filho já próprio, inventário sem pacotes, revisão/STATUS explícito, seleção de uso único e monitoramento da origem durante a sessão. **PROTÓTIPO**, mesma feature desligada por padrão; não conclui005 ou T-MC: dedicado fora do launcher permanece manual, LAN real/janela Tauri e sessões longas ainda dependem de validação/contrato próprios. Nenhum par da matriz, produtor Core ou canal IPC foi ampliado. [Contrato](../AURORA_CONNECT_SPEC.md#95-descoberta-de-porta-de-processo-próprio--incremento48).
