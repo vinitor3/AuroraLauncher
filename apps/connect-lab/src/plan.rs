@@ -15,6 +15,12 @@ use std::{
 
 pub const MAX_PLAN_BYTES: usize = 16 * 1024;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlanProfile {
+    Legacy,
+    FragmentedV2,
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PlanError {
     #[error("plan_read_failed")]
@@ -146,7 +152,7 @@ impl ValidatedPlan {
                 udp_return_policy: s.udp_return_policy.into(),
             })
             .collect();
-        json!({
+        let mut preview = json!({
             "schemaKind": "localLabServicePlan", "schemaVersion": SCHEMA_VERSION,
             "experimental": true, "hashAlgorithm": "sha256", "hash": self.hash,
             "before": {"session": "notStarted"},
@@ -154,7 +160,17 @@ impl ValidatedPlan {
             "filesChanged": [], "relay": false, "modConfigurationChanges": false,
             "authorization": "requiresExplicitHashAndPinnedGuest", "rollback": "revokeAndStopLabProcess",
             "minecraft": "notVerified", "simpleVoiceChat": "notVerified", "plasmoVoice": "notVerified"
-        })
+        });
+        if self
+            .services
+            .iter()
+            .any(|service| service.required_capability == Capability::FragmentedDatagram)
+        {
+            preview["profile"] = json!("fragmentedV2");
+            preview["udpEnvelopeVersion"] = json!(2);
+            preview["maxFragmentFrameBytes"] = json!(crate::MAX_FRAGMENT_FRAME_BYTES);
+        }
+        preview
     }
 }
 
@@ -164,12 +180,29 @@ pub fn load_plan(
     path: impl AsRef<Path>,
     expected_hash: Option<&str>,
 ) -> Result<ValidatedPlan, PlanError> {
+    load_plan_in_profile(path.as_ref(), expected_hash, PlanProfile::Legacy)
+}
+
+/// Explicit V2 opt-in. Requires exactly game/TCP and aux/fragmented UDP.
+/// This has the same confined read and exact-byte approval as `load_plan`;
+/// neither entry point grants network access or applies a configuration.
+pub fn load_fragmented_plan(
+    path: impl AsRef<Path>,
+    expected_hash: Option<&str>,
+) -> Result<ValidatedPlan, PlanError> {
+    load_plan_in_profile(path.as_ref(), expected_hash, PlanProfile::FragmentedV2)
+}
+
+fn load_plan_in_profile(
+    path: &Path,
+    expected_hash: Option<&str>,
+    profile: PlanProfile,
+) -> Result<ValidatedPlan, PlanError> {
     if expected_hash
         .is_some_and(|hash| hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()))
     {
         return Err(PlanError::InvalidApproval);
     }
-    let path = path.as_ref();
     if !is_local_plain_path(path) {
         return Err(PlanError::InvalidPlan);
     }
@@ -225,7 +258,7 @@ pub fn load_plan(
     let json_bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
     let plan: ServicePlan =
         serde_json::from_slice(json_bytes).map_err(|_| PlanError::InvalidJson)?;
-    validate(plan, hash)
+    validate(plan, hash, profile)
 }
 
 fn is_local_plain_path(path: &Path) -> bool {
@@ -320,7 +353,11 @@ fn is_link(metadata: &Metadata) -> bool {
     false
 }
 
-fn validate(plan: ServicePlan, hash: String) -> Result<ValidatedPlan, PlanError> {
+fn validate(
+    plan: ServicePlan,
+    hash: String,
+    profile: PlanProfile,
+) -> Result<ValidatedPlan, PlanError> {
     if plan.schema_version != SCHEMA_VERSION
         || !(10..=3600).contains(&plan.duration_seconds)
         || !(1..=2).contains(&plan.services.len())
@@ -340,6 +377,7 @@ fn validate(plan: ServicePlan, hash: String) -> Result<ValidatedPlan, PlanError>
             || planned.endpoint.port() == 0
             || planned.revision != 1
             || planned.max_datagram_bytes > 65507
+            || (profile == PlanProfile::FragmentedV2 && planned.max_datagram_bytes == 0)
         {
             return Err(PlanError::InvalidPlan);
         }
@@ -355,7 +393,14 @@ fn validate(plan: ServicePlan, hash: String) -> Result<ValidatedPlan, PlanError>
             "aux"
                 if !seen_aux
                     && planned.protocol == Protocol::Udp
-                    && planned.required_capability == Capability::Datagram =>
+                    && planned.required_capability
+                        == match profile {
+                            PlanProfile::Legacy => Capability::Datagram,
+                            PlanProfile::FragmentedV2 => Capability::FragmentedDatagram,
+                        }
+                    && (profile == PlanProfile::Legacy
+                        || (1..=crate::fragment::MAX_DATAGRAM)
+                            .contains(&planned.max_datagram_bytes)) =>
             {
                 seen_aux = true
             }
@@ -365,7 +410,11 @@ fn validate(plan: ServicePlan, hash: String) -> Result<ValidatedPlan, PlanError>
             bytes_per_second,
             datagrams_per_second,
         } = policy
-            && (bytes_per_second < DATAGRAM_HEADER_LEN as u32
+            && (bytes_per_second
+                < match profile {
+                    PlanProfile::Legacy => DATAGRAM_HEADER_LEN as u32,
+                    PlanProfile::FragmentedV2 => crate::fragment::HEADER_LEN as u32,
+                }
                 || bytes_per_second > limits.udp_bytes_per_second
                 || datagrams_per_second == 0
                 || datagrams_per_second > limits.datagrams_per_second)
@@ -382,7 +431,7 @@ fn validate(plan: ServicePlan, hash: String) -> Result<ValidatedPlan, PlanError>
             udp_return_policy: policy,
         });
     }
-    if !seen_game {
+    if !seen_game || (profile == PlanProfile::FragmentedV2 && !seen_aux) {
         return Err(PlanError::InvalidPlan);
     }
     Ok(ValidatedPlan {

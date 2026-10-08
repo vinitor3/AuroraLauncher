@@ -24,7 +24,7 @@ pub use minecraft_status::{
     MinecraftStatusSummary, probe_minecraft_status,
 };
 pub use model::*;
-pub use plan::{MAX_PLAN_BYTES, PlanError, ValidatedPlan, load_plan};
+pub use plan::{MAX_PLAN_BYTES, PlanError, ValidatedPlan, load_fragmented_plan, load_plan};
 pub use wire::{DATAGRAM_HEADER_LEN, DatagramFrame};
 
 pub fn generate_key() -> SecretKey {

@@ -92,6 +92,7 @@ impl Guest {
         limits: Limits,
         mode: InvitationAddressMode,
     ) -> Result<Self> {
+        invitation.check_legacy_profile()?;
         invitation.check_address_mode(mode)?;
         if secret_key.public() != invitation.guest_key() {
             return Err(Error::Unauthorized);

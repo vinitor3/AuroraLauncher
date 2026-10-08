@@ -24,6 +24,34 @@ pub(crate) enum InvitationAddressMode {
     ExternalIpv6,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InvitationProfile {
+    Legacy,
+    FragmentedV2,
+}
+
+#[derive(Clone, Copy)]
+struct InvitationPolicy {
+    address: InvitationAddressMode,
+    profile: InvitationProfile,
+}
+
+impl InvitationPolicy {
+    const fn legacy(address: InvitationAddressMode) -> Self {
+        Self {
+            address,
+            profile: InvitationProfile::Legacy,
+        }
+    }
+
+    const fn fragmented(address: InvitationAddressMode) -> Self {
+        Self {
+            address,
+            profile: InvitationProfile::FragmentedV2,
+        }
+    }
+}
+
 /// Conservative classification of an explicitly selected initial address only.
 /// No reachability/translation/tunnel detection or restriction of Iroh's other
 /// internal paths is implied. This function opens no socket or lookup.
@@ -133,16 +161,24 @@ impl Grant {
             },
         })
     }
-    fn validate(&self) -> Result<()> {
+    fn validate(&self, profile: InvitationProfile) -> Result<()> {
         let expected = match self.service_id.as_str() {
             "game" => (Protocol::Tcp, Capability::ReliableStream),
-            "aux" => (Protocol::Udp, Capability::Datagram),
+            "aux" => (
+                Protocol::Udp,
+                match profile {
+                    InvitationProfile::Legacy => Capability::Datagram,
+                    InvitationProfile::FragmentedV2 => Capability::FragmentedDatagram,
+                },
+            ),
             _ => return Err(Error::Configuration),
         };
         if self.protocol != expected.0
             || self.required_capability != expected.1
             || self.revision != 1
             || !(1..=65507).contains(&self.max_datagram_bytes)
+            || (self.required_capability == Capability::FragmentedDatagram
+                && self.max_datagram_bytes > crate::fragment::MAX_DATAGRAM)
         {
             return Err(Error::Configuration);
         }
@@ -153,7 +189,11 @@ impl Grant {
         {
             let limits = Limits::default();
             if self.protocol != Protocol::Udp
-                || bytes_per_second < crate::DATAGRAM_HEADER_LEN as u32
+                || bytes_per_second
+                    < match profile {
+                        InvitationProfile::Legacy => crate::DATAGRAM_HEADER_LEN as u32,
+                        InvitationProfile::FragmentedV2 => crate::fragment::HEADER_LEN as u32,
+                    }
                 || bytes_per_second > limits.udp_bytes_per_second
                 || datagrams_per_second == 0
                 || datagrams_per_second > limits.datagrams_per_second
@@ -165,7 +205,7 @@ impl Grant {
     }
 }
 
-fn grants(services: &[Service]) -> Result<Vec<Grant>> {
+fn grants(services: &[Service], profile: InvitationProfile) -> Result<Vec<Grant>> {
     if !(1..=2).contains(&services.len()) {
         return Err(Error::Configuration);
     }
@@ -175,18 +215,19 @@ fn grants(services: &[Service]) -> Result<Vec<Grant>> {
         .collect::<Result<Vec<_>>>()?;
     // Canonical order is game, then optional aux, independent of local registry order.
     result.sort_by_key(|grant| grant.service_id != "game");
-    validate_grants(&result)?;
+    validate_grants(&result, profile)?;
     Ok(result)
 }
-fn validate_grants(grants: &[Grant]) -> Result<()> {
+fn validate_grants(grants: &[Grant], profile: InvitationProfile) -> Result<()> {
     if !(1..=2).contains(&grants.len())
+        || (profile == InvitationProfile::FragmentedV2 && grants.len() != 2)
         || grants[0].service_id != "game"
         || (grants.len() == 2 && grants[1].service_id != "aux")
     {
         return Err(Error::Configuration);
     }
     for grant in grants {
-        grant.validate()?;
+        grant.validate(profile)?;
     }
     Ok(())
 }
@@ -264,7 +305,7 @@ impl Invitation {
             direct,
             services,
             expires_at_unix_ms,
-            InvitationAddressMode::Loopback,
+            InvitationPolicy::legacy(InvitationAddressMode::Loopback),
         )
     }
 
@@ -285,7 +326,48 @@ impl Invitation {
             direct,
             services,
             expires_at_unix_ms,
-            InvitationAddressMode::ExternalIpv6,
+            InvitationPolicy::legacy(InvitationAddressMode::ExternalIpv6),
+        )
+    }
+
+    /// Explicit V2 grant profile, still limited to a loopback initial address.
+    /// Legacy issue/verify and legacy Host/Guest entry points reject this profile.
+    pub fn issue_fragmented(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        expires_at_unix_ms: u64,
+    ) -> Result<Self> {
+        Self::issue_in_mode(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            expires_at_unix_ms,
+            InvitationPolicy::fragmented(InvitationAddressMode::Loopback),
+        )
+    }
+
+    /// Both V2 and an external IPv6 initial address require this explicit API.
+    pub fn issue_fragmented_external_ipv6(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        expires_at_unix_ms: u64,
+    ) -> Result<Self> {
+        Self::issue_in_mode(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            expires_at_unix_ms,
+            InvitationPolicy::fragmented(InvitationAddressMode::ExternalIpv6),
         )
     }
 
@@ -296,7 +378,7 @@ impl Invitation {
         direct: SocketAddr,
         services: &[Service],
         expires_at_unix_ms: u64,
-        mode: InvitationAddressMode,
+        policy: InvitationPolicy,
     ) -> Result<Self> {
         let now = unix_millis();
         let body = Body {
@@ -309,16 +391,16 @@ impl Invitation {
             expires_at_unix_ms,
             generation: 1,
             direct_address: direct,
-            services: grants(services)?,
+            services: grants(services, policy.profile)?,
         };
-        Self::validate_body(&body, host.public(), guest, now, mode)?;
+        Self::validate_body(&body, host.public(), guest, now, policy)?;
         let signature = hex(&host.sign(&signed_bytes(&body)?).to_bytes());
         Self::from_envelope(
             Envelope { body, signature },
             host.public(),
             guest,
             now,
-            mode,
+            policy,
         )
     }
 
@@ -340,7 +422,36 @@ impl Invitation {
             expected_host,
             guest,
             unix_millis(),
-            InvitationAddressMode::ExternalIpv6,
+            InvitationPolicy::legacy(InvitationAddressMode::ExternalIpv6),
+        )
+    }
+
+    /// Verify a signed V2 profile only after explicit local transport opt-in.
+    pub fn verify_fragmented(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+    ) -> Result<Self> {
+        Self::verify_at_in_mode(
+            encoded,
+            expected_host,
+            guest,
+            unix_millis(),
+            InvitationPolicy::fragmented(InvitationAddressMode::Loopback),
+        )
+    }
+
+    pub fn verify_fragmented_external_ipv6(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+    ) -> Result<Self> {
+        Self::verify_at_in_mode(
+            encoded,
+            expected_host,
+            guest,
+            unix_millis(),
+            InvitationPolicy::fragmented(InvitationAddressMode::ExternalIpv6),
         )
     }
     fn verify_at(
@@ -354,7 +465,7 @@ impl Invitation {
             expected_host,
             guest,
             now,
-            InvitationAddressMode::Loopback,
+            InvitationPolicy::legacy(InvitationAddressMode::Loopback),
         )
     }
 
@@ -363,7 +474,7 @@ impl Invitation {
         expected_host: EndpointId,
         guest: EndpointId,
         now: u64,
-        mode: InvitationAddressMode,
+        policy: InvitationPolicy,
     ) -> Result<Self> {
         if encoded.is_empty() || encoded.len() > MAX_INVITATION_BYTES {
             return Err(Error::Limit);
@@ -372,14 +483,14 @@ impl Invitation {
         if encode(&envelope)? != encoded {
             return Err(Error::Protocol);
         }
-        Self::from_envelope(envelope, expected_host, guest, now, mode)
+        Self::from_envelope(envelope, expected_host, guest, now, policy)
     }
     fn validate_body(
         body: &Body,
         expected_host: EndpointId,
         guest: EndpointId,
         now: u64,
-        mode: InvitationAddressMode,
+        policy: InvitationPolicy,
     ) -> Result<()> {
         let host_key = EndpointId::from_bytes(&decode_hex::<32>(&body.host_key)?)
             .map_err(|_| Error::Protocol)?;
@@ -392,7 +503,7 @@ impl Invitation {
         if body.schema_version != 1 || body.generation != 1 || !valid_id(&body.session_id) {
             return Err(Error::Configuration);
         }
-        mode.validate(body.direct_address)?;
+        policy.address.validate(body.direct_address)?;
         let ttl = body
             .expires_at_unix_ms
             .checked_sub(body.issued_at_unix_ms)
@@ -404,16 +515,16 @@ impl Invitation {
         {
             return Err(Error::Expired);
         }
-        validate_grants(&body.services)
+        validate_grants(&body.services, policy.profile)
     }
     fn from_envelope(
         envelope: Envelope,
         expected_host: EndpointId,
         guest: EndpointId,
         now: u64,
-        mode: InvitationAddressMode,
+        policy: InvitationPolicy,
     ) -> Result<Self> {
-        Self::validate_body(&envelope.body, expected_host, guest, now, mode)?;
+        Self::validate_body(&envelope.body, expected_host, guest, now, policy)?;
         let signature = Signature::from_bytes(&decode_hex::<64>(&envelope.signature)?);
         expected_host
             .verify(&signed_bytes(&envelope.body)?, &signature)
@@ -438,12 +549,24 @@ impl Invitation {
         self.digest.clone()
     }
     pub fn preview(&self) -> Value {
-        json!({ "schemaVersion": 1, "experimental": true, "invitationSha256": self.digest,
+        let mut preview = json!({ "schemaVersion": 1, "experimental": true, "invitationSha256": self.digest,
             "hostKey": self.envelope.body.host_key, "guestKey": self.envelope.body.guest_key,
             "sessionId": self.session_id(), "invitationId": self.envelope.body.invitation_id,
             "issuedAtUnixMs": self.envelope.body.issued_at_unix_ms, "expiresAtUnixMs": self.expires_at_unix_ms(),
             "generation": 1, "directAddress": self.direct_addr().to_string(), "services": self.envelope.body.services,
-            "singleUse": true, "relay": false, "accountIdentityVerified": false })
+            "singleUse": true, "relay": false, "accountIdentityVerified": false });
+        if self
+            .envelope
+            .body
+            .services
+            .iter()
+            .any(|grant| grant.required_capability == Capability::FragmentedDatagram)
+        {
+            preview["profile"] = json!("fragmentedV2");
+            preview["udpEnvelopeVersion"] = json!(2);
+            preview["maxFragmentFrameBytes"] = json!(crate::MAX_FRAGMENT_FRAME_BYTES);
+        }
+        preview
     }
     pub fn lease(&self) -> Lease {
         Lease {
@@ -504,6 +627,10 @@ impl Invitation {
     pub(crate) fn check_address_mode(&self, mode: InvitationAddressMode) -> Result<()> {
         mode.validate(self.direct_addr())
     }
+    /// Defense in depth when a verified V2 value reaches an old entry point.
+    pub(crate) fn check_legacy_profile(&self) -> Result<()> {
+        validate_grants(&self.envelope.body.services, InvitationProfile::Legacy)
+    }
     pub(crate) fn check_host(&self, config: &HostConfig) -> Result<()> {
         self.check_host_in_mode(config, InvitationAddressMode::Loopback)
     }
@@ -512,6 +639,7 @@ impl Invitation {
     }
     fn check_host_in_mode(&self, config: &HostConfig, mode: InvitationAddressMode) -> Result<()> {
         self.check_address_mode(mode)?;
+        self.check_legacy_profile()?;
         self.check_current()?;
         let expected = self.lease();
         if config.secret_key.public() != self.host
@@ -526,7 +654,7 @@ impl Invitation {
             || lease.peer != expected.peer
             || lease.expires_at_unix_ms != expected.expires_at_unix_ms
             || lease.services != expected.services
-            || grants(&config.services)? != self.envelope.body.services
+            || grants(&config.services, InvitationProfile::Legacy)? != self.envelope.body.services
         {
             return Err(Error::Configuration);
         }

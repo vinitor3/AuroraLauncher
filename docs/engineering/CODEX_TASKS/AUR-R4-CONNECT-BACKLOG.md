@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 08/10/2026
 
+Incremento 51/003/005/006/007 prepara planos e convites V2 assinados por APIs explícitas, mantendo o legado recusado antes de I/O. **PROTÓTIPO** com 55 PASS focados e perfil/endereço separados; admissão Host/Guest/CLI V2 é o próximo componente, sem concluir qualquer gate de áudio ou rede externa. [Contrato 51](../../aurora-connect-fragmented-invitations.md). Este registro atualiza a limitação histórica 49 quanto a emissão/verificação, preservando pendências de execução e UI.
+
 Correção47b/005/008 amplia somente preparação humana para600s em aliases explícitos do runner, mantendo lease≤600s e defaults antigos. Prova real com dois processos esperou61s e passou; novo kit preparado. A primeira tentativa remota47 não conectou: usuário colou convite/approve no shell após saída nativa não observada, host teve zero peers/destinos/bytes e cleanup normal. Causa nativa não foi inferida; convites externos continuam **PRECISA DE TESTE** até nova evidência. [Procedimento](../../aurora-connect-internet-invitations.md).
 
 Incremento49/003/006/007: API UDP V2 opt-in remonta até4096B com quotas/prazo/isolamento e bytes reais em loopback, dois peers/serviços e TCP concorrente. **PROTÓTIPO**, sem configuração de voz ou áudio. Plano/convite/CLI/UI ainda recusam a capability nova; anúncio e áudio SVC/Plasmo exigem provas separadas. [Contrato49](../../aurora-connect-fragmented-udp.md). Não conclui T-UDP, T-VOICE ou R4 por teste sintético.

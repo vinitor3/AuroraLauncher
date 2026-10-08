@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 08/10/2026
 
+Incremento 51 acrescenta plano e convite explicitamente fragmentados, assinatura dos limites e recusa pelos caminhos antigos antes de I/O. **PROTÓTIPO**, 55 testes focados aprovados; admissão Host/Guest/CLI V2 permanece pendente. [Contrato 51](../aurora-connect-fragmented-invitations.md). Nenhuma nova prova de Minecraft, voz, interface, rede externa ou par Core/Skins.
+
 Correção47b dá600s de preparação humana em aliases explícitos, com prova local de61s e kit separado. A tentativa externa47 não teve admissão/tráfego: JSON/approve foram interpretados pelo PowerShell após saída nativa não observada. Cleanup local passou, mas causa e resultado nativo remoto não foram recuperados; nenhuma homologação de convite entre redes é inferida.
 
 Incremento49 acrescenta modo de biblioteca UDP V2 explicitamente autorizado, com remontagem inteira ou descarte até4096B e testes reais em loopback. Padrões sintéticos0/1427/2108/4096B, dois peers/serviços, TCP concorrente, isolamento/quotas/revogação não são áudio de mod ou prova externa. [Evidência e limites](../aurora-connect-fragmented-udp.md). SVC/Plasmo e nove pares conservam seus estados; plano/convite/CLI/UI V2 permanecem separados.

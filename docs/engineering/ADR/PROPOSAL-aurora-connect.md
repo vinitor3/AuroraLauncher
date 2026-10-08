@@ -6,6 +6,10 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento 51 — autorização explícita de UDP fragmentado
+
+Decisão experimental em 08/10/2026: selecionar fragmentação e endereço externo por APIs independentes. O envelope assinado schema 1 já vincula capability, limites e política; reutilizá-lo evita uma segunda representação de autoridade. O perfil exige game/TCP e aux/UDP V2, enquanto os caminhos legados recusam esse objeto antes de I/O. O incremento implementa plano/emissão/verificação, ainda sem admissão Host/Guest/CLI V2. TTL 600s preservado, sem renovação implícita. [Contrato, provas e rollback](../../aurora-connect-fragmented-invitations.md); nenhum gate de voz, rede externa ou produto é promovido.
+
 O requisito V2 amplia R4 para transportar Minecraft TCP e serviços TCP/UDP explicitamente autorizados, incluindo integração separada de Simple Voice Chat e Plasmo Voice. Não cria voz própria. Ele substitui a proibição de qualquer relay: caminho direto é preferido; relay gratuito pode ser avaliado e habilitado para uso verificado; gasto obrigatório, automático ou por excedente sem bloqueio efetivo é proibido.
 
 Esta proposta preserva a organização, os IDs e gates do roadmap. Não altera R0, o Assistente desktop e limites HTTP/IPC de R1, updater reversível de R1.5, recovery/Doctor/CAS/Tools de R2/R2.5, Creator de R3 nem gates de produção/privacidade/custos de R5. A matriz ativa de nove pares Core/Skins permanece a autoridade. Companion/HUD e Assistente in-game continuam retirados pela ADR-018. Os arquivos monolíticos mantêm ownership exclusivo por wave.
