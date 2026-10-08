@@ -12,6 +12,12 @@ O incremento 47b acrescenta somente os aliases explícitos `host-external-ipv6-i
 
 Os eventos de identidade e revisão informam `preparationTimeoutSeconds` e `inputExpiresAtMs`. O runner revalida o prazo antes e depois de esperar entrada; uma linha enfileirada não vence um prazo já expirado. Isso não intercepta texto colado no PowerShell depois que o processo terminou. O launcher 47b avisa antes de iniciar e emite `kit_guest_finished` ao retornar.
 
+### Falha de cópia do coordenador no ensaio 47b
+
+Na primeira tentativa externa com o kit 47b, o convidado recebeu `invalid_protocol` porque o coordenador encaminhou uma cópia corrompida do convite. A saída ConPTY continha movimento de cursor na coluna 80 e sobrescrita de caracteres; remover somente os códigos ANSI, sem aplicar a sobrescrita, repetiu dois caracteres da assinatura. A cópia enviada tinha 130 caracteres hexadecimais nesse campo, em vez dos 128 exigidos. A reconstrução respeitando os movimentos do terminal recuperou o convite original, cuja assinatura e digest passaram na verificação local. A causa desta tentativa foi identificada na cópia feita pelo coordenador; não foi atribuída à rede nem à ação do convidado. Ela é distinta da tentativa histórica do kit 47, cuja causa de saída nativa permanece desconhecida.
+
+O anfitrião registrou zero participantes admitidos, zero destinos TCP e zero bytes. Host e echo encerraram com código de saída 0 e rebind confirmado; o resultado não aprova entrada ou os ensaios negativos. Antes de encaminhar outro convite, o coordenador passou a conferir localmente a representação canônica, a assinatura Ed25519 e o digest SHA-256 da cópia exata que será enviada. Remover ANSI isoladamente não satisfaz esse gate. A conferência não emite convite novo, não altera seus prazos e não substitui a verificação independente do runner convidado. Convite, assinatura e identidades reais permanecem fora desta documentação e do Git.
+
 ## Preparação
 
 O coordenador prepara e testa um kit privado novo, com executáveis fixados por SHA-256, procedimento e helpers TCP. O manifesto registra seu estado de criação, `testedTwoComputers=false`; resultados remotos posteriores ficam separados. Não substituir kit38, supervisor43 ou kit47. Não há instalador, Java, mod, mudança de firewall/roteador/configuração pessoal, relay ou custo. O convidado copia o kit para uma pasta local regular e confere o hash fornecido antes de executar. As ferramentas do coordenador alcançam apenas o anfitrião.
