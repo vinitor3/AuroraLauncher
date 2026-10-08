@@ -86,6 +86,12 @@ Logs privados: `.aurora/connect-validation/connect-fragment-full-final-2.log`, `
 
 ## Evidência, limites e recuperação
 
+### Recusa de validade e diferença de relógios — 08/10/2026
+
+Uma nova tentativa 47b verificou a cópia canônica, assinatura Ed25519 e digest antes de enviar. O convidado relatou `expired_or_revoked` antes da revisão/prontidão; host permaneceu com zero peers, recusas, destinos e bytes. Host e echo encerraram normalmente com exit 0/rebind, sem tráfego. Registro privado `external-invites47b-replay-a4314bf4ef1b42db8b3c5719d6122d82/closed.json`, **NOT_APPROVED**. Não houve revogação anterior à falha; o código agrupa vencimento e emissão futura, não identifica uma causa temporal sozinho.
+
+Medição posterior, somente leitura, com `w32tm /stripchart /computer:time.windows.com /samples:3 /dataonly`: offsets do anfitrião aproximadamente -75,856s e do convidado -1,395s. A diferença observada é compatível com emissão que ainda parecia futura no convidado; não foi capturado o instante exato da verificação remota. Uma consulta remota posterior dentro da janela não demonstra o estado anterior. Sem diagnóstico de NAT ou relaxamento dos validadores. W32Time no anfitrião foi observado parado/manual, Type NoSync; correção pontual exige plano, snapshot, autorização e recuperação, preparada separadamente antes de nova tentativa.
+
 Registrar separadamente relato remoto, topologia confirmada pelo usuário, observações locais, bins/hashes, prazo, bytes, contadores e cleanup. Se falhar, conservar o código/último evento, encerrar recursos próprios e preparar nova tentativa; não atribuir causa a NAT/firewall sem evidência. Não pedir senhas, tokens, chaves privadas ou gravações.
 
 Este ensaio comprova apenas convites e TCP sintético. UDP mantém suas provas anteriores; Minecraft, interface Tauri, SVC, Plasmo, contas mistas, NAT/CGNAT, relay e estabilidade exigem seus próprios testes. [Contrato](engineering/AURORA_CONNECT_SPEC.md), [estado e comandos executados](task-aur-r4-connect.md), [integração desktop](aurora-connect-desktop.md).
