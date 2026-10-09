@@ -1,6 +1,6 @@
 # Aurora Connect — CLI e probe de UDP fragmentado
 
-Data: 09/10/2026. Incremento 51b. Estado: **PROTÓTIPO**, com quatro testes de integração reais locais e três testes unitários novos aprovados. Complementa a [admissão fragmentada](aurora-connect-fragmented-admission.md), o [perfil do convite](aurora-connect-fragmented-invitations.md) e o [transporte V2](aurora-connect-fragmented-udp.md). Não constitui kit externo, homologação de voz, Minecraft ou interface.
+Data: 09/10/2026. Incrementos 51b e correção de metadados 51c. Estado: **PROTÓTIPO**, com quatro testes de integração reais locais e três testes unitários novos aprovados. Complementa a [admissão fragmentada](aurora-connect-fragmented-admission.md), o [perfil do convite](aurora-connect-fragmented-invitations.md) e o [transporte V2](aurora-connect-fragmented-udp.md). Não constitui kit externo, homologação de voz, Minecraft ou interface.
 
 O trabalho foi concluído na branch `codex/aur-r4-connect`, sobre HEAD `78df138b78a4bc07b280f7aa880422f3492e48a9`, preservando os demais fontes 51b e a preparação separada 52. Nenhum manifest, lockfile, matriz Core/Skins, pin de caller ou kit histórico mudou nesta parte do incremento. A dependência de transporte continua Iroh 1.3.0 fixada. Não houve alteração de configuração pessoal, Java, firewall ou relógio.
 
@@ -24,7 +24,7 @@ Somente os novos comandos V2 têm preparação de até 600 s por etapa interativ
 
 Enviar uma linha e pressionar Enter, aguardar o evento correspondente e manter o mesmo processo. Não colar JSON ou `approve` no prompt `PS ...>` depois de o programa terminar. `stop` seguido de Enter, Ctrl+C, prazo ou fechamento da conexão encerram a ponte. Chaves e convites ficam em RAM; uma thread bloqueada na leitura do terminal pode permanecer até a saída do processo, sem bloquear o runtime Tokio.
 
-`guest_ready` distingue `approvedOriginalDatagramBytes` do teto de frame completo, `maxFragmentFrameBytes=1264`, e declara `associationCeilingNegotiated=false`: o listener criado ainda não equivale a uma associação UDP negociada. A abertura ocorre para cada origem local conforme o tráfego e os limites existentes. Ao encerrar, `fragmented_transport_snapshot` fornece os deltas observados de frames QUIC DATAGRAM; não os chama de pacotes físicos ou áudio entregue.
+`guest_ready` distingue `approvedOriginalDatagramBytes` do teto de frame completo, `maxFragmentFrameBytes=1264`, e declara `associationCeilingNegotiated=true`, com `capacityScope=initialAssociation`. Antes desse evento, a ponte já concluiu `openFragmented` e reservou a primeira associação autorizada para a primeira origem local. `transportOriginalCapacity` é o teto negociado dessa associação, limitado também pela capacidade atual do transporte e pelo máximo V2 de 4096 B; não é uma capacidade genérica sem negociação. A associação reservada pode expirar antes do primeiro tráfego; nesse caso, ou para novas origens locais, outra associação será aberta e terá seu próprio teto. O snapshot inicial não promete o mesmo valor para todas as associações futuras, uma MTU física ou suporte de áudio. Ao encerrar, `fragmented_transport_snapshot` fornece deltas observados de frames QUIC DATAGRAM; não os chama de pacotes físicos ou áudio entregue.
 
 ## Fixture limitada e oráculos
 
@@ -74,6 +74,27 @@ Os logs são privados em `.aurora/connect-validation/`; não contêm cópias de 
 O positivo real cria quatro processos próprios: echo, Host, Guest e probe; a consulta de plano é um processo preparatório que termina antes. O teste emite/verifica convite, faz admissão autenticada, transporta os bytes TCP/UDP, exige pelo menos 18 frames QUIC DATAGRAM observados por direção e espera `guest_stopped`, `host_stopped` e `echo_fragmented_stopped`. Após soltar todos os handles, faz rebind dos listeners Guest, destinos echo e socket de transporte Host; o próprio probe também verifica rebind de suas origens UDP. O resumo compartilhável contém somente contadores, sem endereço, peer ou convite.
 
 Os três negativos de integração são: argumentos/TTL/perfil legado/modo incompatível recusados antes de identidade; aprovação com EOF sem Enter recusada como `invalid_protocol`, com canário de transporte próprio sem tráfego; e probe ligado diretamente ao echo por TCP/UDP comum, que precisa falhar com `fragment_probe_oversize_delivered` quando 4097 B alcança o endpoint. Esse último oráculo impede chamar um caminho sem a recusa de fronteira de resultado aprovado.
+
+## Correção 51c — escopo do teto anunciado
+
+Aplicada em 09/10/2026 sobre `4317a9dd88bf36a42b1919ecbec9073feacb50f5`, depois da validação do incremento 52. A auditoria observou que o texto anterior e `associationCeilingNegotiated=false` estavam incorretos: `Guest::udp_bridge_mode` aguarda a abertura autorizada e guarda `Reply.maxPayload` da primeira associação antes de retornar a ponte. `guest_ready` agora informa `associationCeilingNegotiated=true` e `capacityScope=initialAssociation`. A semântica de `transportOriginalCapacity` é a explicada acima, não uma aprovação de todas as futuras associações.
+
+A correção altera somente o evento CLI, seu oráculo de integração e este documento. Não altera Host, Guest, wire, assinatura, convite, transporte, limite de payload, política UDP, prazos ou áudio. O teste existente com dois agentes reais confere o flag, o escopo e a capacidade inicial 4096 antes de executar o probe completo e encerrar/reabrir as portas. Callers que validam estritamente o evento precisam adotar os novos campos explicitamente ao selecionar o novo binário; nenhum pin histórico é atualizado automaticamente.
+
+Comandos da correção, com `CARGO_TARGET_DIR` apontando para `.aurora/connect-validation/relay50-target`:
+
+```powershell
+cargo fmt --manifest-path apps/connect-lab/Cargo.toml --all -- --check
+cargo test --manifest-path apps/connect-lab/Cargo.toml --locked --offline --jobs 2 --test fragmented_cli -- --test-threads=1 --nocapture
+cargo test --manifest-path apps/connect-lab/Cargo.toml --locked --offline --jobs 2 --bin aurora-connect-lab fragment_probe::tests -- --nocapture
+cargo clippy --manifest-path apps/connect-lab/Cargo.toml --locked --offline --jobs 2 --bin aurora-connect-lab --test fragmented_cli -- -D warnings
+cargo build --manifest-path apps/connect-lab/Cargo.toml --locked --offline --jobs 2 --bin aurora-connect-lab --no-default-features
+git diff --check
+```
+
+Resultados: quatro integrações PASS em 9,70 s (`fragmented-51c-cli.log`); três unitários PASS, cinco filtrados (`fragmented-51c-unit.log`); Clippy PASS em 1,11 s (`fragmented-51c-clippy.log`); formatação/diff PASS; build sem features PASS em 5,86 s (`fragmented-51c-build.log`). São os mesmos cenários anteriores com o oráculo corrigido, não sete funcionalidades novas. A suite completa 52 passou antes desta alteração restrita de metadados; não foi repetida, pois nenhum transporte ou ciclo de vida mudou.
+
+Snapshot: `main.rs` SHA-256 `090bca7026cf9f7c6bd26f353e18770e1e3bf273ecd021208331c1be8366c358`; teste `fragmented_cli.rs` `e160c40d27f6c364ebf400eb253dc91554cc50692b9e2fc5d7cdb7effbe6aa4e`. Novo executável exclusivamente no target privado: 24.401.920 B, SHA-256 `adcc23b75c5b4222fba582c18ccf4147c46e984197e9724e9dae1a4cd26b0423`. Os binários principais históricos continuam com SHA `005b55c4…5f973` (lab) e `7d3403b2…b3e16` (audit). Nenhum kit, configuração, processo Java, relay externo ou porta de sessão remota foi alterado. Reverter 51c significa restaurar somente esses metadados/teste/documentação após revisão; não desfazer 51b ou 52.
 
 ## Limites e rollback
 

@@ -596,7 +596,7 @@ async fn run_guest_bridges(
             event(
                 json!({"event":"guest_ready","tcp":tcp_bridge.local_addr().to_string(),"udp":bridge.local_addr().to_string(),
                 "profile":"fragmentedV2","udpEnvelopeVersion":2,"approvedOriginalDatagramBytes":approved_original,
-                "transportOriginalCapacity":bridge.max_payload(),"associationCeilingNegotiated":false,
+                "transportOriginalCapacity":bridge.max_payload(),"associationCeilingNegotiated":true,"capacityScope":"initialAssociation",
                 "maxFragmentFrameBytes":aurora_connect_lab::MAX_FRAGMENT_FRAME_BYTES,"experimental":true,"relay":false,
                 "next":"enter stop then press Enter to close; invitation whole-session expiry is unchanged"}),
             );

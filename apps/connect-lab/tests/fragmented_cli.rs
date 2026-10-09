@@ -200,7 +200,9 @@ fn cli_invited_fragmented_two_origins_large_tcp_oversize_and_cleanup() {
     guest.send(&format!("approve {}\n", review["digest"].as_str().unwrap()));
     let ready = guest.event("guest_ready");
     assert_eq!(ready["approvedOriginalDatagramBytes"], 4096);
-    assert_eq!(ready["associationCeilingNegotiated"], false);
+    assert_eq!(ready["associationCeilingNegotiated"], true);
+    assert_eq!(ready["capacityScope"], "initialAssociation");
+    assert_eq!(ready["transportOriginalCapacity"], 4096);
     let tcp = ready["tcp"].as_str().unwrap();
     let udp = ready["udp"].as_str().unwrap();
     let mut probe = Cli::start(&["probe-fragmented", tcp, udp]);
