@@ -49,11 +49,17 @@ O mesmo ensaio comparou 1 MiB TCP por direção, desconectou mantendo a identida
 
 Revisão independente do diff e dos logs não encontrou bloqueador. Quota global, ausência de trim, cancelamento do receive e espera/cleanup do dial foram inspecionados. A nona vazia especificamente durante um dial em andamento e Ctrl+C depois de vazias não tiveram fixture runtime dedicada neste incremento; não apresentar essa inspeção como ensaio executado desses dois casos.
 
+## Kit privado preparado
+
+Código revisado no commit `3acfad4`. A cópia nova `connect-invite-kit-47c-731f76f1.zip`, sob `.aurora/connect-validation`, contém cinco entradas, verificadas individualmente contra nome, tamanho e SHA-256 dos arquivos locais. ZIP: **7784155 B**, SHA-256 `fe4f3e11f4881cc0cb9103b736cd4b1d0a29dce645b2ad24a0200c64c0e4df6c`. Manifesto registra `testedTwoComputers=false`; é snapshot da preparação, não deve ser reescrito após o ensaio.
+
+Pins do convidado: executável `731f76f126aa7149d8d479b27f804ff85c04d1bdaa931f1507ec595f86191eb6`, helper `guest-47c.ps1` `a5b1a0e0a94e02887b3a03bb264469c78faaeb88f59e240fb978ae305f1922cb`, probe `probe-tcp-47.ps1` `d50c0262cc75ce66ffcf35291f2d94b8486caad1c926c91f58a8f56d27db803a`. O helper passou quatro verificações reais em Windows PowerShell5.1 por `node .aurora/connect-validation/connect-invite-kit-47c-check.mjs`: pin ausente/inválido, argumento extra e identidade única seguida de EOF/aviso de encerramento. Sem abrir endpoint; cleanup aprovado. Convidado extrai em pasta nova `C:\AuroraConnectConvites47c`; o anfitrião preserva o executável47b já verificado. Nenhum instalador, publicação ou mudança pessoal foi realizado.
+
 ## Limites, operação e rollback
 
 O resultado continua sendo um laboratório experimental, sem entrada/expiração/replay/revogação de convites homologados entre duas internets. O transporte TCP/UDP anterior e seus resultados permanecem separados. Nenhuma prova nova de Minecraft, interface, Simple Voice Chat, Plasmo Voice, contas mistas, Core/Skins, NAT/CGNAT ou relay decorre desta correção.
 
-Um eventual kit 47c deve ser uma pasta/ZIP novos, com hash próprio e pin explícito no helper. Não substituir os kits 47/47b nem o executável histórico usado pelas regras do anfitrião. A composição local 47b/47c foi testada separadamente acima e permite preparar o próximo ensaio mantendo o executável do anfitrião. Continua **PRECISA DE TESTE** entre computadores/redes diferentes; não exige alterar o firewall para substituir o binário histórico nesta preparação.
+O kit 47c usa pasta/ZIP novos, com hash próprio e pin explícito no helper. Não substituir os kits 47/47b nem o executável histórico usado pelas regras do anfitrião. A composição local 47b/47c foi testada separadamente acima e permite preparar o próximo ensaio mantendo o executável do anfitrião. Continua **PRECISA DE TESTE** entre computadores/redes diferentes; não exige alterar o firewall para substituir o binário histórico nesta preparação.
 
 O procedimento humano continua separado: enviar somente o convite, observar `audit_review`, então enviar somente `approve <digest>`. Se o processo terminou e reapareceu `PS ...>`, não colar JSON ou aprovação no shell. A tolerância a vazias não resolve processos já encerrados, convites antigos, identidade trocada ou relógios divergentes.
 
