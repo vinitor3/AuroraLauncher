@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 09/10/2026
 
+Incremento60/005/006/007/008 integra o caller e painel de anúncio em cópia diagnóstica: inspeção, revisão/aplicação, recibo RAM e restauração estrita ou reconciliada explicitamente selecionada. Fechamento aguarda trabalho iniciado e exige consentimento próprio antes de perder o recibo. [Contrato, provas e limites60](../../aurora-connect-desktop-voice.md). **PROTÓTIPO**, desligado por padrão; não conclui áudio, anúncio integrado a cada participante, janela Tauri, T-VOICE ou teste externo de convites. Recibo durável, integração ao ciclo real de jogo e demais gates continuam pendentes.
+
 Incremento59/006/007/008 acrescenta inspeção nativa limitada de anúncio e artefato na cópia selecionada, sem criar plano ou modificar configuração. O reader de recovery evita inicialização durante consulta; [contrato e resultados59](../../aurora-connect-voice-inspection.md). **PROTÓTIPO**, sob feature desligada. Prepara a integração de configuração no painel; não conclui caller Tauri/UI de voz, anúncio por participante, áudio ou homologação.
 
 Incremento58/006/007/008 remove o empréstimo entre chamadas da restauração de anúncio, conservando a revisão original em um controlador nativo exclusivo. Confirmação consome uma revisão; cancelamento/Drop não escrevem, e reconciliação nunca é automática. [Contrato e resultados58](../../aurora-connect-voice-restoration-controller.md). **PROTÓTIPO**, somente cópias de diagnóstico; caller Tauri/interface, recibo durável e áudio de cada mod continuam pendentes. Não conclui T-VOICE ou qualquer gate de homologação.

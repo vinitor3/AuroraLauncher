@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 09/10/2026
 
+Incremento60: caller/painel de anúncio usa a cópia diagnóstica e o mod selecionados, conservando aprovação e recibo de restauração no nativo. Saída e logout tratam a perda explícita do recibo. [Contrato e validação60](../aurora-connect-desktop-voice.md). **PROTÓTIPO**, desligado por padrão; testes de configuração e DOM não homologam áudio SVC/Plasmo, janela Tauri, redes, Minecraft ou pares Core/Skins. Matriz ativa e versões permanecem inalteradas.
+
 Incremento59: inspeção Rust de aplicação de anúncio verifica cópia, JAR e configuração com leitura limitada, mantendo observação separada de aprovação, bind efetivo e áudio. [Registro59](../aurora-connect-voice-inspection.md). **PROTÓTIPO**; nenhuma célula Minecraft/loader/Java/Core/Skins, rede ou mod de voz foi homologada por essa inspeção. Versões e matriz ativa permanecem inalteradas.
 
 Incremento58: controlador nativo de restauração preserva autorização, prazo e bytes entre chamadas, sob feature de laboratório. O [registro58](../aurora-connect-voice-restoration-controller.md) distingue os testes de arquivo/recuperação da execução dos mods. **PROTÓTIPO**; não acrescenta voz audível, janela Tauri, Minecraft, rede ou par Core/Skins homologado. SVC e Plasmo conservam gates separados.

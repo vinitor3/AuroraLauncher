@@ -8,6 +8,8 @@ import { RecoveryReviewDialog } from "../recovery/RecoveryView";
 import { recoveryBytes, recoveryDate, type RecoveryPreview, type RecoveryResult } from "../recovery/types";
 import { labError, type LabDetails, type LabEnvironment, type LabProgress, type LabSetting } from "./types";
 import "./diagnostic-lab.css";
+import { VoiceAnnouncementPanel } from "../voice-announcement/VoiceAnnouncementPanel";
+import { useVoiceAnnouncement } from "../voice-announcement/VoiceAnnouncementProvider";
 
 type Props = {
   instanceId: string; busy: boolean; runningIds: string[]; javaExecutable: string;
@@ -20,6 +22,7 @@ const operationText: Record<Operation, string> = { list: "Verificando cópias e 
 const outcomes: Record<DoctorRun["outcome"], string> = { preparing: "Preparando", running: "Em execução", success: "Encerramento normal observado", failed: "Falha observada", cancelled: "Cancelada", unknown: "Resultado não confirmado" };
 
 export function DiagnosticLabView({ instanceId, busy, runningIds, javaExecutable, onOperationChange, onChanged, onLaunch, onRecovery, onExplain }: Props) {
+  const voice = useVoiceAnnouncement();
   const [environments, setEnvironments] = useState<LabEnvironment[]>();
   const [selectedId, setSelectedId] = useState("");
   const [details, setDetails] = useState<LabDetails>();
@@ -51,7 +54,7 @@ export function DiagnosticLabView({ instanceId, busy, runningIds, javaExecutable
   const inFlight = useRef(false);
   const callbacks = useRef({ onOperationChange, onChanged, onLaunch });
   callbacks.current = { onOperationChange, onChanged, onLaunch };
-  const disabled = busy || !!operation;
+  const disabled = busy || !!operation || !!voice?.blocking;
   const selected = environments?.find((environment) => environment.id === selectedId);
   const currentDetails = details?.environment.id === selectedId ? details : undefined;
   const selectedRunning = runningIds.includes(selectedId);
@@ -216,6 +219,7 @@ export function DiagnosticLabView({ instanceId, busy, runningIds, javaExecutable
     {message && <p className="recovery-message recovery-success" role="status">{message}</p>}
     {warning && <p className="recovery-message recovery-warning" role="status">{warning}</p>}
     {undoOrigin && <button className="secondary" disabled={disabled} onClick={() => onRecovery(undoOrigin)} type="button">Abrir Recuperação da original para desfazer</button>}
+    <VoiceAnnouncementPanel instanceId={selected?.state === "ready" ? selectedId : null} sourceInstanceId={instanceId} busy={busy || !!operation} running={runningIds.includes(voice?.snapshot?.instanceId ?? selectedId)} onChanged={onChanged} />
     <div className="recovery-list-heading"><h3>Cópias desta instância</h3><button className="secondary compact" disabled={disabled} onClick={() => { invalidatePreview(); void perform("list", async (current) => { await loadList(current); if (selectedId) await loadDetails(selectedId, current); }); }} type="button">Atualizar ambientes</button></div>
     {environments?.length === 0 && <div className="recovery-empty"><strong>Nenhuma cópia de teste</strong><p>Crie uma cópia para testar mods e configurações com o jogo fechado.</p></div>}
     <div className="lab-environments">{environments?.map((environment) => <article className={`recovery-point${environment.id === selectedId ? " selected" : ""}`} key={environment.instanceUuid}><div><h3>Cópia de teste · {recoveryDate(environment.createdAt)}</h3><p>Origem na criação: {environment.originInstanceId}</p><small>{recoveryBytes(environment.logicalBytes)} · {environment.copiedWorld ? `Mundo copiado: ${environment.copiedWorld}` : "Sem mundos copiados"} · {runningIds.includes(environment.id) ? "Em execução" : environment.state === "ready" ? "Disponível" : "Operação incompleta — verifique ou exclua a cópia"}</small><details><summary>Identidade e limites</summary><p>Identidade própria: <code>{environment.instanceUuid}</code></p><p>Origem verificada por identidade: <code>{environment.originUuid}</code></p>{environment.limitations.map((limitation, index) => <p key={index}>{limitation}</p>)}</details></div><div className="lab-actions"><button className="secondary compact" disabled={disabled || environment.state !== "ready"} onClick={() => chooseEnvironment(environment.id)} type="button">{environment.id === selectedId ? "Atualizar cópia" : "Abrir cópia"}</button><button className="danger compact" disabled={disabled || runningIds.includes(environment.id)} onClick={() => setDeleting(environment)} type="button">Excluir cópia</button></div></article>)}</div>

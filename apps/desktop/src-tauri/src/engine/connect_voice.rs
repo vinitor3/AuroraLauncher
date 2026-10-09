@@ -1,5 +1,6 @@
 //! Experimental, explicitly compiled voice configuration adapters for verified
-//! diagnostic copies only. No Tauri command or UI exposes this module.
+//! diagnostic copies only. The opt-in desktop caller retains plans and receipts
+//! privately; commands expose bounded presentation and explicit approval only.
 //! The opaque guard checks for standard Java processes around the shared lock
 //! and confirmation. Callers still must prevent external starts during mutation;
 //! renamed/embedded JVMs are not detectable by this conservative lab gate.
@@ -23,6 +24,12 @@ const PLASMO_BYTES: u64 = 12_365_966;
 const MAX_CONFIG: u64 = 256 * 1024;
 
 type Result<T> = std::result::Result<T, RecoveryError>;
+
+#[cfg(windows)]
+#[path = "connect_voice_desktop_live.rs"]
+mod desktop;
+#[cfg(windows)]
+pub(crate) use desktop::Manager as DesktopManager;
 
 #[path = "connect_voice_inspection.rs"]
 mod inspection;

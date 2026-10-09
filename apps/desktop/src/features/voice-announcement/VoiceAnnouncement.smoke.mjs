@@ -1,0 +1,351 @@
+// Synthetic IPC/DOM fixtures. No Java, file mutation, account, audio or network.
+import assert from "node:assert/strict";
+import { test, beforeEach, afterEach } from "node:test";
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import ts from "typescript";
+const require = createRequire(import.meta.url);
+const { parseHTML } = require("linkedom");
+const { window, document } = parseHTML("<html><body><div id='root'></div></body></html>");
+document.oninput = null;
+Object.assign(globalThis, { window, document, HTMLElement: window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: "Voice synthetic DOM" } });
+let time = 1800000000000;
+Date.now = () => time;
+let timerId = 0;
+const timers = new Map();
+globalThis.setInterval = callback => { timers.set(++timerId, callback); return timerId; };
+globalThis.clearInterval = id => timers.delete(id);
+const modules = new Map();
+async function sourceModule(source) {
+  if (modules.has(source.href)) return modules.get(source.href);
+  let output = ts.transpileModule(await readFile(source, "utf8"), { fileName: fileURLToPath(source), compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX } }).outputText.replace(/^import ["'][^"']+\.css["'];?$/gm, "");
+  for (const { fileName: specifier } of ts.preProcessFile(output).importedFiles) {
+    const dependency = specifier.startsWith(".") ? ["", ".ts", ".tsx"].map(ext => new URL(specifier + ext, source)).find(url => existsSync(fileURLToPath(url))) : undefined;
+    const resolved = dependency ? await sourceModule(dependency) : pathToFileURL(require.resolve(specifier)).href;
+    output = output.replaceAll(`from "${specifier}"`, `from ${JSON.stringify(resolved)}`);
+  }
+  const url = `data:text/javascript;base64,${Buffer.from(output).toString("base64")}`;
+  modules.set(source.href, url); return url;
+}
+const types = await import(await sourceModule(new URL("./types.ts", import.meta.url)));
+const OP = "11111111-1111-4111-8111-111111111111", PLAN = "22222222-2222-4222-8222-222222222222", CLOSE = "33333333-3333-4333-8333-333333333333", POINT = "44444444-4444-4444-8444-444444444444";
+const hash = "a".repeat(64), digest = "b".repeat(64);
+const copy = "aurora-test-synthetic";
+const caps = available => ({ available, experimental: true, diagnosticCopyOnly: true, mode: "dedicatedAuroraOnly", guestAddress: "127.0.0.1:35554", mods: available ? ["simple_voice_chat", "plasmo_voice"] : [], restoration: "strictAndExplicitReconciled", audioState: "notVerified", transportState: "notObserved" });
+const idle = () => ({ generation: 0, operationId: null, instanceId: null, voiceMod: null, phase: "idle", busy: false, observation: null, review: null, restorationState: null, lastRecoveryResult: null, lastErrorCode: null, close: null });
+const observation = (voiceMod = "simple_voice_chat") => ({ voiceMod, artifactVersion: types.MODS[voiceMod].version, artifactSha256: types.MODS[voiceMod].sha256, artifactBytes: types.MODS[voiceMod].bytes, configPath: types.MODS[voiceMod].path, sourceSha256: hash, sourceBytes: 60, limitations: [...types.LIMITATIONS], announcement: voiceMod === "simple_voice_chat" ? { type: "simpleVoiceChat", voiceHost: "" } : { type: "plasmoPublic", ip: "127.0.0.1", port: 0 } });
+const review = (action = "setAnnouncement", voiceMod = "simple_voice_chat") => ({ action, voiceMod, planId: PLAN, digest, configPath: types.MODS[voiceMod].path, before: "voice_host=", after: "voice_host=127.0.0.1:35554", sourceSha256: hash, replacementSha256: "c".repeat(64), expiresAtMs: time + 300000, warning: "Experimental; somente cópia dedicada Aurora." });
+const selected = (extra = {}) => ({ ...idle(), generation: 1, operationId: OP, instanceId: copy, voiceMod: "simple_voice_chat", phase: "observed", observation: observation(), ...extra });
+const applied = () => selected({ phase: "applied", observation: null, restorationState: "ready", lastRecoveryResult: { restoredPointId: POINT, undoAvailable: true, recoveredInterrupted: false } });
+const closeReview = intent => ({ ...applied(), generation: 3, phase: "closeReview", close: { closeId: CLOSE, intent, state: "reviewRequired", review: { digest, expiresAtMs: time + 60000, instanceId: copy, voiceMod: "simple_voice_chat", state: "applied", selectiveRestorationLost: true } } });
+let snapshot, capabilities, calls, handlers, root, props, controller, logoutPromise, logoutSteps, externalAction, changed, navigations, harnessRenders;
+const callbacks = new Map(), listeners = new Map(); let callbackId = 0;
+function move(extra) { snapshot = { ...snapshot, ...extra, generation: snapshot.generation + 1 }; return structuredClone(snapshot); }
+async function nativeInvoke(command, args) {
+  if (command === "plugin:event|listen") { listeners.set(args.handler, { event: args.event, callback: callbacks.get(args.handler) }); return args.handler; }
+  if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); return; }
+  calls.push({ command, args });
+  if (handlers.has(command)) return handlers.get(command)(args);
+  const request = args?.request;
+  switch (command) {
+    case "voice_announcement_capabilities": return structuredClone(capabilities);
+    case "voice_announcement_snapshot": return structuredClone(snapshot);
+    case "voice_announcement_inspect": return move({ ...selected(), instanceId: request.instanceId, voiceMod: request.voiceMod, observation: observation(request.voiceMod) });
+    case "voice_announcement_prepare_apply": return move({ phase: "reviewApply", review: review("setAnnouncement", snapshot.voiceMod) });
+    case "voice_announcement_confirm": return move({ phase: snapshot.review.action === "setAnnouncement" ? "applied" : "restored", review: null, observation: null, restorationState: snapshot.review.action === "setAnnouncement" ? "ready" : "restored", lastRecoveryResult: applied().lastRecoveryResult });
+    case "voice_announcement_prepare_restore": return move({ phase: "reviewRestore", review: review("restoreOriginal", snapshot.voiceMod) });
+    case "voice_announcement_prepare_restore_reconciled": return move({ phase: "reviewRestore", review: review("restoreReconciled", snapshot.voiceMod) });
+    case "voice_announcement_cancel_review": return move({ phase: snapshot.restorationState === "ready" ? "applied" : "observed", review: null });
+    case "voice_announcement_begin_close":
+      if (snapshot.restorationState === "ready" || snapshot.phase === "needsRecovery") return move({ ...closeReview(request.intent), generation: snapshot.generation });
+      return move({ phase: "closed", busy: false, review: null, observation: null, restorationState: null, close: { closeId: CLOSE, intent: request.intent, state: "ready", review: null } });
+    case "voice_announcement_cancel_close": return move({ close: null, phase: snapshot.restorationState === "ready" ? "applied" : "failed", lastErrorCode: null });
+    case "voice_announcement_confirm_close": return move({ phase: "closed", restorationState: null, close: { ...snapshot.close, state: "ready", review: null } });
+    case "voice_announcement_finish_close": return move(idle());
+    default: throw new Error("Unexpected synthetic command");
+  }
+}
+window.__TAURI_INTERNALS__ = { invoke: nativeInvoke, transformCallback(callback) { callbacks.set(++callbackId, callback); return callbackId; } };
+window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} }; window.isTauri = true;
+const { act, createElement, useEffect } = await import("react");
+const { createRoot } = await import("react-dom/client");
+const { VoiceAnnouncementProvider, useVoiceAnnouncement, withVoiceAnnouncementLogout } = await import(await sourceModule(new URL("./VoiceAnnouncementProvider.tsx", import.meta.url)));
+const { VoiceAnnouncementPanel } = await import(await sourceModule(new URL("./VoiceAnnouncementPanel.tsx", import.meta.url)));
+function Harness({ panel = true, ...panelProps }) {
+  harnessRenders += 1;
+  controller = useVoiceAnnouncement();
+  useEffect(() => controller.registerNavigator((...args) => navigations.push(args)), [controller.registerNavigator]);
+  return createElement("div", null,
+    createElement("button", { onClick() { logoutPromise = withVoiceAnnouncementLogout(controller, externalAction).catch(() => logoutSteps.push("failed")); } }, "Sair da conta fixture"),
+    panel ? createElement(VoiceAnnouncementPanel, { ...panelProps, onChanged: async () => { changed += 1; } }) : null);
+}
+const container = document.getElementById("root");
+const render = async (extra = {}) => { props = { ...props, ...extra }; await act(async () => root.render(createElement(VoiceAnnouncementProvider, null, createElement(Harness, props)))); };
+const button = name => { const found = [...container.querySelectorAll("button")].find(value => value.textContent === name); assert.ok(found, name); return found; };
+const click = async name => { assert.equal(button(name).disabled, false, name); await act(async () => button(name).dispatchEvent(new window.Event("click", { bubbles: true }))); };
+const check = async name => { const element = container.querySelector(`input[aria-label="${name}"]`); assert.ok(element); assert.equal(element.disabled, false); await act(async () => { element.checked = !element.checked; element.dispatchEvent(new window.Event("click", { bubbles: true })); }); };
+const count = name => calls.filter(call => call.command === `voice_announcement_${name}`).length;
+const last = name => calls.filter(call => call.command === `voice_announcement_${name}`).at(-1);
+const refresh = async () => { await act(async () => controller.refresh()); };
+const tick = async () => { await act(async () => { for (const callback of [...timers.values()]) callback(); }); };
+const emit = async (event, payload) => { await act(async () => { for (const listener of listeners.values()) if (listener.event === event) listener.callback({ payload }); }); };
+const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+beforeEach(() => {
+  time = 1800000000000; snapshot = idle(); capabilities = caps(true); calls = []; handlers = new Map();
+  window.isTauri = true; harnessRenders = 0;
+  props = { instanceId: copy, sourceInstanceId: "original", busy: false, running: false };
+  changed = 0; navigations = []; logoutPromise = null; logoutSteps = []; externalAction = async () => { logoutSteps.push("connect", "firebase"); };
+  root = createRoot(container);
+});
+afterEach(async () => { await act(async () => root.unmount()); window.isTauri = true; assert.equal(timers.size, 0, "All UI timers were removed"); assert.equal(listeners.size, 0, "All event listeners were removed"); });
+
+test("feature off exposes no config controls or instance read; normal logout continues", async () => {
+  capabilities = caps(false); await render();
+  assert.equal(container.querySelector('[aria-label="Anúncio de voz experimental"]'), null);
+  assert.equal(count("snapshot"), 0); await click("Sair da conta fixture"); await logoutPromise;
+  assert.deepEqual(logoutSteps, ["connect", "firebase"]); assert.equal(count("begin_close"), 0);
+});
+for (const mode of ["browser", "featureOff"]) test(`${mode} creates no expiry timer or periodic consumer render`, async () => {
+  if (mode === "browser") window.isTauri = false;
+  else capabilities = caps(false);
+  await render(); assert.equal(timers.size, 0); const renders = harnessRenders;
+  time += 10000; await tick(); assert.equal(harnessRenders, renders); assert.equal(count("snapshot"), 0);
+  assert.equal(count("capabilities"), mode === "browser" ? 0 : 1);
+});
+test("expiry timers exist only for visible file or close reviews without replacing polling or listeners", async () => {
+  await render(); assert.equal(timers.size, 1, "Idle only retains the native snapshot poll");
+  const [pollId] = timers.keys(); const listenerIds = [...listeners.keys()];
+  time += 900000;
+  snapshot = selected({ phase: "reviewApply", review: { ...review(), expiresAtMs: time - 1 } }); await refresh();
+  assert.equal(timers.size, 2); assert.match(container.textContent, /A revisão venceu/);
+  const fileTimers = [...timers.keys()]; await refresh(); assert.deepEqual([...timers.keys()], fileTimers);
+  await render({ panel: false }); assert.deepEqual([...timers.keys()], [pollId]);
+  await render({ panel: true }); assert.equal(timers.size, 2);
+  await render({ instanceId: "other-copy", sourceInstanceId: "other-source" }); assert.deepEqual([...timers.keys()], [pollId]);
+  await render({ instanceId: copy, sourceInstanceId: "original" }); assert.equal(timers.size, 2);
+  await click("Cancelar revisão"); assert.deepEqual([...timers.keys()], [pollId]);
+  time += 900000;
+  snapshot = closeReview("exit"); snapshot.generation = 20; snapshot.close.review.expiresAtMs = time - 1; await refresh();
+  assert.equal(timers.size, 2); assert.match(container.textContent, /A revisão venceu/);
+  const closeTimers = [...timers.keys()]; await refresh(); assert.deepEqual([...timers.keys()], closeTimers);
+  await click("Cancelar saída"); assert.deepEqual([...timers.keys()], [pollId]); assert.deepEqual([...listeners.keys()], listenerIds);
+});
+for (const voiceMod of ["simple_voice_chat", "plasmo_voice"]) test(`${voiceMod}: explicit inspection, review, one approval and strict restoration`, async () => {
+  await render();
+  if (voiceMod === "plasmo_voice") await act(async () => { const select = container.querySelector("select"); for (const option of select.querySelectorAll("option")) option.selected = false; select.querySelector(`option[value="${voiceMod}"]`).selected = true; select.dispatchEvent(new window.Event("change", { bubbles: true })); });
+  await click("Inspecionar anúncio");
+  assert.deepEqual(last("inspect").args, { request: { instanceId: copy, voiceMod } });
+  assert.match(container.textContent, voiceMod === "simple_voice_chat" ? /voice_host vazio/ : /porta efetiva não resolvida/);
+  await click("Revisar aplicação na cópia");
+  assert.deepEqual(last("prepare_apply").args, { request: { operationId: OP, generation: 1 } });
+  assert.equal(button("Confirmar alteração revisada").disabled, true); assert.equal(count("confirm"), 0);
+  await check("Autorizo esta alteração do anúncio"); await click("Confirmar alteração revisada");
+  assert.deepEqual(last("confirm").args, { request: { operationId: OP, planId: PLAN, digest } });
+  assert.match(container.textContent, /Anúncio aplicado somente na cópia/); assert.equal(changed, 1);
+  await click("Revisar restauração estrita"); assert.equal(button("Confirmar alteração revisada").disabled, true);
+  await check("Autorizo esta alteração do anúncio"); await click("Confirmar alteração revisada");
+  assert.match(container.textContent, /Anúncio restaurado/); assert.equal(changed, 2); assert.equal(count("prepare_restore_reconciled"), 0);
+});
+test("strict failure never selects reconciled action; explicit reconciled gets new consent", async () => {
+  snapshot = applied(); await render();
+  handlers.set("voice_announcement_prepare_restore", () => { move({ lastErrorCode: "voice_stale_review" }); throw "voice_stale_review"; });
+  await click("Revisar restauração estrita"); assert.equal(count("prepare_restore_reconciled"), 0);
+  await click("Revisar restauração preservando outras edições");
+  assert.equal(snapshot.review.action, "restoreReconciled"); assert.equal(button("Confirmar alteração revisada").disabled, true);
+  assert.deepEqual(last("prepare_restore_reconciled").args, { request: { operationId: OP } });
+});
+test("source switch hides review and blocks mutations of the previous copy", async () => {
+  snapshot = selected({ phase: "reviewApply", review: review() }); await render(); await check("Autorizo esta alteração do anúncio");
+  await render({ instanceId: "another-copy", sourceInstanceId: "another-source" });
+  assert.equal(container.querySelector('[aria-label="Revisão do anúncio"]'), null); assert.equal(count("confirm"), 0);
+  assert.equal(button("Inspecionar anúncio").disabled, true); await click("Abrir cópia desta operação"); assert.deepEqual(navigations, [[copy, "voice"]]);
+});
+test("delayed result retains native context and does not apply to a newly selected copy", async () => {
+  const wait = deferred(); handlers.set("voice_announcement_inspect", () => wait.promise); await render(); await click("Inspecionar anúncio");
+  await render({ instanceId: "different-copy", sourceInstanceId: "different-source" });
+  await act(async () => { snapshot = selected(); wait.resolve(snapshot); });
+  assert.match(container.textContent, /outra cópia/); assert.equal(button("Inspecionar anúncio").disabled, true); assert.equal(count("prepare_apply"), 0);
+});
+test("new digest and panel remount clear approval; old generation cannot replace review", async () => {
+  snapshot = selected({ phase: "reviewApply", review: review() }); await render(); await check("Autorizo esta alteração do anúncio");
+  move({ review: { ...snapshot.review, digest: "d".repeat(64) } }); await refresh(); assert.equal(button("Confirmar alteração revisada").disabled, true);
+  await check("Autorizo esta alteração do anúncio"); await render({ panel: false }); await render({ panel: true }); assert.equal(button("Confirmar alteração revisada").disabled, true);
+  snapshot = selected({ phase: "reviewApply", review: review(), generation: 0 }); await refresh();
+  assert.equal(controller.snapshot.review.digest, "d".repeat(64)); assert.equal(count("confirm"), 0);
+});
+test("file and close consent reset permanently after observed expiry even if civil clock goes back", async () => {
+  snapshot = selected({ phase: "reviewApply", review: { ...review(), expiresAtMs: time + 10 } }); await render(); await check("Autorizo esta alteração do anúncio");
+  time += 20; await tick(); time -= 20; await tick(); assert.equal(button("Confirmar alteração revisada").disabled, true);
+  snapshot = closeReview("exit"); snapshot.generation = 20; snapshot.close.review.expiresAtMs = time + 10; await refresh();
+  await check("Aceito perder o recibo de restauração"); time += 20; await tick(); time -= 20; await tick(); assert.equal(button("Sair mantendo alteração na cópia").disabled, true);
+});
+test("review to waiting close serializes without review and preserves actual apply result", async () => {
+  snapshot = selected({ phase: "reviewApply", review: review() }); await render();
+  const wait = deferred(); handlers.set("voice_announcement_begin_close", () => {
+    move({ phase: "closing", busy: true, review: null, close: { closeId: CLOSE, intent: "panel", state: "waiting", review: null } }); return wait.promise;
+  });
+  await click("Encerrar operação de anúncio"); await refresh(); assert.match(container.textContent, /Aguardando a operação de arquivos/);
+  assert.equal(controller.snapshot.review, null); assert.equal(controller.blocking, true);
+  await act(async () => { snapshot = { ...closeReview("panel"), generation: 40 }; wait.resolve(snapshot); });
+  assert.match(container.textContent, /Sair mantendo a alteração na cópia/); assert.equal(controller.snapshot.restorationState, "ready"); assert.equal(count("confirm_close"), 0);
+});
+test("native exit attention works without panel; cancel keeps receipt and restores navigation", async () => {
+  await render({ panel: false }); snapshot = closeReview("exit"); await emit("aurora-voice-close-attention", { closeId: CLOSE });
+  assert.ok(container.querySelector('[role="alertdialog"]')); await click("Continuar e revisar restauração");
+  assert.equal(controller.snapshot.phase, "applied"); assert.equal(controller.blocking, false); assert.deepEqual(navigations, [[copy, "voice"]]); assert.equal(count("confirm_close"), 0);
+});
+test("native exit approval does not invoke frontend finish_close", async () => {
+  snapshot = closeReview("exit"); await render({ panel: false }); await check("Aceito perder o recibo de restauração"); await click("Sair mantendo alteração na cópia");
+  assert.deepEqual(last("confirm_close").args, { request: { closeId: CLOSE, digest } }); assert.equal(count("finish_close"), 0); assert.equal(controller.blocking, true);
+});
+test("logout waits for approval and exterior Connect/Firebase action before finish_close", async () => {
+  snapshot = applied(); const wait = deferred(); externalAction = async () => { logoutSteps.push("connect"); await wait.promise; logoutSteps.push("firebase"); };
+  await render(); await click("Sair da conta fixture"); assert.deepEqual(logoutSteps, []); assert.equal(count("finish_close"), 0);
+  await check("Aceito perder o recibo de restauração"); await click("Sair mantendo alteração na cópia");
+  assert.deepEqual(logoutSteps, ["connect"]); assert.equal(controller.blocking, true); assert.equal(count("finish_close"), 0);
+  await act(async () => { wait.resolve(); await logoutPromise; }); assert.deepEqual(logoutSteps, ["connect", "firebase"]); assert.equal(count("finish_close"), 1); assert.equal(controller.blocking, false);
+});
+test("cancelled logout leaves account action uncalled and receipt ready", async () => {
+  snapshot = applied(); await render(); await click("Sair da conta fixture"); await click("Cancelar saída"); await logoutPromise;
+  assert.deepEqual(logoutSteps, []); assert.equal(count("finish_close"), 0); assert.equal(controller.snapshot.restorationState, "ready");
+});
+test("lost accepted logout approval response resumes the same action and waits before finishing", async () => {
+  snapshot = applied(); const wait = deferred(); externalAction = async () => { logoutSteps.push("connect"); await wait.promise; logoutSteps.push("firebase"); };
+  handlers.set("voice_announcement_confirm_close", () => { move({ phase: "closed", restorationState: null, close: { ...snapshot.close, state: "ready", review: null } }); throw "voice_internal"; });
+  await render(); await click("Sair da conta fixture"); await check("Aceito perder o recibo de restauração"); await click("Sair mantendo alteração na cópia");
+  assert.deepEqual(logoutSteps, ["connect"]); assert.equal(count("confirm_close"), 1); assert.equal(count("finish_close"), 0); assert.equal(controller.blocking, true);
+  await act(async () => { wait.resolve(); await logoutPromise; });
+  assert.deepEqual(logoutSteps, ["connect", "firebase"]); assert.equal(count("finish_close"), 1); assert.equal(controller.blocking, false);
+});
+test("lost accepted logout cancellation response keeps receipt and allows a later logout request", async () => {
+  snapshot = applied();
+  handlers.set("voice_announcement_cancel_close", () => { move({ close: null, phase: "applied", lastErrorCode: null }); throw "voice_internal"; });
+  await render(); await click("Sair da conta fixture"); await click("Cancelar saída"); await logoutPromise;
+  assert.deepEqual(logoutSteps, []); assert.equal(controller.snapshot.restorationState, "ready"); assert.equal(controller.blocking, false); assert.equal(count("finish_close"), 0);
+  handlers.delete("voice_announcement_cancel_close"); await click("Sair da conta fixture");
+  assert.equal(count("begin_close"), 2); await click("Cancelar saída"); await logoutPromise; assert.deepEqual(logoutSteps, []);
+});
+test("refused logout approval never continues account work from an unchanged review", async () => {
+  snapshot = applied(); handlers.set("voice_announcement_confirm_close", () => { throw "voice_internal"; });
+  await render(); await click("Sair da conta fixture"); await check("Aceito perder o recibo de restauração"); await click("Sair mantendo alteração na cópia");
+  assert.deepEqual(logoutSteps, []); assert.equal(controller.snapshot.restorationState, "ready"); assert.equal(count("finish_close"), 0);
+  await click("Cancelar saída"); await logoutPromise; assert.deepEqual(logoutSteps, []);
+});
+for (const kind of ["confirm", "cancel"]) test(`lost logout ${kind} response and failed immediate reads reconcile once from later polling`, async () => {
+  snapshot = applied(); const wait = deferred(); externalAction = async () => { logoutSteps.push("connect"); await wait.promise; logoutSteps.push("firebase"); };
+  await render(); await click("Sair da conta fixture");
+  const command = `${kind}_close`;
+  handlers.set(`voice_announcement_${command}`, () => {
+    if (kind === "confirm") move({ phase: "closed", restorationState: null, close: { ...snapshot.close, state: "ready", review: null } });
+    else move({ close: null, phase: "applied", lastErrorCode: null });
+    handlers.set("voice_announcement_snapshot", () => { throw "voice_internal"; });
+    throw "voice_internal";
+  });
+  if (kind === "confirm") { await check("Aceito perder o recibo de restauração"); await click("Sair mantendo alteração na cópia"); }
+  else await click("Cancelar saída");
+  assert.equal(controller.valid, false); assert.deepEqual(logoutSteps, []); assert.equal(count("finish_close"), 0);
+  handlers.delete("voice_announcement_snapshot"); await tick();
+  assert.equal(count(command), 1);
+  if (kind === "confirm") {
+    assert.deepEqual(logoutSteps, ["connect"]); assert.equal(count("finish_close"), 0); assert.equal(controller.blocking, true);
+    await act(async () => { wait.resolve(); await logoutPromise; });
+    assert.deepEqual(logoutSteps, ["connect", "firebase"]); assert.equal(count("finish_close"), 1);
+  } else {
+    await logoutPromise; assert.deepEqual(logoutSteps, []); assert.equal(controller.snapshot.restorationState, "ready");
+    handlers.delete(`voice_announcement_${command}`); await click("Sair da conta fixture"); await click("Cancelar saída"); await logoutPromise;
+  }
+  await tick(); assert.equal(controller.blocking, false); assert.equal(count("confirm_close"), kind === "confirm" ? 1 : 0);
+});
+test("exterior logout failure still releases approved native barrier", async () => {
+  externalAction = async () => { logoutSteps.push("connect"); throw new Error("private failure"); };
+  await render(); await click("Sair da conta fixture"); await logoutPromise;
+  assert.deepEqual(logoutSteps, ["connect", "failed"]); assert.equal(count("finish_close"), 1); assert.equal(controller.blocking, false); assert.doesNotMatch(container.textContent, /private failure/);
+});
+test("orphaned logout review cannot discard receipt; ready orphan can release barrier", async () => {
+  snapshot = closeReview("logout"); await render({ panel: false });
+  assert.match(container.textContent, /pedido de saída da conta foi interrompido/); assert.equal(button("Sair mantendo alteração na cópia").disabled, true);
+  await click("Cancelar saída"); assert.equal(controller.snapshot.restorationState, "ready"); assert.equal(count("confirm_close"), 0);
+  move({ phase: "closed", restorationState: null, close: { closeId: CLOSE, intent: "logout", state: "ready", review: null } }); await refresh();
+  await click("Retomar trabalho"); assert.equal(controller.blocking, false); assert.equal(count("finish_close"), 1); assert.deepEqual(logoutSteps, []);
+});
+test("wrong close approval refreshes consumed review while retaining receipt", async () => {
+  snapshot = closeReview("exit"); await render();
+  handlers.set("voice_announcement_confirm_close", () => { move({ close: { ...snapshot.close, review: null }, lastErrorCode: "voice_stale_close" }); throw "voice_stale_close"; });
+  await check("Aceito perder o recibo de restauração"); await click("Sair mantendo alteração na cópia");
+  assert.match(container.textContent, /recibo foi preservado/); assert.equal(button("Sair mantendo alteração na cópia").disabled, true); assert.equal(controller.snapshot.restorationState, "ready");
+  await click("Cancelar saída"); assert.equal(controller.blocking, false);
+});
+test("lost panel-close confirmation response exposes finish recovery without a second approval", async () => {
+  snapshot = closeReview("panel"); await render();
+  handlers.set("voice_announcement_confirm_close", () => { move({ phase: "closed", restorationState: null, close: { ...snapshot.close, state: "ready", review: null } }); throw "voice_internal"; });
+  await check("Aceito perder o recibo de restauração"); await click("Sair mantendo alteração na cópia");
+  assert.equal(controller.snapshot.close.state, "ready"); assert.equal(controller.blocking, true);
+  await click("Retomar trabalho"); assert.equal(controller.blocking, false); assert.equal(count("confirm_close"), 1); assert.equal(count("finish_close"), 1);
+});
+test("blocked exit reports only allowlisted error and no raw payload", async () => {
+  await render({ panel: false }); await emit("aurora-voice-close-blocked", { code: "PRIVATE_TOKEN C:/private" });
+  assert.match(container.textContent, /Não foi possível concluir/); assert.doesNotMatch(container.textContent, /PRIVATE_TOKEN|C:\/private/);
+});
+test("ready copy and running-game UI gates do not issue inspection", async () => {
+  await render({ instanceId: null }); assert.equal(button("Inspecionar anúncio").disabled, true);
+  await render({ instanceId: copy, running: true }); assert.equal(button("Inspecionar anúncio").disabled, true); assert.equal(count("inspect"), 0);
+});
+test("double confirmation cannot start two writes and completion remains owned after panel unmount", async () => {
+  snapshot = selected({ phase: "reviewApply", review: review() }); const wait = deferred();
+  handlers.set("voice_announcement_confirm", () => { move({ phase: "applying", busy: true, review: null, observation: null }); return wait.promise; });
+  await render(); await check("Autorizo esta alteração do anúncio");
+  const confirm = button("Confirmar alteração revisada");
+  await act(async () => { confirm.dispatchEvent(new window.Event("click", { bubbles: true })); confirm.dispatchEvent(new window.Event("click", { bubbles: true })); });
+  assert.equal(count("confirm"), 1); await render({ panel: false });
+  await act(async () => { snapshot = { ...applied(), generation: 10 }; wait.resolve(snapshot); });
+  await render({ panel: true }); assert.equal(controller.snapshot.restorationState, "ready"); assert.ok(button("Revisar restauração estrita")); assert.equal(count("confirm"), 1);
+});
+test("needsRecovery exposes recovery navigation without preparing either restore", async () => {
+  snapshot = selected({ phase: "needsRecovery", observation: null, restorationState: "needs_recovery", lastErrorCode: "voice_needs_recovery" });
+  await render(); assert.match(container.textContent, /Verificação na Recuperação necessária/);
+  assert.equal([...container.querySelectorAll("button")].some(value => value.textContent === "Revisar restauração estrita"), false);
+  await click("Abrir Recuperação da cópia"); assert.deepEqual(navigations, [[copy, "recovery"]]);
+  assert.equal(count("prepare_restore"), 0); assert.equal(count("prepare_restore_reconciled"), 0);
+});
+test("busy worker and every published operation phase have a consistent projection", () => {
+  const base = selected();
+  for (const phase of ["inspecting", "preparingApply", "applying"]) types.voiceSnapshotFrom({ ...base, phase, busy: true });
+  for (const phase of ["preparingRestore", "restoring"]) types.voiceSnapshotFrom({ ...applied(), phase, busy: true });
+  types.voiceSnapshotFrom({ ...base, phase: "reviewApply", review: review() });
+  types.voiceSnapshotFrom({ ...applied(), phase: "reviewRestore", review: review("restoreOriginal") });
+  types.voiceSnapshotFrom({ ...applied(), phase: "restored", restorationState: "restored" });
+  types.voiceSnapshotFrom({ ...base, phase: "failed", observation: null });
+  types.voiceSnapshotFrom({ ...applied(), phase: "closing", busy: true, close: { closeId: CLOSE, intent: "panel", state: "waiting", review: null } });
+  assert.throws(() => types.voiceSnapshotFrom({ ...base, phase: "closing", busy: true, review: review(), close: { closeId: CLOSE, intent: "panel", state: "waiting", review: null } }));
+});
+test("malformed later snapshot fails closed instead of accepting a changed plan", async () => {
+  snapshot = selected({ phase: "reviewApply", review: review() }); await render();
+  snapshot = { ...snapshot, generation: 2, receipt: { invented: true } }; await act(async () => controller.refresh().catch(() => undefined));
+  assert.equal(controller.valid, false); assert.equal(button("Confirmar alteração revisada").disabled, true); assert.equal(count("confirm"), 0);
+});
+test("parsers preserve empty, absent and zero while rejecting arrays, cross-mod and authority metadata", () => {
+  assert.equal(types.voiceObservationFrom(observation()).announcement.voiceHost, "");
+  const absent = { ...observation("plasmo_voice"), announcement: { type: "plasmoAbsent" } }; assert.deepEqual(types.voiceObservationFrom(absent).announcement, { type: "plasmoAbsent" });
+  assert.equal(types.voiceObservationFrom(observation("plasmo_voice")).announcement.port, 0);
+  for (const field of ["action"]) assert.throws(() => types.voiceReviewFrom({ ...review(), [field]: [review()[field]] }));
+  for (const field of ["intent", "state"]) { const bad = closeReview("exit"); bad.close[field] = [bad.close[field]]; assert.throws(() => types.voiceSnapshotFrom(bad)); }
+  const badState = closeReview("exit"); badState.close.review.state = ["applied"]; assert.throws(() => types.voiceSnapshotFrom(badState));
+  assert.throws(() => types.voiceSnapshotFrom({ ...applied(), phase: "closed" }));
+  assert.throws(() => types.voiceSnapshotFrom({ ...selected(), observation: observation("plasmo_voice") }));
+  assert.throws(() => types.voiceSnapshotFrom({ ...selected(), receipt: "authority" }));
+  assert.throws(() => types.voiceObservationFrom({ ...observation("plasmo_voice"), announcement: { type: "plasmoPublic", ip: "", port: 0 } }));
+  assert.throws(() => types.voiceCapabilitiesFrom({ ...caps(false), available: true }));
+});
+test("parsers enforce bounded text/pins/hashes and impossible state combinations", () => {
+  assert.throws(() => types.voiceObservationFrom({ ...observation(), artifactSha256: "f".repeat(64) }));
+  assert.throws(() => types.voiceObservationFrom({ ...observation(), announcement: { type: "simpleVoiceChat", voiceHost: "é".repeat(513) } }));
+  assert.throws(() => types.voiceReviewFrom({ ...review(), before: "x".repeat(2049) }));
+  assert.throws(() => types.voiceReviewFrom({ ...review(), expiresAtMs: 1.5 }));
+  assert.throws(() => types.voiceSnapshotFrom({ ...selected(), busy: true }));
+  assert.throws(() => types.voiceSnapshotFrom({ ...applied(), restorationState: null }));
+  assert.throws(() => types.voiceSnapshotFrom({ ...selected(), phase: "closing", busy: true }));
+  assert.throws(() => types.voiceSnapshotFrom({ ...selected({ phase: "reviewApply", review: review() }), review: { ...review(), sourceSha256: "d".repeat(64) } }));
+});

@@ -49,6 +49,7 @@ import { DoctorView } from "./features/doctor/DoctorView";
 import { RecoveryView } from "./features/recovery/RecoveryView";
 import { DiagnosticLabView } from "./features/diagnostic-lab/DiagnosticLabView";
 import { ConnectView } from "./features/connect/ConnectView";
+import { VoiceAnnouncementProvider, useVoiceAnnouncement, withVoiceAnnouncementLogout } from "./features/voice-announcement/VoiceAnnouncementProvider";
 import { capabilitiesFrom, snapshotFrom } from "./features/connect/types";
 import type { DoctorReport, DoctorRun } from "./features/doctor/types";
 import { publicAiError } from "../../../shared/aiErrors";
@@ -1057,6 +1058,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [instanceFilter, setInstanceFilter] = useState("");
   const [activeSection, setActiveSection] = useState<LauncherSection>("instances");
   const [connectAvailable, setConnectAvailable] = useState(false);
+  const voice = useVoiceAnnouncement();
   const [signingOut, setSigningOut] = useState(false);
   const signOutPending = useRef(false);
   useEffect(() => {
@@ -1072,21 +1074,23 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     signOutPending.current = true;
     setSigningOut(true);
     try {
-      if (isTauri()) {
-        const capabilities = capabilitiesFrom(await invoke("connect_capabilities"));
-        if (capabilities.available) {
-          const current = snapshotFrom(await invoke("connect_snapshot"));
-          if (current.operationId) {
-            const stopped = snapshotFrom(await invoke("connect_stop", { operationId: current.operationId }));
-            if (stopped.cleanupState !== "complete") throw new Error("Connect cleanup incomplete");
+      await withVoiceAnnouncementLogout(voice, async () => {
+        if (isTauri()) {
+          const capabilities = capabilitiesFrom(await invoke("connect_capabilities"));
+          if (capabilities.available) {
+            const current = snapshotFrom(await invoke("connect_snapshot"));
+            if (current.operationId) {
+              const stopped = snapshotFrom(await invoke("connect_stop", { operationId: current.operationId }));
+              if (stopped.cleanupState !== "complete") throw new Error("Connect cleanup incomplete");
+            }
           }
         }
-      }
-      await logoutAuroraUser(services);
-      setProfile(undefined);
-      setSessionStartup({ phase: "signed-out" });
+        await logoutAuroraUser(services);
+        setProfile(undefined);
+        setSessionStartup({ phase: "signed-out" });
+      });
     } catch {
-      const message = "Não foi possível encerrar a conexão e sair da conta. Confira o Aurora Connect e tente novamente.";
+      const message = "Não foi possível concluir a saída. Confira a conexão e o anúncio de voz antes de tentar novamente.";
       setNotice(message);
       if (sessionStartup.phase === "error") setSessionStartup({ phase: "error", error: message });
     } finally {
@@ -1103,7 +1107,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [launcherBusy, setBusy] = useState(false);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const recoveryBusyRef = useRef(false);
-  const busy = launcherBusy || recoveryBusy;
+  const busy = launcherBusy || recoveryBusy || !!voice?.blocking;
   const avatarMigrationRef = useRef("");
   const localAvatarMigrationRef = useRef("");
   const appearanceMigrationPending = useRef<Promise<void>>(Promise.resolve());
@@ -1142,7 +1146,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     clearContentUpdatePlan();
   }
   function closeInstanceEditor() {
-    if (recoveryBusyRef.current) return;
+    if (recoveryBusyRef.current || voice?.isBlocking()) return;
     editorOpenRequestRef.current = { generation: editorOpenRequestRef.current.generation + 1, id: "" };
     invalidateContentUpdatePlan();
     activeInstanceRef.current = { ...activeInstanceRef.current, editingInstance: "" };
@@ -1169,6 +1173,10 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     setInstalledMinecraftVersion(saved.minecraftVersion ?? "");
     if (saved.minecraftVersion) setMinecraftVersion(saved.minecraftVersion);
   }
+  useEffect(() => voice?.registerNavigator((id, target) => {
+    setActiveSection("instances");
+    void openEditor(id, target === "recovery" ? "recovery" : "diagnostic-lab");
+  }));
   useEffect(() => {
     if (!editingInstance) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -2001,7 +2009,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     return mergedArtwork;
   }
   async function openEditor(id: string, initialView: EditorView = "installed", runId?: string) {
-    if (recoveryBusyRef.current) return;
+    if (recoveryBusyRef.current || voice?.isBlocking()) return;
     const editorRequest = { generation: editorOpenRequestRef.current.generation + 1, id };
     editorOpenRequestRef.current = editorRequest;
     const editorIsCurrent = () => editorOpenRequestRef.current.generation === editorRequest.generation
@@ -2136,7 +2144,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       : [...current, filename]);
   }
   function selectContentType(nextType: ContentType) {
-    if (recoveryBusyRef.current) return;
+    if (recoveryBusyRef.current || voice?.isBlocking()) return;
     setContentType(nextType);
     setSelectedContentNames([]);
     setSelectedUpdateFilenames([]);
@@ -2149,7 +2157,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     if (editorView === "discover") void loadContentCatalog({ type: nextType, query: "", category: "", sort: "popular" });
   }
   async function selectInstance(id: string, stillCurrent: () => boolean = () => true) {
-    if (recoveryBusyRef.current) return;
+    if (recoveryBusyRef.current || voice?.isBlocking()) return;
     activeInstanceRef.current = { ...activeInstanceRef.current, targetInstance: id };
     setTargetInstance(id);
     try {
@@ -2469,13 +2477,13 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     if (Object.keys(contentUpdateScans).length === 0) void scanAllContentUpdates();
   }
   function activateEditorView(view: EditorView) {
-    if (recoveryBusyRef.current) return;
+    if (recoveryBusyRef.current || voice?.isBlocking()) return;
     if (view === "updates") showContentUpdates();
     else if (view === "discover") showContentCatalog();
     else setEditorView(view);
   }
   function handleEditorViewKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, view: EditorView) {
-    if (recoveryBusyRef.current) return;
+    if (recoveryBusyRef.current || voice?.isBlocking()) return;
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const currentIndex = EDITOR_VIEWS.indexOf(view);
@@ -4171,5 +4179,5 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
 }
 
 export default function App() {
-  return <LauncherStartup />;
+  return <VoiceAnnouncementProvider><LauncherStartup /></VoiceAnnouncementProvider>;
 }

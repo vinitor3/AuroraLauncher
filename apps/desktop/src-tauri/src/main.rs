@@ -10,6 +10,7 @@ mod doctor_runs;
 mod launcher_sessions;
 mod manual_downloads;
 mod player_profiles;
+mod voice_announcement_commands;
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -19,9 +20,9 @@ use tauri::{
 
 const MAIN_TRAY_ID: &str = "aurora-main-tray";
 
-#[cfg(feature = "connect-lab")]
+#[cfg(any(feature = "connect-lab", feature = "connect-voice-lab"))]
 #[derive(Default)]
-struct ConnectExitState {
+struct ExperimentalExitState {
     closing: std::sync::atomic::AtomicBool,
     ready: std::sync::atomic::AtomicBool,
 }
@@ -78,8 +79,8 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
-            #[cfg(feature = "connect-lab")]
-            app.manage(ConnectExitState::default());
+            #[cfg(any(feature = "connect-lab", feature = "connect-voice-lab"))]
+            app.manage(ExperimentalExitState::default());
             if create_launcher_tray(app).is_err() {
                 // On systems without a tray, retain normal closing behavior
                 // instead of hiding the only way to reach the launcher.
@@ -108,7 +109,23 @@ fn main() {
         .manage(aurora_launcher_core::engine::ai_tools::AiToolBroker::default())
         .manage(aurora_launcher_core::engine::connect::ConnectManager::default())
         .manage(aurora_launcher_core::engine::connect_discovery::DiscoveryManager::default())
+        .manage(
+            aurora_launcher_core::engine::connect_voice_desktop::VoiceAnnouncementManager::default(
+            ),
+        )
         .invoke_handler(tauri::generate_handler![
+            voice_announcement_commands::voice_announcement_capabilities,
+            voice_announcement_commands::voice_announcement_snapshot,
+            voice_announcement_commands::voice_announcement_inspect,
+            voice_announcement_commands::voice_announcement_prepare_apply,
+            voice_announcement_commands::voice_announcement_confirm,
+            voice_announcement_commands::voice_announcement_prepare_restore,
+            voice_announcement_commands::voice_announcement_prepare_restore_reconciled,
+            voice_announcement_commands::voice_announcement_cancel_review,
+            voice_announcement_commands::voice_announcement_begin_close,
+            voice_announcement_commands::voice_announcement_cancel_close,
+            voice_announcement_commands::voice_announcement_confirm_close,
+            voice_announcement_commands::voice_announcement_finish_close,
             connect_commands::connect_capabilities,
             connect_commands::connect_discover_instance,
             connect_commands::connect_review_discovered,
@@ -213,10 +230,13 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("erro ao preparar o Aurora Smart Launcher")
         .run(|app, event| {
-            #[cfg(feature = "connect-lab")]
+            #[cfg(any(feature = "connect-lab", feature = "connect-voice-lab"))]
             if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
                 use std::sync::atomic::Ordering;
-                let exit = app.state::<ConnectExitState>();
+                use tauri::Emitter;
+                type VoiceManager =
+                    aurora_launcher_core::engine::connect_voice_desktop::VoiceAnnouncementManager;
+                let exit = app.state::<ExperimentalExitState>();
                 if exit.ready.load(Ordering::Acquire) {
                     return;
                 }
@@ -225,17 +245,57 @@ fn main() {
                     let app = app.clone();
                     let exit_code = code.unwrap_or(0);
                     tauri::async_runtime::spawn(async move {
-                        app.state::<aurora_launcher_core::engine::connect::ConnectManager>()
-                            .shutdown_all()
-                            .await;
-                        app.state::<ConnectExitState>()
-                            .ready
-                            .store(true, Ordering::Release);
-                        app.exit(exit_code);
+                        let voice = app.state::<VoiceManager>();
+                        let outcome = voice.begin_exit().await;
+                        if outcome.is_ok() && voice.exit_ready() {
+                            // Ready+Exit is sealed: no cancel/finish/new writer
+                            // can reopen voice admission while this await runs.
+                            app.state::<aurora_launcher_core::engine::connect::ConnectManager>()
+                                .shutdown_all()
+                                .await;
+                            if voice.exit_ready() {
+                                app.state::<ExperimentalExitState>()
+                                    .ready
+                                    .store(true, Ordering::Release);
+                                app.exit(exit_code);
+                                return;
+                            }
+                        }
+                        app.state::<ExperimentalExitState>()
+                            .closing
+                            .store(false, Ordering::Release);
+                        // Approval may have arrived after the first readiness
+                        // check while ExitRequested was already being handled.
+                        // Re-enter rather than lose that explicit exit request.
+                        if voice.exit_ready() && outcome.is_ok() {
+                            app.exit(exit_code);
+                            return;
+                        }
+                        show_launcher(&app);
+                        match voice.snapshot("main") {
+                            Ok(snapshot) if snapshot.close.is_some() => {
+                                if let Some(close) = snapshot.close {
+                                    let _ = app.emit_to(
+                                        "main",
+                                        "aurora-voice-close-attention",
+                                        serde_json::json!({"closeId": close.close_id}),
+                                    );
+                                }
+                            }
+                            _ => {
+                                let code =
+                                    outcome.err().map_or("voice_internal", |error| error.code());
+                                let _ = app.emit_to(
+                                    "main",
+                                    "aurora-voice-close-blocked",
+                                    serde_json::json!({"code": code}),
+                                );
+                            }
+                        }
                     });
                 }
             }
-            #[cfg(not(feature = "connect-lab"))]
+            #[cfg(not(any(feature = "connect-lab", feature = "connect-voice-lab")))]
             let _ = (app, event);
         });
 }
