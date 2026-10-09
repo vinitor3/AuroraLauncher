@@ -289,6 +289,10 @@ pub struct Invitation {
     guest: EndpointId,
     deadline: Instant,
 }
+enum IssueExpiry {
+    Absolute(u64),
+    Lifetime(Duration),
+}
 impl Invitation {
     pub fn issue(
         host: &SecretKey,
@@ -304,7 +308,7 @@ impl Invitation {
             session_id,
             direct,
             services,
-            expires_at_unix_ms,
+            IssueExpiry::Absolute(expires_at_unix_ms),
             InvitationPolicy::legacy(InvitationAddressMode::Loopback),
         )
     }
@@ -325,7 +329,7 @@ impl Invitation {
             session_id,
             direct,
             services,
-            expires_at_unix_ms,
+            IssueExpiry::Absolute(expires_at_unix_ms),
             InvitationPolicy::legacy(InvitationAddressMode::ExternalIpv6),
         )
     }
@@ -346,7 +350,7 @@ impl Invitation {
             session_id,
             direct,
             services,
-            expires_at_unix_ms,
+            IssueExpiry::Absolute(expires_at_unix_ms),
             InvitationPolicy::fragmented(InvitationAddressMode::Loopback),
         )
     }
@@ -366,7 +370,48 @@ impl Invitation {
             session_id,
             direct,
             services,
-            expires_at_unix_ms,
+            IssueExpiry::Absolute(expires_at_unix_ms),
+            InvitationPolicy::fragmented(InvitationAddressMode::ExternalIpv6),
+        )
+    }
+
+    /// Explicit V2 issuance with one civil-clock sample for both signed times.
+    /// Duration must be an exact positive number of milliseconds, at most 600s.
+    pub fn issue_fragmented_for_lifetime(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        lifetime: Duration,
+    ) -> Result<Self> {
+        Self::issue_in_mode(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            IssueExpiry::Lifetime(lifetime),
+            InvitationPolicy::fragmented(InvitationAddressMode::Loopback),
+        )
+    }
+
+    /// The duration-based V2 constructor for an explicitly approved IPv6 path.
+    pub fn issue_fragmented_external_ipv6_for_lifetime(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        lifetime: Duration,
+    ) -> Result<Self> {
+        Self::issue_in_mode(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            IssueExpiry::Lifetime(lifetime),
             InvitationPolicy::fragmented(InvitationAddressMode::ExternalIpv6),
         )
     }
@@ -377,10 +422,27 @@ impl Invitation {
         session_id: &str,
         direct: SocketAddr,
         services: &[Service],
-        expires_at_unix_ms: u64,
+        expiry: IssueExpiry,
         policy: InvitationPolicy,
     ) -> Result<Self> {
+        let started = Instant::now();
         let now = unix_millis();
+        let (expires_at_unix_ms, duration_deadline) = match expiry {
+            IssueExpiry::Absolute(expires) => (expires, None),
+            IssueExpiry::Lifetime(lifetime) => {
+                if lifetime.is_zero()
+                    || lifetime > MAX_INVITATION_LIFETIME
+                    || !lifetime.subsec_nanos().is_multiple_of(1_000_000)
+                {
+                    return Err(Error::Expired);
+                }
+                let expires = now
+                    .checked_add(lifetime.as_millis() as u64)
+                    .ok_or(Error::Expired)?;
+                let deadline = started.checked_add(lifetime).ok_or(Error::Expired)?;
+                (expires, Some(deadline))
+            }
+        };
         let body = Body {
             schema_version: 1,
             host_key: host.public().to_string(),
@@ -395,13 +457,19 @@ impl Invitation {
         };
         Self::validate_body(&body, host.public(), guest, now, policy)?;
         let signature = hex(&host.sign(&signed_bytes(&body)?).to_bytes());
-        Self::from_envelope(
+        let mut invitation = Self::from_envelope(
             Envelope { body, signature },
             host.public(),
             guest,
             now,
             policy,
-        )
+        )?;
+        if let Some(deadline) = duration_deadline {
+            // Signing and verification never extend the duration requested by
+            // the caller. Absolute constructors keep their existing behavior.
+            invitation.deadline = invitation.deadline.min(deadline);
+        }
+        Ok(invitation)
     }
 
     /// Verify only after the operator obtained expected_host through an
@@ -692,6 +760,129 @@ impl Invitation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fragmented_services() -> Vec<Service> {
+        vec![
+            Service {
+                service_id: "game".into(),
+                protocol: Protocol::Tcp,
+                endpoint: "127.0.0.1:40001".parse().unwrap(),
+                revision: 1,
+                max_datagram_bytes: 1400,
+                required_capability: Capability::ReliableStream,
+                udp_return_policy: UdpReturnPolicy::ReplyBudget,
+            },
+            Service {
+                service_id: "aux".into(),
+                protocol: Protocol::Udp,
+                endpoint: "127.0.0.1:40002".parse().unwrap(),
+                revision: 1,
+                max_datagram_bytes: 4096,
+                required_capability: Capability::FragmentedDatagram,
+                udp_return_policy: UdpReturnPolicy::ReplyBudget,
+            },
+        ]
+    }
+
+    #[test]
+    fn duration_fragmented_issuance_signs_exact_lifetime_in_both_address_modes() {
+        let host = generate_key();
+        let guest = generate_key();
+        for external in [false, true] {
+            let issue = if external {
+                Invitation::issue_fragmented_external_ipv6_for_lifetime
+            } else {
+                Invitation::issue_fragmented_for_lifetime
+            };
+            let direct = if external {
+                "[2606:4700:4700::1111]:40003"
+            } else {
+                "127.0.0.1:40003"
+            };
+            for lifetime in [Duration::from_millis(2500), Duration::from_secs(600)] {
+                let before = Instant::now();
+                let invitation = issue(
+                    &host,
+                    guest.public(),
+                    "duration-fixture",
+                    direct.parse().unwrap(),
+                    &fragmented_services(),
+                    lifetime,
+                )
+                .unwrap();
+                assert_eq!(
+                    invitation.expires_at_unix_ms() - invitation.envelope.body.issued_at_unix_ms,
+                    lifetime.as_millis() as u64
+                );
+                assert!(invitation.deadline >= before + lifetime);
+                assert!(invitation.remaining() <= lifetime);
+                assert_eq!(invitation.clone().deadline, invitation.deadline);
+                let verify = if external {
+                    Invitation::verify_fragmented_external_ipv6
+                } else {
+                    Invitation::verify_fragmented
+                };
+                assert!(verify(&invitation.encode(), host.public(), guest.public()).is_ok());
+                // A duration constructor cannot let the old profile admit V2.
+                assert!(
+                    Invitation::verify(&invitation.encode(), host.public(), guest.public())
+                        .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn duration_fragmented_issuance_rejects_truncation_overflow_and_wrong_address_mode() {
+        let host = generate_key();
+        let guest = generate_key();
+        for lifetime in [
+            Duration::ZERO,
+            Duration::from_nanos(1),
+            Duration::from_micros(1_000_001),
+            Duration::from_millis(600_001),
+            Duration::MAX,
+        ] {
+            for issue in [
+                Invitation::issue_fragmented_for_lifetime,
+                Invitation::issue_fragmented_external_ipv6_for_lifetime,
+            ] {
+                assert!(matches!(
+                    issue(
+                        &host,
+                        guest.public(),
+                        "duration-fixture",
+                        "127.0.0.1:40003".parse().unwrap(),
+                        &fragmented_services(),
+                        lifetime,
+                    ),
+                    Err(Error::Expired)
+                ));
+            }
+        }
+        assert!(
+            Invitation::issue_fragmented_for_lifetime(
+                &host,
+                guest.public(),
+                "duration-fixture",
+                "[2606:4700:4700::1111]:40003".parse().unwrap(),
+                &fragmented_services(),
+                Duration::from_secs(1),
+            )
+            .is_err()
+        );
+        assert!(
+            Invitation::issue_fragmented_external_ipv6_for_lifetime(
+                &host,
+                guest.public(),
+                "duration-fixture",
+                "127.0.0.1:40003".parse().unwrap(),
+                &fragmented_services(),
+                Duration::from_secs(1),
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn monotonic_deadline_rejects_even_if_wall_clock_fields_still_allow() {

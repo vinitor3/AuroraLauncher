@@ -1165,6 +1165,18 @@ pub struct UdpBridge {
     fragmented: bool,
 }
 impl UdpBridge {
+    /// Whether cancellation was requested or the local forwarding task ended.
+    /// This is a local lifecycle observation, not a remote delivery guarantee.
+    pub fn is_closed(&self) -> bool {
+        self.cancel.is_cancelled()
+            || self
+                .task
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_none_or(JoinHandle::is_finished)
+    }
+
     /// The initial bidirectional ceiling, reduced immediately if our current path shrinks.
     /// A larger ceiling requires reopening the association; no implicit renegotiation.
     pub fn max_payload(&self) -> Option<usize> {

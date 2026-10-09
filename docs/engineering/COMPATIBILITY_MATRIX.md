@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 09/10/2026
 
+Incremento57: perfil desktop TCP+UDP fragmentado com revisão explícita, destino manual e120s; falha UDP não muda automaticamente o estado do TCP. O [registro57](../aurora-connect-desktop-udp.md) separa bytes sintéticos, testes do caller e projeções DOM. **PROTÓTIPO**; anúncio/configuração SVC/Plasmo e áudio continuam com gates próprios. Nenhuma configuração pessoal, par Core/Skins, rede externa ou célula de homologação foi ampliada. Feature continua desligada por padrão.
+
 Incremento56: o caller desktop e o painel distinguem prazo de ingresso e encerramento da sessão por opt-in game/TCP. Dois managers locais verificam continuidade após ingresso, novas conexões, expiração/revogação, STATUS sintético e cleanup; fixtures DOM validam a projeção dos dois prazos. **PROTÓTIPO**, não homologa janela Tauri, uma hora de estabilidade, Minecraft, áudio ou nova rede. [Contrato e resultados56](../aurora-connect-desktop-session-lifetime.md). Nove pares Core/Skins e versões permanecem intactos; perfil curto continua padrão e Connect segue desligado para usuários.
 
 Incremento53: callers de voz V2 opt-in transportaram UDP4096B, recusaram4097B e mantiveram TCP concorrente em fixtures reais. Regressão final498 PASS/3 opt-ins históricos ignorados. SVC2.6.22 e Plasmo2.1.17 passaram separadamente nos controles locais de35s com cliente sintético PLAY e restauração própria. Primeiro SVC falhou, com causa indeterminada; repetição e rodada após ajuste do timeout do cliente passaram. **PARCIAL**: áudio, GUI, redes, contas mistas e nove pares Core/Skins não são homologados por essas provas. [Registro53](../task-aur-r4-connect.md#incremento53--callers-de-voz-com-transporte-v2-explícito).

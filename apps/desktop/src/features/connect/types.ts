@@ -1,6 +1,13 @@
+import {
+  FRAGMENTED_PROFILE, fragmentedCapabilityFrom, fragmentedExportFieldsFrom, fragmentedPreparationFieldsFrom,
+  fragmentedReviewFieldsFrom, fragmentedSnapshotFieldsFrom, type FragmentedGuestUdp, type FragmentedUdpCapability,
+  type FragmentedUdpContract, type FragmentedUdpReview,
+} from "./fragmented-types";
+
 export type ConnectMode = "loopback" | "externalIpv6";
 export type ConnectRole = "host" | "guest";
 export type ConnectSessionProfile = "sessionGameTcp";
+export type ConnectInvitationProfile = ConnectSessionProfile | typeof FRAGMENTED_PROFILE;
 export type ConnectSessionTiming = {
   profile: ConnectSessionProfile; schemaVersion: 2; admissionSeconds: number; sessionSeconds: number;
   admissionExpiresAtMs: number; sessionExpiresAtMs: number;
@@ -12,6 +19,7 @@ export type ConnectCapabilities = {
   statusProtocol: 767; statusHandshakeHost: "localhost"; statusHandshakePort: 43001;
   ownedInstanceDiscovery?: boolean;
   sessionInvitations?: { profile: ConnectSessionProfile; schemaVersion: 2; maxAdmissionSeconds: 600; maxSessionSeconds: 3600 };
+  fragmentedUdpInvitations?: FragmentedUdpCapability;
 };
 export type ConnectStatusSummary = {
   requestedProtocol: number; reportedProtocol: number; protocolMatchesRequested: boolean;
@@ -27,21 +35,24 @@ export type ConnectSnapshot = {
   plasmoVoiceState: "disabled"; relayEnabled: false; pathState: "notVerified";
   preparation: ConnectPreparation | null; review: ConnectReview | null;
   cleanupState: "notStarted" | "pending" | "complete" | "failed";
-  invitationProfile?: ConnectSessionProfile; sessionTiming?: ConnectSessionTiming;
-};
-export type ConnectPreparation = { operationId: string; generation: number; publicId: string; expiresAtMs: number; invitationProfile?: ConnectSessionProfile };
+  invitationProfile?: ConnectInvitationProfile; sessionTiming?: ConnectSessionTiming;
+  fragmentedUdp?: FragmentedUdpContract;
+} & Partial<FragmentedGuestUdp>;
+export type ConnectPreparation = { operationId: string; generation: number; publicId: string; expiresAtMs: number; invitationProfile?: ConnectInvitationProfile };
 export type ConnectReview = {
   operationId: string; generation: number; digest: string; invitationDigest: string;
   role: ConnectRole; mode: ConnectMode; hostPublicId: string; guestPublicId: string;
   directAddress: string; gameTarget: string | null; localTcpBind: string | null;
-  services: { serviceId: "game"; protocol: "tcp"; revision: 1; requiredCapability: "reliableStream" }[];
+  services: ({ serviceId: "game"; protocol: "tcp"; revision: 1; requiredCapability: "reliableStream" }
+    | { serviceId: "aux"; protocol: "udp"; revision: 1; requiredCapability: "fragmentedDatagram" })[];
   expiresAtMs: number; invitationExpiresAtMs: number; lifetimeSeconds: number;
   statusProtocol: 767; statusHandshakeHost: "localhost"; statusHandshakePort: 43001;
   targetSource?: "manual" | "ownedInstance" | null;
   instanceId?: string | null; runId?: string | null;
   sessionTiming?: ConnectSessionTiming;
+  fragmentedUdp?: FragmentedUdpReview;
 };
-export type ConnectExport = { invitation: string; hostPublicId: string; expiresAtMs: number; sessionTiming?: ConnectSessionTiming };
+export type ConnectExport = { invitation: string; hostPublicId: string; expiresAtMs: number; sessionTiming?: ConnectSessionTiming; fragmentedUdp?: FragmentedUdpContract };
 
 const ERROR_TEXT: Record<string, string> = {
   connect_disabled: "O Aurora Connect experimental não está habilitado nesta versão.",
@@ -87,7 +98,11 @@ const role = (value: unknown): value is ConnectRole => value === "host" || value
 const mode = (value: unknown): value is ConnectMode => value === "loopback" || value === "externalIpv6";
 const statusContract = (value: Record<string, unknown>) => value.statusProtocol === 767 && value.statusHandshakeHost === "localhost" && value.statusHandshakePort === 43001;
 const invalid = (): never => { throw new Error("Invalid Connect projection"); };
-const sessionProfile = (value: unknown) => value === undefined || value === "sessionGameTcp";
+const invitationProfile = (value: unknown) => value === undefined || value === "sessionGameTcp" || value === FRAGMENTED_PROFILE;
+const noFragmentedFields = (value: Record<string, unknown>) => {
+  if (["fragmentedUdp", "udpState", "udpAddress", "udpErrorCode", "udpOriginalCapacity", "udpCapacityScope", "udpTarget"]
+    .some(key => value[key] !== undefined)) invalid();
+};
 const sameTiming = (left: ConnectSessionTiming, right: ConnectSessionTiming) =>
   left.profile === right.profile && left.schemaVersion === right.schemaVersion
   && left.admissionSeconds === right.admissionSeconds && left.sessionSeconds === right.sessionSeconds
@@ -101,6 +116,7 @@ export function sessionTimingFrom(value: unknown): ConnectSessionTiming {
     || value.admissionExpiresAtMs > value.sessionExpiresAtMs
     || value.sessionExpiresAtMs - value.admissionExpiresAtMs !== (value.sessionSeconds - value.admissionSeconds) * 1000
     || value.admissionExpiresAtMs < value.admissionSeconds * 1000) return invalid();
+  noFragmentedFields(value);
   return value as ConnectSessionTiming;
 }
 
@@ -115,6 +131,11 @@ export function capabilitiesFrom(value: unknown): ConnectCapabilities {
     const session = value.sessionInvitations;
     if (!record(session) || session.profile !== "sessionGameTcp" || session.schemaVersion !== 2
       || session.maxAdmissionSeconds !== 600 || session.maxSessionSeconds !== 3600) return invalid();
+    noFragmentedFields(session);
+  }
+  if (value.fragmentedUdpInvitations !== undefined) {
+    if (!value.available) return invalid();
+    fragmentedCapabilityFrom(value.fragmentedUdpInvitations);
   }
   return value as ConnectCapabilities;
 }
@@ -127,8 +148,10 @@ export function snapshotFrom(value: unknown): ConnectSnapshot {
     || !(value.errorCode === null || text(value.errorCode)) || value.worldState !== "notVerified"
     || value.simpleVoiceChatState !== "disabled" || value.plasmoVoiceState !== "disabled"
     || value.relayEnabled !== false || value.pathState !== "notVerified"
-    || !sessionProfile(value.invitationProfile)
+    || !invitationProfile(value.invitationProfile)
     || !["notStarted", "pending", "complete", "failed"].includes(value.cleanupState as string)) return invalid();
+  if (value.invitationProfile === FRAGMENTED_PROFILE) fragmentedSnapshotFieldsFrom(value);
+  else noFragmentedFields(value);
   const timing = value.sessionTiming === undefined ? undefined : sessionTimingFrom(value.sessionTiming);
   if (value.phase === "idle" && value.invitationProfile !== undefined) return invalid();
   if (timing && value.invitationProfile !== "sessionGameTcp") return invalid();
@@ -143,6 +166,7 @@ export function snapshotFrom(value: unknown): ConnectSnapshot {
   }
   if (value.review !== null) {
     const reviewed = reviewFrom(value.review);
+    if (Boolean(reviewed.fragmentedUdp) !== (value.invitationProfile === FRAGMENTED_PROFILE)) return invalid();
     if (Boolean(reviewed.sessionTiming) !== Boolean(timing)
       || (timing && reviewed.sessionTiming && !sameTiming(timing, reviewed.sessionTiming))) return invalid();
   }
@@ -157,7 +181,9 @@ export function snapshotFrom(value: unknown): ConnectSnapshot {
 }
 export function preparationFrom(value: unknown): ConnectPreparation {
   if (!record(value) || !text(value.operationId) || !integer(value.generation) || !hash(value.publicId) || !integer(value.expiresAtMs)
-    || !sessionProfile(value.invitationProfile) || value.sessionTiming !== undefined) return invalid();
+    || !invitationProfile(value.invitationProfile) || value.sessionTiming !== undefined) return invalid();
+  if (value.invitationProfile === FRAGMENTED_PROFILE) fragmentedPreparationFieldsFrom(value);
+  else noFragmentedFields(value);
   return value as ConnectPreparation;
 }
 export function reviewFrom(value: unknown): ConnectReview {
@@ -167,7 +193,12 @@ export function reviewFrom(value: unknown): ConnectReview {
     || !(value.gameTarget === null || text(value.gameTarget)) || !(value.localTcpBind === null || value.localTcpBind === "127.0.0.1:0")
     || !integer(value.expiresAtMs) || !integer(value.invitationExpiresAtMs) || value.expiresAtMs > value.invitationExpiresAtMs
     || !statusContract(value) || !integer(value.lifetimeSeconds) || value.lifetimeSeconds < 1 || value.lifetimeSeconds > 600
-    || !Array.isArray(value.services) || value.services.length !== 1) return invalid();
+    || !Array.isArray(value.services) || value.invitationProfile !== undefined) return invalid();
+  if (value.fragmentedUdp !== undefined) fragmentedReviewFieldsFrom(value);
+  else {
+    noFragmentedFields(value);
+    if (value.services.length !== 1) return invalid();
+  }
   if (value.sessionTiming !== undefined) {
     const timing = sessionTimingFrom(value.sessionTiming);
     if (value.invitationExpiresAtMs !== timing.admissionExpiresAtMs || value.lifetimeSeconds !== timing.admissionSeconds) return invalid();
@@ -186,6 +217,9 @@ export function reviewFrom(value: unknown): ConnectReview {
 export function exportFrom(value: unknown): ConnectExport {
   if (!record(value) || typeof value.invitation !== "string" || !value.invitation.length
     || new TextEncoder().encode(value.invitation).length > 4096 || !hash(value.hostPublicId) || !integer(value.expiresAtMs)) return invalid();
+  if (value.invitationProfile !== undefined) return invalid();
+  if (value.fragmentedUdp !== undefined) fragmentedExportFieldsFrom(value);
+  else noFragmentedFields(value);
   if (value.sessionTiming !== undefined && value.expiresAtMs !== sessionTimingFrom(value.sessionTiming).admissionExpiresAtMs) return invalid();
   return value as ConnectExport;
 }

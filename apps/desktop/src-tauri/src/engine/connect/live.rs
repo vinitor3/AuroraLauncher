@@ -1,3 +1,4 @@
+use super::fragmented_profile::{self, FragmentedGuestState, UdpFailure};
 use super::session_authority::{Authority, HostDraftRequest, Profile};
 use super::*;
 use aurora_connect_lab as lab;
@@ -10,6 +11,9 @@ use std::{
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(test)]
+#[path = "fragmented_desktop.rs"]
+mod fragmented_desktop;
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod session_tests;
@@ -60,7 +64,7 @@ enum Draft {
         request: HostDraftRequest,
         key: lab::SecretKey,
         bind: SocketAddr,
-        service: lab::Service,
+        services: Vec<lab::Service>,
         source: TargetGuard,
     },
     Guest {
@@ -207,6 +211,9 @@ fn expire_pending_at(a: &mut Attempt, now_unix: u64) {
             a.snapshot.phase = "closed";
             a.snapshot.cleanup_state = "complete";
             a.snapshot.error_code = Some(ConnectError::PlanExpired.code());
+            if let Some(udp) = &mut a.snapshot.udp {
+                udp.close();
+            }
             a.snapshot.generation = a.snapshot.generation.saturating_add(1);
         }
     }
@@ -238,6 +245,9 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
         a.snapshot.transport_state = "closed";
         a.snapshot.cleanup_state = "complete";
         a.snapshot.tcp_address = None;
+        if let Some(udp) = &mut a.snapshot.udp {
+            udp.close();
+        }
         a.snapshot.error_code = error.map(ConnectError::code);
         a.export = None;
         a.host = None;
@@ -289,6 +299,31 @@ async fn close_operation(
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     finish(state, id, error);
+}
+
+// A pending UDP setup/teardown owns resources and must not be dropped. Keep
+// observing session authority while it waits; closing Guest cuts TCP as well
+// and unblocks native requests, then the exact same future is reaped.
+async fn await_udp_work<T>(
+    guest: &lab::Guest,
+    cancel: &CancellationToken,
+    deadline: Instant,
+    current: impl Fn() -> bool,
+    work: impl std::future::Future<Output = T>,
+) -> (T, bool) {
+    tokio::pin!(work);
+    let mut tick = tokio::time::interval(Duration::from_millis(100));
+    loop {
+        tokio::select! {
+            value=&mut work=>return(value,false),
+            _=cancel.cancelled()=>break,
+            _=tokio::time::sleep_until(deadline.into())=>break,
+            _=guest.connection().closed()=>break,
+            _=tick.tick()=>if !current(){break;},
+        }
+    }
+    guest.shutdown().await;
+    (work.await, true)
 }
 impl Manager {
     pub(super) fn snapshot(&self, owner: &str) -> Result<ConnectSnapshot, ConnectError> {
@@ -348,6 +383,9 @@ impl Manager {
         };
         snapshot.preparation = Some(preparation.clone());
         snapshot.invitation_profile = profile.name();
+        if profile == Profile::Fragmented && role == "guest" {
+            snapshot.udp = Some(FragmentedGuestState::default());
+        }
         state.attempt = Some(Attempt {
             owner: owner.into(),
             snapshot,
@@ -390,6 +428,13 @@ impl Manager {
         })?;
         self.prepare_host_internal(owner, request.into(), TargetGuard::Owned(Arc::new(target)))
     }
+    pub(super) fn prepare_fragmented_host(
+        &self,
+        owner: &str,
+        request: FragmentedHostRequest,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        self.prepare_host_internal(owner, request.into(), TargetGuard::Manual)
+    }
     pub(super) fn prepare_session_host(
         &self,
         owner: &str,
@@ -427,6 +472,11 @@ impl Manager {
         if source.recheck()?.is_some_and(|observed| observed != target) {
             return Err(ConnectError::InvalidRequest);
         }
+        let services = if let Some(udp) = &request.udp_target {
+            fragmented_profile::services(target, canonical(udp)?)?
+        } else {
+            vec![game(target)]
+        };
         let key = lab::generate_key();
         let public = key.public().to_string();
         self.prepare(
@@ -435,7 +485,7 @@ impl Manager {
                 request,
                 key,
                 bind,
-                service: game(target),
+                services,
                 source,
             },
             "host",
@@ -448,6 +498,13 @@ impl Manager {
         request: GuestRequest,
     ) -> Result<ConnectPreparation, ConnectError> {
         self.prepare_guest_internal(owner, request, Profile::Legacy)
+    }
+    pub(super) fn prepare_fragmented_guest(
+        &self,
+        owner: &str,
+        request: GuestRequest,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        self.prepare_guest_internal(owner, request, Profile::Fragmented)
     }
     pub(super) fn prepare_session_guest(
         &self,
@@ -504,13 +561,13 @@ impl Manager {
             Draft::Host {
                 request,
                 key,
-                service,
+                services,
                 ..
             } => (
                 request.mode,
                 key.public().to_string(),
                 invitation.lease().peer.to_string(),
-                Some(service.endpoint.to_string()),
+                Some(services[0].endpoint.to_string()),
                 request.admission_seconds,
             ),
             Draft::Guest {
@@ -528,6 +585,14 @@ impl Manager {
             ),
         };
         let session_timing = invitation.timing()?;
+        let fragmented_udp = invitation.is_fragmented().then(|| FragmentedUdpReview {
+            contract: FragmentedUdpContract::default(),
+            udp_target: match &draft {
+                Draft::Host { request, .. } => request.udp_target.clone(),
+                Draft::Guest { .. } => None,
+            },
+        });
+        let lifetime = invitation.fragmented_seconds().unwrap_or(lifetime);
         let lifetime = session_timing
             .as_ref()
             .map_or(lifetime, |timing| timing.admission_seconds);
@@ -551,12 +616,29 @@ impl Manager {
             } else {
                 None
             },
-            services: vec![ServiceReview {
-                service_id: "game",
-                protocol: "tcp",
-                revision: 1,
-                required_capability: "reliableStream",
-            }],
+            services: if invitation.is_fragmented() {
+                vec![
+                    ServiceReview {
+                        service_id: "game",
+                        protocol: "tcp",
+                        revision: 1,
+                        required_capability: "reliableStream",
+                    },
+                    ServiceReview {
+                        service_id: "aux",
+                        protocol: "udp",
+                        revision: 1,
+                        required_capability: "fragmentedDatagram",
+                    },
+                ]
+            } else {
+                vec![ServiceReview {
+                    service_id: "game",
+                    protocol: "tcp",
+                    revision: 1,
+                    required_capability: "reliableStream",
+                }]
+            },
             expires_at_ms: a
                 .snapshot
                 .preparation
@@ -573,6 +655,7 @@ impl Manager {
             instance_id,
             run_id,
             session_timing: session_timing.clone(),
+            fragmented_udp: fragmented_udp.clone(),
         };
         let bytes =
             serde_json::to_vec(&(fingerprint, &review)).map_err(|_| ConnectError::Internal)?;
@@ -590,6 +673,7 @@ impl Manager {
         a.snapshot.phase = "reviewed";
         a.snapshot.review = Some(review.clone());
         a.snapshot.session_timing = session_timing;
+        a.snapshot.fragmented_udp = fragmented_udp.map(|value| value.contract);
         a.snapshot.expires_at_ms = Some(review.expires_at_ms);
         Ok(review)
     }
@@ -611,7 +695,7 @@ impl Manager {
             request,
             key,
             bind,
-            service,
+            services,
             source,
         } = &draft
         else {
@@ -633,15 +717,24 @@ impl Manager {
                     ConnectMode::Loopback => lab::Invitation::issue,
                     ConnectMode::ExternalIpv6 => lab::Invitation::issue_external_ipv6,
                 };
+                issue(key, recipient, id, *bind, services, admission_expires).map(Authority::Legacy)
+            }
+            Profile::Fragmented => {
+                let issue = match request.mode {
+                    ConnectMode::Loopback => lab::Invitation::issue_fragmented_for_lifetime,
+                    ConnectMode::ExternalIpv6 => {
+                        lab::Invitation::issue_fragmented_external_ipv6_for_lifetime
+                    }
+                };
                 issue(
                     key,
                     recipient,
                     id,
                     *bind,
-                    std::slice::from_ref(service),
-                    admission_expires,
+                    services,
+                    Duration::from_secs(request.admission_seconds.into()),
                 )
-                .map(Authority::Legacy)
+                .map(Authority::Fragmented)
             }
             Profile::Session => {
                 let issue = match request.mode {
@@ -655,7 +748,7 @@ impl Manager {
                     recipient,
                     id,
                     *bind,
-                    std::slice::from_ref(service),
+                    services,
                     Duration::from_secs(request.admission_seconds.into()),
                     Duration::from_secs(request.session_seconds.into()),
                 )
@@ -704,6 +797,13 @@ impl Manager {
                 };
                 verify(encoded, *host, key.public()).map(Authority::Legacy)
             }
+            Profile::Fragmented => {
+                let verify = match request.mode {
+                    ConnectMode::Loopback => lab::Invitation::verify_fragmented,
+                    ConnectMode::ExternalIpv6 => lab::Invitation::verify_fragmented_external_ipv6,
+                };
+                verify(encoded, *host, key.public()).map(Authority::Fragmented)
+            }
             Profile::Session => {
                 let verify = match request.mode {
                     ConnectMode::Loopback => lab::SessionInvitation::verify_loopback,
@@ -713,20 +813,21 @@ impl Manager {
             }
         };
         let invitation = match verified {
-            Ok(invitation) if invitation.timing().is_ok() => invitation,
+            Ok(invitation) if invitation.validate_desktop().is_ok() => invitation,
             _ => {
                 a.draft = Some(draft);
                 return Err(ConnectError::InvitationRejected);
             }
         };
         let preview = invitation.preview();
-        if preview["services"].as_array().is_none_or(|services| {
-            services.len() != 1
-                || services[0]["serviceId"] != "game"
-                || services[0]["protocol"] != "tcp"
-                || services[0]["revision"] != 1
-                || services[0]["requiredCapability"] != "reliableStream"
-        }) || !invitation.lease().services.contains("game")
+        if !invitation.is_fragmented()
+            && (preview["services"].as_array().is_none_or(|services| {
+                services.len() != 1
+                    || services[0]["serviceId"] != "game"
+                    || services[0]["protocol"] != "tcp"
+                    || services[0]["revision"] != 1
+                    || services[0]["requiredCapability"] != "reliableStream"
+            }) || !invitation.lease().services.contains("game"))
         {
             a.draft = Some(draft);
             return Err(ConnectError::InvitationRejected);
@@ -990,7 +1091,7 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
             request,
             key,
             bind,
-            service,
+            services,
             source,
         } => {
             if source.recheck().is_err() {
@@ -1003,7 +1104,7 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                 secret_key: key,
                 bind_addr: bind,
                 session_id: invitation.session_id().into(),
-                services: vec![service],
+                services,
                 leases: vec![lease],
                 limits: lab::Limits::default(),
             };
@@ -1039,6 +1140,7 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                             host_public_id: host.id().to_string(),
                             expires_at_ms: invitation.admission_expires(),
                             session_timing: a.snapshot.session_timing.clone(),
+                            fragmented_udp: a.snapshot.fragmented_udp.clone(),
                         });
                     }
                 });
@@ -1125,6 +1227,7 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                 close_operation(&state, &id, &cancel, Some(ConnectError::PortUnavailable)).await;
                 return;
             };
+            let mut udp_bridge = None;
             if !cancel.is_cancelled()
                 && Instant::now() < deadline
                 && invitation.check_session().is_ok()
@@ -1134,9 +1237,53 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                         a.snapshot.phase = "guestConnected";
                         a.snapshot.transport_state = "authenticated";
                         a.snapshot.tcp_address = Some(bridge.local_addr().to_string());
+                        if invitation.is_fragmented() {
+                            a.snapshot.udp = Some(FragmentedGuestState::starting());
+                        }
                     }
                 });
-                tokio::select! {_=cancel.cancelled()=>{},_=tokio::time::sleep_until(deadline.into())=>{},_=guest.connection().closed()=>{}}
+                if invitation.is_fragmented() {
+                    let ((opened, projection), interrupted) = await_udp_work(
+                        &guest,
+                        &cancel,
+                        deadline,
+                        || invitation.check_session().is_ok(),
+                        fragmented_profile::open_guest_bridge(&guest),
+                    )
+                    .await;
+                    udp_bridge = opened;
+                    if !interrupted
+                        && !cancel.is_cancelled()
+                        && Instant::now() < deadline
+                        && invitation.check_session().is_ok()
+                    {
+                        update(&state, &id, |a| {
+                            if a.snapshot.phase == "guestConnected" {
+                                a.snapshot.udp = Some(projection);
+                            }
+                        });
+                    }
+                }
+                let mut tick = tokio::time::interval(Duration::from_millis(100));
+                loop {
+                    tokio::select! {
+                        _=cancel.cancelled()=>break,
+                        _=tokio::time::sleep_until(deadline.into())=>break,
+                        _=guest.connection().closed()=>break,
+                        _=tick.tick()=>{
+                            if invitation.check_session().is_err() { break; }
+                            let failure=udp_bridge.as_ref().and_then(|udp| {
+                                if udp.is_closed() {Some(UdpFailure::Closed)}
+                                else if udp.max_payload()!=Some(usize::from(fragmented_profile::ORIGINAL_DATAGRAM_BYTES)) {Some(UdpFailure::CapacityUnavailable)}
+                                else {None}
+                            });
+                            if let Some(code)=failure {
+                                if let Some(udp)=udp_bridge.take(){let (_,interrupted)=await_udp_work(&guest,&cancel,deadline,||invitation.check_session().is_ok(),udp.shutdown()).await;drop(udp);if interrupted {break;}}
+                                update(&state,&id,|a| {if a.snapshot.phase=="guestConnected" {a.snapshot.udp=Some(FragmentedGuestState::failed(code));}});
+                            }
+                        }
+                    }
+                }
             }
             cancel.cancel();
             update(&state, &id, |a| {
@@ -1144,6 +1291,10 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
             });
             guest.shutdown().await;
             bridge.shutdown().await;
+            if let Some(udp) = udp_bridge.take() {
+                udp.shutdown().await;
+                drop(udp);
+            }
             drop(bridge);
             drop(guest);
             close_operation(&state, &id, &cancel, None).await;

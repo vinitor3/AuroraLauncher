@@ -1,6 +1,14 @@
 # Aurora Connect no desktop — laboratório experimental
 
-Este documento descreve o caller local acrescentado no incremento46, a descoberta de portas do incremento48 e o perfil de sessão do incremento56. O [task](task-aur-r4-connect.md) registra os comandos executados e seus resultados; instruções abaixo não constituem prova de execução gráfica. Todos os gates de [R4](engineering/MASTER_ROADMAP.md), nove pares Core/Skins, Assistente desktop e recovery/CAS/Doctor permanecem válidos.
+Este documento descreve o caller local acrescentado no incremento46, a descoberta de portas do incremento48, o perfil de sessão do incremento56 e o transporte TCP+UDP explícito do incremento57. O [task](task-aur-r4-connect.md) registra os comandos executados e seus resultados; instruções abaixo não constituem prova de execução gráfica. Todos os gates de [R4](engineering/MASTER_ROADMAP.md), nove pares Core/Skins, Assistente desktop e recovery/CAS/Doctor permanecem válidos.
+
+## Perfil explícito TCP+UDP — incremento57
+
+O painel oferece **Jogo + UDP experimental**, escolhido antes da preparação. Autoriza somente `game`/TCP e `aux`/UDP fragmentado, com destinos loopback manuais e prazo único de1–120s. O perfil de sessão56 permanece separado e somente TCP; nenhum parser faz fallback para outro perfil. O convidado revisa os serviços, os limites UDP e o destino local fixo `127.0.0.1:35554`, sem receber o destino privado do anfitrião. [Contrato, comandos, evidências e limites57](aurora-connect-desktop-udp.md).
+
+A conexão TCP e a consulta de servidor ficam disponíveis independentemente da preparação UDP. UDP só aparece disponível depois de abrir a porta e negociar a primeira associação com capacidade4096B; falha de porta/capacidade/encerramento aparece separadamente e não desliga o TCP. A capacidade é da associação inicial e não promete ausência de perda ou suporte a toda mensagem de um mod. Expiração, revogação e encerramento geral continuam fechando ambos os transportes.
+
+Não há alteração ou anúncio automático das configurações de voz, descoberta LAN neste perfil, porta alternativa, relay ou teste de áudio implícito. A autorização de retorno limita16384B/s e20fragmentos/s por serviço, incluindo headers; não homologa tráfego de áudio. Host e Guest têm papéis diferentes: o host autoriza o destino UDP, mas não recebe uma ponte local de convidado. Simple Voice Chat e Plasmo Voice conservam validações separadas.
 
 ## Perfil explícito de sessão — incremento56
 
@@ -14,7 +22,7 @@ Preparação, fonte descoberta, consulta STATUS, cancelamento, logout e encerram
 
 A feature Rust `connect-lab` é opcional e desligada por padrão. O build normal registra os comandos estreitos, mas não compila nem instancia o transporte; `connect_capabilities.available=false` mantém a navegação Connect oculta. A feature independente `connect-voice-lab` não habilita voz neste painel. Não foi criado instalador ou alterada versão de release.
 
-O caller usa diretamente a biblioteca real `apps/connect-lab`, sem subprocesso PowerShell, chave privada no frontend, Firebase social ou persistência de convites. Autoriza somente `game/tcp`, revisão1 e `reliableStream`, com destino loopback selecionado explicitamente pelo anfitrião. Digitar uma porta não comprova que pertence ao Minecraft ou a uma instância gerenciada. A alternativa Windows de descoberta confere o processo filho já iniciado pelo Aurora, conforme o contrato abaixo. Connect não inicia Java, abre o mundo para LAN ou entra automaticamente no jogo.
+O caller usa diretamente a biblioteca real `apps/connect-lab`, sem subprocesso PowerShell, chave privada no frontend, Firebase social ou persistência de convites. Os perfis curto e de sessão autorizam somente `game/tcp`, revisão1 e `reliableStream`; o opt-in57 acrescenta `aux/udp` conforme a seção própria. Destinos loopback são selecionados explicitamente pelo anfitrião. Digitar uma porta não comprova que pertence ao Minecraft ou a uma instância gerenciada. A alternativa Windows de descoberta confere o processo filho já iniciado pelo Aurora, conforme o contrato abaixo. Connect não inicia Java, abre o mundo para LAN ou entra automaticamente no jogo.
 
 Há uma tentativa por processo/janela principal do launcher. As chaves privadas e o estado de consumo permanecem somente na memória do backend. O proprietário deriva da janela Tauri, não de argumento enviado pelo frontend. Essa propriedade local não equivale a autenticação Microsoft, identidade de jogador ou amizade Aurora.
 
@@ -74,8 +82,8 @@ Rollback operacional: Encerrar Connect, aguardar recursos liberados e sair pelo 
 | Convites entre duas internets | APIs assinadas45 reutilizadas | Entrada, expiração, revogação com host vivo e replay da mesma identidade no novo fluxo externo |
 | Integração no launcher | Caller nativo e painel com revisão, conectar, STATUS e encerrar | Exercício gráfico Tauri e entre computadores; estado de jogador depende de produtor de jogo confiável |
 | Ciclo de jogo | Porta manual ou descoberta por processo próprio com revisão/STATUS, monitor de origem e cleanup; perfil56 separa ingresso e sessão | Minecraft LAN real, dedicado supervisionado, estabilidade prolongada e exercício gráfico do perfil56 |
-| Simple Voice Chat | Mantém adaptador, controles e provas locais anteriores | Tamanho UDP integral, áudio real, anúncio por participante e recovery integrado |
-| Plasmo Voice | Mantém adaptador, controles e provas locais anteriores | Ensaio separado de áudio/tamanho/anúncio/recovery |
+| Simple Voice Chat | Controles reais53 com V2; transporte genérico TCP+UDP57 no painel, sem aplicar configurações | Áudio real, anúncio por participante, recovery integrado ao painel e limites dos pacotes reais de áudio |
+| Plasmo Voice | Controles reais53 separados com V2; transporte genérico57 no painel, sem identificar mod | Ensaio separado de áudio/anúncio/recovery e limites dos pacotes reais de áudio |
 | Redes e conjunto | Amostra IPv4 próprio documentada separadamente | LAN/IPv4 externo/NAT/CGNAT/relay elegível; dois jogadores, contas mistas, Core/Skins, quedas/estabilidade; manifesto/updater antes de sincronização |
 
 Ausência de participantes remotos não bloqueia a implementação local independente. Testes audíveis e ações no outro PC serão preparados separadamente, sem solicitar credenciais ou gravações.

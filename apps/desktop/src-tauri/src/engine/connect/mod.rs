@@ -1,6 +1,11 @@
 //! Explicit experimental desktop caller. Public DTOs exist in default builds;
 //! transport, private keys and sockets exist only with the connect-lab feature.
 use serde::{Deserialize, Serialize};
+mod fragmented_profile;
+pub use fragmented_profile::{
+    FragmentedGuestState, FragmentedHostRequest, FragmentedUdpCapabilities, FragmentedUdpContract,
+    FragmentedUdpReview,
+};
 
 #[cfg(feature = "connect-lab")]
 mod live;
@@ -72,6 +77,8 @@ pub struct ConnectCapabilities {
     pub owned_instance_discovery: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_invitations: Option<SessionInvitationCapabilities>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fragmented_udp_invitations: Option<FragmentedUdpCapabilities>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -117,6 +124,8 @@ pub struct ConnectReview {
     pub run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_timing: Option<SessionTiming>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fragmented_udp: Option<FragmentedUdpReview>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -126,6 +135,8 @@ pub struct InvitationExport {
     pub expires_at_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_timing: Option<SessionTiming>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fragmented_udp: Option<FragmentedUdpContract>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -166,6 +177,10 @@ pub struct ConnectSnapshot {
     pub invitation_profile: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_timing: Option<SessionTiming>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fragmented_udp: Option<FragmentedUdpContract>,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub udp: Option<FragmentedGuestState>,
 }
 impl ConnectSnapshot {
     fn idle() -> Self {
@@ -191,6 +206,8 @@ impl ConnectSnapshot {
             review: None,
             invitation_profile: None,
             session_timing: None,
+            fragmented_udp: None,
+            udp: None,
         }
     }
 }
@@ -272,6 +289,8 @@ impl ConnectManager {
                     max_session_seconds: 3600,
                 },
             ),
+            fragmented_udp_invitations: cfg!(feature = "connect-lab")
+                .then(FragmentedUdpCapabilities::default),
         }
     }
     pub fn snapshot(&self, owner: &str) -> Result<ConnectSnapshot, ConnectError> {
@@ -293,6 +312,36 @@ impl ConnectManager {
         #[cfg(feature = "connect-lab")]
         {
             self.live.prepare_host(owner, request)
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, request);
+            Err(ConnectError::Disabled)
+        }
+    }
+    pub fn prepare_fragmented_host(
+        &self,
+        owner: &str,
+        request: FragmentedHostRequest,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live.prepare_fragmented_host(owner, request)
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, request);
+            Err(ConnectError::Disabled)
+        }
+    }
+    pub fn prepare_fragmented_guest(
+        &self,
+        owner: &str,
+        request: GuestRequest,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live.prepare_fragmented_guest(owner, request)
         }
         #[cfg(not(feature = "connect-lab"))]
         {
@@ -472,6 +521,30 @@ mod disabled_tests {
         assert!(!manager.capabilities().available);
         let caps = serde_json::to_value(manager.capabilities()).unwrap();
         assert!(caps.get("sessionInvitations").is_none());
+        assert!(caps.get("fragmentedUdpInvitations").is_none());
+        assert!(matches!(
+            manager.prepare_fragmented_host(
+                "main",
+                FragmentedHostRequest {
+                    mode: ConnectMode::Loopback,
+                    bind_address: "127.0.0.1:32000".into(),
+                    game_target: "127.0.0.1:32001".into(),
+                    udp_target: "127.0.0.1:32002".into(),
+                    lifetime_seconds: 120
+                }
+            ),
+            Err(ConnectError::Disabled)
+        ));
+        assert!(matches!(
+            manager.prepare_fragmented_guest(
+                "main",
+                GuestRequest {
+                    mode: ConnectMode::Loopback,
+                    expected_host_public_id: String::new()
+                }
+            ),
+            Err(ConnectError::Disabled)
+        ));
         assert_eq!(caps["maxLifetimeSeconds"], 600);
         assert!(matches!(
             manager.prepare_session_host(
