@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "connect-lab")]
 mod live;
+#[cfg(feature = "connect-lab")]
+mod session_authority;
 #[cfg(all(test, feature = "connect-lab"))]
 mod tests;
 
@@ -20,6 +22,33 @@ pub struct HostRequest {
     pub bind_address: String,
     pub game_target: String,
     pub lifetime_seconds: u16,
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionHostRequest {
+    pub mode: ConnectMode,
+    pub bind_address: String,
+    pub game_target: String,
+    pub admission_seconds: u16,
+    pub session_seconds: u16,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInvitationCapabilities {
+    pub profile: &'static str,
+    pub schema_version: u8,
+    pub max_admission_seconds: u16,
+    pub max_session_seconds: u16,
+}
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTiming {
+    pub profile: &'static str,
+    pub schema_version: u8,
+    pub admission_seconds: u16,
+    pub session_seconds: u16,
+    pub admission_expires_at_ms: u64,
+    pub session_expires_at_ms: u64,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -41,6 +70,8 @@ pub struct ConnectCapabilities {
     pub status_handshake_host: &'static str,
     pub status_handshake_port: u16,
     pub owned_instance_discovery: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_invitations: Option<SessionInvitationCapabilities>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +80,8 @@ pub struct ConnectPreparation {
     pub generation: u64,
     pub public_id: String,
     pub expires_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invitation_profile: Option<&'static str>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,6 +115,8 @@ pub struct ConnectReview {
     pub target_source: Option<&'static str>,
     pub instance_id: Option<String>,
     pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_timing: Option<SessionTiming>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,6 +124,8 @@ pub struct InvitationExport {
     pub invitation: String,
     pub host_public_id: String,
     pub expires_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_timing: Option<SessionTiming>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -125,6 +162,10 @@ pub struct ConnectSnapshot {
     pub cleanup_state: &'static str,
     pub preparation: Option<ConnectPreparation>,
     pub review: Option<ConnectReview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invitation_profile: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_timing: Option<SessionTiming>,
 }
 impl ConnectSnapshot {
     fn idle() -> Self {
@@ -148,6 +189,8 @@ impl ConnectSnapshot {
             cleanup_state: "notStarted",
             preparation: None,
             review: None,
+            invitation_profile: None,
+            session_timing: None,
         }
     }
 }
@@ -221,6 +264,14 @@ impl ConnectManager {
             status_handshake_host: "localhost",
             status_handshake_port: 43001,
             owned_instance_discovery: cfg!(all(windows, feature = "connect-lab")),
+            session_invitations: cfg!(feature = "connect-lab").then_some(
+                SessionInvitationCapabilities {
+                    profile: "sessionGameTcp",
+                    schema_version: 2,
+                    max_admission_seconds: 600,
+                    max_session_seconds: 3600,
+                },
+            ),
         }
     }
     pub fn snapshot(&self, owner: &str) -> Result<ConnectSnapshot, ConnectError> {
@@ -248,6 +299,46 @@ impl ConnectManager {
             let _ = (owner, request);
             Err(ConnectError::Disabled)
         }
+    }
+    pub fn prepare_session_host(
+        &self,
+        owner: &str,
+        request: SessionHostRequest,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live.prepare_session_host(owner, request)
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, request);
+            Err(ConnectError::Disabled)
+        }
+    }
+    pub fn prepare_session_guest(
+        &self,
+        owner: &str,
+        request: GuestRequest,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live.prepare_session_guest(owner, request)
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, request);
+            Err(ConnectError::Disabled)
+        }
+    }
+    #[cfg(all(windows, feature = "connect-lab"))]
+    pub fn prepare_session_host_discovered(
+        &self,
+        owner: &str,
+        request: SessionHostRequest,
+        target: super::connect_discovery::ApprovedTarget,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        self.live
+            .prepare_session_host_discovered(owner, request, target)
     }
     #[cfg(all(windows, feature = "connect-lab"))]
     pub fn prepare_host_discovered(
@@ -379,6 +470,32 @@ mod disabled_tests {
     fn default_build_is_disabled_and_exposes_no_live_resources() {
         let manager = ConnectManager::default();
         assert!(!manager.capabilities().available);
+        let caps = serde_json::to_value(manager.capabilities()).unwrap();
+        assert!(caps.get("sessionInvitations").is_none());
+        assert_eq!(caps["maxLifetimeSeconds"], 600);
+        assert!(matches!(
+            manager.prepare_session_host(
+                "main",
+                SessionHostRequest {
+                    mode: ConnectMode::Loopback,
+                    bind_address: "127.0.0.1:32000".into(),
+                    game_target: "127.0.0.1:32001".into(),
+                    admission_seconds: 600,
+                    session_seconds: 3600
+                }
+            ),
+            Err(ConnectError::Disabled)
+        ));
+        assert!(matches!(
+            manager.prepare_session_guest(
+                "main",
+                GuestRequest {
+                    mode: ConnectMode::Loopback,
+                    expected_host_public_id: String::new()
+                }
+            ),
+            Err(ConnectError::Disabled)
+        ));
         assert!(manager.snapshot("main").unwrap().operation_id.is_none());
         assert!(matches!(
             manager.prepare_guest(

@@ -4,6 +4,8 @@ Atualização: 09/10/2026. Estado: **PROTÓTIPO** opt-in na biblioteca `apps/con
 
 ## Motivo e limite deste passo
 
+Continuidade56: o [caller desktop](aurora-connect-desktop-session-lifetime.md) adota estas APIs por um perfil explícito, preservando o perfil curto. Foram acrescentadas `issue_loopback_for_lifetimes` e `issue_external_ipv6_for_lifetimes`: calculam emissão e ambos os vencimentos com a mesma amostra civil/monotônica, validam durações representáveis exatamente em milissegundos e reutilizam o mesmo codec. Isso evita a diferença entre o relógio do caller e uma nova leitura durante a emissão. APIs de vencimentos absolutos, domínio, corpo assinado e verificadores52 permanecem iguais. O desktop exige adicionalmente segundos inteiros exatos; essa restrição não é uma alteração do codec. O restante deste documento registra o escopo e as provas originais52.
+
 O convite atual de schema 1 usa um único vencimento para ingresso e sessão inteira, limitado a 600 s. O host volta a conferir esse vencimento em pedidos de serviços e no encerramento. Aumentar somente um timer da interface ou uma lease não separaria esses contratos com segurança. O caller Node continua com seu perfil loopback de 120 s e os demais caminhos conservam seus limites atuais.
 
 O incremento cria um tipo distinto `SessionInvitation`, envelope de schema 2 e domínio de assinatura próprio. O primeiro perfil tem apenas `game`/TCP, revisão 1 e `reliableStream`. UDP fragmentado também usa uma versão 2 em seu próprio protocolo, mas essa numeração é independente: o convite novo não autoriza UDP, áudio ou relay. Uma sessão autenticada pode continuar abrindo o serviço TCP autorizado depois que a janela de ingresso acabou, até seu prazo absoluto ou encerramento anterior.

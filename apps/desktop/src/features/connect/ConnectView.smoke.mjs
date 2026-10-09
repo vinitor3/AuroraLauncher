@@ -11,6 +11,10 @@ import ts from "typescript";
 const require = createRequire(import.meta.url);
 const { parseHTML } = require("linkedom");
 const { window, document } = parseHTML("<html><body><div id='root'></div></body></html>");
+// Advertise the native input event supported by the fixture so React uses its
+// modern event path. Set the prototype value below to model user editing rather
+// than a programmatic setter already observed by React's value tracker.
+document.oninput = null;
 // Linkedom omits the browser textarea.defaultValue reflection used by React 19
 // on initial mount. Supply that DOM behavior only inside this synthetic fixture.
 Object.defineProperty(window.HTMLTextAreaElement.prototype, "defaultValue", {
@@ -93,6 +97,10 @@ const submit = async () => { const form = container.querySelector("form"); asser
 const count = name => calls.filter(call => call.command === name).length;
 const render = async () => { await act(async () => root.render(createElement(ConnectView))); };
 const checkConsent = async () => { const checkbox = container.querySelector('.connect-consent input'); assert.ok(checkbox); await act(async () => { checkbox.checked = !checkbox.checked; checkbox.dispatchEvent(new window.Event("click", { bubbles: true })); }); };
+const editInput = async (input, value) => { await act(async () => {
+  Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set.call(input, value);
+  input.dispatchEvent(new window.Event("input", { bubbles: true }));
+}); };
 beforeEach(() => { snapshot = idle(); capabilities = { ...caps }; calls = []; handlers = new Map(); copied = []; clipboardFails = false; root = createRoot(container); });
 afterEach(async () => { await act(async () => root.unmount()); });
 
@@ -331,4 +339,236 @@ test("discovery rejects a native target changed between review and STATUS", asyn
   assert.match(container.textContent, /Não foi possível concluir/);
   assert.equal(button("Preparar anfitrião").disabled, true);
   assert.equal(count("connect_prepare_discovered_host"), 0);
+});
+
+const sessionCapability = { profile: "sessionGameTcp", schemaVersion: 2, maxAdmissionSeconds: 600, maxSessionSeconds: 3600 };
+const sessionTiming = { profile: "sessionGameTcp", schemaVersion: 2, admissionSeconds: 600, sessionSeconds: 3600,
+  admissionExpiresAtMs: 1800000600000, sessionExpiresAtMs: 1800003600000 };
+const sessionPreparation = { ...preparation, invitationProfile: "sessionGameTcp" };
+const sessionReview = { ...review, sessionTiming };
+const sessionExport = { invitation: '{"fixture":"session invitation"}', hostPublicId: hostId,
+  expiresAtMs: sessionTiming.admissionExpiresAtMs, sessionTiming };
+function preparedSession(role = "host") {
+  return { ...idle(), operationId, generation: 1, role, phase: role === "host" ? "hostPrepared" : "guestPrepared",
+    invitationProfile: "sessionGameTcp", preparation: { ...sessionPreparation, publicId: role === "host" ? hostId : guestId }, expiresAtMs: preparation.expiresAtMs };
+}
+function reviewedSession(role = "host") {
+  return { ...preparedSession(role), phase: "reviewed", sessionTiming,
+    review: { ...sessionReview, role, gameTarget: role === "host" ? review.gameTarget : null, localTcpBind: role === "host" ? null : "127.0.0.1:0" } };
+}
+function activeSession(role = "host", admitted = false) {
+  return { ...reviewedSession(role), phase: role === "host" ? "hostListening" : "guestConnected",
+    transportState: role === "guest" ? "authenticated" : admitted ? "admitted" : "listening", preparation: null, review: null,
+    expiresAtMs: sessionTiming.sessionExpiresAtMs, tcpAddress: role === "guest" ? "127.0.0.1:42123" : null };
+}
+function sessionFixtures() {
+  capabilities.sessionInvitations = sessionCapability;
+  for (const command of ["connect_prepare_session_host", "connect_prepare_session_guest", "connect_prepare_session_host_discovered"]) {
+    handlers.set(command, () => { snapshot = preparedSession(command === "connect_prepare_session_guest" ? "guest" : "host"); return snapshot.preparation; });
+  }
+  for (const role of ["host", "guest"]) {
+    handlers.set(`connect_review_${role}`, () => { snapshot = reviewedSession(role); return snapshot.review; });
+  }
+  handlers.set("connect_confirm", () => { snapshot = activeSession(snapshot.role); return structuredClone(snapshot); });
+  handlers.set("connect_export_invitation", () => sessionExport);
+}
+async function chooseSession() {
+  const select = [...container.querySelectorAll("select")].find(el => el.querySelector('option[value="sessionGameTcp"]'));
+  assert.ok(select);
+  await act(async () => {
+    for (const option of select.querySelectorAll("option")) option.selected = option.value === "sessionGameTcp";
+    select.dispatchEvent(new window.Event("change", { bubbles: true }));
+  });
+}
+
+test("session capability leaves the legacy 600-second command as the default", async () => {
+  sessionFixtures(); await render();
+  assert.equal(container.querySelector('option[value="legacy"]').selected, true);
+  await submit();
+  assert.deepEqual(calls.find(call => call.command === "connect_prepare_host").args,
+    { request: { mode: "loopback", bindAddress: "127.0.0.1:42000", gameTarget: "127.0.0.1:43001", lifetimeSeconds: 600 } });
+  assert.equal(count("connect_prepare_session_host"), 0);
+});
+
+test("session host opts in before preparation and explicitly reviews both absolute deadlines", async () => {
+  sessionFixtures(); await render(); await chooseSession();
+  assert.match(container.textContent, /prazo para entrar e o encerramento da sessão são separados/);
+  await submit();
+  assert.deepEqual(calls.find(call => call.command === "connect_prepare_session_host").args,
+    { request: { mode: "loopback", bindAddress: "127.0.0.1:42000", gameTarget: "127.0.0.1:43001", admissionSeconds: 600, sessionSeconds: 3600 } });
+  assert.equal(count("connect_prepare_host"), 0);
+  await submit();
+  const entry = label => [...container.querySelectorAll(".connect-review dt")].find(el => el.textContent === label).nextElementSibling.textContent;
+  assert.equal(entry("Prazo para entrar"), "600 segundos desde a emissão");
+  assert.equal(entry("Duração máxima da sessão"), "3600 segundos desde a emissão, sem renovação");
+  assert.equal(entry("Autorize até"), types.connectDate(sessionReview.expiresAtMs));
+  assert.equal(entry("Entrar até"), types.connectDate(sessionTiming.admissionExpiresAtMs));
+  assert.equal(entry("Encerramento da sessão"), types.connectDate(sessionTiming.sessionExpiresAtMs));
+  assert.doesNotMatch(container.textContent, /Convite e sessão expiram/);
+  assert.equal(button("Autorizar conexão").disabled, true);
+  assert.equal(count("connect_confirm"), 0);
+  await checkConsent(); await click("Autorizar conexão");
+  assert.deepEqual(calls.find(call => call.command === "connect_confirm").args, { operationId, digest });
+  await click("Copiar convite");
+  assert.equal(copied.at(-1), sessionExport.invitation);
+  await click("Encerrar Connect");
+  assert.match(container.textContent, /Recursos liberados/);
+});
+
+test("session guest uses its separate prepare command while the reviewed invitation remains opaque", async () => {
+  sessionFixtures(); await render(); await click("Convidado"); await chooseSession(); await submit();
+  assert.deepEqual(calls.find(call => call.command === "connect_prepare_session_guest").args,
+    { request: { mode: "loopback", expectedHostPublicId: "" } });
+  assert.equal(count("connect_prepare_guest"), 0);
+  await submit();
+  assert.deepEqual(calls.find(call => call.command === "connect_review_guest").args, { operationId, encodedInvitation: "" });
+  await checkConsent(); await click("Autorizar conexão");
+  assert.equal(container.querySelector('#connect-local-address').value, "127.0.0.1:42123");
+  assert.match(container.textContent, /Entrada no mundoNão verificada/);
+  assert.equal(count("connect_probe_status"), 0);
+});
+
+test("session discovery preserves separate STATUS approval and consumes the selected source only at prepare", async () => {
+  discoveryFixtures(); sessionFixtures(); await render(); await chooseSession(); await discoveryToReview();
+  assert.equal(count("connect_prepare_session_host_discovered"), 0);
+  await click("Autorizar consulta e selecionar porta");
+  assert.equal(count("connect_prepare_session_host_discovered"), 0);
+  await submit();
+  assert.deepEqual(calls.find(call => call.command === "connect_prepare_session_host_discovered").args,
+    { request: { mode: "loopback", bindAddress: "127.0.0.1:42000", gameTarget: "127.0.0.1:45432", admissionSeconds: 600, sessionSeconds: 3600 }, selectionId: "selection-fixture" });
+  assert.equal(count("connect_prepare_discovered_host"), 0);
+  assert.equal(count("connect_confirm"), 0);
+});
+
+test("session remount preserves backend timing without generating identity or renewing consent", async () => {
+  sessionFixtures(); snapshot = reviewedSession(); await render(); await checkConsent();
+  await act(async () => root.unmount()); root = createRoot(container); await render();
+  assert.equal(button("Autorizar conexão").disabled, true);
+  assert.match(container.textContent, /3600 segundos desde a emissão/);
+  assert.equal(count("connect_prepare_session_host"), 0);
+  assert.equal(count("connect_stop"), 0);
+  await checkConsent();
+  snapshot = { ...snapshot, review: { ...snapshot.review, digest: "f".repeat(64) } };
+  await click("Atualizar estado");
+  assert.equal(button("Autorizar conexão").disabled, true);
+});
+
+test("session admission expiry hides export without claiming an admitted connection ended", async () => {
+  sessionFixtures(); snapshot = activeSession(); await render(); await click("Copiar convite");
+  const admissionExpiresAtMs = Date.now() - 1000;
+  snapshot = { ...snapshot, generation: 2, transportState: "admitted",
+    sessionTiming: { ...sessionTiming, admissionExpiresAtMs, sessionExpiresAtMs: admissionExpiresAtMs + 3000000 }, expiresAtMs: admissionExpiresAtMs + 3000000 };
+  await click("Atualizar estado");
+  assert.match(container.textContent, /Convite utilizado · conexão ativa/);
+  assert.doesNotMatch(container.textContent, /Conexão encerrada|session invitation/);
+  assert.equal([...container.querySelectorAll("button")].some(el => el.textContent === "Copiar convite"), false);
+  assert.equal(count("connect_stop"), 0);
+  assert.equal(button("Encerrar Connect").disabled, false);
+});
+
+test("session pending admission expiry removes the export action while host state remains authoritative", async () => {
+  sessionFixtures(); const admissionExpiresAtMs = Date.now() - 1;
+  snapshot = { ...activeSession(), sessionTiming: { ...sessionTiming, admissionExpiresAtMs, sessionExpiresAtMs: admissionExpiresAtMs + 3000000 }, expiresAtMs: admissionExpiresAtMs + 3000000 };
+  await render();
+  assert.equal([...container.querySelectorAll("button")].some(el => el.textContent === "Copiar convite"), false);
+  assert.match(container.textContent, /Aguardando convidado/);
+  assert.equal(count("connect_export_invitation"), 0);
+  assert.equal(count("connect_stop"), 0);
+});
+
+test("session stop supersedes pending authorization and discards a late active session", async () => {
+  sessionFixtures(); snapshot = reviewedSession(); let complete;
+  handlers.set("connect_confirm", () => new Promise(resolve => { complete = resolve; }));
+  await render(); await checkConsent(); await click("Autorizar conexão"); await click("Encerrar Connect");
+  await act(async () => complete(activeSession()));
+  assert.match(container.textContent, /Conexão encerrada/);
+  assert.doesNotMatch(container.textContent, /Aguardando convidado/);
+});
+
+test("session source failure and unsupported projection never authorize or expose raw native data", async () => {
+  discoveryFixtures(); sessionFixtures(); await render(); await chooseSession(); await discoveryToReview();
+  await click("Autorizar consulta e selecionar porta");
+  handlers.set("connect_prepare_session_host_discovered", () => Promise.reject("connect_source_changed"));
+  await submit();
+  assert.match(container.textContent, /jogo ou sua porta mudou/);
+  assert.equal(count("connect_confirm"), 0);
+  assert.equal(count("connect_prepare_session_host"), 0);
+});
+
+test("session preparation with a wrong profile keeps its cancellation handle and never authorizes", async () => {
+  sessionFixtures(); await render(); await chooseSession();
+  handlers.set("connect_prepare_session_host", () => preparation);
+  await submit();
+  assert.equal(button("Encerrar Connect").disabled, false);
+  assert.equal(count("connect_confirm"), 0);
+  await click("Encerrar Connect");
+  assert.deepEqual(calls.find(call => call.command === "connect_stop").args, { operationId });
+});
+
+test("session host form preserves integer bounds without relying on native HTML validation", async () => {
+  sessionFixtures(); await render(); await chooseSession();
+  const numeric = [...container.querySelectorAll('input[type="number"]')];
+  assert.equal(numeric.length, 2);
+  assert.equal(numeric[0].getAttribute("min"), "1");
+  assert.equal(numeric[0].getAttribute("max"), "600");
+  assert.equal(numeric[1].getAttribute("max"), "3600");
+  for (const [admission, session] of [["601", "3600"], ["0", "3600"], ["1.5", "3600"], ["600", "599"], ["600", "3601"], ["", "3600"]]) {
+    await editInput(numeric[0], admission); await editInput(numeric[1], session); await submit();
+    assert.equal(count("connect_prepare_session_host"), 0);
+    assert.match(container.textContent, /Confira os endereços, o código público e o prazo/);
+  }
+  await editInput(numeric[0], "3"); await editInput(numeric[1], "12"); await submit();
+  assert.deepEqual(calls.find(call => call.command === "connect_prepare_session_host").args.request,
+    { mode: "loopback", bindAddress: "127.0.0.1:42000", gameTarget: "127.0.0.1:43001", admissionSeconds: 3, sessionSeconds: 12 });
+});
+
+test("absent session capability provides only legacy preparation and disabled backend exposes neither profile", async () => {
+  await render();
+  assert.equal(container.querySelector('option[value="sessionGameTcp"]'), null);
+  await act(async () => root.unmount()); root = createRoot(container);
+  capabilities = { ...caps, available: false }; calls = [];
+  await render();
+  assert.equal(container.querySelector("form"), null);
+  assert.deepEqual(calls.map(call => call.command), ["connect_capabilities"]);
+});
+
+test("session timing validates signed seconds, matching expiry deltas and unchanged legacy aliases", () => {
+  assert.deepEqual(types.sessionTimingFrom(sessionTiming), sessionTiming);
+  assert.equal(types.reviewFrom(sessionReview).sessionTiming, sessionTiming);
+  assert.equal(types.exportFrom(sessionExport).sessionTiming, sessionTiming);
+  for (const value of [null, {}, { ...sessionTiming, profile: "legacy" }, { ...sessionTiming, schemaVersion: 1 },
+    { ...sessionTiming, admissionSeconds: 0 }, { ...sessionTiming, admissionSeconds: 601 },
+    { ...sessionTiming, sessionSeconds: 3601 }, { ...sessionTiming, sessionSeconds: 599 },
+    { ...sessionTiming, sessionSeconds: 3600.1 }, { ...sessionTiming, sessionExpiresAtMs: Number.MAX_SAFE_INTEGER + 1 },
+    { ...sessionTiming, sessionExpiresAtMs: sessionTiming.admissionExpiresAtMs - 1 },
+    { ...sessionTiming, sessionExpiresAtMs: sessionTiming.sessionExpiresAtMs + 1 },
+    { ...sessionTiming, admissionExpiresAtMs: undefined }]) assert.throws(() => types.sessionTimingFrom(value));
+  assert.throws(() => types.reviewFrom({ ...sessionReview, lifetimeSeconds: 599 }));
+  assert.throws(() => types.reviewFrom({ ...sessionReview, invitationExpiresAtMs: sessionTiming.admissionExpiresAtMs - 1 }));
+  assert.throws(() => types.exportFrom({ ...sessionExport, expiresAtMs: sessionTiming.sessionExpiresAtMs }));
+  assert.throws(() => types.reviewFrom({ ...sessionReview, expiresAtMs: sessionTiming.admissionExpiresAtMs + 1 }));
+  assert.throws(() => types.reviewFrom({ ...review, lifetimeSeconds: 3600 }));
+});
+
+test("session projections reject partial or cross-profile metadata while legacy stays metadata-free", () => {
+  assert.deepEqual(types.preparationFrom(preparation), preparation);
+  assert.deepEqual(types.snapshotFrom(idle()), idle());
+  assert.deepEqual(types.snapshotFrom(preparedSession()), preparedSession());
+  assert.deepEqual(types.snapshotFrom(reviewedSession()), reviewedSession());
+  assert.deepEqual(types.snapshotFrom(activeSession()), activeSession());
+  for (const value of [
+    { ...idle(), sessionTiming }, { ...activeSession(), invitationProfile: undefined },
+    { ...idle(), invitationProfile: "sessionGameTcp" }, { ...preparedSession(), sessionTiming },
+    { ...activeSession(), sessionTiming: undefined }, { ...activeSession(), expiresAtMs: sessionTiming.admissionExpiresAtMs },
+    { ...reviewedSession(), review }, { ...reviewedSession(), preparation },
+    { ...reviewedSession(), review: { ...sessionReview, sessionTiming: { ...sessionTiming, sessionExpiresAtMs: sessionTiming.sessionExpiresAtMs + 1 } } },
+    { ...preparedSession(), invitationProfile: "legacy" },
+  ]) assert.throws(() => types.snapshotFrom(value));
+  assert.throws(() => types.preparationFrom({ ...sessionPreparation, sessionTiming }));
+  assert.throws(() => types.preparationFrom({ ...preparation, invitationProfile: null }));
+  for (const session of [null, {}, { ...sessionCapability, maxAdmissionSeconds: 601 },
+    { ...sessionCapability, maxSessionSeconds: 3601 }, { ...sessionCapability, schemaVersion: 1 }]) {
+    assert.throws(() => types.capabilitiesFrom({ ...caps, sessionInvitations: session }));
+  }
+  assert.deepEqual(types.capabilitiesFrom({ ...caps, sessionInvitations: sessionCapability }).sessionInvitations, sessionCapability);
 });

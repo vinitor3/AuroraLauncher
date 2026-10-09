@@ -84,7 +84,7 @@ fn policy_owner_single_slot_and_review_restore_are_enforced_without_network() {
         ));
     }
 }
-async fn status_fixture() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+pub(super) async fn status_fixture() -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {

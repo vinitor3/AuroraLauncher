@@ -52,13 +52,13 @@ fn owned_listener_fixture() {
         let _ = thread.join();
     }
 }
-struct Fixture {
+pub(crate) struct Fixture {
     child: Child,
     ports: Vec<u16>,
     reader: Option<thread::JoinHandle<()>>,
 }
 impl Fixture {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut command = Command::new(std::env::current_exe().unwrap());
         #[cfg(windows)]
         {
@@ -108,7 +108,7 @@ impl Fixture {
     fn proof(&mut self) -> OwnedChildProof {
         OwnedChildProof::from_child(&mut self.child, "fixture-instance", "fixture-run").unwrap()
     }
-    fn stop(&mut self) {
+    pub(crate) fn stop(&mut self) {
         if let Some(mut input) = self.child.stdin.take() {
             let _ = input.write_all(b"stop\n");
         }
@@ -231,7 +231,7 @@ async fn status_requires_review_and_exact_digest_then_returns_single_use_owned_t
     ));
 }
 
-async fn approved(manager: &DiscoveryManager, fixture: &mut Fixture) -> ApprovedTarget {
+pub(crate) async fn approved(manager: &DiscoveryManager, fixture: &mut Fixture) -> ApprovedTarget {
     let inventory = manager.inventory("main", fixture.proof()).unwrap();
     let candidate = inventory
         .candidates

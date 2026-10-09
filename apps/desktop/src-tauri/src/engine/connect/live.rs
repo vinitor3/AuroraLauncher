@@ -1,3 +1,4 @@
+use super::session_authority::{Authority, HostDraftRequest, Profile};
 use super::*;
 use aurora_connect_lab as lab;
 use sha2::{Digest, Sha256};
@@ -8,6 +9,10 @@ use std::{
 };
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod session_tests;
 
 enum TargetGuard {
     Manual,
@@ -52,7 +57,7 @@ impl TargetGuard {
 
 enum Draft {
     Host {
-        request: HostRequest,
+        request: HostDraftRequest,
         key: lab::SecretKey,
         bind: SocketAddr,
         service: lab::Service,
@@ -62,11 +67,13 @@ enum Draft {
         request: GuestRequest,
         key: lab::SecretKey,
         host: lab::EndpointId,
+        profile: Profile,
     },
 }
 struct Reviewed {
     draft: Draft,
-    invitation: lab::Invitation,
+    invitation: Authority,
+    admission_deadline: Instant,
     deadline: Instant,
     review_deadline: Instant,
 }
@@ -84,6 +91,8 @@ struct Attempt {
     probes: u16,
     last_probe: Option<Instant>,
     session_deadline: Option<Instant>,
+    admission_deadline: Option<Instant>,
+    authority: Option<Authority>,
 }
 #[derive(Default)]
 struct State {
@@ -94,6 +103,15 @@ struct State {
 #[derive(Default)]
 pub(super) struct Manager {
     state: Arc<Mutex<State>>,
+}
+impl Drop for Manager {
+    fn drop(&mut self) {
+        if let Ok(state) = self.state.lock() {
+            if let Some(attempt) = &state.attempt {
+                attempt.cancel.cancel();
+            }
+        }
+    }
 }
 fn lock(state: &Mutex<State>) -> Result<std::sync::MutexGuard<'_, State>, ConnectError> {
     state.lock().map_err(|_| ConnectError::Internal)
@@ -151,15 +169,37 @@ fn terminal(a: &Attempt) -> bool {
         && a.snapshot.cleanup_state == "complete"
         && a.worker.as_ref().is_none_or(|worker| worker.is_finished())
 }
+fn admission_state(
+    current: impl FnOnce() -> bool,
+    consumed: impl FnOnce() -> bool,
+) -> Option<bool> {
+    // Read consumption after the clock gate: an admission valid just before
+    // ingress expired must not be discarded using an earlier false snapshot.
+    let current = current();
+    let consumed = consumed();
+    (current || consumed).then_some(consumed)
+}
 fn expire_pending(a: &mut Attempt) {
+    expire_pending_at(a, lab::unix_millis());
+}
+fn expire_pending_at(a: &mut Attempt, now_unix: u64) {
     if matches!(
         a.snapshot.phase,
         "hostPrepared" | "guestPrepared" | "reviewed"
     ) {
         let deadline = a.reviewed.as_ref().map_or(a.prepared_deadline, |review| {
-            review.review_deadline.min(review.deadline)
+            review.review_deadline.min(review.admission_deadline)
         });
-        if Instant::now() >= deadline {
+        let admission_invalid = a
+            .reviewed
+            .as_ref()
+            .is_some_and(|review| review.invitation.check_admission().is_err());
+        let review_expired = a
+            .snapshot
+            .preparation
+            .as_ref()
+            .is_none_or(|p| now_unix >= p.expires_at_ms);
+        if Instant::now() >= deadline || admission_invalid || review_expired {
             a.draft = None;
             a.reviewed = None;
             a.snapshot.preparation = None;
@@ -201,6 +241,7 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
         a.snapshot.error_code = error.map(ConnectError::code);
         a.export = None;
         a.host = None;
+        a.authority = None;
         a.snapshot.preparation = None;
         a.snapshot.review = None;
     });
@@ -285,11 +326,16 @@ impl Manager {
             .generation
             .max(state.attempt.as_ref().map_or(0, |a| a.snapshot.generation))
             .saturating_add(1);
+        let profile = match &draft {
+            Draft::Host { request, .. } => request.profile,
+            Draft::Guest { profile, .. } => *profile,
+        };
         let preparation = ConnectPreparation {
             operation_id: uuid::Uuid::new_v4().to_string(),
             generation: state.generation,
             public_id,
             expires_at_ms: lab::unix_millis().saturating_add(60_000),
+            invitation_profile: profile.name(),
         };
         let mut snapshot = ConnectSnapshot::idle();
         snapshot.operation_id = Some(preparation.operation_id.clone());
@@ -301,6 +347,7 @@ impl Manager {
             "guestPrepared"
         };
         snapshot.preparation = Some(preparation.clone());
+        snapshot.invitation_profile = profile.name();
         state.attempt = Some(Attempt {
             owner: owner.into(),
             snapshot,
@@ -315,6 +362,8 @@ impl Manager {
             probes: 0,
             last_probe: None,
             session_deadline: None,
+            admission_deadline: None,
+            authority: None,
         });
         Ok(preparation)
     }
@@ -323,7 +372,7 @@ impl Manager {
         owner: &str,
         request: HostRequest,
     ) -> Result<ConnectPreparation, ConnectError> {
-        self.prepare_host_internal(owner, request, TargetGuard::Manual)
+        self.prepare_host_internal(owner, request.into(), TargetGuard::Manual)
     }
     #[cfg(windows)]
     pub(super) fn prepare_host_discovered(
@@ -339,17 +388,38 @@ impl Manager {
                 ConnectError::SourceChanged
             }
         })?;
-        self.prepare_host_internal(owner, request, TargetGuard::Owned(Arc::new(target)))
+        self.prepare_host_internal(owner, request.into(), TargetGuard::Owned(Arc::new(target)))
+    }
+    pub(super) fn prepare_session_host(
+        &self,
+        owner: &str,
+        request: SessionHostRequest,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        self.prepare_host_internal(owner, request.into(), TargetGuard::Manual)
+    }
+    #[cfg(windows)]
+    pub(super) fn prepare_session_host_discovered(
+        &self,
+        owner: &str,
+        request: SessionHostRequest,
+        target: super::super::connect_discovery::ApprovedTarget,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        let target = target.activate().map_err(|error| {
+            if error == super::super::connect_discovery::DiscoveryError::Stale {
+                ConnectError::PlanExpired
+            } else {
+                ConnectError::SourceChanged
+            }
+        })?;
+        self.prepare_host_internal(owner, request.into(), TargetGuard::Owned(Arc::new(target)))
     }
     fn prepare_host_internal(
         &self,
         owner: &str,
-        request: HostRequest,
+        request: HostDraftRequest,
         source: TargetGuard,
     ) -> Result<ConnectPreparation, ConnectError> {
-        if request.lifetime_seconds == 0 || request.lifetime_seconds > 600 {
-            return Err(ConnectError::InvalidRequest);
-        }
+        request.validate()?;
         let bind = canonical(&request.bind_address)?;
         policy(request.mode, bind)?;
         let target = canonical(&request.game_target)?;
@@ -377,17 +447,46 @@ impl Manager {
         owner: &str,
         request: GuestRequest,
     ) -> Result<ConnectPreparation, ConnectError> {
+        self.prepare_guest_internal(owner, request, Profile::Legacy)
+    }
+    pub(super) fn prepare_session_guest(
+        &self,
+        owner: &str,
+        request: GuestRequest,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        self.prepare_guest_internal(owner, request, Profile::Session)
+    }
+    fn prepare_guest_internal(
+        &self,
+        owner: &str,
+        request: GuestRequest,
+        profile: Profile,
+    ) -> Result<ConnectPreparation, ConnectError> {
         let host = peer(&request.expected_host_public_id)?;
         let key = lab::generate_key();
         let public = key.public().to_string();
-        self.prepare(owner, Draft::Guest { request, key, host }, "guest", public)
+        self.prepare(
+            owner,
+            Draft::Guest {
+                request,
+                key,
+                host,
+                profile,
+            },
+            "guest",
+            public,
+        )
     }
     fn save_review(
         a: &mut Attempt,
         draft: Draft,
-        invitation: lab::Invitation,
+        invitation: Authority,
+        admission_deadline: Instant,
         deadline: Instant,
     ) -> Result<ConnectReview, ConnectError> {
+        let (admission_deadline, deadline) = invitation
+            .deadlines((admission_deadline, deadline))
+            .map_err(|_| ConnectError::PlanExpired)?;
         a.snapshot.generation = a.snapshot.generation.saturating_add(1);
         let (source, instance_id, run_id, fingerprint) = match &draft {
             Draft::Host { source, .. } => {
@@ -412,20 +511,26 @@ impl Manager {
                 key.public().to_string(),
                 invitation.lease().peer.to_string(),
                 Some(service.endpoint.to_string()),
-                request.lifetime_seconds,
+                request.admission_seconds,
             ),
-            Draft::Guest { request, key, host } => (
+            Draft::Guest {
+                request, key, host, ..
+            } => (
                 request.mode,
                 host.to_string(),
                 key.public().to_string(),
                 None,
                 invitation
-                    .expires_at_unix_ms()
+                    .admission_expires()
                     .saturating_sub(lab::unix_millis())
                     .div_ceil(1000)
                     .min(600) as u16,
             ),
         };
+        let session_timing = invitation.timing()?;
+        let lifetime = session_timing
+            .as_ref()
+            .map_or(lifetime, |timing| timing.admission_seconds);
         let mut review = ConnectReview {
             operation_id: a
                 .snapshot
@@ -458,8 +563,8 @@ impl Manager {
                 .as_ref()
                 .ok_or(ConnectError::Internal)?
                 .expires_at_ms
-                .min(invitation.expires_at_unix_ms()),
-            invitation_expires_at_ms: invitation.expires_at_unix_ms(),
+                .min(invitation.admission_expires()),
+            invitation_expires_at_ms: invitation.admission_expires(),
             lifetime_seconds: lifetime,
             status_protocol: 767,
             status_handshake_host: "localhost",
@@ -467,6 +572,7 @@ impl Manager {
             target_source: source,
             instance_id,
             run_id,
+            session_timing: session_timing.clone(),
         };
         let bytes =
             serde_json::to_vec(&(fingerprint, &review)).map_err(|_| ConnectError::Internal)?;
@@ -477,11 +583,13 @@ impl Manager {
         a.reviewed = Some(Reviewed {
             draft,
             invitation,
+            admission_deadline,
             deadline,
             review_deadline: a.prepared_deadline,
         });
         a.snapshot.phase = "reviewed";
         a.snapshot.review = Some(review.clone());
+        a.snapshot.session_timing = session_timing;
         a.snapshot.expires_at_ms = Some(review.expires_at_ms);
         Ok(review)
     }
@@ -514,27 +622,54 @@ impl Manager {
             a.draft = Some(draft);
             return Err(error);
         }
-        let deadline = Instant::now() + Duration::from_secs(request.lifetime_seconds.into());
-        let expires = lab::unix_millis() + u64::from(request.lifetime_seconds) * 1000;
-        let issue = match request.mode {
-            ConnectMode::Loopback => lab::Invitation::issue,
-            ConnectMode::ExternalIpv6 => lab::Invitation::issue_external_ipv6,
+        let at = Instant::now();
+        let now = lab::unix_millis();
+        let admission_deadline = at + Duration::from_secs(request.admission_seconds.into());
+        let deadline = at + Duration::from_secs(request.session_seconds.into());
+        let admission_expires = now + u64::from(request.admission_seconds) * 1000;
+        let issued = match request.profile {
+            Profile::Legacy => {
+                let issue = match request.mode {
+                    ConnectMode::Loopback => lab::Invitation::issue,
+                    ConnectMode::ExternalIpv6 => lab::Invitation::issue_external_ipv6,
+                };
+                issue(
+                    key,
+                    recipient,
+                    id,
+                    *bind,
+                    std::slice::from_ref(service),
+                    admission_expires,
+                )
+                .map(Authority::Legacy)
+            }
+            Profile::Session => {
+                let issue = match request.mode {
+                    ConnectMode::Loopback => lab::SessionInvitation::issue_loopback_for_lifetimes,
+                    ConnectMode::ExternalIpv6 => {
+                        lab::SessionInvitation::issue_external_ipv6_for_lifetimes
+                    }
+                };
+                issue(
+                    key,
+                    recipient,
+                    id,
+                    *bind,
+                    std::slice::from_ref(service),
+                    Duration::from_secs(request.admission_seconds.into()),
+                    Duration::from_secs(request.session_seconds.into()),
+                )
+                .map(Authority::Session)
+            }
         };
-        let invitation = match issue(
-            key,
-            recipient,
-            id,
-            *bind,
-            std::slice::from_ref(service),
-            expires,
-        ) {
+        let invitation = match issued {
             Ok(invitation) => invitation,
             Err(_) => {
                 a.draft = Some(draft);
                 return Err(ConnectError::InvitationRejected);
             }
         };
-        Self::save_review(a, draft, invitation, deadline)
+        Self::save_review(a, draft, invitation, admission_deadline, deadline)
     }
     pub(super) fn review_guest(
         &self,
@@ -549,19 +684,37 @@ impl Manager {
             return Err(ConnectError::PlanExpired);
         }
         let draft = a.draft.take().ok_or(ConnectError::StaleOperation)?;
-        let Draft::Guest { request, key, host } = &draft else {
+        let Draft::Guest {
+            request,
+            key,
+            host,
+            profile,
+        } = &draft
+        else {
             a.draft = Some(draft);
             return Err(ConnectError::InvalidRequest);
         };
-        let verify = match request.mode {
-            ConnectMode::Loopback => lab::Invitation::verify,
-            ConnectMode::ExternalIpv6 => lab::Invitation::verify_external_ipv6,
-        };
         let start = Instant::now();
         let now = lab::unix_millis();
-        let invitation = match verify(encoded, *host, key.public()) {
-            Ok(invitation) => invitation,
-            Err(_) => {
+        let verified = match profile {
+            Profile::Legacy => {
+                let verify = match request.mode {
+                    ConnectMode::Loopback => lab::Invitation::verify,
+                    ConnectMode::ExternalIpv6 => lab::Invitation::verify_external_ipv6,
+                };
+                verify(encoded, *host, key.public()).map(Authority::Legacy)
+            }
+            Profile::Session => {
+                let verify = match request.mode {
+                    ConnectMode::Loopback => lab::SessionInvitation::verify_loopback,
+                    ConnectMode::ExternalIpv6 => lab::SessionInvitation::verify_external_ipv6,
+                };
+                verify(encoded, *host, key.public()).map(Authority::Session)
+            }
+        };
+        let invitation = match verified {
+            Ok(invitation) if invitation.timing().is_ok() => invitation,
+            _ => {
                 a.draft = Some(draft);
                 return Err(ConnectError::InvitationRejected);
             }
@@ -578,9 +731,11 @@ impl Manager {
             a.draft = Some(draft);
             return Err(ConnectError::InvitationRejected);
         }
+        let admission_deadline =
+            start + Duration::from_millis(invitation.admission_expires().saturating_sub(now));
         let deadline =
-            start + Duration::from_millis(invitation.expires_at_unix_ms().saturating_sub(now));
-        Self::save_review(a, draft, invitation, deadline)
+            start + Duration::from_millis(invitation.session_expires().saturating_sub(now));
+        Self::save_review(a, draft, invitation, admission_deadline, deadline)
     }
     pub(super) async fn confirm(
         &self,
@@ -601,12 +756,23 @@ impl Manager {
         {
             return Err(ConnectError::WrongDigest);
         }
+        // Approval cannot pass a preparation deadline crossed while inspecting
+        // the digest. This checks civil time as well as the original Instant.
+        expire_pending(a);
+        if a.snapshot.phase != "reviewed" {
+            return Err(ConnectError::PlanExpired);
+        }
         let reviewed = a.reviewed.take().ok_or(ConnectError::StaleOperation)?;
-        if Instant::now() >= reviewed.deadline || Instant::now() >= reviewed.review_deadline {
+        if Instant::now() >= reviewed.admission_deadline
+            || Instant::now() >= reviewed.review_deadline
+            || reviewed.invitation.check_admission().is_err()
+        {
             return Err(ConnectError::PlanExpired);
         }
         a.session_deadline = Some(reviewed.deadline);
-        a.snapshot.expires_at_ms = Some(reviewed.invitation.expires_at_unix_ms());
+        a.admission_deadline = Some(reviewed.admission_deadline);
+        a.authority = Some(reviewed.invitation.clone());
+        a.snapshot.expires_at_ms = Some(reviewed.invitation.session_expires());
         a.snapshot.generation = a.snapshot.generation.saturating_add(1);
         a.snapshot.phase = "starting";
         a.snapshot.review = None;
@@ -627,8 +793,11 @@ impl Manager {
     ) -> Result<InvitationExport, ConnectError> {
         let mut state = lock(&self.state)?;
         let a = selected(&mut state, owner, id)?;
-        if a.session_deadline
+        if a.admission_deadline
             .is_none_or(|deadline| Instant::now() >= deadline)
+            || a.authority
+                .as_ref()
+                .is_none_or(|authority| authority.check_admission().is_err())
         {
             return Err(ConnectError::PlanExpired);
         }
@@ -654,6 +823,9 @@ impl Manager {
             }
             if a.session_deadline
                 .is_none_or(|deadline| Instant::now() >= deadline)
+                || a.authority
+                    .as_ref()
+                    .is_none_or(|authority| authority.check_session().is_err())
             {
                 return Err(ConnectError::PlanExpired);
             }
@@ -687,6 +859,15 @@ impl Manager {
         let a = selected(&mut state, owner, id)?;
         a.probe_active = false;
         if a.snapshot.phase != "guestConnected" {
+            return Ok(a.snapshot.clone());
+        }
+        if a.authority
+            .as_ref()
+            .is_none_or(|value| value.check_session().is_err())
+        {
+            a.snapshot.status_state = "failed";
+            a.snapshot.error_code = Some(ConnectError::PlanExpired.code());
+            a.snapshot.generation = a.snapshot.generation.saturating_add(1);
             return Ok(a.snapshot.clone());
         }
         match result {
@@ -791,7 +972,10 @@ impl Manager {
     }
 }
 async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, reviewed: Reviewed) {
-    if cancel.is_cancelled() || Instant::now() >= reviewed.deadline {
+    if cancel.is_cancelled()
+        || Instant::now() >= reviewed.admission_deadline
+        || reviewed.invitation.check_admission().is_err()
+    {
         close_operation(&state, &id, &cancel, None).await;
         return;
     }
@@ -823,12 +1007,7 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                 leases: vec![lease],
                 limits: lab::Limits::default(),
             };
-            let result = match request.mode {
-                ConnectMode::Loopback => lab::Host::start_invited(config, &invitation).await,
-                ConnectMode::ExternalIpv6 => {
-                    lab::Host::start_invited_external_ipv6(config, &invitation).await
-                }
-            };
+            let result = invitation.start_host(request.mode, config).await;
             let Ok(host) = result else {
                 close_operation(
                     &state,
@@ -844,8 +1023,12 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                 return;
             };
             let host = Arc::new(host);
-            let mut source_error = None;
-            if !cancel.is_cancelled() && Instant::now() < deadline {
+            let mut source_error = source.recheck().err();
+            if source_error.is_none()
+                && !cancel.is_cancelled()
+                && Instant::now() < deadline
+                && invitation.check_admission().is_ok()
+            {
                 update(&state, &id, |a| {
                     if a.snapshot.phase != "closing" {
                         a.snapshot.phase = "hostListening";
@@ -854,7 +1037,8 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                         a.export = Some(InvitationExport {
                             invitation: invitation.encode(),
                             host_public_id: host.id().to_string(),
-                            expires_at_ms: invitation.expires_at_unix_ms(),
+                            expires_at_ms: invitation.admission_expires(),
+                            session_timing: a.snapshot.session_timing.clone(),
                         });
                     }
                 });
@@ -869,7 +1053,11 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                             if source_checked.elapsed()>=Duration::from_secs(1){source_checked=Instant::now();
                                 #[cfg(windows)] if let TargetGuard::Owned(target)=&source {let target=target.clone();if !matches!(tokio::task::spawn_blocking(move||target.recheck_owned()).await,Ok(Ok(_))){source_error=Some(ConnectError::SourceChanged);break;}}
                             }
-                            let consumed = host.invitation_consumed(&lease_id);
+                            if invitation.check_session().is_err() { break; }
+                            let Some(consumed) = admission_state(
+                                || invitation.check_admission().is_ok(),
+                                || host.invitation_consumed(&lease_id),
+                            ) else { break; };
                             let active = host.metrics().active_peers > 0;
                             if consumed && !admitted {
                                 admitted = true;
@@ -904,19 +1092,7 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
             // Do not select/drop/abort the connect future: it owns an endpoint
             // during dial. Cancellation is recorded immediately, then a late
             // success is shut down before any listener can be published.
-            let result = match request.mode {
-                ConnectMode::Loopback => {
-                    lab::Guest::connect_invited(key, &invitation, lab::Limits::default()).await
-                }
-                ConnectMode::ExternalIpv6 => {
-                    lab::Guest::connect_invited_external_ipv6(
-                        key,
-                        &invitation,
-                        lab::Limits::default(),
-                    )
-                    .await
-                }
-            };
+            let result = invitation.connect_guest(request.mode, key).await;
             let Ok(guest) = result else {
                 close_operation(
                     &state,
@@ -931,7 +1107,10 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                 .await;
                 return;
             };
-            if cancel.is_cancelled() || Instant::now() >= deadline {
+            if cancel.is_cancelled()
+                || Instant::now() >= deadline
+                || invitation.check_session().is_err()
+            {
                 guest.shutdown().await;
                 drop(guest);
                 close_operation(&state, &id, &cancel, None).await;
@@ -946,7 +1125,10 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                 close_operation(&state, &id, &cancel, Some(ConnectError::PortUnavailable)).await;
                 return;
             };
-            if !cancel.is_cancelled() && Instant::now() < deadline {
+            if !cancel.is_cancelled()
+                && Instant::now() < deadline
+                && invitation.check_session().is_ok()
+            {
                 update(&state, &id, |a| {
                     if a.snapshot.phase != "closing" {
                         a.snapshot.phase = "guestConnected";

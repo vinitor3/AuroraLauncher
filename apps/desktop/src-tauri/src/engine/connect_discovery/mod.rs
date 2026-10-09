@@ -19,7 +19,7 @@ mod windows;
 #[cfg(all(windows, feature = "connect-lab"))]
 pub use windows::OwnedChildProof;
 #[cfg(all(test, windows, feature = "connect-lab"))]
-mod tests;
+pub(crate) mod tests;
 
 #[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DiscoveryError {

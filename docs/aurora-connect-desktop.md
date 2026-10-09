@@ -1,6 +1,14 @@
 # Aurora Connect no desktop — laboratório experimental
 
-Este documento descreve o caller local acrescentado no incremento46 e a descoberta de portas do incremento48. O [task](task-aur-r4-connect.md) registra os comandos executados e seus resultados; instruções abaixo não constituem prova de execução gráfica. Todos os gates de [R4](engineering/MASTER_ROADMAP.md), nove pares Core/Skins, Assistente desktop e recovery/CAS/Doctor permanecem válidos.
+Este documento descreve o caller local acrescentado no incremento46, a descoberta de portas do incremento48 e o perfil de sessão do incremento56. O [task](task-aur-r4-connect.md) registra os comandos executados e seus resultados; instruções abaixo não constituem prova de execução gráfica. Todos os gates de [R4](engineering/MASTER_ROADMAP.md), nove pares Core/Skins, Assistente desktop e recovery/CAS/Doctor permanecem válidos.
+
+## Perfil explícito de sessão — incremento56
+
+O painel experimental oferece também **Sessão de jogo**, selecionada antes de preparar anfitrião ou convidado. Usa o [contrato52](aurora-connect-session-lifetime.md), somente `game`/TCP, com prazo para entrar de1–600s e encerramento absoluto de até3600s desde a emissão. O perfil curto anterior permanece selecionado por padrão e conserva seus comandos, DTOs, assinaturas e limite600s. Nenhum prazo é ampliado silenciosamente ao colar um convite.
+
+A revisão mostra e vincula ao digest os dois prazos. A preparação continua limitada a60s; exportar deixa de ser permitido quando o convite é consumido ou o ingresso vence. Depois de uma admissão válida, a ponte permite TCP existente e novas conexões até o vencimento da sessão, revogação ou encerramento anterior. Sem convidado admitido, o host encerra no fim do ingresso. O tempo máximo é contado desde emissão, sem renovação por atividade; limites de inatividade continuam independentes.
+
+Preparação, fonte descoberta, consulta STATUS, cancelamento, logout e encerramento preservam os gates anteriores. Duração não autoriza iniciar/prolongar Java nem habilita voz ou relay. A emissão por duração usa uma única amostra de relógio para os campos assinados; o desktop aceita segundos inteiros exatos, recusando intervalos fracionários em convites schema2. [Contrato nativo, interface, provas e limites56](aurora-connect-desktop-session-lifetime.md). Uma amostra curta não homologa uma hora de estabilidade ou entrada gráfica.
 
 ## Disponibilidade e limites
 
@@ -21,7 +29,7 @@ Os modos são loopback e IPv6 externo explicitamente selecionado, conforme [spec
 5. O convidado pode consultar STATUS/pong pela ponte e copiar o endereço para Conexão direta no Minecraft. O painel não inicia o jogo nem afirma entrada no mundo.
 6. Encerrar cancela a operação e aguarda recursos próprios. A mesma ação serve durante a preparação, conexão e consulta. Operações antigas não podem encerrar uma nova tentativa pelo mesmo identificador.
 
-Preparação/revisão expiram após60s; o convite tem prazo independente de até600s desde emissão, que também limita a sessão inteira. A interface distingue esses relógios. Não há renovação implícita. Reiniciar exige novas chaves/sessão/convite; não se reaproveita a autorização consumida. O prazo900s do laboratório gráfico histórico não altera esse contrato.
+No perfil curto original, preparação/revisão expiram após60s; o convite tem prazo independente de até600s desde emissão, que também limita a sessão inteira. A interface distingue esses relógios. O perfil56 separa ingresso e sessão conforme a seção acima. Não há renovação implícita. Reiniciar exige novas chaves/sessão/convite; não se reaproveita a autorização consumida. O prazo900s do laboratório gráfico histórico não altera esses contratos.
 
 STATUS deste incremento usa Minecraft1.21.1/protocolo767, handshake `localhost:43001`, explicitamente identificado na interface. A ponte TCP continua opaca. A resposta de STATUS tem parser limitado e expõe apenas resumo de protocolo, população declarada e tempos; não apresenta MOTD, favicon, nomes ou payload bruto. Há até30 consultas, intervalo mínimo20s, limite próprio e cancelamento. Outros protocolos/virtual hosts exigem contrato de seleção posterior.
 
@@ -65,7 +73,7 @@ Rollback operacional: Encerrar Connect, aguardar recursos liberados e sair pelo 
 | --- | --- | --- |
 | Convites entre duas internets | APIs assinadas45 reutilizadas | Entrada, expiração, revogação com host vivo e replay da mesma identidade no novo fluxo externo |
 | Integração no launcher | Caller nativo e painel com revisão, conectar, STATUS e encerrar | Exercício gráfico Tauri e entre computadores; estado de jogador depende de produtor de jogo confiável |
-| Ciclo de jogo | Porta manual ou descoberta por processo próprio com revisão/STATUS, monitor de origem e cleanup | Minecraft LAN real, dedicado supervisionado, sessões longas com contrato próprio |
+| Ciclo de jogo | Porta manual ou descoberta por processo próprio com revisão/STATUS, monitor de origem e cleanup; perfil56 separa ingresso e sessão | Minecraft LAN real, dedicado supervisionado, estabilidade prolongada e exercício gráfico do perfil56 |
 | Simple Voice Chat | Mantém adaptador, controles e provas locais anteriores | Tamanho UDP integral, áudio real, anúncio por participante e recovery integrado |
 | Plasmo Voice | Mantém adaptador, controles e provas locais anteriores | Ensaio separado de áudio/tamanho/anúncio/recovery |
 | Redes e conjunto | Amostra IPv4 próprio documentada separadamente | LAN/IPv4 externo/NAT/CGNAT/relay elegível; dois jogadores, contas mistas, Core/Skins, quedas/estabilidade; manifesto/updater antes de sincronização |

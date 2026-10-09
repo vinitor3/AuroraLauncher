@@ -130,6 +130,13 @@ pub struct SessionInvitation {
     #[cfg(test)]
     wall_override: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
 }
+enum IssueTiming {
+    Absolute(SessionDeadlines),
+    Lifetimes {
+        admission: Duration,
+        session: Duration,
+    },
+}
 impl SessionInvitation {
     pub fn issue_loopback(
         host: &SecretKey,
@@ -145,7 +152,7 @@ impl SessionInvitation {
             session_id,
             direct,
             services,
-            deadlines,
+            IssueTiming::Absolute(deadlines),
             AddressMode::Loopback,
         )
     }
@@ -164,7 +171,49 @@ impl SessionInvitation {
             session_id,
             direct,
             services,
-            deadlines,
+            IssueTiming::Absolute(deadlines),
+            AddressMode::ExternalIpv6,
+        )
+    }
+
+    /// Compute both signed expiries from the same clock as issuedAt. Durations
+    /// are exact milliseconds, bounded by the existing admission/session rules.
+    pub fn issue_loopback_for_lifetimes(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        admission: Duration,
+        session: Duration,
+    ) -> Result<Self> {
+        Self::issue_in_mode(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            IssueTiming::Lifetimes { admission, session },
+            AddressMode::Loopback,
+        )
+    }
+    /// External IPv6 remains an explicit, separate address-policy choice.
+    pub fn issue_external_ipv6_for_lifetimes(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        admission: Duration,
+        session: Duration,
+    ) -> Result<Self> {
+        Self::issue_in_mode(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            IssueTiming::Lifetimes { admission, session },
             AddressMode::ExternalIpv6,
         )
     }
@@ -175,10 +224,34 @@ impl SessionInvitation {
         session_id: &str,
         direct: SocketAddr,
         services: &[Service],
-        deadlines: SessionDeadlines,
+        timing: IssueTiming,
         mode: AddressMode,
     ) -> Result<Self> {
         let clock = Clock::now();
+        let deadlines = match timing {
+            IssueTiming::Absolute(value) => value,
+            IssueTiming::Lifetimes { admission, session } => {
+                if admission.is_zero()
+                    || admission > MAX_ADMISSION_LIFETIME
+                    || session < admission
+                    || session > MAX_SESSION_LIFETIME
+                    || admission.subsec_nanos() % 1_000_000 != 0
+                    || session.subsec_nanos() % 1_000_000 != 0
+                {
+                    return Err(Error::Configuration);
+                }
+                SessionDeadlines {
+                    admission_expires_at_unix_ms: clock
+                        .unix_ms
+                        .checked_add(admission.as_millis() as u64)
+                        .ok_or(Error::Configuration)?,
+                    session_expires_at_unix_ms: clock
+                        .unix_ms
+                        .checked_add(session.as_millis() as u64)
+                        .ok_or(Error::Configuration)?,
+                }
+            }
+        };
         validate_local_services(services)?;
         let body = Body {
             schema_version: 2,
@@ -625,6 +698,88 @@ mod tests {
             max_datagram_bytes: 1400,
             required_capability: Capability::ReliableStream,
             udp_return_policy: UdpReturnPolicy::ReplyBudget,
+        }
+    }
+
+    #[test]
+    fn duration_factories_use_exact_signed_intervals_and_keep_explicit_address_policy() {
+        let host = generate_key();
+        let guest = generate_key().public();
+        for (admission, session) in [(2500, 4500), (600_000, 3_600_000)] {
+            for external in [false, true] {
+                let direct = if external {
+                    "[2001:4860::1]:32000"
+                } else {
+                    "127.0.0.1:32000"
+                }
+                .parse()
+                .unwrap();
+                let factory = if external {
+                    SessionInvitation::issue_external_ipv6_for_lifetimes
+                } else {
+                    SessionInvitation::issue_loopback_for_lifetimes
+                };
+                let value = factory(
+                    &host,
+                    guest,
+                    "duration_test",
+                    direct,
+                    &[service()],
+                    Duration::from_millis(admission),
+                    Duration::from_millis(session),
+                )
+                .unwrap();
+                let body = &value.envelope.body;
+                assert_eq!(
+                    body.admission_expires_at_unix_ms - body.issued_at_unix_ms,
+                    admission
+                );
+                assert_eq!(
+                    body.session_expires_at_unix_ms - body.issued_at_unix_ms,
+                    session
+                );
+                let verified = if external {
+                    SessionInvitation::verify_external_ipv6(&value.encode(), host.public(), guest)
+                } else {
+                    SessionInvitation::verify_loopback(&value.encode(), host.public(), guest)
+                }
+                .unwrap();
+                assert!(value.encode() == verified.encode());
+                let opposite = if external {
+                    SessionInvitation::verify_loopback(&value.encode(), host.public(), guest)
+                } else {
+                    SessionInvitation::verify_external_ipv6(&value.encode(), host.public(), guest)
+                };
+                assert!(opposite.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn duration_factories_reject_out_of_bounds_and_submillisecond_values_without_truncation() {
+        let host = generate_key();
+        let guest = generate_key().public();
+        for (admission, session) in [
+            (Duration::ZERO, Duration::from_secs(1)),
+            (Duration::from_secs(601), Duration::from_secs(601)),
+            (Duration::from_secs(1), Duration::from_secs(3601)),
+            (Duration::from_secs(2), Duration::from_secs(1)),
+            (Duration::from_secs(u64::MAX), Duration::from_secs(u64::MAX)),
+            (Duration::from_nanos(1_000_001), Duration::from_secs(1)),
+            (Duration::from_secs(1), Duration::from_nanos(1_000_000_001)),
+        ] {
+            assert!(matches!(
+                SessionInvitation::issue_loopback_for_lifetimes(
+                    &host,
+                    guest,
+                    "duration_test",
+                    "127.0.0.1:32000".parse().unwrap(),
+                    &[service()],
+                    admission,
+                    session
+                ),
+                Err(Error::Configuration)
+            ));
         }
     }
 

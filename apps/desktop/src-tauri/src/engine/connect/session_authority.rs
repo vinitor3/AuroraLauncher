@@ -1,0 +1,233 @@
+//! Private desktop authority. Clones retain the library's original deadlines;
+//! projections never reparse bytes to construct a replacement authorization.
+use super::*;
+use aurora_connect_lab as lab;
+use std::{net::SocketAddr, time::Instant};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Profile {
+    Legacy,
+    Session,
+}
+impl Profile {
+    pub(super) fn name(self) -> Option<&'static str> {
+        match self {
+            Self::Legacy => None,
+            Self::Session => Some("sessionGameTcp"),
+        }
+    }
+}
+pub(super) struct HostDraftRequest {
+    pub mode: ConnectMode,
+    pub bind_address: String,
+    pub game_target: String,
+    pub admission_seconds: u16,
+    pub session_seconds: u16,
+    pub profile: Profile,
+}
+impl From<HostRequest> for HostDraftRequest {
+    fn from(value: HostRequest) -> Self {
+        Self {
+            mode: value.mode,
+            bind_address: value.bind_address,
+            game_target: value.game_target,
+            admission_seconds: value.lifetime_seconds,
+            session_seconds: value.lifetime_seconds,
+            profile: Profile::Legacy,
+        }
+    }
+}
+impl From<SessionHostRequest> for HostDraftRequest {
+    fn from(value: SessionHostRequest) -> Self {
+        Self {
+            mode: value.mode,
+            bind_address: value.bind_address,
+            game_target: value.game_target,
+            admission_seconds: value.admission_seconds,
+            session_seconds: value.session_seconds,
+            profile: Profile::Session,
+        }
+    }
+}
+impl HostDraftRequest {
+    pub(super) fn validate(&self) -> Result<(), ConnectError> {
+        if self.admission_seconds == 0
+            || self.admission_seconds > 600
+            || self.session_seconds < self.admission_seconds
+            || self.session_seconds > 3600
+            || (self.profile == Profile::Legacy && self.session_seconds != self.admission_seconds)
+        {
+            return Err(ConnectError::InvalidRequest);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub(super) enum Authority {
+    Legacy(lab::Invitation),
+    Session(lab::SessionInvitation),
+}
+impl Authority {
+    pub(super) fn deadlines(&self, legacy: (Instant, Instant)) -> lab::Result<(Instant, Instant)> {
+        match self {
+            Self::Legacy(_) => Ok(legacy),
+            Self::Session(value) => {
+                // Take the anchor BEFORE asking the original object for its
+                // remaining budgets. Nothing is reconstructed from a maximum.
+                let at = Instant::now();
+                Ok((
+                    at + value.admission_remaining()?,
+                    at + value.session_remaining()?,
+                ))
+            }
+        }
+    }
+    pub(super) fn check_admission(&self) -> lab::Result<()> {
+        match self {
+            // Legacy keeps the caller's captured monotonic deadline and the
+            // library's private checks. Do not reverify its bytes to get a new
+            // deadline merely to observe the public absolute expiry here.
+            Self::Legacy(v) if lab::unix_millis() >= v.expires_at_unix_ms() => {
+                Err(lab::Error::Expired)
+            }
+            Self::Legacy(_) => Ok(()),
+            Self::Session(v) => v.check_admission_current(),
+        }
+    }
+    pub(super) fn check_session(&self) -> lab::Result<()> {
+        match self {
+            Self::Legacy(_) => self.check_admission(),
+            Self::Session(v) => v.check_session_current(),
+        }
+    }
+    pub(super) fn lease(&self) -> lab::Lease {
+        match self {
+            Self::Legacy(v) => v.lease(),
+            Self::Session(v) => v.lease(),
+        }
+    }
+    pub(super) fn session_id(&self) -> &str {
+        match self {
+            Self::Legacy(v) => v.session_id(),
+            Self::Session(v) => v.session_id(),
+        }
+    }
+    pub(super) fn direct_addr(&self) -> SocketAddr {
+        match self {
+            Self::Legacy(v) => v.direct_addr(),
+            Self::Session(v) => v.direct_addr(),
+        }
+    }
+    pub(super) fn digest(&self) -> String {
+        match self {
+            Self::Legacy(v) => v.digest(),
+            Self::Session(v) => v.digest(),
+        }
+    }
+    pub(super) fn encode(&self) -> String {
+        match self {
+            Self::Legacy(v) => v.encode(),
+            Self::Session(v) => v.encode(),
+        }
+    }
+    pub(super) fn admission_expires(&self) -> u64 {
+        match self {
+            Self::Legacy(v) => v.expires_at_unix_ms(),
+            Self::Session(v) => v.admission_expires_at_unix_ms(),
+        }
+    }
+    pub(super) fn session_expires(&self) -> u64 {
+        match self {
+            Self::Legacy(v) => v.expires_at_unix_ms(),
+            Self::Session(v) => v.session_expires_at_unix_ms(),
+        }
+    }
+    pub(super) fn preview(&self) -> serde_json::Value {
+        match self {
+            Self::Legacy(v) => v.preview(),
+            Self::Session(v) => v.preview(),
+        }
+    }
+    pub(super) fn timing(&self) -> Result<Option<SessionTiming>, ConnectError> {
+        let Self::Session(value) = self else {
+            return Ok(None);
+        };
+        let preview = value.preview();
+        let issued = preview["issuedAtUnixMs"]
+            .as_u64()
+            .ok_or(ConnectError::InvitationRejected)?;
+        let admission = value.admission_expires_at_unix_ms();
+        let session = value.session_expires_at_unix_ms();
+        let max_safe_integer = (1u64 << 53) - 1;
+        if issued == 0
+            || issued > max_safe_integer
+            || admission > max_safe_integer
+            || session > max_safe_integer
+            || admission <= issued
+            || session < admission
+        {
+            return Err(ConnectError::InvitationRejected);
+        }
+        if (admission - issued) % 1000 != 0 || (session - issued) % 1000 != 0 {
+            return Err(ConnectError::InvitationRejected);
+        }
+        let admission_seconds = (admission - issued) / 1000;
+        let session_seconds = (session - issued) / 1000;
+        // UI fields use integral seconds from signed issuance, never remaining
+        // time. No rounding of an absolute expiry is allowed to fit the DTO.
+        if admission_seconds > 600
+            || session_seconds > 3600
+            || session - admission != (session_seconds - admission_seconds) * 1000
+        {
+            return Err(ConnectError::InvitationRejected);
+        }
+        Ok(Some(SessionTiming {
+            profile: "sessionGameTcp",
+            schema_version: 2,
+            admission_seconds: admission_seconds as u16,
+            session_seconds: session_seconds as u16,
+            admission_expires_at_ms: admission,
+            session_expires_at_ms: session,
+        }))
+    }
+    pub(super) async fn start_host(
+        &self,
+        mode: ConnectMode,
+        config: lab::HostConfig,
+    ) -> lab::Result<lab::Host> {
+        match (self, mode) {
+            (Self::Legacy(v), ConnectMode::Loopback) => lab::Host::start_invited(config, v).await,
+            (Self::Legacy(v), ConnectMode::ExternalIpv6) => {
+                lab::Host::start_invited_external_ipv6(config, v).await
+            }
+            (Self::Session(v), ConnectMode::Loopback) => {
+                lab::Host::start_invited_session(config, v).await
+            }
+            (Self::Session(v), ConnectMode::ExternalIpv6) => {
+                lab::Host::start_invited_session_external_ipv6(config, v).await
+            }
+        }
+    }
+    pub(super) async fn connect_guest(
+        &self,
+        mode: ConnectMode,
+        key: lab::SecretKey,
+    ) -> lab::Result<lab::Guest> {
+        match (self, mode) {
+            (Self::Legacy(v), ConnectMode::Loopback) => {
+                lab::Guest::connect_invited(key, v, lab::Limits::default()).await
+            }
+            (Self::Legacy(v), ConnectMode::ExternalIpv6) => {
+                lab::Guest::connect_invited_external_ipv6(key, v, lab::Limits::default()).await
+            }
+            (Self::Session(v), ConnectMode::Loopback) => {
+                lab::Guest::connect_invited_session(key, v, lab::Limits::default()).await
+            }
+            (Self::Session(v), ConnectMode::ExternalIpv6) => {
+                lab::Guest::connect_invited_session_external_ipv6(key, v, lab::Limits::default())
+                    .await
+            }
+        }
+    }
+}

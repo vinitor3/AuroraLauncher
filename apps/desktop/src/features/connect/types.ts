@@ -1,11 +1,17 @@
 export type ConnectMode = "loopback" | "externalIpv6";
 export type ConnectRole = "host" | "guest";
+export type ConnectSessionProfile = "sessionGameTcp";
+export type ConnectSessionTiming = {
+  profile: ConnectSessionProfile; schemaVersion: 2; admissionSeconds: number; sessionSeconds: number;
+  admissionExpiresAtMs: number; sessionExpiresAtMs: number;
+};
 export type ConnectPhase = "idle" | "hostPrepared" | "guestPrepared" | "reviewed" | "starting" | "hostListening" | "guestConnected" | "closing" | "closed" | "failed";
 export type ConnectCapabilities = {
   available: boolean; experimental: true; maxLifetimeSeconds: number;
   modes: ConnectMode[]; services: string[]; voiceEnabled: false; relayEnabled: false;
   statusProtocol: 767; statusHandshakeHost: "localhost"; statusHandshakePort: 43001;
   ownedInstanceDiscovery?: boolean;
+  sessionInvitations?: { profile: ConnectSessionProfile; schemaVersion: 2; maxAdmissionSeconds: 600; maxSessionSeconds: 3600 };
 };
 export type ConnectStatusSummary = {
   requestedProtocol: number; reportedProtocol: number; protocolMatchesRequested: boolean;
@@ -21,8 +27,9 @@ export type ConnectSnapshot = {
   plasmoVoiceState: "disabled"; relayEnabled: false; pathState: "notVerified";
   preparation: ConnectPreparation | null; review: ConnectReview | null;
   cleanupState: "notStarted" | "pending" | "complete" | "failed";
+  invitationProfile?: ConnectSessionProfile; sessionTiming?: ConnectSessionTiming;
 };
-export type ConnectPreparation = { operationId: string; generation: number; publicId: string; expiresAtMs: number };
+export type ConnectPreparation = { operationId: string; generation: number; publicId: string; expiresAtMs: number; invitationProfile?: ConnectSessionProfile };
 export type ConnectReview = {
   operationId: string; generation: number; digest: string; invitationDigest: string;
   role: ConnectRole; mode: ConnectMode; hostPublicId: string; guestPublicId: string;
@@ -32,8 +39,9 @@ export type ConnectReview = {
   statusProtocol: 767; statusHandshakeHost: "localhost"; statusHandshakePort: 43001;
   targetSource?: "manual" | "ownedInstance" | null;
   instanceId?: string | null; runId?: string | null;
+  sessionTiming?: ConnectSessionTiming;
 };
-export type ConnectExport = { invitation: string; hostPublicId: string; expiresAtMs: number };
+export type ConnectExport = { invitation: string; hostPublicId: string; expiresAtMs: number; sessionTiming?: ConnectSessionTiming };
 
 const ERROR_TEXT: Record<string, string> = {
   connect_disabled: "O Aurora Connect experimental não está habilitado nesta versão.",
@@ -79,6 +87,22 @@ const role = (value: unknown): value is ConnectRole => value === "host" || value
 const mode = (value: unknown): value is ConnectMode => value === "loopback" || value === "externalIpv6";
 const statusContract = (value: Record<string, unknown>) => value.statusProtocol === 767 && value.statusHandshakeHost === "localhost" && value.statusHandshakePort === 43001;
 const invalid = (): never => { throw new Error("Invalid Connect projection"); };
+const sessionProfile = (value: unknown) => value === undefined || value === "sessionGameTcp";
+const sameTiming = (left: ConnectSessionTiming, right: ConnectSessionTiming) =>
+  left.profile === right.profile && left.schemaVersion === right.schemaVersion
+  && left.admissionSeconds === right.admissionSeconds && left.sessionSeconds === right.sessionSeconds
+  && left.admissionExpiresAtMs === right.admissionExpiresAtMs && left.sessionExpiresAtMs === right.sessionExpiresAtMs;
+
+export function sessionTimingFrom(value: unknown): ConnectSessionTiming {
+  if (!record(value) || value.profile !== "sessionGameTcp" || value.schemaVersion !== 2
+    || !integer(value.admissionSeconds) || value.admissionSeconds < 1 || value.admissionSeconds > 600
+    || !integer(value.sessionSeconds) || value.sessionSeconds < value.admissionSeconds || value.sessionSeconds > 3600
+    || !integer(value.admissionExpiresAtMs) || !integer(value.sessionExpiresAtMs)
+    || value.admissionExpiresAtMs > value.sessionExpiresAtMs
+    || value.sessionExpiresAtMs - value.admissionExpiresAtMs !== (value.sessionSeconds - value.admissionSeconds) * 1000
+    || value.admissionExpiresAtMs < value.admissionSeconds * 1000) return invalid();
+  return value as ConnectSessionTiming;
+}
 
 export function capabilitiesFrom(value: unknown): ConnectCapabilities {
   if (!record(value) || typeof value.available !== "boolean" || value.experimental !== true
@@ -87,6 +111,11 @@ export function capabilitiesFrom(value: unknown): ConnectCapabilities {
     || !Array.isArray(value.modes) || value.modes.length !== 2 || !value.modes.every(mode)
     || new Set(value.modes).size !== 2 || !Array.isArray(value.services)
     || value.services.length !== 1 || value.services[0] !== "game") return invalid();
+  if (value.sessionInvitations !== undefined) {
+    const session = value.sessionInvitations;
+    if (!record(session) || session.profile !== "sessionGameTcp" || session.schemaVersion !== 2
+      || session.maxAdmissionSeconds !== 600 || session.maxSessionSeconds !== 3600) return invalid();
+  }
   return value as ConnectCapabilities;
 }
 export function snapshotFrom(value: unknown): ConnectSnapshot {
@@ -98,9 +127,25 @@ export function snapshotFrom(value: unknown): ConnectSnapshot {
     || !(value.errorCode === null || text(value.errorCode)) || value.worldState !== "notVerified"
     || value.simpleVoiceChatState !== "disabled" || value.plasmoVoiceState !== "disabled"
     || value.relayEnabled !== false || value.pathState !== "notVerified"
+    || !sessionProfile(value.invitationProfile)
     || !["notStarted", "pending", "complete", "failed"].includes(value.cleanupState as string)) return invalid();
-  if (value.preparation !== null) preparationFrom(value.preparation);
-  if (value.review !== null) reviewFrom(value.review);
+  const timing = value.sessionTiming === undefined ? undefined : sessionTimingFrom(value.sessionTiming);
+  if (value.phase === "idle" && value.invitationProfile !== undefined) return invalid();
+  if (timing && value.invitationProfile !== "sessionGameTcp") return invalid();
+  if (timing && ["hostPrepared", "guestPrepared"].includes(value.phase as string)) return invalid();
+  if (value.invitationProfile === "sessionGameTcp"
+    && ["reviewed", "starting", "hostListening", "guestConnected"].includes(value.phase as string) && !timing) return invalid();
+  if (timing && ["hostListening", "guestConnected"].includes(value.phase as string)
+    && value.expiresAtMs !== timing.sessionExpiresAtMs) return invalid();
+  if (value.preparation !== null) {
+    const prepared = preparationFrom(value.preparation);
+    if (prepared.invitationProfile !== value.invitationProfile) return invalid();
+  }
+  if (value.review !== null) {
+    const reviewed = reviewFrom(value.review);
+    if (Boolean(reviewed.sessionTiming) !== Boolean(timing)
+      || (timing && reviewed.sessionTiming && !sameTiming(timing, reviewed.sessionTiming))) return invalid();
+  }
   if (value.statusSummary !== null) {
     const summary = value.statusSummary;
     if (!record(summary) || summary.requestedProtocol !== 767 || !protocol(summary.reportedProtocol)
@@ -111,7 +156,8 @@ export function snapshotFrom(value: unknown): ConnectSnapshot {
   return value as ConnectSnapshot;
 }
 export function preparationFrom(value: unknown): ConnectPreparation {
-  if (!record(value) || !text(value.operationId) || !integer(value.generation) || !hash(value.publicId) || !integer(value.expiresAtMs)) return invalid();
+  if (!record(value) || !text(value.operationId) || !integer(value.generation) || !hash(value.publicId) || !integer(value.expiresAtMs)
+    || !sessionProfile(value.invitationProfile) || value.sessionTiming !== undefined) return invalid();
   return value as ConnectPreparation;
 }
 export function reviewFrom(value: unknown): ConnectReview {
@@ -122,6 +168,10 @@ export function reviewFrom(value: unknown): ConnectReview {
     || !integer(value.expiresAtMs) || !integer(value.invitationExpiresAtMs) || value.expiresAtMs > value.invitationExpiresAtMs
     || !statusContract(value) || !integer(value.lifetimeSeconds) || value.lifetimeSeconds < 1 || value.lifetimeSeconds > 600
     || !Array.isArray(value.services) || value.services.length !== 1) return invalid();
+  if (value.sessionTiming !== undefined) {
+    const timing = sessionTimingFrom(value.sessionTiming);
+    if (value.invitationExpiresAtMs !== timing.admissionExpiresAtMs || value.lifetimeSeconds !== timing.admissionSeconds) return invalid();
+  }
   if (value.targetSource !== undefined) {
     if (value.targetSource === null) {
       if (value.role !== "guest" || value.instanceId !== null || value.runId !== null) return invalid();
@@ -136,6 +186,7 @@ export function reviewFrom(value: unknown): ConnectReview {
 export function exportFrom(value: unknown): ConnectExport {
   if (!record(value) || typeof value.invitation !== "string" || !value.invitation.length
     || new TextEncoder().encode(value.invitation).length > 4096 || !hash(value.hostPublicId) || !integer(value.expiresAtMs)) return invalid();
+  if (value.sessionTiming !== undefined && value.expiresAtMs !== sessionTimingFrom(value.sessionTiming).admissionExpiresAtMs) return invalid();
   return value as ConnectExport;
 }
 
