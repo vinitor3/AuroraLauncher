@@ -20,6 +20,8 @@ O anfitrião registrou zero participantes admitidos, zero destinos TCP e zero by
 
 ## Preparação
 
+Atualização47c em09/10: o [leitor corrigido](aurora-connect-invite-input.md) ignora até8 Enter vazios por execução, mantendo aprovação explícita e deadlines. O kit47b descrito abaixo permanece histórico e imutável; novo convidado47c usa cópia separada/pin próprio. A tentativa remota `approval_mismatch` não teve admissão e motivou reprodução local, sem atribuir automaticamente a causa ao usuário ou à rede.
+
 O coordenador prepara e testa um kit privado novo, com executáveis fixados por SHA-256, procedimento e helpers TCP. O manifesto registra seu estado de criação, `testedTwoComputers=false`; resultados remotos posteriores ficam separados. Não substituir kit38, supervisor43 ou kit47. Não há instalador, Java, mod, mudança de firewall/roteador/configuração pessoal, relay ou custo. O convidado copia o kit para uma pasta local regular e confere o hash fornecido antes de executar. As ferramentas do coordenador alcançam apenas o anfitrião.
 
 Kit atual: `.aurora/connect-validation/connect-invite-kit-47b-7d3403b2.zip`, 15.797.985B, sete entradas verificadas. Artefatos privados; não são release ou instalador.
@@ -105,3 +107,9 @@ Depois da correção pontual do relógio, duas tentativas distintas chegaram a `
 Em ambas, host e echo terminaram com exit0/rebind, zero peers admitidos, recusas, destinos TCP e bytes; nenhum replay/revoke/expiração ativa foi executado. O timeout não foi convertido em diagnóstico de NAT. A auditoria somente leitura da segunda conferiu processo/caminho pinado, bind UDP no IPv6 próprio Preferred, adaptador ativo, perfil Private, rota padrão IPv6 e regras efetivas TCP/UDP permitindo o executável; não encontrou regra de bloqueio aplicável ou IPsec habilitado. Esses fatos não provam chegada de pacotes. O próximo ensaio prepara contadores PktMon limitados à porta de transporte, sem payload/ETL, com snapshot e remoção apenas do filtro próprio; seu resultado fica pendente até execução e limpeza observadas.
 
 Rollback operacional: `stop` em cada runner próprio e no echo, seguido da conferência de liberação. EOF/Ctrl+C também encerram recursos, mas não substituem a comprovação do teste planejado. Não há configuração pessoal a restaurar; conservar kit/evidências. Rollback de código é revert local revisado somente do incremento, sem reset/clean ou substituição de artefatos históricos.
+
+### Retomada e entrada vazia — 09/10/2026
+
+Tentativa de08/10 com contadores preparados não recebeu relato de review/aprovação antes da interrupção. Na retomada, handles dos executores anteriores não estavam disponíveis; leitura atual encontrou zero processosConnect e listeners42000/42010/43001 livres. Não inferir seus códigos finais ou rebind observado retrospectivamente. `external-invites47b-counters-a5d7e61987aa46be9c63eeae373d3a7d/resumed-observation.json` preserva esses limites; PktMon não foi iniciado nessa tentativa.
+
+Nova tentativa de09/10 conferiu IP próprio/profile e NTP somente leitura (offsets -0,2289238/-0,2292237/-0,2282044s; nenhuma correção aplicada). Cópia Ed25519/digest passou e foi enviada somente a linha do convite. Convidado relatou `approval_mismatch` antes de solicitarmos `approve`; entrada exata não foi observada. Host/echo saíram0/rebind, zero peers/recusas/destinos/bytes, sem iniciar PktMon. Evidência `external-invites47b-counters-a2567204bad045c8aa674eebfebf2bf9/closed.json`, SHA256 `d17774cfe4583d99a21127d7e70739036ed73da9eaa13d491119b73b84b24e31`. Localmente, convite válido+CRLFextra reproduziu o erro, sem aprovação e com canário zerado. Correção47c e seus testes são descritos no domínio próprio; o motivo exato do input remoto permanece **HIPÓTESE**.

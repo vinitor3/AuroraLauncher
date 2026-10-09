@@ -216,6 +216,11 @@ impl Drop for Echo {
         );
     }
 }
+enum Preparation {
+    Immediate,
+    Wait(Duration),
+    BlankLines,
+}
 struct Pair {
     host: Process,
     guest: Process,
@@ -226,7 +231,14 @@ struct Pair {
 impl Pair {
     fn new(echo: SocketAddr, ttl: u64) -> Self {
         let reservation = UdpSocket::bind("127.0.0.1:0").expect("owned host reservation");
-        Self::from_reservation(echo, ttl, reservation, "host", "guest", Duration::ZERO)
+        Self::from_reservation(
+            echo,
+            ttl,
+            reservation,
+            "host",
+            "guest",
+            Preparation::Immediate,
+        )
     }
     fn from_reservation(
         echo: SocketAddr,
@@ -234,8 +246,13 @@ impl Pair {
         reservation: UdpSocket,
         host_command: &str,
         guest_command: &str,
-        preparation_wait: Duration,
+        preparation: Preparation,
     ) -> Self {
+        let (preparation_wait, blank_input) = match preparation {
+            Preparation::Immediate => (Duration::ZERO, false),
+            Preparation::Wait(wait) => (wait, false),
+            Preparation::BlankLines => (Duration::ZERO, true),
+        };
         let bind = reservation.local_addr().expect("host address");
         let plan = Plan::new(bind, echo, ttl);
         let mut host = Process::start(&plan.args(host_command));
@@ -281,6 +298,11 @@ impl Pair {
                 && matches!(guest.output.try_recv(), Err(mpsc::TryRecvError::Empty)),
             "no unsolicited event or replacement identity during preparation"
         );
+        if blank_input {
+            for _ in 0..2 {
+                host.line("");
+            }
+        }
         host.line(
             guest_identity["peer"]
                 .as_str()
@@ -295,6 +317,11 @@ impl Pair {
                     <= review["expiresAtMs"].as_u64().expect("host lease deadline"),
             "host approval never extends the invitation deadline"
         );
+        if blank_input {
+            for _ in 0..3 {
+                host.line("");
+            }
+        }
         drop(reservation);
         host.line(&format!(
             "approve {}",
@@ -302,11 +329,25 @@ impl Pair {
         ));
         let invitation = host.event("audit_invitation");
         host.event("audit_host_ready");
+        if blank_input {
+            for _ in 0..3 {
+                host.line("");
+            }
+            for _ in 0..2 {
+                guest.line("");
+            }
+        }
         guest.line(
             invitation["invitation"]
                 .as_str()
                 .expect("fixture invitation"),
         );
+        // Extra Enter after the pasted invitation is framing, never approval.
+        if blank_input {
+            for _ in 0..3 {
+                guest.line("");
+            }
+        }
         let review = guest.event("audit_review");
         assert!(
             review["preparationTimeoutSeconds"] == preparation_seconds
@@ -327,6 +368,11 @@ impl Pair {
             review["digest"].as_str().expect("review digest")
         ));
         let ready = guest.event("audit_guest_ready");
+        if blank_input {
+            for _ in 0..3 {
+                guest.line("");
+            }
+        }
         let listener: SocketAddr = ready["tcp"]
             .as_str()
             .expect("bridge endpoint")
@@ -461,7 +507,7 @@ fn own_ipv6_two_processes_replay_revocation_cleanup() {
         reservation,
         "host-external-ipv6",
         "guest-external-ipv6",
-        Duration::ZERO,
+        Preparation::Immediate,
     );
     check_replay_revocation(&mut pair);
     drop(pair);
@@ -497,7 +543,7 @@ fn own_ipv6_interactive_two_original_processes_wait_past_sixty_seconds() {
         reservation,
         "host-external-ipv6-interactive",
         "guest-external-ipv6-interactive",
-        Duration::from_secs(61),
+        Preparation::Wait(Duration::from_secs(61)),
     );
     check_replay_revocation(&mut pair);
     drop(pair);
@@ -588,6 +634,8 @@ fn wrong_approval_digest_never_opens_the_reviewed_host_port() {
     host.event("audit_host_identity");
     host.line(&generate_key().public().to_string());
     host.event("audit_review");
+    host.line("");
+    host.line("");
     host.line(&format!("approve {}", "0".repeat(64)));
     assert!(
         host.event("audit_failed")["code"] == "approval_mismatch",
@@ -716,4 +764,82 @@ fn host_command_quota_closes_its_endpoint_and_reports_static_failure() {
         UdpSocket::bind(pair.bind).is_ok(),
         "quota host port released"
     );
+}
+
+#[test]
+fn bounded_blank_lines_across_phases_preserve_real_admission_replay_and_revocation() {
+    let echo = Echo::new();
+    let reservation = UdpSocket::bind("127.0.0.1:0").expect("owned blank fixture reservation");
+    let mut pair = Pair::from_reservation(
+        echo.address,
+        90,
+        reservation,
+        "host",
+        "guest",
+        Preparation::BlankLines,
+    );
+    check_replay_revocation(&mut pair);
+}
+
+#[test]
+fn ninth_blank_line_across_prompts_and_whitespace_never_authorize_host() {
+    for refusal in ["blank_input_limit", "approval_mismatch", "input_closed"] {
+        let reservation = UdpSocket::bind("127.0.0.1:0").expect("owned refusal reservation");
+        let bind = reservation.local_addr().expect("owned refusal address");
+        let echo = Echo::new();
+        let plan = Plan::new(bind, echo.address, 30);
+        let mut host = Process::start(&plan.args("host"));
+        host.event("audit_host_identity");
+        for _ in 0..8 {
+            host.line("");
+        }
+        host.line(&generate_key().public().to_string());
+        host.event("audit_review");
+        match refusal {
+            "blank_input_limit" => host.line(""),
+            "approval_mismatch" => host.line(" "),
+            "input_closed" => {
+                host.child.stdin.take();
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(host.event("audit_failed")["code"], refusal);
+        host.exit(1);
+        assert_eq!(reservation.local_addr().unwrap(), bind);
+        reservation.set_nonblocking(true).unwrap();
+        let mut packet = [0u8; 64];
+        assert_eq!(
+            reservation.recv_from(&mut packet).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+}
+
+#[test]
+fn blank_flood_and_eof_before_invitation_do_not_hide_failure() {
+    for flood in [false, true] {
+        let mut guest = Process::start(&[
+            "guest".into(),
+            generate_key().public().to_string(),
+            "127.0.0.1:0".into(),
+        ]);
+        guest.event("audit_guest_identity");
+        for _ in 0..8 {
+            guest.line("");
+        }
+        if flood {
+            guest.line("");
+        } else {
+            guest.child.stdin.take();
+        }
+        assert_eq!(
+            guest.event("audit_failed")["code"],
+            if flood {
+                "blank_input_limit"
+            } else {
+                "input_closed"
+            }
+        );
+        guest.exit(1);
+    }
 }

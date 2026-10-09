@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 type Result<T = ()> = std::result::Result<T, &'static str>;
 const LINE_LIMIT: usize = lab::MAX_INVITATION_BYTES + 5; // BOM and CRLF framing.
 const COMMAND_LIMIT: usize = 32;
+const BLANK_LINE_LIMIT: usize = 8;
 
 #[derive(Clone, Copy)]
 enum Mode {
@@ -119,6 +120,7 @@ fn frame(mut bytes: Vec<u8>) -> Result<String> {
 }
 struct Input {
     lines: mpsc::Receiver<Result<String>>,
+    skipped_blank_lines: usize,
 }
 impl Input {
     fn new() -> Self {
@@ -146,7 +148,27 @@ impl Input {
                 }
             }
         });
-        Self { lines }
+        Self {
+            lines,
+            skipped_blank_lines: 0,
+        }
+    }
+    // Empty framed lines may come from pressing Enter after a multiline paste.
+    // This process-wide quota is shared by preparation, approval and commands.
+    // Never trim whitespace or turn a blank line into an approval/command.
+    async fn next_line(&mut self) -> Option<Result<String>> {
+        loop {
+            let value = self.lines.recv().await?;
+            match value {
+                Ok(line) if line.is_empty() => {
+                    if self.skipped_blank_lines >= BLANK_LINE_LIMIT {
+                        return Some(Err("blank_input_limit"));
+                    }
+                    self.skipped_blank_lines += 1;
+                }
+                value => return Some(value),
+            }
+        }
     }
     async fn prompt(&mut self, limit: Instant) -> Result<String> {
         // A buffered line cannot win a select race against an expired prompt.
@@ -155,7 +177,7 @@ impl Input {
             return Err("timed_out");
         }
         let result = tokio::select! {
-            line=self.lines.recv()=>line.ok_or("input_closed")?,
+            line=self.next_line()=>line.ok_or("input_closed")?,
             _=tokio::time::sleep_until(limit.into())=>Err("timed_out"),
             _=tokio::signal::ctrl_c()=>Err("cancelled"),
         };
@@ -323,7 +345,7 @@ async fn host(args: &[String], mode: Mode) -> Result {
     let result:Result=async {
         for index in 0..COMMAND_LIMIT {
             let command=tokio::select! {
-                line=input.lines.recv()=>match line {Some(value)=>value?,None=>{reason="input_closed";break;}},
+                line=input.next_line()=>match line {Some(value)=>value?,None=>{reason="input_closed";break;}},
                 _=tokio::time::sleep_until(deadline.into())=>{reason="lease_expired";break;},
                 _=tokio::signal::ctrl_c()=>{reason="cancelled";break;},
             };
@@ -405,7 +427,7 @@ async fn attempt(
     tokio::pin!(connect);
     let cancellation = tokio::select! {
         result=&mut connect=>return Ok(Some(result)),
-        line=input.lines.recv()=>match line {None=>Ok(()),Some(Ok(line)) if line=="stop"=>Ok(()),_=>Err("invalid_command")},
+        line=input.next_line()=>match line {None=>Ok(()),Some(Ok(line)) if line=="stop"=>Ok(()),Some(Err(error))=>Err(error),_=>Err("invalid_command")},
         _=tokio::signal::ctrl_c()=>Ok(()),
         _=tokio::time::sleep_until(deadline.into())=>Err("expired_or_revoked"),
     };
@@ -485,7 +507,7 @@ async fn guest(args: &[String], mode: Mode) -> Result {
             // new dial is permitted after its original deadline.
             let closure=async {if let Some(value)=&active {value.guest.connection().closed().await;}else{std::future::pending::<()>().await;}};
             let command=tokio::select! {
-                line=input.lines.recv()=>match line {Some(value)=>Some(value?),None=>{reason="input_closed";break;}},
+                line=input.next_line()=>match line {Some(value)=>Some(value?),None=>{reason="input_closed";break;}},
                 _=closure=>None,
                 _=tokio::time::sleep_until((deadline+Duration::from_secs(3)).into())=>{
                     if active.is_some() {return Err("expiry_close_not_observed");}
@@ -598,7 +620,10 @@ mod tests {
     async fn expired_prompt_refuses_buffered_input_without_consuming_it() {
         let (send, lines) = mpsc::channel(1);
         send.send(Ok("approve fixture".into())).await.unwrap();
-        let mut input = Input { lines };
+        let mut input = Input {
+            lines,
+            skipped_blank_lines: 0,
+        };
         assert_eq!(input.prompt(Instant::now()).await, Err("timed_out"));
         assert_eq!(input.lines.try_recv().unwrap().unwrap(), "approve fixture");
         let deadline = Instant::now() + Duration::from_millis(5);
@@ -606,6 +631,52 @@ mod tests {
         send.send(Ok("stop".into())).await.unwrap();
         assert_eq!(input.prompt(deadline).await, Err("timed_out"));
         assert_eq!(input.lines.try_recv().unwrap().unwrap(), "stop");
+    }
+    #[tokio::test]
+    async fn blank_lines_have_one_process_quota_and_never_trim_approval() {
+        let (send, lines) = mpsc::channel(16);
+        for _ in 0..BLANK_LINE_LIMIT {
+            send.send(Ok(String::new())).await.unwrap();
+        }
+        send.send(Ok(" ".into())).await.unwrap();
+        send.send(Ok("\t".into())).await.unwrap();
+        send.send(Ok("approve fixture".into())).await.unwrap();
+        send.send(Ok(String::new())).await.unwrap();
+        let mut input = Input {
+            lines,
+            skipped_blank_lines: 0,
+        };
+        let limit = Instant::now() + Duration::from_secs(1);
+        assert_eq!(input.prompt(limit).await, Ok(" ".into()));
+        assert_eq!(input.skipped_blank_lines, BLANK_LINE_LIMIT);
+        assert_eq!(input.prompt(limit).await, Ok("\t".into()));
+        assert_eq!(input.prompt(limit).await, Ok("approve fixture".into()));
+        assert_eq!(input.prompt(limit).await, Err("blank_input_limit"));
+    }
+    #[tokio::test]
+    async fn blank_lines_preserve_absolute_deadline_and_eof() {
+        let (send, lines) = mpsc::channel(8);
+        for _ in 0..4 {
+            send.send(Ok(String::new())).await.unwrap();
+        }
+        let mut input = Input {
+            lines,
+            skipped_blank_lines: 0,
+        };
+        let limit = Instant::now() + Duration::from_millis(10);
+        assert_eq!(input.prompt(limit).await, Err("timed_out"));
+        assert_eq!(input.skipped_blank_lines, 4);
+        send.send(Ok(String::new())).await.unwrap();
+        assert_eq!(input.prompt(limit).await, Err("timed_out"));
+        assert!(input.lines.try_recv().unwrap().unwrap().is_empty());
+        assert_eq!(input.skipped_blank_lines, 4);
+        send.send(Ok(String::new())).await.unwrap();
+        drop(send);
+        assert_eq!(
+            input.prompt(Instant::now() + Duration::from_secs(1)).await,
+            Err("input_closed")
+        );
+        assert_eq!(input.skipped_blank_lines, 5);
     }
     #[test]
     fn game_projection_requires_the_single_exact_tcp_contract() {
