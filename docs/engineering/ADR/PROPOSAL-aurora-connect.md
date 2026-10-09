@@ -6,6 +6,12 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento52 — separar ingresso de duração da partida
+
+A validade única de600s do convite antigo impedia uma sessão admitida continuar além dessa janela. A decisão experimental cria autoridade tipada `SessionInvitation`, schema2/domínio próprios, exclusivamente para game/TCP: ingresso até600s e sessão absoluta até3600s desde emissão. Não aumentar silenciosamente o TTL legado nem renovar a lease a cada pacote. Envelope UDPV2 e convite schema1 dos51/51b são outro contrato e permanecem intactos.
+
+Conservar o objeto original evita reconstruir deadlines monotônicos. Host reutiliza o lock de consumo/revogação e a prova digest/generation do wire existente, mas separa autorização de ingresso e de sessão. Após consumo, aberturas TCP dependem da sessão vigente, mesmo depois de vencer ingresso; revogação continua definitiva. Watchers independentes fecham fluxos também quando o leitor de controle está travado. Interfaces/callers terão de apresentar e aprovar os dois prazos antes de selecionar esse perfil; este incremento entrega apenas APIs e provas locais. [Contrato e limites52](../../aurora-connect-session-lifetime.md). A amostra curta não representa estabilidade de uma hora; renovação, persistência, contas, mod e rede externa continuam fora dessa decisão.
+
 ### Incremento 50 — fixture real de relay local
 
 Antes de selecionar infraestrutura externa, validar a mesma biblioteca de relay Iroh 1.3.0 em listener próprio loopback, com identidades permitidas e perfil explícito sem transporte IP. A feature fica desligada por padrão e não é ativada pelo desktop. Este caminho permite testar TCP/UDP, indisponibilidade controlada e quotas sem aceitar termos de terceiros, contratar conta ou alterar configuração. Sonda local necessária para selecionar home relay exigiu gates de proxy; nenhuma alteração global de ambiente é autorizada. Ticket/lifetime pertencem ao fixture e sua parada fecha os endpoints antes do listener. [Evidência, limites e rollback](../../aurora-connect-local-relay.md). A prova não homologa relay externo, NAT/CGNAT ou voz.

@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 09/10/2026
 
+Incremento52 separa ingresso de sessão em APIs explícitas game/TCP, com amostras locais de continuidade após ingresso, novas conexões, recusa tardia, revogação/expiração, ACK atrasado e avanço civil injetado. **PROTÓTIPO**; até3600s assinados não são uma hora de estabilidade testada. CLI/kits/desktop mantêm prazos anteriores; [contrato52](../aurora-connect-session-lifetime.md). Sem novo jogo, voz, ambiente externo ou célula Core/Skins homologada.
+
 Continuidade em09/10/2026, incremento51b: admissão autenticada e CLI V2 explícitas passam testes reais de loopback, incluindo duas origens UDP, datagramas inteiros0/1427/2108/4096B, TCP concorrente, oversize, consumo/revogação/expiração e0-RTT. **PROTÓTIPO**, sem positivo externo V2 ou áudio. [API](../aurora-connect-fragmented-admission.md) e [CLI](../aurora-connect-fragmented-cli.md). Mantém integralmente os nove pares e todas as provas de jogo/voz anteriores.
 
 Incremento 50 comprova TCP/UDP por relay próprio em loopback, incluindo duas origens UDP, autorização, quota observada e cleanup, com feature desligada por padrão. **PROTÓTIPO**, sem relay público ou nova rede atendida. [Contrato 50](../aurora-connect-local-relay.md). Minecraft, convites externos, SVC/Plasmo, áudio e nove pares permanecem com suas provas separadas.

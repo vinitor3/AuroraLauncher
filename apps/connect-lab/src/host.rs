@@ -25,9 +25,166 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[derive(Clone)]
+enum InvitationAuthority {
+    Legacy(Invitation),
+    Session(SessionInvitation),
+}
+impl InvitationAuthority {
+    fn check_admission(&self) -> Result<()> {
+        match self {
+            Self::Legacy(value) => value.check_current(),
+            Self::Session(value) => value.check_admission_current(),
+        }
+    }
+    fn check_session(&self) -> Result<()> {
+        match self {
+            Self::Legacy(value) => value.check_current(),
+            Self::Session(value) => value.check_session_current(),
+        }
+    }
+    fn session_remaining(&self) -> Duration {
+        match self {
+            Self::Legacy(value) => value.remaining(),
+            Self::Session(value) => value.session_remaining().unwrap_or_default(),
+        }
+    }
+    fn proof(&self) -> wire::InvitationProof {
+        match self {
+            Self::Legacy(value) => value.proof(),
+            Self::Session(value) => value.proof(),
+        }
+    }
+    fn capabilities(&self) -> Vec<Capability> {
+        match self {
+            Self::Legacy(value) => value.capabilities(),
+            Self::Session(value) => value.capabilities(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod session_clock_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn civil_jump_closes_active_tcp(host_clock: bool) {
+        let local: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let listener = tokio::net::TcpListener::bind(local).await.unwrap();
+        let destination_address = listener.local_addr().unwrap();
+        let reservation = std::net::UdpSocket::bind(local).unwrap();
+        let bind = reservation.local_addr().unwrap();
+        let host_key = generate_key();
+        let guest_key = generate_key();
+        let now = unix_millis();
+        let wall = Arc::new(AtomicU64::new(now));
+        let service = Service {
+            service_id: "game".into(),
+            protocol: Protocol::Tcp,
+            endpoint: destination_address,
+            revision: 1,
+            max_datagram_bytes: 1400,
+            required_capability: Capability::ReliableStream,
+            udp_return_policy: UdpReturnPolicy::ReplyBudget,
+        };
+        let original = SessionInvitation::issue_loopback(
+            &host_key,
+            guest_key.public(),
+            "clock-session",
+            bind,
+            std::slice::from_ref(&service),
+            SessionDeadlines {
+                admission_expires_at_unix_ms: now + 20_000,
+                session_expires_at_unix_ms: now + 60_000,
+            },
+        )
+        .unwrap();
+        let changed = original.clone().with_test_wall_clock(wall.clone());
+        let host_invitation = if host_clock { &changed } else { &original };
+        let guest_invitation = if host_clock { &original } else { &changed };
+        drop(reservation);
+        let host = Host::start_invited_session(
+            HostConfig {
+                secret_key: host_key,
+                bind_addr: bind,
+                session_id: original.session_id().into(),
+                services: vec![service],
+                leases: vec![original.lease()],
+                limits: Limits::default(),
+            },
+            host_invitation,
+        )
+        .await
+        .unwrap();
+        let guest = Guest::connect_invited_session(guest_key, guest_invitation, Limits::default())
+            .await
+            .unwrap();
+        let bridge = guest.tcp_bridge("game", 1, local).await.unwrap();
+        let bridge_address = bridge.local_addr();
+        let mut app = TcpStream::connect(bridge_address).await.unwrap();
+        let (mut destination, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        app.write_all(b"x").await.unwrap();
+        let mut data = [0; 1];
+        tokio::time::timeout(Duration::from_secs(3), destination.read_exact(&mut data))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(data, *b"x");
+        // Stall Host's control stream read. A check only in its outer loop
+        // cannot observe the civil jump before the 10-second read timeout.
+        let control_reads = host.state.control_reads_started.load(Ordering::SeqCst);
+        let (mut stalled, receiver) = guest.connection().open_bi().await.unwrap();
+        stalled.write_all(&[0, 0]).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while host.state.control_reads_started.load(Ordering::SeqCst) == control_reads {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let before = Instant::now();
+        wall.store(original.session_expires_at_unix_ms(), Ordering::SeqCst);
+        let observed = tokio::time::timeout(Duration::from_secs(2), app.read(&mut data))
+            .await
+            .unwrap();
+        assert!(matches!(observed, Ok(0) | Err(_)));
+        let destination_closed =
+            tokio::time::timeout(Duration::from_secs(2), destination.read(&mut data))
+                .await
+                .unwrap();
+        assert!(matches!(destination_closed, Ok(0) | Err(_)));
+        assert!(before.elapsed() < Duration::from_secs(2));
+        assert!(
+            original.check_session_current().is_ok(),
+            "real_session_deadline_must_not_have_elapsed"
+        );
+        assert_eq!(host.metrics().destination_tcp_connects, 1);
+        drop((app, destination, stalled, receiver));
+        bridge.shutdown().await;
+        guest.shutdown().await;
+        host.shutdown().await;
+        drop((bridge, guest, host, listener));
+        drop(std::net::TcpListener::bind(bridge_address).unwrap());
+        drop(std::net::TcpListener::bind(destination_address).unwrap());
+        drop(std::net::UdpSocket::bind(bind).unwrap());
+    }
+
+    #[tokio::test]
+    async fn host_civil_advance_closes_active_tcp_despite_stalled_control() {
+        civil_jump_closes_active_tcp(true).await;
+    }
+    #[tokio::test]
+    async fn guest_civil_advance_closes_active_tcp_despite_stalled_host_control() {
+        civil_jump_closes_active_tcp(false).await;
+    }
+}
+
 struct LeaseState {
     value: Lease,
-    invitation: Option<Invitation>,
+    invitation: Option<InvitationAuthority>,
     consumed: AtomicBool,
     cancel: CancellationToken,
     udp_limiters: Mutex<HashMap<u32, Arc<Mutex<UdpLimiter>>>>,
@@ -46,6 +203,8 @@ struct State {
     active_leases: Mutex<HashSet<String>>,
     budget: Budget,
     cancel: CancellationToken,
+    #[cfg(test)]
+    control_reads_started: AtomicU64,
 }
 
 pub struct Host {
@@ -76,7 +235,7 @@ impl Host {
         invitation.check_host(&config)?;
         Self::start_inner(
             config,
-            Some(invitation.clone()),
+            Some(InvitationAuthority::Legacy(invitation.clone())),
             transport::EndpointMode::Direct,
         )
         .await
@@ -90,7 +249,7 @@ impl Host {
         invitation.check_host_external_ipv6(&config)?;
         Self::start_inner(
             config,
-            Some(invitation.clone()),
+            Some(InvitationAuthority::Legacy(invitation.clone())),
             transport::EndpointMode::Direct,
         )
         .await
@@ -104,7 +263,7 @@ impl Host {
         invitation.check_host_fragmented(&config)?;
         Self::start_inner(
             config,
-            Some(invitation.clone()),
+            Some(InvitationAuthority::Legacy(invitation.clone())),
             transport::EndpointMode::Direct,
         )
         .await
@@ -118,14 +277,41 @@ impl Host {
         invitation.check_host_fragmented_external_ipv6(&config)?;
         Self::start_inner(
             config,
-            Some(invitation.clone()),
+            Some(InvitationAuthority::Legacy(invitation.clone())),
+            transport::EndpointMode::Direct,
+        )
+        .await
+    }
+    /// Explicit schema-2 game/TCP session. Closing the admission window does
+    /// not close a peer already admitted; the signed session deadline does.
+    pub async fn start_invited_session(
+        config: HostConfig,
+        invitation: &SessionInvitation,
+    ) -> Result<Self> {
+        invitation.check_host(&config)?;
+        Self::start_inner(
+            config,
+            Some(InvitationAuthority::Session(invitation.clone())),
+            transport::EndpointMode::Direct,
+        )
+        .await
+    }
+    /// Explicit schema-2 session with an independently approved IPv6 address.
+    pub async fn start_invited_session_external_ipv6(
+        config: HostConfig,
+        invitation: &SessionInvitation,
+    ) -> Result<Self> {
+        invitation.check_host_external_ipv6(&config)?;
+        Self::start_inner(
+            config,
+            Some(InvitationAuthority::Session(invitation.clone())),
             transport::EndpointMode::Direct,
         )
         .await
     }
     async fn start_inner(
         config: HostConfig,
-        mut invitation: Option<Invitation>,
+        mut invitation: Option<InvitationAuthority>,
         mode: transport::EndpointMode,
     ) -> Result<Self> {
         config.limits.validate()?;
@@ -206,6 +392,14 @@ impl Host {
         let endpoint =
             transport::endpoint_in_mode(config.secret_key, config.bind_addr, &config.limits, mode)
                 .await?;
+        for lease in leases.values() {
+            if let Some(InvitationAuthority::Session(authority)) = &lease.invitation
+                && let Err(error) = authority.check_admission_current()
+            {
+                endpoint.close().await;
+                return Err(error);
+            }
+        }
         let state = Arc::new(State {
             session_id: config.session_id,
             services,
@@ -220,6 +414,8 @@ impl Host {
             metrics: Arc::new(Metrics::default()),
             active_leases: Mutex::new(HashSet::new()),
             cancel: CancellationToken::new(),
+            #[cfg(test)]
+            control_reads_started: AtomicU64::new(0),
         });
         let task = tokio::spawn(serve(endpoint.clone(), state.clone()));
         Ok(Self {
@@ -315,7 +511,11 @@ impl Drop for PeerGuard {
     }
 }
 
-fn authorize<'a>(state: &'a State, lease_id: &str, peer: EndpointId) -> Result<&'a LeaseState> {
+fn authorize_session<'a>(
+    state: &'a State,
+    lease_id: &str,
+    peer: EndpointId,
+) -> Result<&'a LeaseState> {
     let lease = state.leases.get(lease_id).ok_or(Error::Unauthorized)?;
     if lease.value.peer != peer {
         return Err(Error::Unauthorized);
@@ -324,7 +524,19 @@ fn authorize<'a>(state: &'a State, lease_id: &str, peer: EndpointId) -> Result<&
         return Err(Error::Expired);
     }
     if let Some(invitation) = &lease.invitation {
-        invitation.check_current()?;
+        invitation.check_session()?;
+    }
+    Ok(lease)
+}
+
+fn authorize_admission<'a>(
+    state: &'a State,
+    lease_id: &str,
+    peer: EndpointId,
+) -> Result<&'a LeaseState> {
+    let lease = authorize_session(state, lease_id, peer)?;
+    if let Some(invitation) = &lease.invitation {
+        invitation.check_admission()?;
     }
     Ok(lease)
 }
@@ -340,7 +552,7 @@ async fn handshake(connection: &Connection, state: &Arc<State>) -> Result<(Hello
         {
             return Err(Error::Unauthorized);
         }
-        let lease = authorize(state, &hello.lease_id, connection.remote_id())?;
+        let lease = authorize_admission(state, &hello.lease_id, connection.remote_id())?;
         match (&lease.invitation, &hello.invitation) {
             (None, None) => (),
             (Some(invitation), Some(proof)) if *proof == invitation.proof() => {
@@ -353,7 +565,7 @@ async fn handshake(connection: &Connection, state: &Arc<State>) -> Result<(Hello
             _ => return Err(Error::Unauthorized),
         }
         let mut active = state.active_leases.lock().unwrap();
-        authorize(state, &hello.lease_id, connection.remote_id())?;
+        authorize_admission(state, &hello.lease_id, connection.remote_id())?;
         if lease.invitation.is_some() && lease.consumed.load(Ordering::Acquire) {
             return Err(Error::Replay);
         }
@@ -481,7 +693,7 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
     let mut remaining =
         Duration::from_millis(lease.value.expires_at_unix_ms.saturating_sub(unix_millis()));
     if let Some(invitation) = &lease.invitation {
-        remaining = remaining.min(invitation.remaining());
+        remaining = remaining.min(invitation.session_remaining());
     }
     let cancel = state.cancel.child_token();
     let lease_deadline = Instant::now() + remaining;
@@ -492,11 +704,22 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
     let lease_cancel = lease.cancel.clone();
     let watcher_cancel = cancel.clone();
     let watcher_connection = connection.clone();
+    let session_authority = lease.invitation.clone();
     tasks.spawn(async move {
+        // A separate future rechecks civil time even when a control read is
+        // stalled. The original monotonic deadline never moves forward.
+        let authority_expired = async {
+            if let Some(InvitationAuthority::Session(invitation)) = session_authority {
+                invitation.wait_session_expired().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
         tokio::select! {
             _ = watcher_cancel.cancelled() => (),
             _ = lease_cancel.cancelled() => (),
             _ = tokio::time::sleep(remaining) => (),
+            _ = authority_expired => (),
         }
         watcher_cancel.cancel();
         watcher_connection.close(0u32.into(), b"lease closed");
@@ -529,6 +752,8 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
                 let Ok((mut send, mut recv)) = stream else { break; };
                 last_activity = Instant::now();
                 if !control.take(1) { let _ = reject(&mut send, Error::Limit, &state).await; continue; }
+                #[cfg(test)]
+                state.control_reads_started.fetch_add(1, Ordering::SeqCst);
                 let request = tokio::time::timeout(state.limits.handshake_timeout, wire::read_message::<_, OpenRequest>(&mut recv, state.limits.max_control_bytes)).await;
                 let request = match request {
                     Ok(Ok(request)) => request,
@@ -563,7 +788,7 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
                                 };
                                 match destination {
                                     Ok(Ok(socket)) => {
-                                        if authorize(&state, &hello.lease_id, connection.remote_id()).is_err() { let _ = reject(&mut send, Error::Expired, &state).await; continue; }
+                                        if authorize_session(&state, &hello.lease_id, connection.remote_id()).is_err() { let _ = reject(&mut send, Error::Expired, &state).await; continue; }
                                         if reply(&mut send, &Reply::default(), &state).await.is_err() { continue; }
                                         let state = state.clone(); let cancel = cancel.clone();
                                         tasks.spawn(async move {
@@ -621,7 +846,7 @@ fn validate_open<'a>(
     request: &OpenRequest,
     last: &mut u64,
 ) -> Result<(u32, &'a Service)> {
-    let lease = authorize(state, &hello.lease_id, connection.remote_id())?;
+    let lease = authorize_session(state, &hello.lease_id, connection.remote_id())?;
     if request.schema_version != SCHEMA_VERSION || !valid_id(&request.service_id) {
         return Err(Error::Protocol);
     }

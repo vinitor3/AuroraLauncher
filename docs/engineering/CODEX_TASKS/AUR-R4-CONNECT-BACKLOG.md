@@ -6,7 +6,9 @@ Base atualizada: `6a107b87adc4882bd464909e22650185f862ea5e`, launcher `0.1.1-alp
 
 Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../AURORA_CONNECT_SPEC.md), [proposta de ADR sem número reservado](../ADR/PROPOSAL-aurora-connect.md), [dependências e zero-spend](../AURORA_CONNECT_DEPENDENCIES.md), [diagnóstico/rastreabilidade/alterações](../../task-aur-r4-connect-v2-review.md) e [prompt Codex](../CODEX_PROMPTS/AUR-R4-CONNECT-V2.md). Requisitos explícitos da revisão V2 prevalecem sobre proibições antigas de todo relay.
 
-## Estado da execução — 08/10/2026
+## Estado da execução — 09/10/2026
+
+Incremento52/005/008: APIs de sessão game/TCP com ingresso≤600s e encerramento absoluto≤3600s, autoridade original retida e autorização separada após admissão. Provas locais cobrem TCP depois do ingresso, recusa tardia noHost, replay, revogação/expiração e cleanup; não concluem duração/estabilidade real, callerdesktop ou T-MC. [Contrato52](../../aurora-connect-session-lifetime.md). CLI, kits, Node120s e UI600s continuam inalterados; UDP fragmentado usa perfil/schema distinto.
 
 Incremento 50/004/008: relay próprio em loopback, explicitamente selecionado, passou TCP/UDP reais, caminho exclusivamente relay, quota, autorização e cleanup. **PROTÓTIPO** desligado por padrão. Gates de proxy, ticket invalidado e cancelamento online protegem o fixture local; não habilitam relay público ou fallback, não homologam NAT/CGNAT e não concluem 004. [Provas e limites 50](../../aurora-connect-local-relay.md). Custo local zero; condições de serviços externos permanecem separadas.
 

@@ -38,6 +38,8 @@ struct Inner {
     budget: Budget,
     udp: Arc<Semaphore>,
     task: Mutex<Option<JoinHandle<()>>>,
+    session_task: Mutex<Option<JoinHandle<()>>>,
+    session_authority: Option<SessionInvitation>,
     fragment_memory: fragment::PeerBudget,
     fragmented_capability: bool,
 }
@@ -172,10 +174,82 @@ impl Guest {
         )
         .await
     }
+    /// Explicit game/TCP schema-2 session. Its signed admission deadline and
+    /// admitted-session deadline retain their original clocks independently.
+    pub async fn connect_invited_session(
+        secret_key: SecretKey,
+        invitation: &SessionInvitation,
+        limits: Limits,
+    ) -> Result<Self> {
+        Self::connect_session_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            InvitationAddressMode::Loopback,
+        )
+        .await
+    }
+    /// External IPv6 is a separate caller decision, never inferred from JSON.
+    pub async fn connect_invited_session_external_ipv6(
+        secret_key: SecretKey,
+        invitation: &SessionInvitation,
+        limits: Limits,
+    ) -> Result<Self> {
+        Self::connect_session_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            InvitationAddressMode::ExternalIpv6,
+        )
+        .await
+    }
+    async fn connect_session_in_mode(
+        secret_key: SecretKey,
+        invitation: &SessionInvitation,
+        limits: Limits,
+        mode: InvitationAddressMode,
+    ) -> Result<Self> {
+        invitation.check_address_mode(mode)?;
+        if secret_key.public() != invitation.guest_key() {
+            return Err(Error::Unauthorized);
+        }
+        invitation.check_admission_current()?;
+        let direct = invitation.direct_addr();
+        let bind_addr = match mode {
+            InvitationAddressMode::ExternalIpv6 => "[::]:0",
+            InvitationAddressMode::Loopback if direct.is_ipv4() => "127.0.0.1:0",
+            InvitationAddressMode::Loopback => "[::1]:0",
+        }
+        .parse()
+        .map_err(|_| Error::Configuration)?;
+        Self::connect_inner_authorized(
+            GuestConfig {
+                secret_key,
+                bind_addr,
+                host: EndpointAddr::new(invitation.host_key()).with_ip_addr(direct),
+                session_id: invitation.session_id().into(),
+                lease_id: invitation.lease().lease_id,
+                capabilities: invitation.capabilities(),
+                limits,
+            },
+            Some(invitation.proof()),
+            transport::EndpointMode::Direct,
+            Some(invitation.clone()),
+        )
+        .await
+    }
     async fn connect_inner(
         config: GuestConfig,
         invitation: Option<InvitationProof>,
         mode: transport::EndpointMode,
+    ) -> Result<Self> {
+        Self::connect_inner_authorized(config, invitation, mode, None).await
+    }
+    async fn connect_inner_authorized(
+        config: GuestConfig,
+        invitation: Option<InvitationProof>,
+        mode: transport::EndpointMode,
+        session_authority: Option<SessionInvitation>,
     ) -> Result<Self> {
         config.limits.validate()?;
         if !valid_id(&config.session_id)
@@ -207,11 +281,17 @@ impl Guest {
             .capabilities
             .contains(&Capability::FragmentedDatagram);
         let attempt = tokio::time::timeout(config.limits.handshake_timeout, async {
+            if let Some(authority) = &session_authority {
+                authority.check_admission_current()?;
+            }
             // Iroh verifies the authenticated remote key against EndpointAddr.id during TLS.
             let connection = endpoint
                 .connect(config.host, ALPN)
                 .await
                 .map_err(|_| Error::Transport)?;
+            if let Some(authority) = &session_authority {
+                authority.check_admission_current()?;
+            }
             let (mut send, mut recv) = connection.open_bi().await.map_err(|_| Error::Transport)?;
             let hello = Hello {
                 schema_version: SCHEMA_VERSION,
@@ -225,6 +305,11 @@ impl Guest {
             wire::read_message::<_, Reply>(&mut recv, config.limits.max_control_bytes)
                 .await?
                 .check()?;
+            // Host already consumed admission before ACK. Only the original
+            // session deadline applies now; no new verification or deadline.
+            if let Some(authority) = &session_authority {
+                authority.check_session_current()?;
+            }
             Ok::<_, Error>(connection)
         })
         .await
@@ -252,6 +337,21 @@ impl Guest {
             config.limits.clone(),
             budget.clone(),
         ));
+        let session_task = session_authority.clone().map(|authority| {
+            let token = cancel.clone();
+            let connection = connection.clone();
+            let endpoint = endpoint.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = token.cancelled() => (),
+                    _ = connection.closed() => (),
+                    _ = authority.wait_session_expired() => (),
+                }
+                token.cancel();
+                connection.close(0u32.into(), b"session closed");
+                endpoint.close().await;
+            })
+        });
         Ok(Self {
             inner: Arc::new(Inner {
                 endpoint,
@@ -264,6 +364,8 @@ impl Guest {
                 udp: Arc::new(Semaphore::new(config.limits.max_udp_per_peer)),
                 limits: config.limits,
                 task: Mutex::new(Some(task)),
+                session_task: Mutex::new(session_task),
+                session_authority,
                 fragment_memory,
                 fragmented_capability,
             }),
@@ -291,6 +393,10 @@ impl Guest {
         if let Some(task) = task {
             let _ = task.await;
         }
+        let session_task = self.inner.session_task.lock().unwrap().take();
+        if let Some(task) = session_task {
+            let _ = task.await;
+        }
         self.inner.endpoint.close().await;
     }
     async fn request(
@@ -307,6 +413,9 @@ impl Guest {
         let mut next = self.inner.open_lock.lock().await;
         if self.inner.cancel.is_cancelled() {
             return Err(Error::Closed);
+        }
+        if let Some(authority) = &self.inner.session_authority {
+            authority.check_session_current()?;
         }
         if *next >= self.inner.limits.max_requests_per_connection {
             return Err(Error::Limit);
@@ -327,6 +436,9 @@ impl Guest {
                 let (mut send, mut recv) = self.inner.connection.open_bi().await.map_err(|_| Error::Transport)?;
                 wire::write_message(&mut send, &request, self.inner.limits.max_control_bytes).await?;
                 let response: Reply = wire::read_message(&mut recv, self.inner.limits.max_control_bytes).await?;
+                if let Some(authority) = &self.inner.session_authority {
+                    authority.check_session_current()?;
+                }
                 Ok((send, recv, response.check()?))
             }) => response.unwrap_or(Err(Error::Timeout)),
         }
@@ -438,7 +550,13 @@ impl Guest {
         if !bind.ip().is_loopback() || !valid_id(service) {
             return Err(Error::Configuration);
         }
+        if let Some(authority) = &self.inner.session_authority {
+            authority.check_session_current()?;
+        }
         let listener = TcpListener::bind(bind).await.map_err(|_| Error::Io)?;
+        if let Some(authority) = &self.inner.session_authority {
+            authority.check_session_current()?;
+        }
         let address = listener.local_addr().map_err(|_| Error::Io)?;
         let cancel = self.inner.cancel.child_token();
         let token = cancel.clone();
