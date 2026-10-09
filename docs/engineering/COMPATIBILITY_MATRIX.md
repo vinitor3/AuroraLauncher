@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 09/10/2026
 
+Incremento58: controlador nativo de restauração preserva autorização, prazo e bytes entre chamadas, sob feature de laboratório. O [registro58](../aurora-connect-voice-restoration-controller.md) distingue os testes de arquivo/recuperação da execução dos mods. **PROTÓTIPO**; não acrescenta voz audível, janela Tauri, Minecraft, rede ou par Core/Skins homologado. SVC e Plasmo conservam gates separados.
+
 Incremento57: perfil desktop TCP+UDP fragmentado com revisão explícita, destino manual e120s; falha UDP não muda automaticamente o estado do TCP. O [registro57](../aurora-connect-desktop-udp.md) separa bytes sintéticos, testes do caller e projeções DOM. **PROTÓTIPO**; anúncio/configuração SVC/Plasmo e áudio continuam com gates próprios. Nenhuma configuração pessoal, par Core/Skins, rede externa ou célula de homologação foi ampliada. Feature continua desligada por padrão.
 
 Incremento56: o caller desktop e o painel distinguem prazo de ingresso e encerramento da sessão por opt-in game/TCP. Dois managers locais verificam continuidade após ingresso, novas conexões, expiração/revogação, STATUS sintético e cleanup; fixtures DOM validam a projeção dos dois prazos. **PROTÓTIPO**, não homologa janela Tauri, uma hora de estabilidade, Minecraft, áudio ou nova rede. [Contrato e resultados56](../aurora-connect-desktop-session-lifetime.md). Nove pares Core/Skins e versões permanecem intactos; perfil curto continua padrão e Connect segue desligado para usuários.

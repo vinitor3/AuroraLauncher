@@ -2,6 +2,10 @@
 //! whole-instance snapshot. It is intentionally not persistent/serializable.
 use super::*;
 
+#[path = "connect_voice_restore_controller.rs"]
+mod controller;
+pub use controller::RestorationController;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RestorationState {
@@ -32,6 +36,12 @@ pub struct RestorationReceipt {
 }
 
 impl RestorationReceipt {
+    /// Moves the exclusive receipt into an owned caller without serializing or
+    /// copying its restoration authority. Existing borrowed APIs stay available.
+    pub fn into_controller(self) -> RestorationController {
+        RestorationController::new(self)
+    }
+
     pub(super) fn from_plan(plan: &PreparedAnnouncement) -> Self {
         Self {
             receipt_id: Uuid::new_v4().to_string(),

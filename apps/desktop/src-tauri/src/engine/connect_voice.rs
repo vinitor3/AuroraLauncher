@@ -31,7 +31,9 @@ mod process;
 pub use process::{acquire_voice_mutation_guard, VoiceMutationGuard};
 #[path = "connect_voice_restore.rs"]
 mod restoration;
-pub use restoration::{PreparedRestoration, RestorationReceipt, RestorationState};
+pub use restoration::{
+    PreparedRestoration, RestorationController, RestorationReceipt, RestorationState,
+};
 
 pub struct AppliedAnnouncement {
     pub recovery: RecoveryResult,
