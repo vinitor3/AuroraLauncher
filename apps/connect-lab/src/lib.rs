@@ -1,5 +1,6 @@
 //! Experimental transport library. Defaults are direct-only, without port mapping.
 mod bridge;
+mod connect_observation;
 mod fragment;
 mod guest;
 mod host;
@@ -14,6 +15,7 @@ mod transport;
 mod wire;
 
 pub use bridge::MAX_FRAGMENT_FRAME_BYTES;
+pub use connect_observation::{GuestConnectObservation, GuestConnectPhase};
 pub use fragment::Completed as ReassembledDatagram;
 pub use guest::{FragmentedUdpAssociation, Guest, TcpBridge, UdpAssociation, UdpBridge};
 pub use host::Host;

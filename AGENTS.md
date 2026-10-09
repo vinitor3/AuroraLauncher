@@ -29,6 +29,8 @@ O laboratório descartável `apps/connect-runtime-tools` já executou Minecraft 
 
 ## Mapa do repositório
 
+Connect54 oferece observação opt-in do Guest após resultado/cleanup, com fase fechada e tempo monotônico; sem IP, peer, convite, payload ou erro bruto. APIs/aliases antigos, assinatura, limites e handshake10s permanecem iguais. Testes default207/relay217 e composição host47b/guest54 passaram somente em loopback. Leia `docs/aurora-connect-connection-diagnostics.md`; fase não identifica causa de NAT/TLS, admitted não comprova ponte/jogo. Usuário pausou testes entre PCs; continuar trabalho local sem preparar execução externa.
+
 Connect52 acrescenta `SessionInvitation` schema2, perfil explícito somente game/TCP: ingresso até600s e sessão absoluta até3600s desde emissão. Não confundir com envelope UDPV2/schema1 dos51/51b. Host conserva consumo/revogação após ingresso vencer; Guest/Host retêm deadlines civil/monotônico originais e fecham TCP por revogação/fim da sessão. APIs novas não ampliam CLI, kits ou desktop600s. Leia `docs/aurora-connect-session-lifetime.md` antes de integrar callers; amostras curtas não homologam uma hora de estabilidade, Minecraft ou rede externa.
 
 Connect 50 acrescenta somente relay próprio loopback sob `local-relay-lab`, off por padrão. Ticket fechado deriva do listener próprio, recusa proxy herdado/Windows não verificado e não aceita relay público. Stop/Drop invalidam clones; fechar endpoints antes do listener e cancelar online pendente são invariantes. Não ampliar API para URL arbitrária ou ligar feature no desktop sem novo contrato. Leia `docs/aurora-connect-local-relay.md`; bytes sintéticos em relay local não homologam NAT, mod, áudio ou custo de operador externo.

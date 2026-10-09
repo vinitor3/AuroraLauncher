@@ -1,5 +1,7 @@
 use crate::{
-    bridge, fragment,
+    bridge,
+    connect_observation::{self, ConnectObserver},
+    fragment,
     invitation::{InvitationAddressMode, InvitationProfile},
     model::{Metrics, valid_id},
     transport::{self, Bucket, Budget},
@@ -87,6 +89,7 @@ impl Guest {
             limits,
             InvitationAddressMode::Loopback,
             InvitationProfile::Legacy,
+            None,
         )
         .await
     }
@@ -103,6 +106,7 @@ impl Guest {
             limits,
             InvitationAddressMode::ExternalIpv6,
             InvitationProfile::Legacy,
+            None,
         )
         .await
     }
@@ -119,6 +123,7 @@ impl Guest {
             limits,
             InvitationAddressMode::Loopback,
             InvitationProfile::FragmentedV2,
+            None,
         )
         .await
     }
@@ -135,8 +140,56 @@ impl Guest {
             limits,
             InvitationAddressMode::ExternalIpv6,
             InvitationProfile::FragmentedV2,
+            None,
         )
         .await
+    }
+    /// Explicit diagnostic variant. Returns only a closed, redacted snapshot
+    /// after the result and failure cleanup; authentication is unchanged.
+    pub async fn connect_invited_observed(
+        secret_key: SecretKey,
+        invitation: &Invitation,
+        limits: Limits,
+    ) -> (Result<Self>, GuestConnectObservation) {
+        Self::connect_invited_observed_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            InvitationAddressMode::Loopback,
+        )
+        .await
+    }
+    /// Explicit external IPv6 diagnostic variant; no address-mode inference.
+    pub async fn connect_invited_external_ipv6_observed(
+        secret_key: SecretKey,
+        invitation: &Invitation,
+        limits: Limits,
+    ) -> (Result<Self>, GuestConnectObservation) {
+        Self::connect_invited_observed_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            InvitationAddressMode::ExternalIpv6,
+        )
+        .await
+    }
+    async fn connect_invited_observed_in_mode(
+        secret_key: SecretKey,
+        invitation: &Invitation,
+        limits: Limits,
+        mode: InvitationAddressMode,
+    ) -> (Result<Self>, GuestConnectObservation) {
+        let observer = ConnectObserver::new();
+        let result = Self::connect_invited_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            mode,
+            InvitationProfile::Legacy,
+            Some(&observer),
+        )
+        .await;
+        (result, observer.snapshot())
     }
     async fn connect_invited_in_mode(
         secret_key: SecretKey,
@@ -144,6 +197,7 @@ impl Guest {
         limits: Limits,
         mode: InvitationAddressMode,
         profile: InvitationProfile,
+        observer: Option<&ConnectObserver>,
     ) -> Result<Self> {
         invitation.check_profile(profile)?;
         invitation.check_address_mode(mode)?;
@@ -159,7 +213,7 @@ impl Guest {
         }
         .parse()
         .map_err(|_| Error::Configuration)?;
-        Self::connect_inner(
+        Self::connect_inner_authorized(
             GuestConfig {
                 secret_key,
                 bind_addr,
@@ -171,6 +225,8 @@ impl Guest {
             },
             Some(invitation.proof()),
             transport::EndpointMode::Direct,
+            None,
+            observer,
         )
         .await
     }
@@ -235,6 +291,7 @@ impl Guest {
             Some(invitation.proof()),
             transport::EndpointMode::Direct,
             Some(invitation.clone()),
+            None,
         )
         .await
     }
@@ -243,13 +300,14 @@ impl Guest {
         invitation: Option<InvitationProof>,
         mode: transport::EndpointMode,
     ) -> Result<Self> {
-        Self::connect_inner_authorized(config, invitation, mode, None).await
+        Self::connect_inner_authorized(config, invitation, mode, None, None).await
     }
     async fn connect_inner_authorized(
         config: GuestConfig,
         invitation: Option<InvitationProof>,
         mode: transport::EndpointMode,
         session_authority: Option<SessionInvitation>,
+        observer: Option<&ConnectObserver>,
     ) -> Result<Self> {
         config.limits.validate()?;
         if !valid_id(&config.session_id)
@@ -274,6 +332,7 @@ impl Guest {
             #[cfg(feature = "local-relay-lab")]
             transport::EndpointMode::LocalRelay(ticket) => ticket.check_guest(&config)?,
         }
+        connect_observation::enter(observer, GuestConnectPhase::EndpointBind);
         let endpoint =
             transport::endpoint_in_mode(config.secret_key, config.bind_addr, &config.limits, mode)
                 .await?;
@@ -285,6 +344,7 @@ impl Guest {
                 authority.check_admission_current()?;
             }
             // Iroh verifies the authenticated remote key against EndpointAddr.id during TLS.
+            connect_observation::enter(observer, GuestConnectPhase::EndpointConnect);
             let connection = endpoint
                 .connect(config.host, ALPN)
                 .await
@@ -292,6 +352,7 @@ impl Guest {
             if let Some(authority) = &session_authority {
                 authority.check_admission_current()?;
             }
+            connect_observation::enter(observer, GuestConnectPhase::ControlOpen);
             let (mut send, mut recv) = connection.open_bi().await.map_err(|_| Error::Transport)?;
             let hello = Hello {
                 schema_version: SCHEMA_VERSION,
@@ -300,8 +361,10 @@ impl Guest {
                 capabilities: config.capabilities,
                 invitation,
             };
+            connect_observation::enter(observer, GuestConnectPhase::HelloWrite);
             wire::write_message(&mut send, &hello, config.limits.max_control_bytes).await?;
             send.finish().map_err(|_| Error::Transport)?;
+            connect_observation::enter(observer, GuestConnectPhase::HelloAck);
             wire::read_message::<_, Reply>(&mut recv, config.limits.max_control_bytes)
                 .await?
                 .check()?;
@@ -310,6 +373,7 @@ impl Guest {
             if let Some(authority) = &session_authority {
                 authority.check_session_current()?;
             }
+            connect_observation::enter(observer, GuestConnectPhase::Admitted);
             Ok::<_, Error>(connection)
         })
         .await

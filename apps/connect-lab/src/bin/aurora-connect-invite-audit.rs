@@ -66,7 +66,29 @@ impl Mode {
         self,
         key: lab::SecretKey,
         invitation: &lab::Invitation,
+        observed: bool,
     ) -> lab::Result<lab::Guest> {
+        if observed {
+            let (result, observation) = match self {
+                Self::Loopback => {
+                    lab::Guest::connect_invited_observed(key, invitation, lab::Limits::default())
+                        .await
+                }
+                Self::ExternalIpv6 | Self::ExternalIpv6Interactive => {
+                    lab::Guest::connect_invited_external_ipv6_observed(
+                        key,
+                        invitation,
+                        lab::Limits::default(),
+                    )
+                    .await
+                }
+            };
+            event(
+                json!({"event":"audit_guest_connect_observation","observation":observation,
+                "code":result.as_ref().err().map(|error| native(*error)).unwrap_or("ok")}),
+            );
+            return result;
+        }
         match self {
             Self::Loopback => {
                 lab::Guest::connect_invited(key, invitation, lab::Limits::default()).await
@@ -422,8 +444,9 @@ async fn attempt(
     key: lab::SecretKey,
     invitation: &lab::Invitation,
     deadline: Instant,
+    observed: bool,
 ) -> Result<Option<lab::Result<lab::Guest>>> {
-    let connect = mode.connect(key, invitation);
+    let connect = mode.connect(key, invitation, observed);
     tokio::pin!(connect);
     let cancellation = tokio::select! {
         result=&mut connect=>return Ok(Some(result)),
@@ -437,7 +460,7 @@ async fn attempt(
     cancellation?;
     Ok(None)
 }
-async fn guest(args: &[String], mode: Mode) -> Result {
+async fn guest(args: &[String], mode: Mode, observed: bool) -> Result {
     if args.len() != 2 {
         return Err("invalid_arguments");
     }
@@ -468,7 +491,15 @@ async fn guest(args: &[String], mode: Mode) -> Result {
         (None, Some(bind)),
     )
     .await?;
-    let connected = attempt(&mut input, mode, key.clone(), &invitation, deadline).await?;
+    let connected = attempt(
+        &mut input,
+        mode,
+        key.clone(),
+        &invitation,
+        deadline,
+        observed,
+    )
+    .await?;
     let Some(connected) = connected else {
         event(
             json!({"event":"audit_guest_stopped","reason":"cancelled_before_ready","sameIdentity":true}),
@@ -542,7 +573,7 @@ async fn guest(args: &[String], mode: Mode) -> Result {
             if deadline.saturating_duration_since(Instant::now())<Duration::from_secs(1)
                 || invitation.expires_at_unix_ms().saturating_sub(lab::unix_millis())<1000 {return Err("trial_too_close_to_expiry");}
             retries+=1;
-            let tried=attempt(&mut input,mode,key.clone(),&invitation,deadline).await?;
+            let tried=attempt(&mut input,mode,key.clone(),&invitation,deadline,observed).await?;
             let Some(tried)=tried else {reason="cancelled";break;};
             let observed=match tried {Ok(unexpected)=>{bare_cleanup(unexpected).await?;return Err("unexpected_admission");},Err(error)=>error};
             // If expiry raced the dial, its refusal cannot prove revocation.
@@ -572,10 +603,14 @@ async fn run() -> Result {
         Some("host-external-ipv6-interactive") => {
             host(&args[1..], Mode::ExternalIpv6Interactive).await
         }
-        Some("guest") => guest(&args[1..], Mode::Loopback).await,
-        Some("guest-external-ipv6") => guest(&args[1..], Mode::ExternalIpv6).await,
+        Some("guest") => guest(&args[1..], Mode::Loopback, false).await,
+        Some("guest-external-ipv6") => guest(&args[1..], Mode::ExternalIpv6, false).await,
         Some("guest-external-ipv6-interactive") => {
-            guest(&args[1..], Mode::ExternalIpv6Interactive).await
+            guest(&args[1..], Mode::ExternalIpv6Interactive, false).await
+        }
+        Some("guest-observe") => guest(&args[1..], Mode::Loopback, true).await,
+        Some("guest-external-ipv6-interactive-observe") => {
+            guest(&args[1..], Mode::ExternalIpv6Interactive, true).await
         }
         _ => Err("invalid_arguments"),
     }
