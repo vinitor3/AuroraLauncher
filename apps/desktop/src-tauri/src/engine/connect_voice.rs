@@ -24,6 +24,10 @@ const MAX_CONFIG: u64 = 256 * 1024;
 
 type Result<T> = std::result::Result<T, RecoveryError>;
 
+#[path = "connect_voice_inspection.rs"]
+mod inspection;
+pub use inspection::{inspect_announcement, AnnouncementInspection, ObservedAnnouncement};
+
 #[path = "connect_voice_plasmo.rs"]
 mod plasmo;
 #[path = "connect_voice_process.rs"]

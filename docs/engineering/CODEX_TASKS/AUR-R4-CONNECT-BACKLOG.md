@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 09/10/2026
 
+Incremento59/006/007/008 acrescenta inspeção nativa limitada de anúncio e artefato na cópia selecionada, sem criar plano ou modificar configuração. O reader de recovery evita inicialização durante consulta; [contrato e resultados59](../../aurora-connect-voice-inspection.md). **PROTÓTIPO**, sob feature desligada. Prepara a integração de configuração no painel; não conclui caller Tauri/UI de voz, anúncio por participante, áudio ou homologação.
+
 Incremento58/006/007/008 remove o empréstimo entre chamadas da restauração de anúncio, conservando a revisão original em um controlador nativo exclusivo. Confirmação consome uma revisão; cancelamento/Drop não escrevem, e reconciliação nunca é automática. [Contrato e resultados58](../../aurora-connect-voice-restoration-controller.md). **PROTÓTIPO**, somente cópias de diagnóstico; caller Tauri/interface, recibo durável e áudio de cada mod continuam pendentes. Não conclui T-VOICE ou qualquer gate de homologação.
 
 Incremento57/003/005/006/007/008 integra ao desktop o perfil explícito TCP+UDP fragmentado, limitado a120s, destinos manuais e duas autorizações de serviço no mesmo convite. Prontidão/falha da ponte UDP fica separada do jogo, sem selecionar outra porta ou alterar configuração de mod. [Contrato, provas e limites57](../../aurora-connect-desktop-udp.md). **PROTÓTIPO**, desligado por padrão; não conclui T-VOICE, T-MC, anúncio por participante, sessão longa, janela Tauri ou nova rede. Os testes entre computadores continuam pausados pelo usuário.

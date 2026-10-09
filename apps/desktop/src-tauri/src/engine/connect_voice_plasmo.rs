@@ -6,6 +6,10 @@ use serde::Deserialize;
 use std::{collections::BTreeSet, ops::Range};
 use toml::{Spanned, Value};
 
+#[path = "connect_voice_plasmo_inspection.rs"]
+mod inspection;
+pub(super) use inspection::inspect_public;
+
 #[path = "connect_voice_plasmo_restore.rs"]
 mod restoration;
 pub(super) use restoration::reconcile;

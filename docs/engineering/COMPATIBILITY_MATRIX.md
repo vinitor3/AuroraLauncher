@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 09/10/2026
 
+Incremento59: inspeção Rust de aplicação de anúncio verifica cópia, JAR e configuração com leitura limitada, mantendo observação separada de aprovação, bind efetivo e áudio. [Registro59](../aurora-connect-voice-inspection.md). **PROTÓTIPO**; nenhuma célula Minecraft/loader/Java/Core/Skins, rede ou mod de voz foi homologada por essa inspeção. Versões e matriz ativa permanecem inalteradas.
+
 Incremento58: controlador nativo de restauração preserva autorização, prazo e bytes entre chamadas, sob feature de laboratório. O [registro58](../aurora-connect-voice-restoration-controller.md) distingue os testes de arquivo/recuperação da execução dos mods. **PROTÓTIPO**; não acrescenta voz audível, janela Tauri, Minecraft, rede ou par Core/Skins homologado. SVC e Plasmo conservam gates separados.
 
 Incremento57: perfil desktop TCP+UDP fragmentado com revisão explícita, destino manual e120s; falha UDP não muda automaticamente o estado do TCP. O [registro57](../aurora-connect-desktop-udp.md) separa bytes sintéticos, testes do caller e projeções DOM. **PROTÓTIPO**; anúncio/configuração SVC/Plasmo e áudio continuam com gates próprios. Nenhuma configuração pessoal, par Core/Skins, rede externa ou célula de homologação foi ampliada. Feature continua desligada por padrão.

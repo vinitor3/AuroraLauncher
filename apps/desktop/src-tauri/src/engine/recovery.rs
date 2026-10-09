@@ -17,6 +17,11 @@ use thiserror::Error;
 use uuid::Uuid;
 use zip::ZipArchive;
 
+#[path = "recovery_readonly.rs"]
+mod readonly;
+#[cfg(feature = "connect-voice-lab")]
+pub(crate) use readonly::with_existing_observation;
+
 const VERSION: u32 = 1;
 const MAX_FILES: usize = 30_000;
 const MAX_BYTES: u64 = 8 * 1024 * 1024 * 1024;
@@ -1237,35 +1242,7 @@ pub fn filesystem_identity(instance: &Instance) -> Result<String> {
 }
 
 pub fn identity_lookup(instance: &Instance) -> Result<Option<String>> {
-    let Some(id) = identity(instance, false)? else {
-        return Ok(None);
-    };
-    let data = instance
-        .root()
-        .parent()
-        .and_then(Path::parent)
-        .ok_or(RecoveryError::UnsafePath)?;
-    let database = path(data, ".aurora/recovery/index.sqlite3")?;
-    if !database.exists() {
-        return Err(RecoveryError::Identity);
-    }
-    let _directories = pin_directory(database.parent().ok_or(RecoveryError::UnsafePath)?)?;
-    let _file = shared_file(&database)?;
-    let db = Connection::open_with_flags(
-        database,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    )?;
-    let owner: Option<String> = db
-        .query_row(
-            "SELECT instance_uuid FROM instances WHERE filesystem_identity=?1",
-            [&id.filesystem_identity],
-            |row| row.get(0),
-        )
-        .optional()?;
-    if owner.as_deref() != Some(id.uuid.as_str()) {
-        return Err(RecoveryError::Identity);
-    }
-    Ok(Some(id.uuid))
+    readonly::identity_lookup(instance)
 }
 
 pub fn capture_observation(
