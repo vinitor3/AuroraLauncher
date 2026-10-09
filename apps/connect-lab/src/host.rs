@@ -95,6 +95,34 @@ impl Host {
         )
         .await
     }
+    /// One-use V2 invitation, requiring the exact signed game/TCP and
+    /// aux/fragmented-UDP registry before opening a loopback endpoint.
+    pub async fn start_invited_fragmented(
+        config: HostConfig,
+        invitation: &Invitation,
+    ) -> Result<Self> {
+        invitation.check_host_fragmented(&config)?;
+        Self::start_inner(
+            config,
+            Some(invitation.clone()),
+            transport::EndpointMode::Direct,
+        )
+        .await
+    }
+    /// Both V2 grants and an external IPv6 initial bind require this explicit
+    /// entry point. Authentication, one-use admission and expiry are unchanged.
+    pub async fn start_invited_fragmented_external_ipv6(
+        config: HostConfig,
+        invitation: &Invitation,
+    ) -> Result<Self> {
+        invitation.check_host_fragmented_external_ipv6(&config)?;
+        Self::start_inner(
+            config,
+            Some(invitation.clone()),
+            transport::EndpointMode::Direct,
+        )
+        .await
+    }
     async fn start_inner(
         config: HostConfig,
         mut invitation: Option<Invitation>,

@@ -1,8 +1,10 @@
 //! Explicit development CLI. No persisted keys, cloud services or launcher hooks.
 mod boundary_probe;
+mod fragment_probe;
 use aurora_connect_lab::{
     Capability, EndpointAddr, EndpointId, Guest, GuestConfig, Host, HostConfig, Invitation, Lease,
-    Limits, Protocol, Service, UdpReturnPolicy, generate_key, load_plan, unix_millis,
+    Limits, Protocol, Service, UdpReturnPolicy, generate_key, load_fragmented_plan, load_plan,
+    unix_millis,
 };
 use serde_json::json;
 use std::{
@@ -50,6 +52,10 @@ async fn until_stop(seconds: u64) {
 // Tokio task: a stalled terminal must not hold runtime shutdown open. At most
 // one dedicated stdin thread remains until this CLI exits after cancellation.
 async fn invitation_input(max_bytes: usize, timeout: Duration) -> Result<String> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    if timeout.is_zero() {
+        return Err(aurora_connect_lab::Error::Timeout.into());
+    }
     let (tx, rx) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
         let mut line = String::new();
@@ -77,11 +83,16 @@ async fn invitation_input(max_bytes: usize, timeout: Duration) -> Result<String>
         };
         let _ = tx.send(value);
     });
-    tokio::select! {
-        value = rx => Ok(value.map_err(|_| aurora_connect_lab::Error::Io)??),
-        _ = tokio::time::sleep(timeout) => Err(aurora_connect_lab::Error::Timeout.into()),
+    let value = tokio::select! {
+        biased;
+        _ = tokio::time::sleep_until(deadline) => Err(aurora_connect_lab::Error::Timeout.into()),
         _ = tokio::signal::ctrl_c() => Err(aurora_connect_lab::Error::Closed.into()),
+        value = rx => Ok(value.map_err(|_| aurora_connect_lab::Error::Io)??),
+    };
+    if tokio::time::Instant::now() >= deadline {
+        return Err(aurora_connect_lab::Error::Timeout.into());
     }
+    value
 }
 
 async fn minecraft_status(args: &[String]) -> Result<()> {
@@ -167,6 +178,15 @@ fn plan(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn plan_fragmented(args: &[String]) -> Result<()> {
+    if args.len() != 1 {
+        return Err(aurora_connect_lab::Error::Configuration.into());
+    }
+    let plan = load_fragmented_plan(&args[0], None)?;
+    event(json!({"event":"plan_ready", "plan":plan.preview()}));
+    Ok(())
+}
+
 async fn host_plan(args: &[String]) -> Result<()> {
     if args.len() != 2 {
         return Err("host_plan_args".into());
@@ -177,11 +197,15 @@ async fn host_plan(args: &[String]) -> Result<()> {
     run_host(plan.bind, plan.seconds, plan.services, Some(plan.hash)).await
 }
 
-async fn host_invite_plan(args: &[String], external_ipv6: bool) -> Result<()> {
+async fn host_invite_plan(args: &[String], external_ipv6: bool, fragmented: bool) -> Result<()> {
     if args.len() != 2 {
         return Err(aurora_connect_lab::Error::Configuration.into());
     }
-    let plan = load_plan(&args[0], Some(&args[1]))?;
+    let plan = if fragmented {
+        load_fragmented_plan(&args[0], Some(&args[1]))
+    } else {
+        load_plan(&args[0], Some(&args[1]))
+    }?;
     if plan.seconds > 600 {
         return Err(aurora_connect_lab::Error::Configuration.into());
     }
@@ -192,16 +216,50 @@ async fn host_invite_plan(args: &[String], external_ipv6: bool) -> Result<()> {
     }
     let secret_key = generate_key();
     let session_id = secret_key.public().to_string();
-    event(
+    let preparation = if fragmented { 600 } else { 60 };
+    let preparation_end = unix_millis().saturating_add(preparation * 1000);
+    let preparation_deadline = tokio::time::Instant::now() + Duration::from_secs(preparation);
+    let identity = if fragmented {
+        json!({"event":"invite_host_identity", "peer":session_id,"plan":plan.preview(),"profile":"fragmentedV2",
+            "preparationSeconds":preparation,"preparationExpiresAtUnixMs":preparation_end,
+            "next":"review services; give host public ID to guest through an authorized channel; enter guest public ID then press Enter before preparation expiry; if the native program exited do not paste into PowerShell"})
+    } else {
         json!({"event":"invite_host_identity", "peer":session_id, "plan":plan.preview(),
-        "next":"review services; give host public ID to guest through an authorized channel; enter guest public ID within 60 seconds"}),
-    );
-    let peer: EndpointId = invitation_input(128, Duration::from_secs(60))
-        .await?
-        .parse()
-        .map_err(|_| aurora_connect_lab::Error::Unauthorized)?;
+        "next":"review services; give host public ID to guest through an authorized channel; enter guest public ID within 60 seconds"})
+    };
+    event(identity);
+    let peer: EndpointId = invitation_input(
+        128,
+        preparation_deadline.saturating_duration_since(tokio::time::Instant::now()),
+    )
+    .await?
+    .parse()
+    .map_err(|_| aurora_connect_lab::Error::Unauthorized)?;
+    if tokio::time::Instant::now() >= preparation_deadline
+        || (fragmented && unix_millis() >= preparation_end)
+    {
+        return Err(aurora_connect_lab::Error::Timeout.into());
+    }
     let expires = unix_millis().saturating_add(plan.seconds * 1000);
-    let invitation = if external_ipv6 {
+    let invitation = if fragmented && external_ipv6 {
+        Invitation::issue_fragmented_external_ipv6(
+            &secret_key,
+            peer,
+            &session_id,
+            plan.bind,
+            &plan.services,
+            expires,
+        )
+    } else if fragmented {
+        Invitation::issue_fragmented(
+            &secret_key,
+            peer,
+            &session_id,
+            plan.bind,
+            &plan.services,
+            expires,
+        )
+    } else if external_ipv6 {
         Invitation::issue_external_ipv6(
             &secret_key,
             peer,
@@ -230,7 +288,11 @@ async fn host_invite_plan(args: &[String], external_ipv6: bool) -> Result<()> {
         leases: vec![lease],
         limits: Limits::default(),
     };
-    let host = if external_ipv6 {
+    let host = if fragmented && external_ipv6 {
+        Host::start_invited_fragmented_external_ipv6(config, &invitation).await
+    } else if fragmented {
+        Host::start_invited_fragmented(config, &invitation).await
+    } else if external_ipv6 {
         Host::start_invited_external_ipv6(config, &invitation).await
     } else {
         Host::start_invited(config, &invitation).await
@@ -241,10 +303,15 @@ async fn host_invite_plan(args: &[String], external_ipv6: bool) -> Result<()> {
         json!({"event":"host_invitation", "invitation":invitation.encode(),
         "digest":invitation.digest(), "singleAdmission":true}),
     );
-    event(
+    let ready = if fragmented {
+        json!({"event":"host_ready","experimental":true,"relay":false,"profile":"fragmentedV2","udpEnvelopeVersion":2,
+            "expiresAtUnixMs":invitation.expires_at_unix_ms(),"wholeSessionMaximumSeconds":600,
+            "next":"enter stop then press Enter to revoke and close; fresh invitation required after shutdown"})
+    } else {
         json!({"event":"host_ready", "experimental":true, "relay":false,
-        "next":"enter stop to revoke and close; reconnect requires a fresh host/session/invitation"}),
-    );
+        "next":"enter stop to revoke and close; reconnect requires a fresh host/session/invitation"})
+    };
+    event(ready);
     until_stop(plan.seconds).await;
     host.revoke(&lease_id);
     host.shutdown().await;
@@ -252,7 +319,15 @@ async fn host_invite_plan(args: &[String], external_ipv6: bool) -> Result<()> {
     Ok(())
 }
 
-async fn guest_invite(args: &[String], tcp_only: bool, external_ipv6: bool) -> Result<()> {
+async fn guest_invite(
+    args: &[String],
+    tcp_only: bool,
+    external_ipv6: bool,
+    fragmented: bool,
+) -> Result<()> {
+    if fragmented && tcp_only {
+        return Err(aurora_connect_lab::Error::Configuration.into());
+    }
     if args.len() != if tcp_only { 3 } else { 4 } {
         return Err(aurora_connect_lab::Error::Configuration.into());
     }
@@ -266,18 +341,45 @@ async fn guest_invite(args: &[String], tcp_only: bool, external_ipv6: bool) -> R
         Some(args[2].parse::<SocketAddr>()?)
     };
     let seconds = duration(&args[if tcp_only { 2 } else { 3 }])?;
-    if seconds > 600 || !tcp.ip().is_loopback() || udp.is_some_and(|addr| !addr.ip().is_loopback())
+    if seconds > 600
+        || !tcp.ip().is_loopback()
+        || udp.is_some_and(|addr| !addr.ip().is_loopback())
+        || (fragmented
+            && [Some(tcp), udp].into_iter().flatten().any(
+                |addr| matches!(addr, SocketAddr::V6(v6) if v6.scope_id()!=0 || v6.flowinfo()!=0),
+            ))
     {
         return Err(aurora_connect_lab::Error::Configuration.into());
     }
     let secret_key = generate_key();
-    event(
+    let preparation = if fragmented { 600 } else { 60 };
+    let preparation_end = unix_millis().saturating_add(preparation * 1000);
+    let preparation_deadline = tokio::time::Instant::now() + Duration::from_secs(preparation);
+    let identity = if fragmented {
+        json!({"event":"guest_identity","peer":secret_key.public().to_string(),"profile":"fragmentedV2",
+            "preparationSeconds":preparation,"preparationExpiresAtUnixMs":preparation_end,
+            "next":"authorize this public ID at the pinned host; paste the invitation then press Enter before preparation expiry; keep the same native process; if it exited do not paste into PowerShell"})
+    } else {
         json!({"event":"guest_identity", "peer":secret_key.public().to_string(),
-        "next":"authorize this public ID at the pinned host; paste its invitation within 60 seconds"}),
-    );
+        "next":"authorize this public ID at the pinned host; paste its invitation within 60 seconds"})
+    };
+    event(identity);
     // 4096 signed bytes plus optional UTF-8 BOM and CRLF framing.
-    let encoded = invitation_input(4101, Duration::from_secs(60)).await?;
-    let invitation = if external_ipv6 {
+    let encoded = invitation_input(
+        4101,
+        preparation_deadline.saturating_duration_since(tokio::time::Instant::now()),
+    )
+    .await?;
+    if tokio::time::Instant::now() >= preparation_deadline
+        || (fragmented && unix_millis() >= preparation_end)
+    {
+        return Err(aurora_connect_lab::Error::Timeout.into());
+    }
+    let invitation = if fragmented && external_ipv6 {
+        Invitation::verify_fragmented_external_ipv6(&encoded, host, secret_key.public())
+    } else if fragmented {
+        Invitation::verify_fragmented(&encoded, host, secret_key.public())
+    } else if external_ipv6 {
         Invitation::verify_external_ipv6(&encoded, host, secret_key.public())
     } else {
         Invitation::verify(&encoded, host, secret_key.public())
@@ -292,22 +394,55 @@ async fn guest_invite(args: &[String], tcp_only: bool, external_ipv6: bool) -> R
     if remaining == 0 {
         return Err(aurora_connect_lab::Error::Expired.into());
     }
-    event(
-        json!({"event":"invitation_review", "digest":invitation.digest(), "invitation":invitation.preview(),
+    let review_limit = remaining.min(preparation * 1000);
+    let review_end = unix_millis().saturating_add(review_limit);
+    let review_deadline = tokio::time::Instant::now() + Duration::from_millis(review_limit);
+    let mut review = json!({"event":"invitation_review", "digest":invitation.digest(), "invitation":invitation.preview(),
         "localTcp":tcp.to_string(), "localUdp":udp.map(|a| a.to_string()),
-        "next":"review pinned host, guest, services and expiry; enter approve followed by the exact digest"}),
-    );
-    if invitation_input(80, Duration::from_millis(remaining.min(60_000))).await?
+        "next":"review pinned host, guest, services and expiry; enter approve followed by the exact digest"});
+    if fragmented {
+        review["profile"] = json!("fragmentedV2");
+        review["approvalExpiresAtUnixMs"] = json!(review_end.min(invitation.expires_at_unix_ms()));
+        review["next"] = json!(
+            "review pinned IDs, services and exact expiry; enter approve followed by exact digest then press Enter; a line without Enter is not approval and expiry is never renewed"
+        );
+    }
+    event(review);
+    if invitation_input(
+        80,
+        review_deadline.saturating_duration_since(tokio::time::Instant::now()),
+    )
+    .await?
         != format!("approve {}", invitation.digest())
     {
         return Err(aurora_connect_lab::Error::Unauthorized.into());
     }
-    let guest = if external_ipv6 {
+    if tokio::time::Instant::now() >= review_deadline {
+        return Err(aurora_connect_lab::Error::Timeout.into());
+    }
+    if unix_millis() >= invitation.expires_at_unix_ms() {
+        return Err(aurora_connect_lab::Error::Expired.into());
+    }
+    let approved_original = if fragmented {
+        Some(
+            invitation.preview()["services"][1]["maxDatagramBytes"]
+                .as_u64()
+                .ok_or(aurora_connect_lab::Error::Configuration)? as usize,
+        )
+    } else {
+        None
+    };
+    let guest = if fragmented && external_ipv6 {
+        Guest::connect_invited_fragmented_external_ipv6(secret_key, &invitation, Limits::default())
+            .await
+    } else if fragmented {
+        Guest::connect_invited_fragmented(secret_key, &invitation, Limits::default()).await
+    } else if external_ipv6 {
         Guest::connect_invited_external_ipv6(secret_key, &invitation, Limits::default()).await
     } else {
         Guest::connect_invited(secret_key, &invitation, Limits::default()).await
     }?;
-    run_guest_bridges(guest, tcp, udp, seconds, true).await
+    run_guest_bridges(guest, tcp, udp, seconds, true, approved_original).await
 }
 
 async fn run_host(
@@ -417,7 +552,7 @@ async fn guest(args: &[String], tcp_only: bool) -> Result<()> {
         limits: Limits::default(),
     })
     .await?;
-    run_guest_bridges(guest, tcp, udp, seconds, false).await
+    run_guest_bridges(guest, tcp, udp, seconds, false, None).await
 }
 
 async fn run_guest_bridges(
@@ -426,7 +561,12 @@ async fn run_guest_bridges(
     udp: Option<SocketAddr>,
     seconds: u64,
     invited: bool,
+    fragmented_original: Option<usize>,
 ) -> Result<()> {
+    let fragmented_stats_before = fragmented_original.map(|_| {
+        let stats = guest.connection().stats();
+        (stats.frame_tx.datagram, stats.frame_rx.datagram)
+    });
     let tcp_bridge = match guest.tcp_bridge("game", 1, tcp).await {
         Ok(bridge) => bridge,
         Err(error) => {
@@ -435,7 +575,12 @@ async fn run_guest_bridges(
         }
     };
     let udp_bridge = if let Some(bind) = udp {
-        match guest.udp_bridge("aux", 1, bind).await {
+        let bridge = if fragmented_original.is_some() {
+            guest.udp_bridge_fragmented("aux", 1, bind).await
+        } else {
+            guest.udp_bridge("aux", 1, bind).await
+        };
+        match bridge {
             Ok(bridge) => Some(bridge),
             Err(error) => {
                 tcp_bridge.shutdown().await;
@@ -447,9 +592,19 @@ async fn run_guest_bridges(
         None
     };
     if let Some(bridge) = &udp_bridge {
-        event(
-            json!({"event":"guest_ready", "tcp":tcp_bridge.local_addr().to_string(), "udp":bridge.local_addr().to_string(), "maxDatagramPayload":bridge.max_payload(), "experimental":true, "next":"enter stop to close"}),
-        );
+        if let Some(approved_original) = fragmented_original {
+            event(
+                json!({"event":"guest_ready","tcp":tcp_bridge.local_addr().to_string(),"udp":bridge.local_addr().to_string(),
+                "profile":"fragmentedV2","udpEnvelopeVersion":2,"approvedOriginalDatagramBytes":approved_original,
+                "transportOriginalCapacity":bridge.max_payload(),"associationCeilingNegotiated":false,
+                "maxFragmentFrameBytes":aurora_connect_lab::MAX_FRAGMENT_FRAME_BYTES,"experimental":true,"relay":false,
+                "next":"enter stop then press Enter to close; invitation whole-session expiry is unchanged"}),
+            );
+        } else {
+            event(
+                json!({"event":"guest_ready", "tcp":tcp_bridge.local_addr().to_string(), "udp":bridge.local_addr().to_string(), "maxDatagramPayload":bridge.max_payload(), "experimental":true, "next":"enter stop to close"}),
+            );
+        }
     } else {
         event(
             json!({"event":"guest_ready", "tcp":tcp_bridge.local_addr().to_string(), "mode":"tcp", "experimental":true, "next":"enter stop to close"}),
@@ -461,6 +616,15 @@ async fn run_guest_bridges(
         _ = until_stop(seconds) => false,
         _ = guest.connection().closed() => true,
     };
+    if let Some((sent, received)) = fragmented_stats_before {
+        let stats = guest.connection().stats();
+        event(
+            json!({"event":"fragmented_transport_snapshot","experimental":true,"profile":"fragmentedV2",
+            "datagramFramesTxSinceReady":stats.frame_tx.datagram.saturating_sub(sent),
+            "datagramFramesRxSinceReady":stats.frame_rx.datagram.saturating_sub(received),
+            "evidence":"transport_counters_only_not_minecraft_or_voice"}),
+        );
+    }
     guest.shutdown().await;
     if let Some(bridge) = udp_bridge {
         bridge.shutdown().await;
@@ -636,14 +800,23 @@ async fn main() {
         Some("host") => host(&args[1..]).await,
         Some("plan") => plan(&args[1..]),
         Some("host-plan") => host_plan(&args[1..]).await,
-        Some("host-invite-plan") => host_invite_plan(&args[1..], false).await,
-        Some("host-invite-plan-external-ipv6") => host_invite_plan(&args[1..], true).await,
+        Some("plan-fragmented") => plan_fragmented(&args[1..]),
+        Some("host-invite-plan") => host_invite_plan(&args[1..], false, false).await,
+        Some("host-invite-plan-external-ipv6") => host_invite_plan(&args[1..], true, false).await,
+        Some("host-invite-plan-fragmented") => host_invite_plan(&args[1..], false, true).await,
+        Some("host-invite-plan-fragmented-external-ipv6") => {
+            host_invite_plan(&args[1..], true, true).await
+        }
         Some("guest") => guest(&args[1..], false).await,
         Some("guest-tcp") => guest(&args[1..], true).await,
-        Some("guest-invite") => guest_invite(&args[1..], false, false).await,
-        Some("guest-invite-tcp") => guest_invite(&args[1..], true, false).await,
-        Some("guest-invite-external-ipv6") => guest_invite(&args[1..], false, true).await,
-        Some("guest-invite-external-ipv6-tcp") => guest_invite(&args[1..], true, true).await,
+        Some("guest-invite") => guest_invite(&args[1..], false, false, false).await,
+        Some("guest-invite-tcp") => guest_invite(&args[1..], true, false, false).await,
+        Some("guest-invite-external-ipv6") => guest_invite(&args[1..], false, true, false).await,
+        Some("guest-invite-external-ipv6-tcp") => guest_invite(&args[1..], true, true, false).await,
+        Some("guest-invite-fragmented") => guest_invite(&args[1..], false, false, true).await,
+        Some("guest-invite-fragmented-external-ipv6") => {
+            guest_invite(&args[1..], false, true, true).await
+        }
         Some("minecraft-status") => minecraft_status(&args[1..]).await,
         Some("echo") => echo(&args[1..], false).await,
         Some("echo-downstream") => echo(&args[1..], true).await,
@@ -660,6 +833,8 @@ async fn main() {
         }
         Some("echo-boundary") => Box::pin(boundary_probe::echo(&args[1..])).await,
         Some("probe-boundary") => Box::pin(boundary_probe::probe(&args[1..])).await,
+        Some("echo-fragmented") => Box::pin(fragment_probe::echo(&args[1..])).await,
+        Some("probe-fragmented") => Box::pin(fragment_probe::probe(&args[1..])).await,
         _ => {
             println!(
                 "EXPERIMENTAL - no launcher integration, keys only in memory\nhost <quic-bind> <approved-tcp-target> <approved-udp-target> <seconds>\nplan <local-service-plan.json>\nhost-plan <local-service-plan.json> <approved-sha256>\nguest <host-public-id> <host-direct-address> <session-id> <local-tcp> <local-udp> <seconds>\nguest-tcp <host-public-id> <host-direct-address> <session-id> <local-tcp> <seconds>\necho <loopback-tcp> <loopback-udp> <seconds>\nprobe <loopback-tcp> <loopback-udp>\nminecraft-status <loopback-tcp-bridge> <handshake-host> <handshake-port> <protocol-number>\necho-downstream / probe-downstream: same arguments, controlled asymmetric UDP test only\nUse stop on stdin or Ctrl+C to end. See docs/aurora-connect.md."
@@ -672,6 +847,9 @@ async fn main() {
             );
             println!(
                 "echo-boundary <loopback-tcp> <loopback-udp> <seconds>\nprobe-boundary <loopback-tcp> <loopback-udp> <expected-payload-1-to-1400>\nBoundary commands use an owned synthetic endpoint and require an approved authorizedDownstream service plan."
+            );
+            println!(
+                "EXPERIMENTAL explicit fragmented UDP V2 invitation commands:\nplan-fragmented <reviewed-plan.json>\nhost-invite-plan-fragmented <reviewed-plan.json> <approved-sha256>\nhost-invite-plan-fragmented-external-ipv6 <reviewed-plan.json> <approved-sha256>\nguest-invite-fragmented <pinned-host-public-id> <local-tcp> <local-udp> <seconds>\nguest-invite-fragmented-external-ipv6 <pinned-host-public-id> <local-tcp> <local-udp> <seconds>\necho-fragmented <loopback-tcp> <loopback-udp> <seconds-10-to-600>\nprobe-fragmented <loopback-tcp> <loopback-udp>\nNew V2 prompts have explicit 600-second preparation; signed whole-session expiry remains at most600 seconds and is never renewed. Both game/TCP and aux/fragmentedDatagram are required. Press Enter after each input; do not paste into PowerShell after native exit. Echo/probe is an owned opaque byte fixture only, with UDP application budget64KiB including oversize attempts and additional TCP1MiB each direction; no Minecraft/voice/relay proof."
             );
             Ok(())
         }
@@ -694,6 +872,11 @@ async fn main() {
             .or_else(|| {
                 error
                     .downcast_ref::<boundary_probe::BoundaryError>()
+                    .map(ToString::to_string)
+            })
+            .or_else(|| {
+                error
+                    .downcast_ref::<fragment_probe::FragmentProbeError>()
                     .map(ToString::to_string)
             })
             .unwrap_or_else(|| "lab_operation_failed".into());

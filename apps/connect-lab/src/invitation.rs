@@ -25,7 +25,7 @@ pub(crate) enum InvitationAddressMode {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum InvitationProfile {
+pub(crate) enum InvitationProfile {
     Legacy,
     FragmentedV2,
 }
@@ -631,15 +631,42 @@ impl Invitation {
     pub(crate) fn check_legacy_profile(&self) -> Result<()> {
         validate_grants(&self.envelope.body.services, InvitationProfile::Legacy)
     }
+    pub(crate) fn check_profile(&self, profile: InvitationProfile) -> Result<()> {
+        match profile {
+            InvitationProfile::Legacy => self.check_legacy_profile(),
+            InvitationProfile::FragmentedV2 => validate_grants(
+                &self.envelope.body.services,
+                InvitationProfile::FragmentedV2,
+            ),
+        }
+    }
     pub(crate) fn check_host(&self, config: &HostConfig) -> Result<()> {
-        self.check_host_in_mode(config, InvitationAddressMode::Loopback)
+        self.check_host_in_policy(
+            config,
+            InvitationPolicy::legacy(InvitationAddressMode::Loopback),
+        )
     }
     pub(crate) fn check_host_external_ipv6(&self, config: &HostConfig) -> Result<()> {
-        self.check_host_in_mode(config, InvitationAddressMode::ExternalIpv6)
+        self.check_host_in_policy(
+            config,
+            InvitationPolicy::legacy(InvitationAddressMode::ExternalIpv6),
+        )
     }
-    fn check_host_in_mode(&self, config: &HostConfig, mode: InvitationAddressMode) -> Result<()> {
-        self.check_address_mode(mode)?;
-        self.check_legacy_profile()?;
+    pub(crate) fn check_host_fragmented(&self, config: &HostConfig) -> Result<()> {
+        self.check_host_in_policy(
+            config,
+            InvitationPolicy::fragmented(InvitationAddressMode::Loopback),
+        )
+    }
+    pub(crate) fn check_host_fragmented_external_ipv6(&self, config: &HostConfig) -> Result<()> {
+        self.check_host_in_policy(
+            config,
+            InvitationPolicy::fragmented(InvitationAddressMode::ExternalIpv6),
+        )
+    }
+    fn check_host_in_policy(&self, config: &HostConfig, policy: InvitationPolicy) -> Result<()> {
+        self.check_address_mode(policy.address)?;
+        self.check_profile(policy.profile)?;
         self.check_current()?;
         let expected = self.lease();
         if config.secret_key.public() != self.host
@@ -654,7 +681,7 @@ impl Invitation {
             || lease.peer != expected.peer
             || lease.expires_at_unix_ms != expected.expires_at_unix_ms
             || lease.services != expected.services
-            || grants(&config.services, InvitationProfile::Legacy)? != self.envelope.body.services
+            || grants(&config.services, policy.profile)? != self.envelope.body.services
         {
             return Err(Error::Configuration);
         }

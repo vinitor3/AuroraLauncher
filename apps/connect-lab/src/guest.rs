@@ -1,6 +1,6 @@
 use crate::{
     bridge, fragment,
-    invitation::InvitationAddressMode,
+    invitation::{InvitationAddressMode, InvitationProfile},
     model::{Metrics, valid_id},
     transport::{self, Bucket, Budget},
     wire::{self, Hello, InvitationProof, OpenRequest, Operation, Reply, SequenceWindow},
@@ -84,6 +84,7 @@ impl Guest {
             invitation,
             limits,
             InvitationAddressMode::Loopback,
+            InvitationProfile::Legacy,
         )
         .await
     }
@@ -99,6 +100,39 @@ impl Guest {
             invitation,
             limits,
             InvitationAddressMode::ExternalIpv6,
+            InvitationProfile::Legacy,
+        )
+        .await
+    }
+    /// Explicit signed V2 grants over a loopback initial address. Legacy and
+    /// external invitations are rejected before opening any endpoint.
+    pub async fn connect_invited_fragmented(
+        secret_key: SecretKey,
+        invitation: &Invitation,
+        limits: Limits,
+    ) -> Result<Self> {
+        Self::connect_invited_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            InvitationAddressMode::Loopback,
+            InvitationProfile::FragmentedV2,
+        )
+        .await
+    }
+    /// Explicit opt-in to both signed V2 grants and an external IPv6 initial
+    /// address. Application listeners remain loopback; no relay or lookup.
+    pub async fn connect_invited_fragmented_external_ipv6(
+        secret_key: SecretKey,
+        invitation: &Invitation,
+        limits: Limits,
+    ) -> Result<Self> {
+        Self::connect_invited_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            InvitationAddressMode::ExternalIpv6,
+            InvitationProfile::FragmentedV2,
         )
         .await
     }
@@ -107,8 +141,9 @@ impl Guest {
         invitation: &Invitation,
         limits: Limits,
         mode: InvitationAddressMode,
+        profile: InvitationProfile,
     ) -> Result<Self> {
-        invitation.check_legacy_profile()?;
+        invitation.check_profile(profile)?;
         invitation.check_address_mode(mode)?;
         if secret_key.public() != invitation.guest_key() {
             return Err(Error::Unauthorized);

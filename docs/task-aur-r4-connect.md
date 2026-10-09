@@ -1240,6 +1240,29 @@ Base `42c5447`, branch `codex/aur-r4-connect`, 08/10/2026. [Domínio 51](aurora-
 
 **Estados/rollback:** TCP/UDP e convites/UI continuam PROTÓTIPO; direto externo conserva provas anteriores PARCIAIS, relay público desligado. Minecraft mantém amostra 44. SVC/Plasmo conservam controles/configuração separados e áudio PRECISA DE TESTE. Encerrar sessões próprias e não selecionar novos loaders/verificadores reverte o comportamento operacional; revert local revisado inclui os dois pequenos pontos de integração. Nenhuma configuração pessoal aplicada, push, release ou instalador.
 
+## Incremento51b — admissão e CLI de UDP fragmentado
+
+Integração sobre `78df138`, branch `codex/aur-r4-connect`, em09/10/2026; APIs e primeiro foco executados em08/10. Base cumulativa alpha.14, Assistente/recovery/CAS/Doctor, nove pares Core1.1.5/Skins0.3.1 e todos os gates preservados. Preparação52 não registrada e correção47c do leitor são deltas separados. Nenhum manifest/lock/dependência, debug principal, pin de caller ou kit histórico foi alterado pelo51b.
+
+**Implementação real.** `src/{host,guest,invitation}.rs` acrescentam quatro entradas explícitas para convite fragmentado, com perfil/endereço revalidados antes de I/O e registro/lease exatamente assinados. Reutilizam TLS, consumo único, revogação e isolamento existentes. `src/main.rs`, novo `src/fragment_probe.rs` e `tests/{fragmented_invitation,fragmented_cli}.rs` acrescentam sete comandos, duas pontes reais, prova TCP concorrente e fixture opaca com fronteiras V2. Os [domínios de admissão](aurora-connect-fragmented-admission.md) e [CLI](aurora-connect-fragmented-cli.md) documentam campos, comandos, limites e logs; AGENTS, spec, ADR, backlog, matriz e domínioConnect refletem essa continuidade.
+
+Convite continua schema1, domínio/assinatura canônicos e TTL≤600s para a sessão inteira. V2 é o envelope UDP; tamanho original até4096B e frame≤1264B não são MTU física. Preparação600s somente nos novos comandos, sem renovar validade. Readiness informa que associaçãoUDP ainda não foi negociada. CLI probe usa46.912B UDP programados dentro de64KiB tentados, incluindo4097B recusados em ambos os sentidos; API positiva usa15.262B em fixture separada. Ambos transportam TCP1MiB por direção e observam progresso durante UDP. Não há áudio, interpretação de mods, relay automático ou ampliação de serviço.
+
+**Comandos integrados executados**, no target privado para preservar bins/kits:
+
+```powershell
+cargo test --offline --locked --jobs 2 --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target -- --test-threads=1
+cargo test --offline --locked --jobs 2 --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --features local-relay-lab -- --test-threads=1
+```
+
+Snapshot integrado: padrão **171PASS/4ignored/0FAIL**, soma90,87s de runtime; feature localrelay **181PASS/5ignored/0FAIL**, soma96,88s. Ignorados continuam opt-ins não homologados; a fixture interna de proxy é acionada pelos testes pais. Logs `connect-51b-full-{default,feature}.log`. Incluem as sete integraçõesAPI, quatroCLI, três novos unitários do probe e regressões legadas/relay; não somar focos repetidos como casos novos. Foco anteriorAPI7PASS8,05s foi seguido do casoTCPativo/revoke/expiry1PASS2,15s e Clippy, com logs específicos. CLI teve falhas reais de stack overflow Windows antes da validação, corrigidas por buffers limitados no heap; todos os logs de falha/reteste permanecem no domínioCLI.
+
+Revisão independente conferiu APIs, gates negativos, early data realmente aceito em três cenários, nenhuma abertura indevida de destino, deadlines e cleanup/rebind. Publicação de conclusão antes do EOF corrigiu falso negativo possível no snapshot da fixture. Nenhum resultado afirma medição temporal pré-TLS, NAT, PMTU real ou compatibilidade de voz.
+
+Após as suítes completas, revisão encontrou outra possibilidade de snapshot atrasado: o contador de bytes recebidos era publicado depois do eco. Último ajuste limita-se à fixture: publicar bytes validados antes de `write_all`, identificando essa semântica no JSON, sem alterar transporte. Reexecução focal **4CLI PASS/9,67s +3unitários PASS**, Clippy bin/teste e fmtall/diffcheck PASS; logs `connect-fragmented-cli-counter-order-{final,unit,clippy,fmt}.log`. Comandos são os três focais do domínioCLI mais `cargo fmt --manifest-path apps/connect-lab/Cargo.toml --all -- --check`. Não afirmar que as suítes171/181 foram repetidas depois dessa alteração; sourcefinal do probeSHA256 `01d6c93463c687f4820dc263a1e36c05d081b5d946176781c6e4516c2e99a7e2`. Root revisou o delta final e seus resultados antes do commit local.
+
+**Estados e rollback.** TCP/UDP/convites/CLI **PROTÓTIPO** com provas locais. Direto externo mantém amostras anteriores **PARCIAIS**; novo convite externo e V2 entre redes continuam **PRECISA DE TESTE**. Relay local mantém50; operador público não foi acessado. Minecraft mantém44, UI mantém46/48 e não há nova janelaTauri; SVC/Plasmo conservam controles/endereço/configuração locais e áudio pendente separadamente. Sessões longas, dois jogadores gráficos/mistos, Core/Skins runtime, estabilidade e sync seguro continuam no roadmap. Encerrar processos próprios e aguardar rebind; não selecionar perfil novo ou usar revert local revisado reverte este incremento, sem escrita pessoal. Sem push/deploy/release/instalador/gasto.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.
