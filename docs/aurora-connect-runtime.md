@@ -2,6 +2,14 @@
 
 Estado: **PROTÓTIPO**, separado do launcher/UI e sem distribuição. Alvo existente na matriz: Minecraft **1.21.1**, Fabric **0.16.14**, Java **21**, protocolo **767**. Nenhum par Core/Skins é acrescentado ou alterado. Evidências atuais: STATUS/pong, dois clientes sintéticos até PLAY/chunks/presença recíproca e, em ensaios separados, controle/endereço SVC2.6.22 e Plasmo2.1.17 por TCP/UDP autenticados do Connect. Configuração própria `online-mode=false` autorizada; áudio, clientes gráficos/mistos, LAN e redes externas permanecem sem homologação. As seções abaixo conservam a sequência histórica das provas.
 
+## Opt-in de controle de voz V2 — incremento53 em validação
+
+O caller V2 de laboratório possui entradas separadas e novo plano de exercício. `live-writer.mjs plan-control-fragmented/run-control-fragmented` seleciona `${profile}-control-fragmented` para `svc` ou `plasmo`; seu digest inclui comando do cliente com `--fragmented-udp`, path/pin do transporte, convite schema1, grant `fragmentedDatagram`, original4096B e frame1264B. Os comandos `plan-control/run-control` e smokes sem a nova flag conservam V1. Uma aprovação antiga não autoriza o novo transporte.
+
+Conservar o procedimento existente: estágio de recursos intocado, pasta de execução nova, revisão do plano e hash, aplicação nativa aprovada com snapshot, `voice_control_ready`, processo de controle do mod correspondente, stop do Java e aprovação separada da restauração. O contrato V2 deve estar fixado antes de preparar/alterar arquivos. Configuração de anúncio continua `127.0.0.1:35554`; codec, MTU, cifragem, gravação e configurações pessoais não mudam. Cada mod exige execução própria; a prova do writer não substitui a prova do cliente.
+
+O artefato51c fixado passou nos gates V2 e quatro ensaios reais de bytes: originais UDP até4096B, rejeição4097B, duas origens, TCP concorrente e cancelamento/cleanup. Depois, cada mod passou por plano/apply, Java em cópia nova, controle real de35s com cliente sintético PLAY, stop e restore reconciliado aprovado, com EULA restaurada. A primeira falha SVC foi preservada; não se atribui sua causa a um teste posterior bem-sucedido. O cliente Minecraft usa timeout30s, mantendo deadline externo60s e limites de voz. Nenhum áudio foi produzido ou capturado. [Comandos, resultados e limites](task-aur-r4-connect.md#incremento53--callers-de-voz-com-transporte-v2-explícito).
+
 <a id="cliente-gráfico-externo--preparação41"></a>
 
 ## Cliente gráfico externo — preparação41 e evidência44

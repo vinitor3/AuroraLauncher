@@ -44,6 +44,27 @@ test('direct compression/encryption installation is refused and errors are redac
   await closeOfflineClient(client);
 });
 
+test('only the exact pinned keepalive timeout receives a static diagnostic without exposing upstream data', async () => {
+  const exact = 'client timed out after 30000 milliseconds';
+  let getterRead = false;
+  const getter = Object.defineProperty(new Error(), 'message', { get() { getterRead = true; throw new Error('PRIVATE_GETTER'); } });
+  const hostile = new Proxy({}, { getOwnPropertyDescriptor() { throw new Error('PRIVATE_DESCRIPTOR'); } });
+  for (const [input, expected] of [[new Error(exact), 'client_keepalive_timeout'],
+    ...[new Error(`${exact} PRIVATE_PACKET`), new Error(`${exact}\n`), new Error(exact.replace('30000', '30001')),
+      new Error('client timed out after 15000 milliseconds'),
+      new Error('PRIVATE_PACKET_AND_PATH'), getter, hostile, undefined]
+      .map(error => [error, 'client_protocol_failed'])]) {
+    const client = new GuardedClient(false, '1.21.1', undefined, true); const errors = [];
+    client.on('error', error => errors.push(error));
+    assert.doesNotThrow(() => client.emit('error', input));
+    assert.equal(errors.length, 1); assert.equal(errors[0].message, expected);
+    assert.doesNotMatch(errors[0].stack, /PRIVATE_|milliseconds/);
+    assert.equal(client.protocolRejected, true);
+    await closeOfflineClient(client);
+  }
+  assert.equal(getterRead, false);
+});
+
 test('synchronous packet handler exceptions become redacted failure and cannot escape the event loop', async () => {
   const client = new GuardedClient(false, '1.21.1', undefined, true); const errors = [];
   client.on('error', error => errors.push(error.message));
@@ -125,4 +146,59 @@ test('normal close flushes queued frames before FIN and disables later protocol 
   assert.deepEqual(await closed, { closed: true, forced: false });
   assert.equal(received, 65539); // canonical three-byte length plus payload
   assert.deepEqual(errors, []);
+});
+
+test('actual pinned keepalive handler survives a 15s plus tick interval, renews 30s and closes on silence', { timeout: 5000 }, async t => {
+  const protocol = require('minecraft-protocol');
+  let accepted; let resolveAccepted;
+  const connection = new Promise(resolve => { resolveAccepted = resolve; });
+  const server = createServer(socket => {
+    accepted = socket; socket.on('error', () => {}); socket.on('data', () => {}); resolveAccepted();
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const client = createOfflineClient(server.address().port, PLAY_NAMES[0]);
+  const errors = []; client.on('error', error => errors.push(error.message));
+  t.after(async () => {
+    await closeOfflineClient(client); accepted?.destroy();
+    await new Promise(resolve => server.close(resolve));
+  });
+  await Promise.all([connection, once(client.socket, 'connect')]);
+  // The fixture supplies PLAY state, not login/world evidence. Incoming wire
+  // uses the pinned serializer, GuardedClient parser and real upstream handler;
+  // neither the handler nor its configured timeout is copied into this test.
+  client.state = protocol.states.PLAY;
+  const serializer = protocol.createSerializer({ state: protocol.states.PLAY, isServer: true, version: '1.21.1' });
+  t.after(() => serializer.destroy());
+  const responses = [];
+  const originalWrite = client.write.bind(client);
+  client.write = (name, packet) => {
+    if (name === 'keep_alive') responses.push(BigInt(packet.keepAliveId));
+    return originalWrite(name, packet);
+  };
+  async function sendKeepalive(id) {
+    const body = serializer.createPacketBuffer({ name: 'keep_alive', params: { keepAliveId: id } });
+    assert.ok(body.length > 0 && body.length < 128);
+    const received = once(client, 'keep_alive');
+    accepted.write(Buffer.concat([Buffer.from([body.length]), body])); await received;
+  }
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  await sendKeepalive(1n);
+  assert.deepEqual(responses, [1n]);
+  t.mock.timers.tick(15001);
+  assert.deepEqual(errors, []); assert.equal(client.socket.destroyed, false);
+  await sendKeepalive(2n);
+  assert.deepEqual(responses, [1n, 2n]);
+  // Cross the first deadline: the second valid response renewed that timer.
+  t.mock.timers.tick(14999);
+  assert.deepEqual(errors, []); assert.equal(client.socket.destroyed, false);
+  t.mock.timers.tick(15000);
+  assert.deepEqual(errors, []); assert.equal(client.socket.destroyed, false);
+  const closed = once(client.socket, 'close');
+  t.mock.timers.tick(1); await closed;
+  assert.deepEqual(errors, ['client_keepalive_timeout']);
+  assert.equal(client.protocolRejected, true);
+  assert.deepEqual(await closeOfflineClient(client), { closed: true, forced: false });
+  assert.ok(client.serializer.destroyed); assert.ok(client.frameGuard.destroyed);
+  t.mock.timers.tick(60000);
+  assert.deepEqual(errors, ['client_keepalive_timeout']);
 });

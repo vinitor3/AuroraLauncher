@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { rejectLinkedParents, resolveExplicitLocalPath } from '../connect-voice-tools/local-path.mjs';
 import { readLocal } from '../connect-runtime-tools/files.mjs';
-import { InvitationGateError, clearInvitationEvent, createInvitationGate } from './invitation-gate.mjs';
+import { InvitationGateError, clearInvitationEvent, createInvitationGate, createFragmentedInvitationGate } from './invitation-gate.mjs';
+import { fragmentedVoiceContract, fragmentedReady, createFragmentedEventSequence } from './voice-fragmented-profile.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const PARENT = join(REPO, '.aurora', 'connect-validation');
@@ -37,15 +38,15 @@ export class GameTunnelError extends Error {
 }
 const invalid = code => { throw new GameTunnelError(code); };
 
-async function checkExecutable() {
-  resolveExplicitLocalPath(EXECUTABLE);
-  await rejectLinkedParents(EXECUTABLE);
-  const before = await lstat(EXECUTABLE);
+async function checkExecutable(executable = EXECUTABLE, expectedHash = EXECUTABLE_SHA256) {
+  resolveExplicitLocalPath(executable);
+  await rejectLinkedParents(executable);
+  const before = await lstat(executable);
   if (!before.isFile() || before.isSymbolicLink() || before.size < 2 || before.size > 128 * 1024 * 1024
-    || (await realpath(EXECUTABLE)).toLowerCase() !== EXECUTABLE.toLowerCase()) invalid('game_tunnel_binary_invalid');
+    || (await realpath(executable)).toLowerCase() !== executable.toLowerCase()) invalid('game_tunnel_binary_invalid');
   // Cargo's build artifact can have legitimate hardlinks; this read-only
   // exception never applies to the generated plan or its containing directory.
-  const file = await open(EXECUTABLE, 'r');
+  const file = await open(executable, 'r');
   try {
     const opened = await file.stat();
     if (opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size) invalid('game_tunnel_binary_changed');
@@ -58,11 +59,11 @@ async function checkExecutable() {
       if (count > before.size) invalid('game_tunnel_binary_changed');
       digest.update(buffer.subarray(0, bytesRead));
     }
-    const after = await file.stat(); const current = await lstat(EXECUTABLE);
+    const after = await file.stat(); const current = await lstat(executable);
     if (count !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs
       || after.ctimeMs !== before.ctimeMs || after.nlink !== before.nlink || current.isSymbolicLink()
       || current.dev !== before.dev || current.ino !== before.ino) invalid('game_tunnel_binary_changed');
-    if (digest.digest('hex') !== EXECUTABLE_SHA256) invalid('game_tunnel_binary_unreviewed');
+    if (digest.digest('hex') !== expectedHash) invalid('game_tunnel_binary_unreviewed');
   } finally { await file.close(); }
 }
 
@@ -97,10 +98,10 @@ async function closeReservation(reservation) {
   if (reservation) await new Promise(resolve => reservation.socket.close(resolve));
 }
 
-function startAgent(args, kind, environment, fail) {
+function startAgent(args, kind, environment, fail, executable = EXECUTABLE, fragmented = false) {
   let child;
   try {
-    child = spawn(EXECUTABLE, args, { cwd: REPO, env: environment, windowsHide: true,
+    child = spawn(executable, args, { cwd: REPO, env: environment, windowsHide: true,
       shell: false, detached: false, stdio: ['pipe', 'pipe', 'pipe'] });
   } catch { invalid('game_tunnel_spawn_failed'); }
   const spawned = deferred(); const closed = deferred();
@@ -109,7 +110,8 @@ function startAgent(args, kind, environment, fail) {
     didSpawn: spawned.promise, didClose: closed.promise };
   const sequence = kind === 'host'
     ? ['invite_host_identity', 'host_invitation', 'host_ready', 'host_stopped']
-    : ['guest_identity', 'invitation_review', 'guest_ready', 'guest_stopped'];
+    : ['guest_identity', 'invitation_review', 'guest_ready', ...(fragmented ? ['fragmented_transport_snapshot'] : []), 'guest_stopped'];
+  const fragmentedSequence = fragmented ? createFragmentedEventSequence(kind) : undefined;
   const queue = [];
   const pendingInputs = new Set();
   let phase = 0; let waiter; let used = 0; let parsingFailed = false;
@@ -128,7 +130,15 @@ function startAgent(args, kind, environment, fail) {
         || !isDeepStrictEqual(event, { event: `${kind}_stopped` })))) {
       clearInvitationEvent(event); malformed('game_tunnel_event_unexpected'); return;
     }
+    if (fragmentedSequence) {
+      try { fragmentedSequence.accept(event, state.closing); }
+      catch { clearInvitationEvent(event); malformed('game_tunnel_event_unexpected'); return; }
+    }
     phase++;
+    if (event.event === 'fragmented_transport_snapshot') {
+      state.transport = fragmentedSequence.transport;
+      clearInvitationEvent(event); return;
+    }
     if (event.event === `${kind}_stopped`) state.stopped = true;
     if (waiter) { const pending = waiter; waiter = undefined; pending(event); }
     else if (queue.length < 3) queue.push(event);
@@ -245,7 +255,16 @@ export async function withPlasmoTunnel(operation, options = {}) {
   return withTunnel(operation, options, 'plasmo');
 }
 
-async function withTunnel(operation, options, voiceProfile) {
+// Separate explicit laboratory entry points. Legacy game and voice callers keep
+// their original artifact, commands, grants and exact event contract.
+export async function withSvcFragmentedTunnel(operation, options = {}) {
+  return withTunnel(operation, options, 'svc', true);
+}
+export async function withPlasmoFragmentedTunnel(operation, options = {}) {
+  return withTunnel(operation, options, 'plasmo', true);
+}
+
+async function withTunnel(operation, options, voiceProfile, fragmented = false) {
   const voice = voiceProfile !== undefined;
   if (typeof operation !== 'function' || !options || typeof options !== 'object' || Array.isArray(options)
     || Object.keys(options).some(key => !['signal', 'timeoutMs'].includes(key))
@@ -254,6 +273,12 @@ async function withTunnel(operation, options, voiceProfile) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) invalid('game_tunnel_invalid_options');
   if (process.platform !== 'win32' || !/^[a-zA-Z]:[\\/]Windows$/i.test(process.env.SystemRoot ?? '')) invalid('game_tunnel_windows_required');
   if (options.signal?.aborted) invalid('game_tunnel_cancelled');
+  let profile;
+  if (fragmented) {
+    try { profile = fragmentedVoiceContract(); }
+    catch { invalid('game_tunnel_fragmented_artifact_pending'); }
+  }
+  const executable = fragmented ? join(REPO, profile.executable) : EXECUTABLE;
 
   const controller = new AbortController(); const failure = deferred();
   let failureCode;
@@ -279,7 +304,7 @@ async function withTunnel(operation, options, voiceProfile) {
     finally { active = false; clearTimeout(timer); }
   };
   try {
-    await checkExecutable(); check();
+    await checkExecutable(executable, fragmented ? profile.executableSha256 : EXECUTABLE_SHA256); check();
     const directory = await ownDirectory(); check();
     const environment = { SystemRoot: process.env.SystemRoot, windir: process.env.SystemRoot,
       TEMP: directory, TMP: directory, USERPROFILE: directory };
@@ -296,20 +321,23 @@ async function withTunnel(operation, options, voiceProfile) {
       revision: 1, requiredCapability: 'reliableStream', maxDatagramBytes: 1400, udpReturnPolicy: { type: 'replyBudget' } };
     const services = [service];
     if (voice) services.push({ serviceId: 'aux', protocol: 'udp', endpoint: voiceProfile === 'svc' ? '127.0.0.1:43002' : '127.0.0.1:43003', revision: 1,
-      requiredCapability: 'datagram', maxDatagramBytes: 1400,
+      requiredCapability: fragmented ? profile.requiredCapability : 'datagram',
+      maxDatagramBytes: fragmented ? profile.approvedOriginalDatagramBytes : 1400,
       udpReturnPolicy: { type: 'authorizedDownstream', bytesPerSecond: 16384, datagramsPerSecond: 20 } });
     const plan = { schemaVersion: 1, bind: reservation.address, durationSeconds: LIFETIME_SECONDS, services };
     const bytes = Buffer.from(`${JSON.stringify(plan)}\n`);
     planFile = join(directory, 'plan.json'); planHash = hash(bytes);
     await writeFile(planFile, bytes, { flag: 'wx' }); check();
-    invitationGate = createInvitationGate({ plan, planHash });
-    const host = startAgent(['host-invite-plan', planFile, planHash], 'host', environment, fail); agents.push(host);
+    invitationGate = (fragmented ? createFragmentedInvitationGate : createInvitationGate)({ plan, planHash });
+    const host = startAgent([fragmented ? profile.hostCommand : 'host-invite-plan', planFile, planHash],
+      'host', environment, fail, executable, fragmented); agents.push(host);
     const hostIdentity = await event(host);
     let hostPin;
     try { hostPin = invitationGate.hostIdentity(hostIdentity); }
     finally { clearInvitationEvent(hostIdentity); }
-    const guest = startAgent([voice ? 'guest-invite' : 'guest-invite-tcp', hostPin,
-      '127.0.0.1:0', ...(voice ? ['127.0.0.1:35554'] : []), String(LIFETIME_SECONDS)], 'guest', environment, fail); agents.push(guest);
+    const guest = startAgent([fragmented ? profile.guestCommand : voice ? 'guest-invite' : 'guest-invite-tcp', hostPin,
+      '127.0.0.1:0', ...(voice ? ['127.0.0.1:35554'] : []), String(LIFETIME_SECONDS)],
+    'guest', environment, fail, executable, fragmented); agents.push(guest);
     hostPin = undefined;
     const guestIdentity = await event(guest);
     try { invitationGate.guestIdentity(guestIdentity); }
@@ -324,7 +352,8 @@ async function withTunnel(operation, options, voiceProfile) {
     finally { clearInvitationEvent(invitation); }
     const hostReady = await event(host);
     try {
-      if (!isDeepStrictEqual(hostReady, { event: 'host_ready', experimental: true, relay: false,
+      if (fragmented) invitationGate.hostReady(hostReady);
+      else if (!isDeepStrictEqual(hostReady, { event: 'host_ready', experimental: true, relay: false,
         next: 'enter stop to revoke and close; reconnect requires a fresh host/session/invitation' })) invalid('game_tunnel_mode_invalid');
     } finally { clearInvitationEvent(hostReady); }
     const review = await event(guest);
@@ -333,20 +362,26 @@ async function withTunnel(operation, options, voiceProfile) {
     if (voiceReservation) { await closeReservation(voiceReservation); voiceReservation = undefined; check(); }
     check(); invitationGate.approve(approval => guest.write(approval));
     const guestReady = await event(guest);
-    let bridgePort; let maxDatagramPayload;
+    let bridgePort; let maxDatagramPayload; let fragmentedContext;
     try {
-      const match = typeof guestReady.tcp === 'string' && /^127\.0\.0\.1:([1-9][0-9]{0,4})$/.exec(guestReady.tcp);
-      if (!match || Number(match[1]) > 65535 || guestReady.experimental !== true) invalid('game_tunnel_mode_invalid');
-      const expected = { event: 'guest_ready', tcp: guestReady.tcp, experimental: true, next: 'enter stop to close',
-        ...(voice ? { udp: '127.0.0.1:35554', maxDatagramPayload: guestReady.maxDatagramPayload } : { mode: 'tcp' }) };
-      if (!isDeepStrictEqual(guestReady, expected) || (voice && (!Number.isSafeInteger(guestReady.maxDatagramPayload)
-        || guestReady.maxDatagramPayload < 128 || guestReady.maxDatagramPayload > 1400))) invalid('game_tunnel_mode_invalid');
-      bridgePort = Number(match[1]); maxDatagramPayload = guestReady.maxDatagramPayload;
+      if (fragmented) {
+        try { fragmentedContext = fragmentedReady(guestReady); }
+        catch { invalid('game_tunnel_mode_invalid'); }
+        bridgePort = fragmentedContext.bridgePort;
+      } else {
+        const match = typeof guestReady.tcp === 'string' && /^127\.0\.0\.1:([1-9][0-9]{0,4})$/.exec(guestReady.tcp);
+        if (!match || Number(match[1]) > 65535 || guestReady.experimental !== true) invalid('game_tunnel_mode_invalid');
+        const expected = { event: 'guest_ready', tcp: guestReady.tcp, experimental: true, next: 'enter stop to close',
+          ...(voice ? { udp: '127.0.0.1:35554', maxDatagramPayload: guestReady.maxDatagramPayload } : { mode: 'tcp' }) };
+        if (!isDeepStrictEqual(guestReady, expected) || (voice && (!Number.isSafeInteger(guestReady.maxDatagramPayload)
+          || guestReady.maxDatagramPayload < 128 || guestReady.maxDatagramPayload > 1400))) invalid('game_tunnel_mode_invalid');
+        bridgePort = Number(match[1]); maxDatagramPayload = guestReady.maxDatagramPayload;
+      }
     } finally { clearInvitationEvent(guestReady); }
     check();
     callbackWork = Promise.resolve().then(() => {
       check(); return operation(Object.freeze({ bridgePort, signal: controller.signal,
-        ...(voice ? { voicePort: 35554, maxDatagramPayload } : {}) }));
+        ...(fragmented ? fragmentedContext : voice ? { voicePort: 35554, maxDatagramPayload } : {}) }));
     }).then(result => { value = result; }, () => fail('game_tunnel_operation_failed'));
     await Promise.race([callbackWork, failure.promise]);
   } catch (error) { fail(error instanceof GameTunnelError || error instanceof InvitationGateError ? error.code : 'game_tunnel_preparation_failed'); }
@@ -374,7 +409,8 @@ async function withTunnel(operation, options, voiceProfile) {
   }
   const cleanup = Object.freeze({ agents: agents.length, closed: agents.filter(agent => agent.closed).length,
     forced: agents.some(agent => agent.forced), stdoutBytes: agents.reduce((n, agent) => n + agent.stdoutBytes, 0),
-    stderrBytes: agents.reduce((n, agent) => n + agent.stderrBytes, 0) });
+    stderrBytes: agents.reduce((n, agent) => n + agent.stderrBytes, 0),
+    ...(fragmented ? { transport: agents[1]?.transport ?? null } : {}) });
   if (failureCode) throw new GameTunnelError(failureCode, cleanup);
   return { value, cleanup };
 }

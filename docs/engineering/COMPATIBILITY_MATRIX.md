@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 09/10/2026
 
+Incremento53: callers de voz V2 opt-in transportaram UDP4096B, recusaram4097B e mantiveram TCP concorrente em fixtures reais. Regressão final498 PASS/3 opt-ins históricos ignorados. SVC2.6.22 e Plasmo2.1.17 passaram separadamente nos controles locais de35s com cliente sintético PLAY e restauração própria. Primeiro SVC falhou, com causa indeterminada; repetição e rodada após ajuste do timeout do cliente passaram. **PARCIAL**: áudio, GUI, redes, contas mistas e nove pares Core/Skins não são homologados por essas provas. [Registro53](../task-aur-r4-connect.md#incremento53--callers-de-voz-com-transporte-v2-explícito).
+
 Incremento54 acrescenta diagnóstico local e redigido de conexão do convidado: default207 PASS/4 ignorados, relay local217 PASS/5 ignorados, mais composição host47b/guest54 com TCP1MiB por direção, replay, revogação e rebind. **PROTÓTIPO**; não acrescenta homologação externa, Minecraft, voz ou qualquer par Core/Skins. [Evidência54](../aurora-connect-connection-diagnostics.md). Testes entre PCs estão pausados por solicitação do usuário.
 
 Incremento52 separa ingresso de sessão em APIs explícitas game/TCP, com amostras locais de continuidade após ingresso, novas conexões, recusa tardia, revogação/expiração, ACK atrasado e avanço civil injetado. **PROTÓTIPO**; até3600s assinados não são uma hora de estabilidade testada. CLI/kits/desktop mantêm prazos anteriores; [contrato52](../aurora-connect-session-lifetime.md). Sem novo jogo, voz, ambiente externo ou célula Core/Skins homologada.

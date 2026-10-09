@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { LiveIpc, validateNativeEvent, readNativeFailure } from './live-ipc.mjs';
-import { inspectAnnouncedConfig, verifyCopyTree, readApproval, runLiveWriter, makeLivePlan, main } from './live-writer.mjs';
+import { inspectAnnouncedConfig, verifyCopyTree, readApproval, runLiveWriter, makeLivePlan, main, liveClientExercise, livePlanDigest } from './live-writer.mjs';
+import { fragmentedVoiceContract } from '../connect-client-lab/voice-fragmented-profile.mjs';
 import { withLabEula, requireLabRoot } from './server-lifecycle.mjs';
 import { withOwnedProcess } from './owned-process.mjs';
 import { runtimeFiles, runtimeArtifacts } from './play-profile.mjs';
@@ -200,6 +201,75 @@ test('live EULA/approval gates precede JDK, helper and stage access', async () =
   await errorCode(makeLivePlan('PRIVATE', 'bad', 'svc', 'bad', 'plasmo-control'), 'live_exercise');
   await errorCode(runLiveWriter('PRIVATE', 'bad', 'svc', 'bad', digest, true,
     { onReview: () => digest, exercise: 'svc-control' }), 'live_control_observer');
+});
+
+test('legacy voice exercise plans and writer mode remain unchanged', () => {
+  for (const profile of ['svc', 'plasmo']) {
+    assert.equal(liveClientExercise(profile, 'writer'), undefined);
+    assert.deepEqual(liveClientExercise(profile, `${profile}-control`), {
+      syntheticOfflineOnly: true, serverPort: 43001, voiceServerPort: profile === 'svc' ? 43002 : 43003,
+      guestVoicePort: 35554, command: `node --max-old-space-size=512 apps/connect-client-lab/${profile}-smoke.mjs --offline-lab`,
+      resultInSeparateClientReport: true, stopRequiredAfterProbe: true, audio: false,
+    });
+    for (const other of ['other-control-fragmented', `${profile}-control-fragmented-8192`,
+      `${profile === 'svc' ? 'plasmo' : 'svc'}-control-fragmented`]) {
+      assert.throws(() => liveClientExercise(profile, other), { message: 'live_exercise' });
+    }
+  }
+});
+
+test('fragmented voice review binds the selected mod, immutable transport and complete command to its digest', () => {
+  const transport = fragmentedVoiceContract();
+  for (const profile of ['svc', 'plasmo']) {
+    const exercise = `${profile}-control-fragmented`;
+    const clientExercise = liveClientExercise(profile, exercise);
+    assert.deepEqual(clientExercise.transport, transport);
+    assert.equal(clientExercise.command,
+      `node --max-old-space-size=512 apps/connect-client-lab/${profile}-smoke.mjs --offline-lab --fragmented-udp`);
+    assert.equal(clientExercise.keepaliveCommand,
+      `node --max-old-space-size=512 apps/connect-client-lab/${profile}-smoke.mjs --offline-lab --fragmented-udp --keepalive`);
+    assert.equal(clientExercise.keepaliveSeconds, 35);
+    const legacy = { profile, exercise: `${profile}-control`, clientExercise: liveClientExercise(profile, `${profile}-control`) };
+    const reviewed = { profile, exercise, clientExercise };
+    const approved = livePlanDigest(reviewed);
+    assert.notEqual(approved, livePlanDigest(legacy));
+    const withoutTransport = structuredClone(reviewed); delete withoutTransport.clientExercise.transport;
+    assert.notEqual(approved, livePlanDigest(withoutTransport));
+    for (const [key, value] of Object.entries({ profile: 'singleDatagramV1', invitationSchemaVersion: 2, udpEnvelopeVersion: 1,
+      executable: 'PRIVATE.exe', executableSha256: 'f'.repeat(64), hostCommand: 'host-invite-plan', guestCommand: 'guest-invite',
+      requiredCapability: 'datagram', approvedOriginalDatagramBytes: 8192, maxFragmentFrameBytes: 1400, relay: true, audio: true })) {
+      const changed = structuredClone(reviewed); changed.clientExercise.transport[key] = value;
+      assert.notEqual(approved, livePlanDigest(changed), key);
+    }
+    const changedCommand = structuredClone(reviewed); changedCommand.clientExercise.command += ' --keepalive';
+    assert.notEqual(approved, livePlanDigest(changedCommand));
+    const changedKeepalive = structuredClone(reviewed); changedKeepalive.clientExercise.keepaliveCommand = clientExercise.command;
+    assert.notEqual(approved, livePlanDigest(changedKeepalive));
+    const changedWindow = structuredClone(reviewed); changedWindow.clientExercise.keepaliveSeconds = 36;
+    assert.notEqual(approved, livePlanDigest(changedWindow));
+    const omittedKeepalive = structuredClone(reviewed); delete omittedKeepalive.clientExercise.keepaliveCommand;
+    assert.notEqual(approved, livePlanDigest(omittedKeepalive));
+    assert.equal(clientExercise.audio, false); assert.equal(clientExercise.resultInSeparateClientReport, true);
+  }
+});
+
+test('fragmented supervisor modes preserve consent, separate mutation approval, callback and exact argument gates', async () => {
+  await errorCode(main(['run-control-fragmented']), 'live_eula_acceptance_required');
+  await errorCode(main(['plan-control-fragmented', 'PRIVATE', 'bad', 'svc', 'bad', '4096']), 'live_usage');
+  await errorCode(main(['plan-control-fragmented', 'PRIVATE', 'bad', 'other', 'bad']), 'live_profile');
+  for (const profile of ['svc', 'plasmo']) {
+    const args = ['run-control-fragmented', 'PRIVATE', 'bad', profile, 'bad'];
+    await errorCode(main([...args, digest]), 'live_eula_acceptance_required');
+    await errorCode(main([...args, digest, '--user-accepted-minecraft-eula', '4096']), 'live_eula_acceptance_required');
+    await errorCode(main([...args, 'bad', '--user-accepted-minecraft-eula']), 'live_approval');
+    const exercise = `${profile}-control-fragmented`;
+    await errorCode(runLiveWriter('PRIVATE', 'bad', profile, 'bad', digest, false,
+      { exercise, onReview: () => digest, onReady: () => {} }), 'live_eula_acceptance_required');
+    await errorCode(runLiveWriter('PRIVATE', 'bad', profile, 'bad', digest, true,
+      { exercise, onReady: () => {} }), 'live_approval');
+    await errorCode(runLiveWriter('PRIVATE', 'bad', profile, 'bad', digest, true,
+      { exercise, onReview: () => digest }), 'live_control_observer');
+  }
 });
 
 test('real sibling cancellation waits for callback preparation and owned child close after helper death', async t => {

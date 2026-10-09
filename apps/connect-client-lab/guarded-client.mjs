@@ -44,7 +44,14 @@ export class GuardedClient extends protocol.Client {
     const packet = event === 'packet' ? args[1]?.name : event;
     if (blockedPackets.has(packet)) { this.rejectProtocol(); return false; }
     if (this.protocolRejected && !['error', 'end'].includes(event)) return false;
-    if (event === 'error') return this.notifyFailure('client_protocol_failed');
+    if (event === 'error') {
+      // The pinned keepalive handler generates this exact local message. Never
+      // expose upstream text, inspect payload fields or invoke message getters.
+      let keepaliveTimeout = false;
+      try { keepaliveTimeout = Object.getOwnPropertyDescriptor(args[0], 'message')?.value
+        === 'client timed out after 30000 milliseconds'; } catch { /* Unknown error stays redacted. */ }
+      return this.notifyFailure(keepaliveTimeout ? 'client_keepalive_timeout' : 'client_protocol_failed');
+    }
     try { return super.emit(event, ...args); }
     catch { return this.notifyFailure('client_protocol_handler_failed'); }
   }
@@ -73,7 +80,9 @@ export function createOfflineClient(port, name) {
   }
   return protocol.createClient({ Client: GuardedClient, host: '127.0.0.1', port,
     username: name, version: '1.21.1', auth: 'offline', profilesFolder: false,
-    hideErrors: true, disableChatSigning: true, keepAlive: true, checkTimeoutInterval: 15000,
+    // Match the pinned upstream default: the server's >=15s send cadence needs
+    // tick/transport margin. The independent 60s caller deadline is unchanged.
+    hideErrors: true, disableChatSigning: true, keepAlive: true, checkTimeoutInterval: 30000,
     clientSettings: { viewDistance: 2, chatFlags: 2, chatColors: false, skinParts: 0,
       enableTextFiltering: true, enableServerListing: false },
     connect: client => { const socket = new Socket(); client.setSocket(socket); socket.connect(port, '127.0.0.1'); },

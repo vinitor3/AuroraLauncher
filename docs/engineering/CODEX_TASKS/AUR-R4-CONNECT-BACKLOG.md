@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 09/10/2026
 
+Incremento53/003/005/006/007/008: caller Node V2 com pin e revisão próprios, schema1/120s preservados; UDP4096/rejeição4097, duas origens, TCP concorrente, cancelamento e cleanup reais. Final498 PASS/3 opt-ins históricos ignorados. SVC e Plasmo passaram separadamente nos controles reais de35s e stop/restore/EULA; primeira falha SVC permanece registrada e sem causa atribuída. [Registro53](../../task-aur-r4-connect.md#incremento53--callers-de-voz-com-transporte-v2-explícito). Áudio, clientes gráficos, redes/misto e T-VOICE continuam PRECISA DE TESTE; opt-in não conclui006/007 nem amplia a matriz.
+
 Incremento54/004/005/008: observador fechado do Guest e aliases explícitos localizam a última operação iniciada, mantendo erros, prazos e autenticação. Default207/relay217 passaram; host47b e guest54 trocaram TCP real e recusaram replay/revogação com cleanup. [Contrato54](../../aurora-connect-connection-diagnostics.md). Causa dos timeouts externos continua **NÃO VERIFICADO**; ensaios entre PCs pausados pelo usuário, sem impedir implementação local.
 
 Incremento52/005/008: APIs de sessão game/TCP com ingresso≤600s e encerramento absoluto≤3600s, autoridade original retida e autorização separada após admissão. Provas locais cobrem TCP depois do ingresso, recusa tardia noHost, replay, revogação/expiração e cleanup; não concluem duração/estabilidade real, callerdesktop ou T-MC. [Contrato52](../../aurora-connect-session-lifetime.md). CLI, kits, Node120s e UI600s continuam inalterados; UDP fragmentado usa perfil/schema distinto.

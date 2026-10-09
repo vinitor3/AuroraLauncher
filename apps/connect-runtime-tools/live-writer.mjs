@@ -11,6 +11,7 @@ import { withOwnedProcess } from './owned-process.mjs';
 import { LiveIpc, INSTANCE_ID, readNativeFailure } from './live-ipc.mjs';
 import { parseConfig } from '../connect-voice-tools/inspect.mjs';
 import { rejectLinkedParents } from '../connect-voice-tools/local-path.mjs';
+import { fragmentedVoiceContract } from '../connect-client-lab/voice-fragmented-profile.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const PARENT = join(REPO, '.aurora/connect-runtime');
@@ -29,10 +30,28 @@ async function helperInfo(name) {
   return { file, sha256: hash(bytes), bytes: bytes.length, test: HELPER_TEST };
 }
 
-export async function makeLivePlan(javaHome, prepared, profile, helperName, exercise = 'writer') {
+export function liveClientExercise(profile, exercise) {
   if (!['svc', 'plasmo'].includes(profile)) fail('live_profile');
-  if (!['writer', 'svc-control', 'plasmo-control'].includes(exercise)
-    || (exercise !== 'writer' && exercise !== `${profile}-control`)) fail('live_exercise');
+  if (!['writer', `${profile}-control`, `${profile}-control-fragmented`].includes(exercise)) fail('live_exercise');
+  if (exercise === 'writer') return undefined;
+  const fragmented = exercise === `${profile}-control-fragmented`;
+  let transport;
+  if (fragmented) {
+    try { transport = fragmentedVoiceContract(); }
+    catch (error) {
+      if (error.message === 'game_tunnel_fragmented_artifact_pending') fail('live_fragmented_artifact_pending');
+      throw error;
+    }
+  }
+  const command = `node --max-old-space-size=512 apps/connect-client-lab/${profile}-smoke.mjs --offline-lab${fragmented ? ' --fragmented-udp' : ''}`;
+  return { syntheticOfflineOnly: true, serverPort: 43001, voiceServerPort: profile === 'svc' ? 43002 : 43003,
+    guestVoicePort: 35554, command,
+    resultInSeparateClientReport: true, stopRequiredAfterProbe: true, audio: false,
+    ...(fragmented ? { transport, keepaliveCommand: `${command} --keepalive`, keepaliveSeconds: 35 } : {}) };
+}
+
+export async function makeLivePlan(javaHome, prepared, profile, helperName, exercise = 'writer') {
+  const clientExercise = liveClientExercise(profile, exercise);
   const server = await makeRunPlan(javaHome, prepared, profile);
   const resources = join(PARENT, prepared);
   const launchArgs = ['-Djava.io.tmpdir=.connect-run-temp', '-Duser.home=.connect-run-temp', '-XX:-UsePerfData',
@@ -44,9 +63,7 @@ export async function makeLivePlan(javaHome, prepared, profile, helperName, exer
   const gameFiles = Object.fromEntries(['server.properties', 'eula.txt', ...(control ? ['whitelist.json'] : [])]
     .map(file => [file, { contents: files[file], sha256: hash(files[file]) }]));
   return { schemaVersion: 1, purpose: 'aurora_connect_native_voice_writer_roundtrip', profile, exercise, gameFiles,
-    ...(control ? { clientExercise: { syntheticOfflineOnly: true, serverPort: 43001, voiceServerPort: profile === 'svc' ? 43002 : 43003,
-      guestVoicePort: 35554, command: `node --max-old-space-size=512 apps/connect-client-lab/${profile}-smoke.mjs --offline-lab`,
-      resultInSeparateClientReport: true, stopRequiredAfterProbe: true, audio: false } } : {}),
+    ...(control ? { clientExercise } : {}),
     resourceStage: prepared, resourceRunPlanSha256: runPlanDigest(server), java: server.java,
     artifacts: server.artifacts, tools: server.tools, helper: await helperInfo(helperName),
     helperArgs: [HELPER_TEST, '--exact', '--ignored', '--test-threads=1', '--nocapture'],
@@ -213,7 +230,8 @@ export async function runLiveWriter(javaHome, prepared, profile, helperName, app
         timeoutMs: 300000, stopTimeoutMs: 5000, outputLimitBytes: 4194304 },
       async ({ signal: javaSignal, ownsProcessId }) => {
         const evidence = await ready(copy, probeHome, javaSignal, ownsProcessId, profile);
-        if (onReady) await onReady({ signal: javaSignal, evidence });
+        if (onReady) await onReady({ signal: javaSignal, evidence,
+          ...(plan.clientExercise?.transport ? { clientExercise: plan.clientExercise } : {}) });
         return evidence;
       }));
       javaResult = await javaWork;
@@ -278,20 +296,23 @@ export async function readApproval(input, expected, signal) {
 }
 
 export async function main(args, { input = process.stdin, signal, emit = value => process.stdout.write(json(value)) } = {}) {
-  if (args.length === 5 && ['plan', 'plan-control'].includes(args[0])) {
-    const plan = await makeLivePlan(...args.slice(1), args[0] === 'plan-control' ? `${args[3]}-control` : 'writer');
+  if (args.length === 5 && ['plan', 'plan-control', 'plan-control-fragmented'].includes(args[0])) {
+    const exercise = args[0] === 'plan' ? 'writer' : `${args[3]}-control${args[0].endsWith('-fragmented') ? '-fragmented' : ''}`;
+    const plan = await makeLivePlan(...args.slice(1), exercise);
     return { event: 'native_writer_plan', planSha256: livePlanDigest(plan), plan };
   }
-  if (args.length === 7 && ['run', 'run-control'].includes(args[0]) && args[6] === '--user-accepted-minecraft-eula') {
-    const control = args[0] === 'run-control';
-    return runLiveWriter(...args.slice(1, 5), args[5], true, { signal, exercise: control ? `${args[3]}-control` : 'writer',
-      ...(control ? { onReady: async ({ signal: childSignal, evidence }) => {
-        emit({ event: 'voice_control_ready', profile: args[3], evidence, clientProbe: 'separate_process_required' });
+  if (args.length === 7 && ['run', 'run-control', 'run-control-fragmented'].includes(args[0]) && args[6] === '--user-accepted-minecraft-eula') {
+    const control = args[0] !== 'run';
+    const exercise = control ? `${args[3]}-control${args[0].endsWith('-fragmented') ? '-fragmented' : ''}` : 'writer';
+    return runLiveWriter(...args.slice(1, 5), args[5], true, { signal, exercise,
+      ...(control ? { onReady: async ({ signal: childSignal, evidence, clientExercise }) => {
+        emit({ event: 'voice_control_ready', profile: args[3], evidence, clientProbe: 'separate_process_required',
+          ...(clientExercise ? { exercise, clientExercise } : {}) });
         await waitForStop(input, childSignal);
       } } : {}),
       onReview: async (review, childSignal) => { emit({ event: 'voice_mutation_review', review }); return readApproval(input, review.digest, childSignal); } });
   }
-  fail(['run', 'run-control'].includes(args[0]) ? 'live_eula_acceptance_required' : 'live_usage');
+  fail(['run', 'run-control', 'run-control-fragmented'].includes(args[0]) ? 'live_eula_acceptance_required' : 'live_usage');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const controller = new AbortController(); const interrupt = () => controller.abort();

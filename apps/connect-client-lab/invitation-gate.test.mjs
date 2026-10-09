@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { createInvitationGate, clearInvitationEvent, InvitationGateError } from './invitation-gate.mjs';
+import { createInvitationGate, createFragmentedInvitationGate, clearInvitationEvent, InvitationGateError } from './invitation-gate.mjs';
+import { FRAGMENTED_HOST_NEXT, FRAGMENTED_GUEST_NEXT, FRAGMENTED_REVIEW_NEXT } from './voice-fragmented-profile.mjs';
 
 // Pure contract fixtures only. These are NOT valid Ed25519 invitations. Real
 // signature verification belongs to the pinned Rust guest, exercised by the
@@ -10,6 +11,8 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const clone = value => structuredClone(value);
 
 function fixture(t, profile = 'game') {
+  const fragmented = profile.endsWith('-v2');
+  profile = profile.replace('-v2', '');
   const clock = { wall: 1_800_000_000_000, monotonic: 1000 };
   t.mock.method(Date, 'now', () => clock.wall);
   t.mock.method(performance, 'now', () => clock.monotonic);
@@ -19,11 +22,11 @@ function fixture(t, profile = 'game') {
   const services = [game];
   if (profile !== 'game') services.push({ serviceId: 'aux', protocol: 'udp',
     endpoint: profile === 'svc' ? '127.0.0.1:43002' : '127.0.0.1:43003', revision: 1,
-    requiredCapability: 'datagram', maxDatagramBytes: 1400,
+    requiredCapability: fragmented ? 'fragmentedDatagram' : 'datagram', maxDatagramBytes: fragmented ? 4096 : 1400,
     udpReturnPolicy: { type: 'authorizedDownstream', bytesPerSecond: 16384, datagramsPerSecond: 20 } });
   const plan = { schemaVersion: 1, bind: '127.0.0.1:31000', durationSeconds: 120, services };
   const planHash = hash(`${JSON.stringify(plan)}\n`);
-  const gate = createInvitationGate({ plan, planHash });
+  const gate = (fragmented ? createFragmentedInvitationGate : createInvitationGate)({ plan, planHash });
   const hostEvent = { event: 'invite_host_identity', peer: host,
     plan: { schemaKind: 'localLabServicePlan', schemaVersion: 1, experimental: true,
       hashAlgorithm: 'sha256', hash: planHash, before: { session: 'notStarted' },
@@ -33,6 +36,13 @@ function fixture(t, profile = 'game') {
     next: 'review services; give host public ID to guest through an authorized channel; enter guest public ID within 60 seconds' };
   const guestEvent = { event: 'guest_identity', peer: guest,
     next: 'authorize this public ID at the pinned host; paste its invitation within 60 seconds' };
+  if (fragmented) {
+    Object.assign(hostEvent.plan, { profile: 'fragmentedV2', udpEnvelopeVersion: 2, maxFragmentFrameBytes: 1264 });
+    Object.assign(hostEvent, { profile: 'fragmentedV2', preparationSeconds: 600,
+      preparationExpiresAtUnixMs: clock.wall + 600_000, next: FRAGMENTED_HOST_NEXT });
+    Object.assign(guestEvent, { profile: 'fragmentedV2', preparationSeconds: 600,
+      preparationExpiresAtUnixMs: clock.wall + 600_000, next: FRAGMENTED_GUEST_NEXT });
+  }
   const grants = services.map(({ endpoint, ...grant }) => grant);
   const body = { schemaVersion: 1, hostKey: host, guestKey: guest, sessionId: host,
     invitationId: 'c'.repeat(64), issuedAtUnixMs: clock.wall, expiresAtUnixMs: clock.wall + 120_000,
@@ -46,6 +56,14 @@ function fixture(t, profile = 'game') {
       directAddress: plan.bind, services: clone(grants), singleUse: true, relay: false, accountIdentityVerified: false },
     localTcp: '127.0.0.1:0', localUdp: profile === 'game' ? null : '127.0.0.1:35554',
     next: 'review pinned host, guest, services and expiry; enter approve followed by the exact digest' };
+  const hostReadyEvent = { event: 'host_ready', experimental: true, relay: false, profile: 'fragmentedV2',
+    udpEnvelopeVersion: 2, expiresAtUnixMs: body.expiresAtUnixMs, wholeSessionMaximumSeconds: 600,
+    next: 'enter stop then press Enter to revoke and close; fresh invitation required after shutdown' };
+  if (fragmented) {
+    Object.assign(reviewEvent.invitation, { profile: 'fragmentedV2', udpEnvelopeVersion: 2, maxFragmentFrameBytes: 1264 });
+    Object.assign(reviewEvent, { profile: 'fragmentedV2', approvalExpiresAtUnixMs: body.expiresAtUnixMs,
+      next: FRAGMENTED_REVIEW_NEXT });
+  }
   const writes = { peer: 0, invitation: 0, approval: 0 };
   const peerWriter = value => { assert.ok(value === guest, 'unexpected_peer_write'); writes.peer++; };
   const invitationWriter = value => { assert.ok(value === encoded, 'unexpected_invitation_write'); writes.invitation++; };
@@ -54,9 +72,12 @@ function fixture(t, profile = 'game') {
     assert.ok(gate.hostIdentity(hostEvent) === host, 'unexpected_host_pin');
     gate.guestIdentity(guestEvent); gate.authorizePeer(peerWriter);
   }
-  function delivered() { authorize(); gate.invitation(invitationEvent, invitationWriter); }
+  function delivered() {
+    authorize(); gate.invitation(invitationEvent, invitationWriter);
+    if (fragmented) gate.hostReady(hostReadyEvent);
+  }
   t.after(() => gate.dispose());
-  return { gate, clock, plan, hostEvent, guestEvent, invitationEvent, reviewEvent,
+  return { gate, clock, plan, hostEvent, guestEvent, invitationEvent, reviewEvent, hostReadyEvent,
     writes, peerWriter, invitationWriter, approvalWriter, authorize, delivered };
 }
 
@@ -78,7 +99,7 @@ function rewrite(event, change) {
   event.invitation = JSON.stringify(envelope); event.digest = hash(event.invitation);
 }
 
-for (const profile of ['game', 'svc', 'plasmo']) {
+for (const profile of ['game', 'svc', 'plasmo', 'svc-v2', 'plasmo-v2']) {
   test(`${profile}: exact local plan, envelope and Rust review permit one approval only`, t => {
     const f = fixture(t, profile);
     assert.ok(Object.isFrozen(f.gate)); assert.equal(JSON.stringify(f.gate), '{}');
@@ -263,3 +284,130 @@ test('delivered event references can be cleared without weakening the stored exp
   f.gate.review(f.reviewEvent); clearInvitationEvent(f.reviewEvent); f.gate.approve(f.approvalWriter);
   assert.equal(f.writes.approval, 1); assert.equal(JSON.stringify(f.gate), '{}');
 });
+
+for (const [name, mutate] of Object.entries({
+  profile: e => { e.profile = 'legacy'; },
+  envelope: e => { e.plan.udpEnvelopeVersion = 1; },
+  capability: e => { e.plan.after.services[1].requiredCapability = 'datagram'; },
+  original: e => { e.plan.after.services[1].maxDatagramBytes = 1400; },
+  frame: e => { e.plan.maxFragmentFrameBytes = 4096; },
+  deadline: e => { e.preparationExpiresAtUnixMs += 2; },
+  unsafeDeadline: e => { e.preparationExpiresAtUnixMs = Number.MAX_SAFE_INTEGER + 1; },
+  preparation: e => { e.preparationSeconds = 601; },
+  missing: e => { delete e.profile; },
+  extra: e => { e.audio = true; },
+})) {
+  test(`V2 host mismatch ${name} cannot authorize peer`, t => {
+    const f = fixture(t, 'svc-v2'); mutate(f.hostEvent);
+    refused(() => f.gate.hostIdentity(f.hostEvent));
+    refused(() => f.gate.authorizePeer(f.peerWriter));
+    assert.deepEqual(f.writes, { peer: 0, invitation: 0, approval: 0 });
+  });
+}
+
+for (const [name, mutate] of Object.entries({
+  legacy: e => { delete e.profile; },
+  deadline: e => { e.preparationExpiresAtUnixMs += 2; },
+  preparation: e => { e.preparationSeconds = 60; },
+  extra: e => { e.audio = true; },
+})) {
+  test(`V2 guest mismatch ${name} cannot authorize peer`, t => {
+    const f = fixture(t, 'plasmo-v2'); f.gate.hostIdentity(f.hostEvent); mutate(f.guestEvent);
+    refused(() => f.gate.guestIdentity(f.guestEvent));
+    assert.deepEqual(f.writes, { peer: 0, invitation: 0, approval: 0 });
+  });
+}
+
+for (const [name, mutate] of Object.entries({
+  expiry: e => { e.expiresAtUnixMs++; },
+  profile: e => { e.profile = 'legacy'; },
+  envelope: e => { e.udpEnvelopeVersion = 1; },
+  session: e => { e.wholeSessionMaximumSeconds = 601; },
+  extra: e => { e.keepalive = true; },
+})) {
+  test(`V2 host readiness mismatch ${name} cannot approve`, t => {
+    const f = fixture(t, 'svc-v2'); f.authorize(); f.gate.invitation(f.invitationEvent, f.invitationWriter);
+    mutate(f.hostReadyEvent); refused(() => f.gate.hostReady(f.hostReadyEvent));
+    refused(() => f.gate.approve(f.approvalWriter)); assert.equal(f.writes.approval, 0);
+  });
+}
+
+for (const [name, mutate] of Object.entries({
+  approvalExpiry: e => { e.approvalExpiresAtUnixMs++; },
+  profile: e => { e.profile = 'legacy'; },
+  previewProfile: e => { delete e.invitation.profile; },
+  frame: e => { e.invitation.maxFragmentFrameBytes = 4096; },
+  capability: e => { e.invitation.services[1].requiredCapability = 'datagram'; },
+  original: e => { e.invitation.services[1].maxDatagramBytes = 1400; },
+  relay: e => { e.invitation.relay = true; },
+  schema: e => { e.invitation.schemaVersion = 2; },
+})) {
+  test(`V2 review mismatch ${name} cannot approve`, t => {
+    const f = fixture(t, 'plasmo-v2'); f.delivered(); mutate(f.reviewEvent);
+    refused(() => f.gate.review(f.reviewEvent));
+    refused(() => f.gate.approve(f.approvalWriter)); assert.equal(f.writes.approval, 0);
+  });
+}
+
+for (const boundary of ['wall', 'monotonic', 'backward']) {
+  test(`V2 preparation ${boundary} expiry refuses peer authorization`, t => {
+    const f = fixture(t, 'svc-v2'); f.gate.hostIdentity(f.hostEvent); f.gate.guestIdentity(f.guestEvent);
+    if (boundary === 'wall') f.clock.wall += 600_000;
+    if (boundary === 'monotonic') f.clock.monotonic += 600_000;
+    if (boundary === 'backward') f.clock.wall--;
+    refused(() => f.gate.authorizePeer(f.peerWriter)); assert.equal(f.writes.peer, 0);
+  });
+}
+
+test('V2 requires host readiness before review, with no approval on phase skip', t => {
+  const f = fixture(t, 'svc-v2'); f.authorize(); f.gate.invitation(f.invitationEvent, f.invitationWriter);
+  refused(() => f.gate.review(f.reviewEvent)); refused(() => f.gate.approve(f.approvalWriter));
+  assert.equal(f.writes.approval, 0);
+});
+
+test('V2 factory refuses a legacy plan instead of inferring a profile', t => {
+  const f = fixture(t, 'svc');
+  refused(() => createFragmentedInvitationGate({ plan: f.plan, planHash: hash(`${JSON.stringify(f.plan)}\n`) }));
+});
+
+for (const mode of ['accept', 'wallClamp', 'monotonicClamp', 'alreadyExpired', 'backward']) {
+  test(`V2 preparation +1ms reporting boundary ${mode} never extends its effective lifetime`, t => {
+    const f = fixture(t, 'svc-v2'); f.hostEvent.preparationExpiresAtUnixMs++;
+    f.guestEvent.preparationExpiresAtUnixMs++;
+    if (mode === 'alreadyExpired') {
+      f.hostEvent.preparationExpiresAtUnixMs = f.clock.wall;
+      refused(() => f.gate.hostIdentity(f.hostEvent)); assert.equal(f.writes.peer, 0); return;
+    }
+    f.gate.hostIdentity(f.hostEvent); f.gate.guestIdentity(f.guestEvent);
+    if (mode === 'wallClamp') f.clock.wall += 600_000;
+    if (mode === 'monotonicClamp') f.clock.monotonic += 600_000;
+    if (mode === 'backward') f.clock.wall--;
+    if (mode !== 'accept') {
+      refused(() => f.gate.authorizePeer(f.peerWriter)); assert.equal(f.writes.peer, 0); return;
+    }
+    f.gate.authorizePeer(f.peerWriter); f.gate.invitation(f.invitationEvent, f.invitationWriter);
+    f.gate.hostReady(f.hostReadyEvent); f.gate.review(f.reviewEvent); f.gate.approve(f.approvalWriter);
+    assert.equal(f.writes.approval, 1);
+  });
+}
+
+for (const [name, mutate] of Object.entries(bodyChanges)) {
+  test(`V2 signed-body contract ${name} refuses before guest stdin`, t => {
+    const f = fixture(t, 'svc-v2'); f.authorize(); rewrite(f.invitationEvent, mutate);
+    refused(() => f.gate.invitation(f.invitationEvent, f.invitationWriter));
+    refused(() => f.gate.approve(f.approvalWriter));
+    assert.deepEqual(f.writes, { peer: 1, invitation: 0, approval: 0 });
+  });
+}
+
+for (const boundary of ['beforeReview', 'beforeApproval', 'backwardClock', 'monotonicDeadline']) {
+  test(`V2 invitation expiry ${boundary} refuses without approval`, t => {
+    const f = fixture(t, 'svc-v2'); f.delivered();
+    if (boundary !== 'beforeReview') f.gate.review(f.reviewEvent);
+    if (boundary === 'backwardClock') f.clock.wall--;
+    else if (boundary === 'monotonicDeadline') f.clock.monotonic += 120_000;
+    else f.clock.wall += 120_000;
+    if (boundary === 'beforeReview') refused(() => f.gate.review(f.reviewEvent));
+    refused(() => f.gate.approve(f.approvalWriter)); assert.equal(f.writes.approval, 0);
+  });
+}
