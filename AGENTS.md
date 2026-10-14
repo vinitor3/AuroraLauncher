@@ -29,6 +29,8 @@ O laboratório descartável `apps/connect-runtime-tools` já executou Minecraft 
 
 ## Mapa do repositório
 
+Connect71 acrescenta Host de grupo estático schema3, com2–8 convites individuais e APIs explícitas loopback/IPv6/IPv4. Exige bijeção convite/lease, conserva a autoridade e os relógios originais por participante; revogar/expirar A não fecha B. As APIs antigas continuam de uma admissão, sem ampliação silenciosa. Consulte `docs/aurora-connect-multiparticipant-session.md`; três agentes sintéticos não comprovam dois jogadores ou voz.
+
 Connect69 permite aposentar explicitamente a autoridade de um recibo de voz após revisão própria. Ready0 passa a Retired1 em uma transação do índice; nenhum arquivo de configuração é alterado e isso nunca significa Restored. Undo genérico não aposenta por inferência. Histórico continua contando no limite64; downgrade anterior recusa o estado novo, sem apagar ou reescrever o índice. Consulte `docs/aurora-connect-voice-receipt-retirement.md` antes de integrar essa ação.
 
 Connect70 expõe essa ação no painel por capability própria, preparo/confirm separados e consentimento novo. Cancelar conserva Ready para outra revisão; resultado incerto mantém barreira e não promete Retired. Listagem/fechamento distinguem histórico aposentado de restauração e perdaRAM. Consulte `docs/aurora-connect-desktop-receipt-retirement.md`; ambos os mods continuam sem homologação de áudio.

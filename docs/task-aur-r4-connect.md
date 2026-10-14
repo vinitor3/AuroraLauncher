@@ -1645,7 +1645,7 @@ node --test apps/desktop/src/features/voice-announcement/VoiceAnnouncement.smoke
 npm.cmd run build
 ```
 
-Logs `.aurora/connect-validation/durable-voice-68-{pinned,frontend-final,frontend-build-final}.log`; Clippy combinado final67/68 já passou12,95s conforme67. A regressão completa integrada usa snapshot anterior a69; resultado será registrado após conclusão. Um ajuste posterior somente no teste abandonado espera liberação efetiva da mutex após `exit_ready`, sem alterar produção; seu foco precisa ser conferido após o ajuste.
+Logs `.aurora/connect-validation/durable-voice-68-{pinned,frontend-final,frontend-build-final}.log`; Clippy combinado final67/68 já passou12,95s conforme67. A regressão completa integrada anterior a69 terminou com **379 PASS/54 ignorados/0 falhas**,158,45s de testes, compilação1m25s; log `durable-voice-68-full-combined.log`. Um ajuste posterior somente no teste abandonado espera liberação efetiva da mutex após `exit_ready`, sem alterar produção; seu reteste **1 PASS** está registrado no incremento70.
 
 TCP, UDP, direto, relay, Minecraft e convites externos conservam os gates existentes. SVC/Plasmo avançam somente em configuração/recuperação; não há áudio ou mod carregado. Não iniciar Java, alterar original ou restaurar silenciosamente. Rollback preserva cópia/índice/CAS e resolve journals2 antes de downgrade. Nenhuma intervenção humana necessária.
 
@@ -1698,6 +1698,40 @@ Regressão da sincronização68 **1 PASS**,0,93s, encerrando a pendência de tes
 Logs `receipt-retirement-70-{resume-race-regression,frontend-final,frontend-build-final}.log` e `receipt-retirement-69-70-clippy-voice.log` no diretório privado de validação. Regressão padrão278/5 está em69. Locks/matriz foram reconferidos e permaneceram nos hashes anteriores. O próximo full combinado será registrado em sua própria rodada; nenhum resultado futuro é atribuído aqui.
 
 Estado separado: TCP e UDP preservados; diretoIPv4/IPv6 sem nova prova externa; relay público desativado; Minecraft sem nova execução; convites externos ainda pendentes; interface de voz avançou localmente; SVC e Plasmo continuam sem áudio homologado. Rollback conserva índice/histórico e respeita os journals/estados novos, sem apagar ou converter recibos. Nenhuma intervenção humana necessária.
+
+## Incremento71 — um anfitrião com convites independentes por participante
+
+Base `f794031` após69/70. Biblioteca acrescenta três entradas explícitas de Host para grupo estático schema3, nos modos loopback/IPv6/IPv4. Cada envelope individual e Guest anteriores permanecem iguais. Antes de abrir endpoint, valida2–8 participantes, correspondência exata de IDs/peers/leases e registry comum; conserva objetos/clocks originais por participante. Revogação ou expiração de A não fecha B, nem aumenta limites globais. [Contrato71](aurora-connect-multiparticipant-session.md).
+
+Arquivos: `apps/connect-lab/src/host.rs`, novo `host_session_group.rs` e novo `tests/multiparticipant_session.rs`. A antiga atribuição de uma Option ao primeiro lease vira modo interno Manual ou mapa Invited com cobertura exata; falta/sobra sempre recusa. APIs antigas continuam recusando múltiplos leases. Nenhuma mudança de codec/assinatura/dependências, CLI, matriz ou configuração pessoal.
+
+Comandos focais executados:
+
+```powershell
+cargo test --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --lib group_validation -- --test-threads=1
+cargo test --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --lib group_ -- --test-threads=1
+cargo test --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --test multiparticipant_session -- --test-threads=1
+```
+
+Primeira compilação unitária recusou `assert_eq` porque a prova privada não implementa Debug; corrigido apenas para comparação booleana, sem expor a prova. Primeiros3 unitários passaram0,07s/compile18,32s; após acrescentar retenção do relógio por ID, **4 PASS/0 ignorados**,0,09s/compile6,01s. A primeira integração **6 PASS**,9,69s/compile42,10s foi seguida de reforço causal da sobreposição TCP/UDP. Rodada final **6 PASS/0 ignorados**,10,01s/compile15,35s, com barreiras entre blocosTCP e os quatro retornosUDP. Fonte final do teste SHA256 `cf8d3ae414e683041a51f8f0bc445ec5ab2f48b6959d5ba790debd865a16882e`. Logs `multiparticipant-71-{unit,unit-final,unit-clocks,integration,integration-final}.log`; não somar rodadas sobrepostas.
+
+Os seis casos comprovam3 agentes/quatro origens distintas, UDP4096 marcado com retornos atrasados, TCP íntegro durante UDP, revogação individual com replay recusado, prazos distintos, ingresso tardio recusado pelo Host, peer/prova/capacidades inválidos sem consumir B, limites por participante/globais,17 configurações inválidas antes de bind, shutdown aguardado e rebind. Modo positivo desta etapa é loopback; IPv4/IPv6 do grupo ainda não têm prova positiva própria. Não são dois jogadores, áudio, redes externas ou estabilidade prolongada.
+
+Regressão integrada nativa antes72: `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-features --all-targets -- --test-threads=1` compilou2m31s e encontrou **277 PASS/1 falha/59 ignorados** na suite lib,154,58s; demais executáveis não rodaram após a falha. Log `multiparticipant-71-desktop-regression.log`. Falha real em `tcp_and_two_udp_sources_continue_after_admission_then_revoke_with_cleanup`: stop podia observar snapshot fechado antes do worker retornar, sobrescrevê-lo como pending, aguardar o worker e devolver pending sem outra publicação. A correção71a e a repetição serão registradas separadamente; não classificar essa rodada como aprovada ou reduzir a asserção do teste.
+
+Regressões amplas da biblioteca, executadas sobre a mesma fonte congelada:
+
+```powershell
+cargo test --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --all-targets -- --test-threads=1
+cargo test --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --all-targets --features local-relay-lab -- --test-threads=1
+cargo clippy --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --all-targets -- -D warnings
+cargo clippy --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --all-targets --features local-relay-lab -- -D warnings
+cargo fmt --manifest-path apps/connect-lab/Cargo.toml --all -- --check
+```
+
+Padrão **246 PASS/7 ignorados/0 falhas**,155,89s de testes, compilação3m14s; relay local **256 PASS/8 ignorados/0 falhas**,173,38s, compilação4m46s. Clippy padrão/relay **PASS15,56s/19,32s**; fmt PASS. Logs `multiparticipant-71-full-{default,relay}.log` e `multiparticipant-71-clippy-{default,relay}.log`. Os opt-ins não executados permanecem identificados como tais; nenhuma nova prova de IPv4 próprio, loopback IPv6 ou relay externo é inferida desta rodada.
+
+Revisões independentes da biblioteca e integração, além da revisão do coordenador, não identificaram bloqueador final no mapa de autoridades. Rollback fecha todos os próprios agentes, preserva os envelopes antigos e não reinterpreta grupo como autorização manual. Nenhuma intervenção humana necessária para continuar os testes locais.
 
 ### Achados históricos de transporte
 

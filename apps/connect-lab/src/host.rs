@@ -31,6 +31,12 @@ enum InvitationAuthority {
     Session(SessionInvitation),
 }
 impl InvitationAuthority {
+    fn lease_id(&self) -> String {
+        match self {
+            Self::Legacy(value) => value.lease().lease_id,
+            Self::Session(value) => value.invitation_id().to_owned(),
+        }
+    }
     fn check_admission(&self) -> Result<()> {
         match self {
             Self::Legacy(value) => value.check_current(),
@@ -62,6 +68,16 @@ impl InvitationAuthority {
         }
     }
 }
+
+// Manual authorization is an explicit mode. An invited group must assign one
+// retained original authority to every lease; absence never becomes manual.
+enum HostAuthorities {
+    Manual,
+    Invited(HashMap<String, InvitationAuthority>),
+}
+
+#[path = "host_session_group.rs"]
+mod session_group;
 
 #[cfg(test)]
 mod session_clock_tests {
@@ -402,7 +418,20 @@ impl Host {
     }
     async fn start_inner(
         config: HostConfig,
-        mut invitation: Option<InvitationAuthority>,
+        invitation: Option<InvitationAuthority>,
+        mode: transport::EndpointMode,
+    ) -> Result<Self> {
+        let authorities = match invitation {
+            Some(invitation) => {
+                HostAuthorities::Invited(HashMap::from([(invitation.lease_id(), invitation)]))
+            }
+            None => HostAuthorities::Manual,
+        };
+        Self::start_with_authorities(config, authorities, mode).await
+    }
+    async fn start_with_authorities(
+        config: HostConfig,
+        mut authorities: HostAuthorities,
         mode: transport::EndpointMode,
     ) -> Result<Self> {
         config.limits.validate()?;
@@ -466,19 +495,28 @@ impl Host {
             {
                 return Err(Error::Configuration);
             }
+            let invitation = match &mut authorities {
+                HostAuthorities::Manual => None,
+                HostAuthorities::Invited(values) => {
+                    Some(values.remove(&lease.lease_id).ok_or(Error::Configuration)?)
+                }
+            };
             leases.insert(
                 lease.lease_id.clone(),
                 LeaseState {
                     fragment_memory: bridge::peer_budget(lease.peer),
                     fragment_ingress: Arc::new(Mutex::new(UdpLimiter::new(&config.limits))),
                     value: lease,
-                    invitation: invitation.take(),
+                    invitation,
                     consumed: AtomicBool::new(false),
                     cancel: CancellationToken::new(),
                     udp_limiters: Mutex::new(HashMap::new()),
                     downstream_limiters: Mutex::new(HashMap::new()),
                 },
             );
+        }
+        if matches!(&authorities, HostAuthorities::Invited(values) if !values.is_empty()) {
+            return Err(Error::Configuration);
         }
         let endpoint =
             transport::endpoint_in_mode(config.secret_key, config.bind_addr, &config.limits, mode)

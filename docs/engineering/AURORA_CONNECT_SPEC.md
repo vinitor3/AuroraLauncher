@@ -408,6 +408,8 @@ Entradas `direct_ipv4` de emissão/verificação/Host/Guest acrescentam IPv4 lit
 
 ## 10. Validação, incrementalidade e liberação
 
+Incremento71: Host pode receber grupo estático de2–8 convites schema3 por APIs próprias, com correspondência exata por ID e modo explícito. Cada participante mantém consumo, revogação, prazos, capacidades e isolamento originais; limites globais não são multiplicados. Nenhum envelope coletivo ou novo formato de Guest. [Contrato71 e provas locais](../aurora-connect-multiparticipant-session.md). O caller antigo permanece com um convidado até integração própria; não inferir jogadores, áudio ou rede externa.
+
 Incremento69: um recibo Ready pode ter sua autoridade seletiva aposentada por plano/digest e confirmação específicos. A transação altera somente o índice para Retired/geração1, nunca a configuração; cancelar preserva a autoridade e undo genérico não implica consumo. Prazo, fingerprint, guardas, CAS e geração são revalidados. [Contrato69](../aurora-connect-voice-receipt-retirement.md). Histórico não equivale a restauração, GC, áudio ou homologação.
 
 Integração70: capability opcional, seleção explícita de recibo Ready e revisão própria expõem essa operação no desktop. Retired é histórico sem retomada; fechar conserva o resultado real e não chama restauração. Resposta perdida nunca dispara confirmação novamente. [Contrato70 e evidências](../aurora-connect-desktop-receipt-retirement.md).
