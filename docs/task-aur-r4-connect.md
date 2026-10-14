@@ -1597,6 +1597,32 @@ npm.cmd run build
 
 Logs `.aurora/connect-validation/direct-ipv4-66-{native-focused,native-own-address,frontend-first,frontend-final,frontend-build}.log`. Os arquivos66 foram congelados durante a validação; o núcleo Recovery67 em preparação foi compilado junto, com checks finais registrados na etapa correspondente. A primeira execução de Clippy encontrou somente enum grande no módulo67, corrigido por indirection sem alterar serde. Nenhuma configuração pessoal/instância/Java foi alterada. TCP/UDP/direto avançam localmente; relay público, Minecraft, convites externos, SVC e Plasmo conservam os gates anteriores. Encerramento e revert revisado da integração são o rollback; nenhum instalador ou publicação. Nenhuma ação humana necessária.
 
+## Incremento67 — recibo durável e retomada de restauração de voz
+
+Fechamento: `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-features --lib durable -- --test-threads=1` **19 PASS/9 ignorados**,6,99s, compile34,37s. São11 Recovery finais+1 parser67+6 testes68+1 migração preexistente; quatro opt-ins67 já executados e cinco68 registrados na próxima etapa. O novo negativo de ID extenso passou. `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-targets --all-features -- -D warnings` **PASS**,12,95s; `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check` e hashes do source freeze67 passaram. Logs `durable-voice-67-68-{focused,clippy-combined}.log`. Código68 foi compilado junto e será commitado separadamente após seus opt-ins; fontes67 permanecem congeladas.
+
+Base `224d49c` após66, trabalho local autorizado. Bloqueio: confirmação Recovery podia concluir a escrita antes de guardar o recibo seletivo em RAM; encerrar o launcher nesse intervalo perdia a autoridade de restauração seletiva. Preparação durável agora tem tipo opaco/domínio/digest próprios antes do consentimento. Journal2 inclui a transição antes dos renames, e recibo/undo/remoção do journal são publicados na mesma transação SQLiteFULL. Preparar/listar/retomar nunca restaura automaticamente. [Contrato, limites, segurança e downgrade67](aurora-connect-durable-voice-receipts.md).
+
+Arquivos nativos: `engine/recovery.rs`, `recovery_readonly.rs`, novos `recovery_voice_receipts.rs`/testes; `connect_voice.rs`, `connect_voice_restore.rs`, novo `connect_voice_durable.rs`/testes e registro no teste pai. Feature opcional conserva caminho RAM anterior; Recovery reconhece journal2 mesmo com voz desligada. Persistência limitada a64 recibos/instância,16KiB/registro,256KiB/imagem, um ativo por mod, ID/geração/hash/runtime/cópia/identidade/CAS revalidados. Nenhum segredo de transporte, configuração pessoal ou biblioteca nova.
+
+Correções da revisão independente: registros `Restored` deixam de depender de pontos históricos cuja exclusão é permitida, sem ocultar recibos `Ready`; pontos ativos continuam protegidos. Retomada verifica `render(original, porta aplicada)==applied`, suportando Plasmo com tabela pública originalmente ausente. Escolha durável foi movida da confirmação para preparação própria, impedindo reutilização do digest RAM. Clippy levou ao uso de `Box<Record>` sem mudar serde. IDs consultados em índice adulterado são limitados antes de alocação extensa e validados integralmente; prefixo UUID não é aceito.
+
+Comandos realmente executados na worktree:
+
+```powershell
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --features connect-lab,connect-voice-lab durable_receipt -- --test-threads=1
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-features --lib durable_ -- --test-threads=1
+# AURORA_CONNECT_ARTIFACT_DIR definido somente no processo para .aurora/connect-voice-artifacts:
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-features --lib engine::connect_voice::tests::durable -- --ignored --test-threads=1
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 -- --test-threads=1
+```
+
+Primeiro foco7 PASS/0 ignorados,9,82s, compile2m31. Foco posterior12 PASS/4 ignorados,5,32s, compile22,82s:11 novos testes e uma regressão de migração Companion já existente; não reintroduz o mod. Opt-in com JARs fixados **4 PASS/0 ignorados**,92,22s, compile1,15s: seis ciclos completos de aplicar/descartar/reabrir/restaurar (dois SVC, quatro Plasmo), estrita e reconciliada, tabela ausente/presente, retirada do JAR, edição alheia preservada, conflito/geração/cópia divergente, aprovação incorreta/cancelamento/CAS alterado. Nada disso executa os mods ou comprova áudio.
+
+Regressão padrão anterior ao último negativo de ID: **273 PASS/5 ignorados**,49,10s somados, compile1m00s. Logs `.aurora/connect-validation/durable-voice-67-{recovery-first,focused-final,pinned,full-default}.log`. Novos handles/objetos provaram independência da RAM; interrupções determinísticas cobrem journal/rename/précommit/póscommit/rollback, sem alegar morte real de processo, queda física de energia ou disco cheio. Conferência final e integração68 serão registradas em complemento, sem somar execuções sobrepostas.
+
+Limite conhecido: undo genérico não consome recibo seletivo; se a configuração mudar por outro executor, restauração pode recusar e o recibo ativo bloqueia nova aplicação do mesmo mod. Aposentadoria explícita será contrato próprio69, nunca inferida pelos bytes atuais. TCP, UDP, direto, relay, Minecraft e convites externos não mudam nesta etapa. SVC/Plasmo avançam somente no ciclo de configuração/recuperação; áudio continua **PRECISA DE TESTE**. Rollback operacional preserva cópia/CAS/índice; resolver journals2 antes de downgrade. Nenhuma ação humana necessária.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.

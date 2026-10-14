@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 14/10/2026
 
+Incremento67: recibos duráveis e retomada segura de restauração em cópias diagnósticas, com provas independentes SVC/Plasmo de arquivo e Recovery. [Contrato67](../aurora-connect-durable-voice-receipts.md). **PROTÓTIPO**; sem áudio, JVM, rede externa ou promoção de qualquer um dos nove pares.
+
 Incremento66: IPv4 explícito disponível no painel/caller experimental dos quatro perfis. [Contrato e provas66](../aurora-connect-desktop-ipv4.md). **PROTÓTIPO**, off por padrão; não promove homologação de redes externas, GUI, jogo, áudio ou qualquer par Core/Skins.
 
 Incremento65: convites assinados recebem modo IPv4 explícito na biblioteca, com testes dos quatro perfis no IPv4 próprio. [Contrato65](../aurora-connect-direct-ipv4.md). **PROTÓTIPO**; não é evidência de LAN entre máquinas, IPv4 público, NAT/CGNAT, áudio ou Minecraft. Nenhuma célula dos nove pares foi promovida; relay público segue desligado.

@@ -19,8 +19,17 @@ use zip::ZipArchive;
 
 #[path = "recovery_readonly.rs"]
 mod readonly;
+#[path = "recovery_voice_receipts.rs"]
+mod voice_receipts;
 #[cfg(feature = "connect-voice-lab")]
 pub(crate) use readonly::with_existing_observation;
+#[cfg(feature = "connect-voice-lab")]
+pub(crate) use readonly::{list_voice_receipts, load_voice_receipt};
+#[cfg(feature = "connect-voice-lab")]
+pub(crate) use voice_receipts::{
+    VoiceReceiptIntent, VoiceReceiptLoaded, VoiceReceiptMod, VoiceReceiptState,
+    VoiceReceiptSummary, VoiceReceiptToken,
+};
 
 const VERSION: u32 = 1;
 const MAX_FILES: usize = 30_000;
@@ -39,6 +48,10 @@ enum Fault {
     CaptureChange,
     StageWrite,
     BackupInterrupt,
+    ReceiptBeforeJournal,
+    ReceiptBeforeCommit,
+    ReceiptAfterCommit,
+    ReceiptRollbackInterrupt,
 }
 #[cfg(test)]
 thread_local! { static FAULT: std::cell::Cell<Fault> = const { std::cell::Cell::new(Fault::None) }; }
@@ -218,6 +231,8 @@ struct Journal {
     undo_id: String,
     point_id: String,
     operations: Vec<Operation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    voice_receipt: Option<voice_receipts::Transition>,
 }
 struct Store {
     root: PathBuf,
@@ -639,6 +654,7 @@ impl Store {
             return Err(RecoveryError::Integrity);
         }
         db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS points(id TEXT PRIMARY KEY, instance_uuid TEXT NOT NULL, manifest_hash TEXT NOT NULL, kind TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS refs(point_id TEXT NOT NULL REFERENCES points(id) ON DELETE CASCADE, hash TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY(point_id,hash)); CREATE TABLE IF NOT EXISTS previews(id TEXT PRIMARY KEY, instance_uuid TEXT NOT NULL, data BLOB NOT NULL); CREATE TABLE IF NOT EXISTS journals(instance_uuid TEXT PRIMARY KEY, data BLOB NOT NULL); CREATE TABLE IF NOT EXISTS undo(instance_uuid TEXT PRIMARY KEY, point_id TEXT NOT NULL); CREATE TABLE IF NOT EXISTS instances(instance_uuid TEXT PRIMARY KEY, filesystem_identity TEXT NOT NULL UNIQUE); PRAGMA user_version=1;")?;
+        voice_receipts::initialize(&db)?;
         let owner: Option<String> = db
             .query_row(
                 "SELECT filesystem_identity FROM instances WHERE instance_uuid=?1",
@@ -1468,7 +1484,7 @@ pub fn delete_point(
         params![store.uuid, point_id],
         |r| r.get(0),
     )?;
-    if active {
+    if active || voice_receipts::pins_point(&tx, &store.uuid, point_id)? {
         return Err(RecoveryError::Pending);
     }
     if tx.execute(
@@ -1688,6 +1704,33 @@ fn restore_impl(
     preview_id: &str,
     interrupt: Option<usize>,
 ) -> Result<RecoveryResult> {
+    restore_attached(instance, guard, preview_id, interrupt, |_, _| {
+        Ok((None, ()))
+    })
+    .map(|(result, ())| result)
+}
+
+#[cfg(feature = "connect-voice-lab")]
+pub(crate) fn restore_voice_receipt(
+    instance: &Instance,
+    guard: &InstanceMutationGuard,
+    preview_id: &str,
+    intent: VoiceReceiptIntent,
+) -> Result<(RecoveryResult, VoiceReceiptToken)> {
+    restore_attached(instance, guard, preview_id, None, |store, journal| {
+        let transition = voice_receipts::prepare(store, journal, intent)?;
+        let token = voice_receipts::token(store, &transition)?;
+        Ok((Some(transition), token))
+    })
+}
+
+fn restore_attached<T>(
+    instance: &Instance,
+    guard: &InstanceMutationGuard,
+    preview_id: &str,
+    interrupt: Option<usize>,
+    attachment: impl FnOnce(&Store, &Journal) -> Result<(Option<voice_receipts::Transition>, T)>,
+) -> Result<(RecoveryResult, T)> {
     let _directories = check_guard(instance, guard)?;
     valid_id(preview_id)?;
     let mut store = Store::open(instance)?;
@@ -1825,15 +1868,25 @@ fn restore_impl(
     if fingerprint(&inventory(instance)?)? != saved.fingerprint {
         return Err(RecoveryError::StalePreview);
     }
-    let journal = Journal {
+    let mut journal = Journal {
         schema_version: VERSION,
         instance_uuid: store.uuid.clone(),
         transaction_id: txid,
         undo_id: before.point.id,
         point_id: target.point.id.clone(),
         operations,
+        voice_receipt: None,
     };
+    let (receipt_transition, committed_metadata) = attachment(&store, &journal)?;
+    if let Some(transition) = receipt_transition {
+        journal.schema_version = 2;
+        journal.voice_receipt = Some(transition);
+    }
     validate_journal(instance, &journal, &store)?;
+    #[cfg(test)]
+    if FAULT.with(|f| f.get() == Fault::ReceiptBeforeJournal) {
+        return Err(RecoveryError::Pending);
+    }
     store.db.execute(
         "INSERT INTO journals VALUES(?1,?2)",
         params![store.uuid, json(&journal)?],
@@ -1867,19 +1920,33 @@ fn restore_impl(
         rollback(instance, &store, &journal)?;
         return Err(error);
     }
+    #[cfg(test)]
+    if FAULT.with(|f| f.get() == Fault::ReceiptBeforeCommit) {
+        return Err(RecoveryError::Pending);
+    }
     // Undo publication and completion are one FULL transaction. A crash before
     // this commit rolls back even when all file renames already succeeded.
     let tx = store.db.transaction()?;
     tx.execute("INSERT INTO undo VALUES(?1,?2) ON CONFLICT(instance_uuid) DO UPDATE SET point_id=excluded.point_id",params![store.uuid,journal.undo_id])?;
+    if let Some(transition) = &journal.voice_receipt {
+        voice_receipts::commit(&tx, &store.uuid, transition)?;
+    }
     tx.execute("DELETE FROM journals WHERE instance_uuid=?1", [&store.uuid])?;
     tx.execute("DELETE FROM previews WHERE instance_uuid=?1", [&store.uuid])?;
     tx.commit()?;
     cleanup_stage(&stage, &journal);
-    Ok(RecoveryResult {
-        restored_point_id: target.point.id,
-        undo_available: true,
-        recovered_interrupted: false,
-    })
+    #[cfg(test)]
+    if FAULT.with(|f| f.get() == Fault::ReceiptAfterCommit) {
+        return Err(RecoveryError::Pending);
+    }
+    Ok((
+        RecoveryResult {
+            restored_point_id: target.point.id,
+            undo_available: true,
+            recovered_interrupted: false,
+        },
+        committed_metadata,
+    ))
 }
 fn cleanup_stage(stage: &Path, journal: &Journal) {
     // Delete only enumerated verified temporary files; never recursively erase
@@ -1908,8 +1975,10 @@ pub(crate) fn stage_copy(source: &Path, dest: &Path, file: &RecoveryFile) -> Res
     verify(dest, file)
 }
 fn validate_journal(instance: &Instance, j: &Journal, store: &Store) -> Result<()> {
-    if j.schema_version != VERSION
-        || j.instance_uuid != store.uuid
+    if !matches!(
+        (j.schema_version, j.voice_receipt.is_some()),
+        (1, false) | (2, true)
+    ) || j.instance_uuid != store.uuid
         || j.operations.len() > MAX_FILES + 1
     {
         return Err(RecoveryError::Integrity);
@@ -1955,6 +2024,9 @@ fn validate_journal(instance: &Instance, j: &Journal, store: &Store) -> Result<(
         {
             return Err(RecoveryError::Integrity);
         }
+    }
+    if let Some(transition) = &j.voice_receipt {
+        voice_receipts::validate(store, j, transition)?;
     }
     Ok(())
 }
@@ -2094,6 +2166,10 @@ fn rollback(instance: &Instance, store: &Store, j: &Journal) -> Result<()> {
             verify(&dest, after).map_err(|_| RecoveryError::Changed)?;
             fs::remove_file(&dest)?;
             sync_parent(&dest)?;
+        }
+        #[cfg(test)]
+        if FAULT.with(|f| f.get() == Fault::ReceiptRollbackInterrupt) {
+            return Err(RecoveryError::Pending);
         }
     }
     store

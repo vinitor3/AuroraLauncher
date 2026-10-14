@@ -408,6 +408,8 @@ Entradas `direct_ipv4` de emissão/verificação/Host/Guest acrescentam IPv4 lit
 
 ## 10. Validação, incrementalidade e liberação
 
+Atualização67: o anúncio de voz possui preparo durável separado, com recibo publicado atomicamente com undo/encerramento do journal. Listagem/retomada são explícitas, somente em cópia diagnóstica válida, sem inicializar identidade, reviver aprovação ou escrever configuração na carga. Estrita e reconciliada conservam revisões novas e guardas; geração impede consumo duplo. [Contrato, limites e provas67](../aurora-connect-durable-voice-receipts.md). Recibo persistido não é voz validada nem execução de mod.
+
 Ordem candidata: inventário/ADR → TCP autenticado → UDP simultâneo controlado → redes reais/relay verificado → Minecraft/convites/estados → SVC e Plasmo separadamente → robustez, manifesto e liberação. Reordenar se código/evidência mostrar incremento já pronto ou bloqueio mais importante; não refazer recovery/Doctor/Tools alpha.14. Testes completos e tarefas estão no [backlog](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md).
 
 Cobertura mínima: TCP integridade/isolamento/half-close/cancelamento/backpressure/auth negativa/destino proibido; UDP bidirecional/fronteiras/retorno de vários peers/perda/reordenação/duplicação/MTU/saturação/expiração; jogo+voz sob carga; portas e múltiplas instâncias; convite inválido/replay/revogação; config com edição concorrente/restauração; quota/relay indisponível; IPv4/IPv6/LAN/NAT duplo/CGNAT/UDP bloqueado; redes distintas BR–BR e BR–EUA com ambiente autorizado e sem custo. Testar dedicado e LAN somente onde versão/mod suportarem, modo misto somente se anunciado.

@@ -1146,3 +1146,6 @@ fn plasmo_receipt_survives_voice_launch_lock_handoff() {
         );
     }
 }
+
+#[path = "connect_voice_durable_tests.rs"]
+mod durable;

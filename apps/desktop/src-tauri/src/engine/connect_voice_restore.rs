@@ -5,6 +5,13 @@ use super::*;
 #[path = "connect_voice_restore_controller.rs"]
 mod controller;
 pub use controller::RestorationController;
+#[path = "connect_voice_durable.rs"]
+mod durable;
+pub use durable::{
+    list_restoration_receipts, prepare_durable_announcement, resume_restoration,
+    DurableAppliedAnnouncement, DurableRestorationController, DurableRestorationSummary,
+    PreparedDurableAnnouncement,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

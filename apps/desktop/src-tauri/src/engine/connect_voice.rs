@@ -43,7 +43,10 @@ pub use process::{acquire_voice_mutation_guard, VoiceMutationGuard};
 #[path = "connect_voice_restore.rs"]
 mod restoration;
 pub use restoration::{
-    PreparedRestoration, RestorationController, RestorationReceipt, RestorationState,
+    list_restoration_receipts, prepare_durable_announcement, resume_restoration,
+    DurableAppliedAnnouncement, DurableRestorationController, DurableRestorationSummary,
+    PreparedDurableAnnouncement, PreparedRestoration, RestorationController, RestorationReceipt,
+    RestorationState,
 };
 
 pub struct AppliedAnnouncement {
@@ -151,6 +154,23 @@ impl PreparedAnnouncement {
         approved_digest: &str,
         on_executor_begin: impl FnOnce(),
     ) -> Result<RecoveryResult> {
+        self.apply_using(
+            instance,
+            guard,
+            approved_digest,
+            on_executor_begin,
+            |preview_id| recovery::restore(instance, guard.inner(), preview_id),
+        )
+    }
+
+    fn apply_using<T>(
+        self,
+        instance: &Instance,
+        guard: &VoiceMutationGuard,
+        approved_digest: &str,
+        on_executor_begin: impl FnOnce(),
+        execute: impl FnOnce(&str) -> Result<T>,
+    ) -> Result<T> {
         if Instant::now() >= self.deadline || approved_digest != self.review.digest {
             return Err(RecoveryError::StalePreview);
         }
@@ -208,7 +228,7 @@ impl PreparedAnnouncement {
         guard.recheck()?;
         // Recovery revalidates the persisted preview, hashes, identity and entire
         // observed state; it captures protection before its durable transaction.
-        recovery::restore(instance, guard.inner(), &preview.id)
+        execute(&preview.id)
     }
 }
 

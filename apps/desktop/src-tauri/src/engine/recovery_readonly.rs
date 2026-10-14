@@ -115,3 +115,60 @@ pub(crate) fn with_existing_observation<T>(
     })?
     .ok_or(RecoveryError::Identity)
 }
+
+/// Read only the existing index, retaining the same physical identity and deny-
+/// write handle as inspection59. Absence never creates an identity or database.
+#[cfg(feature = "connect-voice-lab")]
+fn with_voice_receipts<T>(
+    instance: &Instance,
+    guard: &InstanceMutationGuard,
+    inspect: impl FnOnce(&Path, &Connection, &str) -> Result<T>,
+) -> Result<Option<T>> {
+    let _pins = check_guard(instance, guard)?;
+    with_existing_identity(instance, true, |id, db| {
+        let schema: u32 = db.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if schema != VERSION {
+            return Err(RecoveryError::Integrity);
+        }
+        let pending: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM journals WHERE instance_uuid=?1)",
+            [&id.uuid],
+            |row| row.get(0),
+        )?;
+        if pending {
+            return Err(RecoveryError::Pending);
+        }
+        let data = instance
+            .root()
+            .parent()
+            .and_then(Path::parent)
+            .ok_or(RecoveryError::UnsafePath)?;
+        let root = path(data, ".aurora/recovery")?;
+        let _root = pin_directory(&root)?;
+        let result = inspect(&root, db, &id.uuid)?;
+        let after = identity(instance, false)?.ok_or(RecoveryError::Identity)?;
+        if after.uuid != id.uuid || after.filesystem_identity != id.filesystem_identity {
+            return Err(RecoveryError::Identity);
+        }
+        Ok(result)
+    })
+}
+#[cfg(feature = "connect-voice-lab")]
+pub(crate) fn list_voice_receipts(
+    instance: &Instance,
+    guard: &InstanceMutationGuard,
+) -> Result<Vec<VoiceReceiptSummary>> {
+    Ok(with_voice_receipts(instance, guard, voice_receipts::list_existing)?.unwrap_or_default())
+}
+#[cfg(feature = "connect-voice-lab")]
+pub(crate) fn load_voice_receipt(
+    instance: &Instance,
+    guard: &InstanceMutationGuard,
+    id: &str,
+) -> Result<VoiceReceiptLoaded> {
+    valid_id(id)?;
+    with_voice_receipts(instance, guard, |root, db, uuid| {
+        voice_receipts::load_existing(root, db, uuid, id)
+    })?
+    .ok_or(RecoveryError::NotFound)
+}
