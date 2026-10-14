@@ -57,6 +57,11 @@ pub(crate) struct Fixture {
     ports: Vec<u16>,
     reader: Option<thread::JoinHandle<()>>,
 }
+/// Private test clock seam: does not alter a production constructor or OS time.
+pub(crate) fn expired_target(mut target: ApprovedTarget) -> ApprovedTarget {
+    target.deadline = Instant::now() - Duration::from_secs(1);
+    target
+}
 impl Fixture {
     pub(crate) fn new() -> Self {
         let mut command = Command::new(std::env::current_exe().unwrap());
@@ -105,7 +110,7 @@ impl Fixture {
             .expect("bounded owned fixture readiness");
         fixture
     }
-    fn proof(&mut self) -> OwnedChildProof {
+    pub(crate) fn proof(&mut self) -> OwnedChildProof {
         OwnedChildProof::from_child(&mut self.child, "fixture-instance", "fixture-run").unwrap()
     }
     pub(crate) fn stop(&mut self) {

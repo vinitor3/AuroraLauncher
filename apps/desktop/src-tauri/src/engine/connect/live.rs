@@ -10,6 +10,9 @@ use std::{
 };
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+#[cfg(all(test, windows))]
+#[path = "owned_fragmented_tests.rs"]
+mod owned_fragmented_tests;
 #[path = "udp_recovery.rs"]
 mod udp_recovery;
 #[cfg(test)]
@@ -464,6 +467,34 @@ impl Manager {
         request: SessionFragmentedHostRequest,
     ) -> Result<ConnectPreparation, ConnectError> {
         self.prepare_host_internal(owner, request.into(), TargetGuard::Manual)
+    }
+    #[cfg(windows)]
+    pub(super) fn prepare_session_fragmented_host_discovered(
+        &self,
+        owner: &str,
+        request: SessionFragmentedDiscoveredHostRequest,
+        target: super::super::connect_discovery::ApprovedTarget,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        let target = target.activate().map_err(|error| {
+            if error == super::super::connect_discovery::DiscoveryError::Stale {
+                ConnectError::PlanExpired
+            } else {
+                ConnectError::SourceChanged
+            }
+        })?;
+        let game_target = target
+            .recheck_owned()
+            .map_err(|_| ConnectError::SourceChanged)?
+            .to_string();
+        let request = SessionFragmentedHostRequest {
+            mode: request.mode,
+            bind_address: request.bind_address,
+            game_target,
+            udp_target: request.udp_target,
+            admission_seconds: request.admission_seconds,
+            session_seconds: request.session_seconds,
+        };
+        self.prepare_host_internal(owner, request.into(), TargetGuard::Owned(Arc::new(target)))
     }
     #[cfg(windows)]
     pub(super) fn prepare_session_host_discovered(

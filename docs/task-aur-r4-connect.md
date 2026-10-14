@@ -1519,6 +1519,36 @@ Base `74ca76b`, branch `codex/aur-r4-connect`, em14/10/2026. **PROTÓTIPO**, `co
 
 **Estados separados e rollback.** TCP/UDP e convites/interface continuam **PROTÓTIPO**; direto **PARCIAL** sem novo ensaio externo; relay público desligado e laboratório próprio preservado; Minecraft **PARCIAL**, sem novo Java; Simple Voice Chat e Plasmo Voice mantêm controles/configuração anteriores e áudio **PRECISA DE TESTE**, separadamente. Avanço do transporte T-MIX-03 não conclui retorno de áudio/credencial/rota de mod, contas mistas, múltiplos jogadores, Core/Skins ou estabilidade prolongada. Encerrar Connect e aguardar cleanup; revert local revisado somente63 preserva61/62 e dados. Nenhuma configuração pessoal precisa ser restaurada. Sem custo, push, deploy, release, publicação ou instalador. **O que você precisa fazer agora:** nenhuma ação para este trabalho local.
 
+## Incremento64 — porta TCP descoberta na sessão TCP+UDP
+
+Base limpa `778187a`, branch `codex/aur-r4-connect`; principal `dc2ec5a`, docs `d6f31db`, review `5ac2f7e`, Doctor `6a107b8` e recovery `be3a1c4` reconferidos, sem editar outras worktrees. Alpha.14/Core1.1.5/Skins0.3.1 e nove pares preservados. Auditoria leu AGENTS/prompt canônico, backlog, spec/domínios48/62/63, manifests/locks/matriz e contratos de processo/descoberta. Código confirmou que `prepare_session_fragmented_host` fixava `TargetGuard::Manual` e o painel excluía descoberta nos perfis UDP. Testes externos permanecem pausados a pedido do usuário.
+
+Decisão: novo comando/DTO explícito deriva game/TCP exclusivamente da seleção opaca48; aux/UDP permanece manual. Preparação consome seleção, revisão vincula processo/listener e destino UDP, monitor original encerra ambos os transportes ao perder a origem. Nenhuma descoberta por PID fornecido, endpoint UDP inferido, controle de Java ou alteração pessoal. Capability própria conserva callers anteriores. [Contrato, riscos e rollback64](aurora-connect-discovered-session-udp.md).
+
+Arquivos de produção: `engine/connect/{mod,live,fragmented_profile}.rs`, `connect_commands.rs`, registro em `main.rs`; frontend `features/connect/{ConnectView.tsx,fragmented-types.ts}`. Testes: novo `owned_fragmented_tests.rs`, ajuste de capability em `session_fragmented_tests.rs`, somente helpers `cfg(test)` em `connect_discovery/tests.rs`, regressões DOM em `ConnectView.smoke.mjs`. Domínios, AGENTS, spec, backlog e matriz atualizados; corrigidas descrições gerais obsoletas de inexistência do caller60/rede004 sem ampliar evidências.
+
+Validação focal nativa: **4 PASS/0 falhas/0 ignorados**,205filtrados,6,04s; compilação45,23s (`discovered-session-64-focused.log`). Processo filho próprio/STATUS sintético, dois managers autenticados e duas origensUDP4096 após ingresso; saída/rebind da mesma porta por outro processo fecha TCP+UDP. Expiração da seleção e sete pedidos inválidos recusam transporte/destinoUDP; perda de origem após revisão impede abrir transporte. PortaUDP ocupada conserva STATUS/TCP descoberto; encerrar Connect mantém o filho consultável. Unitário do DTO recusa destinoTCP/PID/identidade/overrides e foi incluído nas regressões padrão.
+
+Interface: **81 PASS/0 falhas/0 ignorados** em dois arquivos (71DOM,1570,969ms;10parser,660,522ms), com seleção, autorização, capability ausente, perfis cruzados, resposta perdida/atrasada, troca de origem e recuperação do slot. Build TypeScript/Vite passou; aviso de chunk>500kB anterior permanece. Logs `session-udp-discovery-64-frontend-{first,parser,build}.log`. QA independente do diff nativo/UI sem bloqueador identificado. Fixtures não homologam janela Tauri, LAN Minecraft ou áudio.
+
+Comandos realmente executados na worktree (build frontend foi `npm.cmd run build` a partir de `apps/desktop`):
+
+```powershell
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --features connect-lab --lib engine::connect::live::owned_fragmented_tests -- --test-threads=1
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 -- --test-threads=1
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-features -- --test-threads=1
+node --test apps/desktop/src/features/connect/ConnectView.smoke.mjs
+node --test apps/desktop/src/features/connect/fragmented-types.test.mjs
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-targets -- -D warnings
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-targets --features connect-lab -- -D warnings
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-targets --all-features -- -D warnings
+git diff --check
+```
+
+Regressões completas: **266 PASS/5 ignorados padrão** e **357 PASS/42 ignorados combinado**, zero falhas,9grupos por execução,44,62s/168,77s somados de testes. Logs `discovered-session-64-full-{default,combined}.log`; compilação padrão39,95s. Clippy de todos os targets passou em padrão28,10s/Connect19,78s/combinado18,16s; fmt de ambos os crates e diff passaram. Locks e matriz reconferidos por SHA-256 permaneceram iguais. A biblioteca65 foi preparada em paralelo e compilada junto no foco/combinado, preservando as APIs loopback utilizadas64; seus testes e escopo permanecem em registro próprio. Não somar contagens de rodadas sobrepostas.
+
+TCP/UDP avançam na composição local com origem observada. Direto/relay, Minecraft, convites externos, SVC e Plasmo mantêm provas anteriores; nenhum gate de homologação ou distribuição foi fechado. Rollback: encerrar somente Connect e aguardar cleanup; revert local revisado de64, sem apagar instâncias/recuperação/artefatos. Nenhuma ação humana necessária para estas verificações.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.

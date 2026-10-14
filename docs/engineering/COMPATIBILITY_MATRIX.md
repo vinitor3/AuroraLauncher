@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 14/10/2026
 
+Incremento64: a sessãoTCP+UDP recebe descoberta do game/TCP por filho próprio, mantendo aux/UDP manual e fechamento de ambos pela perda da origem. [Contrato e evidências64](../aurora-connect-discovered-session-udp.md). **PROTÓTIPO**, off por padrão; processo de fixture/STATUS sintético e DOM não homologam Minecraft LAN, janela Tauri, SVC/Plasmo, rede externa ou os nove pares.
+
 Incremento63: recuperação manual e limitada da ponte UDP na sessão schema3, sem derrubar TCP ou renovar autorização. [Contrato e evidências63](../aurora-connect-desktop-udp-recovery.md). **PROTÓTIPO**, off por padrão. Não amplia homologação SVC/Plasmo, GUI, Minecraft, redes ou pares Core/Skins; T-MIX-03 de áudio real permanece pendente.
 
 Incremento62: caller e painel recebem perfil explícito de sessão TCP+UDP, duas durações e estados UDP independentes. [Contrato e validação62](../aurora-connect-desktop-fragmented-session.md). **PROTÓTIPO**, off por padrão; testes locais/DOM não homologam janela Tauri, áudio, estabilidade1h, rede externa, jogo ou novos pares Core/Skins. Preservadas versões e provas anteriores.
@@ -50,7 +52,7 @@ Incremento42: lifecycle da CLI manual passou idle/revogação/stop/prazo e liber
 
 Preparação41: perfil GUI separado com nomes revisados/whitelist offline e900s, para cliente Aurora1.21.1/Fabric em outro computador. Servidor continua sem mods; cliente pode carregar Core/Skins. [Roteiro e recuperação](../aurora-connect-internet-minecraft-gui.md). A preparação isolada não aprovava entrada no mundo; a amostra posterior44 está delimitada acima.
 
-Estado do Connect: **PROTÓTIPO** independente em `apps/connect-lab`, desligado para usuários. O núcleo desktop tem adaptadores de configuração SVC/Plasmo apenas opt-in/cópia de diagnóstico, sem comando ou interface. Base cumulativa alpha.14 (`5ac2f7e` sobre `6a107b8`), Core 1.1.5, Skins 0.3.1 e os nove pares preservados. Evidências e comandos no [task de execução](../task-aur-r4-connect.md); roteiro no [laboratório](../aurora-connect.md). A [matriz candidata por mod/versão/loader/hospedagem/rede](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) mantém os gates futuros. A matriz abaixo conserva todas as evidências anteriores; retransmissão Skins e testes sintéticos de transporte não homologam Connect em Minecraft.
+Estado do Connect: **PROTÓTIPO**, com biblioteca em `apps/connect-lab` e caller/painel desktop experimental, desligados por padrão. Os adaptadores SVC/Plasmo têm comandos e painel60 somente para cópias de diagnóstico, com restauração seletiva em RAM e sem áudio homologado. Base cumulativa alpha.14 (`5ac2f7e` sobre `6a107b8`), Core1.1.5, Skins0.3.1 e nove pares preservados. Evidências e comandos no [task de execução](../task-aur-r4-connect.md); roteiro no [laboratório](../aurora-connect.md). A [matriz candidata por mod/versão/loader/hospedagem/rede](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md) mantém os gates futuros. A matriz abaixo conserva todas as evidências anteriores; retransmissão Skins e testes sintéticos de transporte não homologam Connect em Minecraft.
 
 | Capacidade | Evidência observada | Estado e fronteira |
 | --- | --- | --- |

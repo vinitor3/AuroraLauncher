@@ -4,6 +4,8 @@ Data: 14/10/2026. Estado: **PROTÓTIPO**, feature `connect-lab` desligada por pa
 
 ## Seleção, revisão e duração
 
+Extensão64: a seleção manual abaixo permanece válida. Um comando distinto pode consumir a seleção opaca48 para game/TCP, mantendo UDP manual e monitorando a origem. [Contrato e limites64](aurora-connect-discovered-session-udp.md).
+
 O perfil explícito `sessionFragmentedGameUdp` exige dois destinos manuais loopback, game/TCP e aux/UDP. Os comandos novos são `connect_prepare_session_fragmented_host` com `{mode,bindAddress,gameTarget,udpTarget,admissionSeconds,sessionSeconds}` e `connect_prepare_session_fragmented_guest` com `{mode,expectedHostPublicId}`. A janela principal é o proprietário; o frontend não recebe chave privada nem autoridade de consumo. Não existe descoberta UDP neste perfil.
 
 Ingresso de1–600s e sessão até3600s desde emissão, com sessão pelo menos tão longa quanto ingresso. O desktop aceita somente segundos inteiros exatos, inclusive ao verificar o intervalo assinado. A preparação e a revisão conservam o prazo original de60s e vencem antes se o ingresso vencer. Repetir revisão não renova tempo. Criar ou confirmar exige seleção explícita de perfil: nenhum erro aciona outro parser.

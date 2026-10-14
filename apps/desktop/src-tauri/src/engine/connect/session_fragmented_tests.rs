@@ -283,7 +283,7 @@ fn profile_capability_and_request_are_explicit_without_changing_previous_contrac
             "profile":"sessionFragmentedGameUdp","invitationSchemaVersion":3,"udpEnvelopeVersion":2,
             "approvedOriginalDatagramBytes":4096,"maxFragmentFrameBytes":1264,"localUdpBind":"127.0.0.1:35554",
             "udpReturnPolicy":{"type":"authorizedDownstream","bytesPerSecond":16384,"datagramsPerSecond":20},
-            "maxAdmissionSeconds":600,"maxSessionSeconds":3600,"udpRecovery":{"maxAttempts":3},
+            "maxAdmissionSeconds":600,"maxSessionSeconds":3600,"udpRecovery":{"maxAttempts":3},"ownedGameTcpDiscovery":cfg!(windows),
         })
     );
     let valid = json!({"mode":"loopback","bindAddress":"127.0.0.1:42000","gameTarget":"127.0.0.1:43001","udpTarget":"127.0.0.1:43002","admissionSeconds":600,"sessionSeconds":3600});

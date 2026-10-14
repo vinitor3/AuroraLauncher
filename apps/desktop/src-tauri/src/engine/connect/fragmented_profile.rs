@@ -63,6 +63,18 @@ pub struct SessionFragmentedHostRequest {
     pub session_seconds: u16,
 }
 
+/// Only the game/TCP target comes from the single-use owned-process selection.
+/// UDP remains an independently reviewed manual loopback destination.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionFragmentedDiscoveredHostRequest {
+    pub mode: ConnectMode,
+    pub bind_address: String,
+    pub udp_target: String,
+    pub admission_seconds: u16,
+    pub session_seconds: u16,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FragmentedReturnPolicy {
@@ -117,6 +129,7 @@ pub struct SessionFragmentedUdpCapabilities {
     pub max_admission_seconds: u16,
     pub max_session_seconds: u16,
     pub udp_recovery: UdpRecoveryCapabilities,
+    pub owned_game_tcp_discovery: bool,
 }
 impl Default for SessionFragmentedUdpCapabilities {
     fn default() -> Self {
@@ -125,6 +138,7 @@ impl Default for SessionFragmentedUdpCapabilities {
             max_admission_seconds: 600,
             max_session_seconds: 3600,
             udp_recovery: UdpRecoveryCapabilities::default(),
+            owned_game_tcp_discovery: cfg!(all(windows, feature = "connect-lab")),
         }
     }
 }
@@ -334,6 +348,49 @@ pub(super) async fn open_guest_bridge(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn discovered_session_request_never_accepts_a_game_endpoint_or_process_override() {
+        let valid = json!({"mode":"loopback","bindAddress":"127.0.0.1:42000","udpTarget":"127.0.0.1:43002","admissionSeconds":600,"sessionSeconds":3600});
+        assert!(
+            serde_json::from_value::<SessionFragmentedDiscoveredHostRequest>(valid.clone()).is_ok()
+        );
+        assert!(serde_json::from_value::<SessionFragmentedHostRequest>(valid.clone()).is_err());
+        for field in [
+            "gameTarget",
+            "pid",
+            "runId",
+            "instanceId",
+            "selectionId",
+            "services",
+            "lifetimeSeconds",
+            "localUdpBind",
+        ] {
+            let mut changed = valid.clone();
+            changed[field] = json!("not_authority");
+            assert!(
+                serde_json::from_value::<SessionFragmentedDiscoveredHostRequest>(changed).is_err(),
+                "{field}"
+            );
+        }
+        for field in ["udpTarget", "admissionSeconds", "sessionSeconds"] {
+            let mut changed = valid.clone();
+            changed.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<SessionFragmentedDiscoveredHostRequest>(changed).is_err()
+            );
+        }
+        for field in ["admissionSeconds", "sessionSeconds"] {
+            for value in [json!(-1), json!(1.5), json!(65536)] {
+                let mut changed = valid.clone();
+                changed[field] = value;
+                assert!(
+                    serde_json::from_value::<SessionFragmentedDiscoveredHostRequest>(changed)
+                        .is_err()
+                );
+            }
+        }
+    }
 
     #[test]
     fn request_has_no_service_or_budget_override_and_requires_its_own_fields() {

@@ -1040,7 +1040,7 @@ test("schema3 parser rejects crossed schema, partial deadlines, unsigned destina
   for (const invalid of [
     { ...reviewedSessionFragmented().review, sessionTiming: undefined },
     { ...reviewedSessionFragmented().review, fragmentedUdp: undefined },
-    { ...reviewedSessionFragmented().review, targetSource: "ownedInstance", instanceId: "instance", runId: "run" },
+    { ...reviewedSessionFragmented().review, targetSource: "ownedInstance", instanceId: "instance", runId: null },
     { ...reviewedSessionFragmented().review, invitationExpiresAtMs: sessionFragmentedTiming.sessionExpiresAtMs },
     { ...reviewedSessionFragmented().review, lifetimeSeconds: 120 },
   ]) assert.throws(() => types.reviewFrom(invalid));
@@ -1302,4 +1302,150 @@ test("UDP recovery capability permits only an exact optional max-three local pol
   assert.throws(() => types.capabilitiesFrom({ ...caps, udpRecovery: { maxAttempts: 3 } }));
   assert.throws(() => types.capabilitiesFrom({ ...caps, sessionInvitations: { ...sessionCapability, udpRecovery: { maxAttempts: 3 } } }));
   assert.throws(() => types.capabilitiesFrom({ ...caps, fragmentedUdpInvitations: { ...fragmentedCapability, udpRecovery: { maxAttempts: 3 } } }));
+});
+
+function reviewedDiscoveredSessionFragmented() {
+  const base = reviewedSessionFragmented();
+  return { ...base, review: { ...base.review, targetSource: "ownedInstance", instanceId: discoverySelected.instanceId,
+    runId: discoverySelected.runId, gameTarget: discoverySelected.target } };
+}
+function discoveredSessionFragmentedFixtures() {
+  discoveryFixtures(); sessionFragmentedFixtures();
+  capabilities.sessionFragmentedUdpInvitations = { ...sessionFragmentedCapability, ownedGameTcpDiscovery: true };
+  handlers.set("connect_prepare_session_fragmented_host_discovered", () => {
+    snapshot = preparedSessionFragmented(); return snapshot.preparation;
+  });
+  handlers.set("connect_review_host", () => { snapshot = reviewedDiscoveredSessionFragmented(); return snapshot.review; });
+}
+
+test("schema3 discovered game remains a separate authorized TCP selection and sends only its opaque ID", async () => {
+  discoveredSessionFragmentedFixtures(); await render(); await chooseProfile(sessionFragmentedProfile);
+  await discoveryToReview();
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  assert.equal(count("connect_confirm_discovered_status"), 0);
+  await click("Autorizar consulta e selecionar porta");
+  assert.equal(labeledInput("Serviço UDP").value, "", "Game discovery must never infer a UDP endpoint");
+  assert.match(container.textContent, /seleção confere somente a porta TCP do jogo/);
+  await submit(); assert.equal(count("connect_prepare_session_fragmented_host_discovered"), 0);
+  await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002"); await submit();
+  assert.deepEqual(calls.find(call => call.command === "connect_prepare_session_fragmented_host_discovered").args,
+    { selectionId: "selection-fixture", request: { mode: "loopback", bindAddress: "127.0.0.1:42000",
+      udpTarget: "127.0.0.1:43002", admissionSeconds: 600, sessionSeconds: 3600 } });
+  assert.equal(count("connect_prepare_session_fragmented_host"), 0);
+  assert.equal(count("connect_prepare_session_host_discovered"), 0);
+  assert.equal(count("connect_confirm"), 0);
+  await submit();
+  assert.match(container.textContent, /Destino autorizado127\.0\.0\.1:45432/);
+  assert.match(container.textContent, /Origem TCP conferidaInstância managed-fixture/);
+  assert.match(container.textContent, /Origem UDPDestino manual autorizado separadamente/);
+  assert.match(container.textContent, /Destino UDP autorizado127\.0\.0\.1:43002/);
+  assert.equal(button("Autorizar conexão").disabled, true);
+  await checkConsent(); await click("Autorizar conexão");
+  assert.deepEqual(calls.find(call => call.command === "connect_confirm").args, { operationId, digest });
+  assert.match(container.textContent, /Simple Voice ChatDesativado nesta integraçãoPlasmo VoiceDesativado nesta integração/);
+  assert.equal(calls.some(call => /voice_|launch|spawn|kill/.test(call.command)), false);
+});
+
+test("schema3 discovery requires its own capability even when generic discovery and UDP recovery are available", async () => {
+  discoveryFixtures(); sessionFragmentedFixtures();
+  capabilities.sessionFragmentedUdpInvitations = { ...sessionFragmentedCapability, ownedGameTcpDiscovery: false, udpRecovery: { maxAttempts: 3 } };
+  await render(); await chooseProfile(sessionFragmentedProfile);
+  assert.equal(container.querySelector('option[value="ownedInstance"]'), null);
+  await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002"); await submit();
+  assert.equal(count("connect_prepare_session_fragmented_host"), 1);
+  assert.equal(count("connect_prepare_session_fragmented_host_discovered"), 0);
+  assert.equal(count("list_running_instances"), 0);
+});
+
+test("schema3 discovery capability never enables discovery on short UDP or a guest", async () => {
+  fragmentedFixtures(); discoveredSessionFragmentedFixtures(); await render();
+  await chooseProfile("fragmentedGameUdp");
+  assert.equal(container.querySelector('option[value="ownedInstance"]'), null);
+  await chooseProfile(sessionFragmentedProfile); await click("Convidado");
+  assert.equal(container.querySelector('option[value="ownedInstance"]'), null);
+  await submit(); assert.equal(count("connect_prepare_session_fragmented_guest"), 1);
+  assert.equal(count("connect_prepare_session_fragmented_host_discovered"), 0);
+});
+
+test("switching profiles discards a pending source response even if both profiles support discovery", async () => {
+  discoveredSessionFragmentedFixtures(); await render(); await discoveryToReview();
+  let complete;
+  handlers.set("connect_confirm_discovered_status", () => new Promise(resolve => { complete = resolve; }));
+  await click("Autorizar consulta e selecionar porta");
+  await chooseProfile(sessionFragmentedProfile); await chooseManaged();
+  await act(async () => complete(discoverySelected));
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  assert.doesNotMatch(container.textContent, /Servidor respondeu em/);
+  assert.equal(count("connect_prepare_session_fragmented_host_discovered"), 0);
+});
+
+test("schema3 rejected discovered preparation consumes the local selection without automatic retry or manual fallback", async () => {
+  discoveredSessionFragmentedFixtures(); await render(); await chooseProfile(sessionFragmentedProfile); await discoveryToReview();
+  await click("Autorizar consulta e selecionar porta"); await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002");
+  handlers.set("connect_prepare_session_fragmented_host_discovered", () => Promise.reject("connect_source_changed"));
+  await submit();
+  assert.equal(count("connect_prepare_session_fragmented_host_discovered"), 1);
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  assert.doesNotMatch(container.textContent, /Servidor respondeu em/);
+  await submit(); await click("Atualizar estado");
+  assert.equal(count("connect_prepare_session_fragmented_host_discovered"), 1);
+  assert.equal(count("connect_prepare_session_fragmented_host"), 0);
+  assert.equal(labeledInput("Serviço UDP").value, "127.0.0.1:43002");
+  await click("Buscar jogos abertos pelo Aurora"); assert.equal(count("list_running_instances"), 2);
+});
+
+test("schema3 discovered preparation consumes its selection before a lost IPC response can be retried", async () => {
+  discoveredSessionFragmentedFixtures(); await render(); await chooseProfile(sessionFragmentedProfile); await discoveryToReview();
+  await click("Autorizar consulta e selecionar porta"); await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002");
+  handlers.set("connect_prepare_session_fragmented_host_discovered", () => {
+    snapshot = preparedSessionFragmented(); return Promise.reject(new Error("lost response"));
+  });
+  await submit(); assert.equal(button("Preparar anfitrião").disabled, true);
+  await click("Atualizar estado");
+  assert.equal(button("Encerrar Connect").disabled, false);
+  assert.equal(count("connect_prepare_session_fragmented_host_discovered"), 1);
+  await click("Encerrar Connect");
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  assert.equal(count("connect_prepare_session_fragmented_host"), 0);
+});
+
+test("schema3 discovered review invalidates consent when the approved source revision changes", async () => {
+  discoveredSessionFragmentedFixtures(); snapshot = reviewedDiscoveredSessionFragmented(); await render();
+  await checkConsent();
+  snapshot = { ...snapshot, generation: 2, review: { ...snapshot.review, generation: 2, runId: "new-run", digest: "e".repeat(64) } };
+  await click("Atualizar estado"); assert.equal(button("Autorizar conexão").disabled, true);
+  assert.equal(count("connect_confirm"), 0);
+  await checkConsent(); await click("Autorizar conexão");
+  assert.deepEqual(calls.find(call => call.command === "connect_confirm").args, { operationId, digest: "e".repeat(64) });
+  snapshot = { ...activeSessionFragmented("host"), generation: 3, phase: "failed", transportState: "closed",
+    cleanupState: "complete", errorCode: "connect_source_changed" };
+  await click("Atualizar estado");
+  assert.match(container.textContent, /Recursos liberados/);
+  assert.equal([...container.querySelectorAll("button")].some(element => element.textContent === "Copiar convite"), false);
+  assert.equal(count("connect_prepare_session_fragmented_host"), 0);
+});
+
+test("only schema3 host reviews accept an owned TCP source with complete bounded identity and an independent UDP target", () => {
+  const own = reviewedDiscoveredSessionFragmented();
+  assert.deepEqual(types.reviewFrom(own.review), own.review);
+  assert.deepEqual(types.snapshotFrom(own), own);
+  for (const fields of [{ instanceId: null }, { runId: null }, { instanceId: "" }, { runId: "x".repeat(257) },
+    { instanceId: "invalid\ninstance" }, { targetSource: "manual" }, { targetSource: null }, { targetSource: undefined },
+    { gameTarget: "192.168.1.2:12345" }, { fragmentedUdp: { ...own.review.fragmentedUdp, udpTarget: "" } },
+    { fragmentedUdp: { ...own.review.fragmentedUdp, udpTarget: null } }]) assert.throws(() => types.reviewFrom({ ...own.review, ...fields }));
+  assert.throws(() => types.reviewFrom({ ...fragmentedReview, targetSource: "ownedInstance", instanceId: "instance", runId: "run" }));
+  assert.throws(() => types.reviewFrom({ ...reviewedSessionFragmented("guest").review, targetSource: "ownedInstance", instanceId: "instance", runId: "run" }));
+});
+
+test("schema3 discovery capability is optional, strictly boolean and absent from the signed transport contract", () => {
+  for (const ownedGameTcpDiscovery of [true, false]) {
+    const capability = { ...sessionFragmentedCapability, ownedGameTcpDiscovery, udpRecovery: { maxAttempts: 3 } };
+    assert.deepEqual(types.capabilitiesFrom({ ...caps, sessionFragmentedUdpInvitations: capability }).sessionFragmentedUdpInvitations, capability);
+  }
+  for (const malformed of [null, undefined, 1, "true", {}, []]) assert.throws(() => types.capabilitiesFrom({ ...caps,
+    sessionFragmentedUdpInvitations: { ...sessionFragmentedCapability, ownedGameTcpDiscovery: malformed } }));
+  assert.throws(() => types.capabilitiesFrom({ ...caps, fragmentedUdpInvitations: { ...fragmentedCapability, ownedGameTcpDiscovery: true } }));
+  assert.throws(() => types.exportFrom({ ...sessionFragmentedExport, fragmentedUdp: { ...sessionFragmentedContract, ownedGameTcpDiscovery: true } }));
+  assert.deepEqual(types.capabilitiesFrom({ ...caps, sessionFragmentedUdpInvitations: sessionFragmentedCapability }).sessionFragmentedUdpInvitations,
+    sessionFragmentedCapability, "The older schema3 capability remains readable without the new action");
 });

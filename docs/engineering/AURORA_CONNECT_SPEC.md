@@ -396,6 +396,10 @@ O caller opcional `connect-voice-lab`, desligado por padrão e independente de `
 
 Trabalho síncrono já iniciado conserva autoridade e publica resultado mesmo após abandono da chamada. Fechamento instala barreira e aguarda esse resultado. Depois de aplicar, perder o recibo RAM exige revisão própria; não há restauração automática. Logout conserva a barreira até o encerramento Connect e conclusão da ação de conta. `Ready+Exit` não pode ser cancelado ou liberado pelo frontend; a saída nativa aguarda ambos os managers. Desmontar o painel ou ocultar na bandeja conserva o slot. O [contrato detalhado60](../aurora-connect-desktop-voice.md) define schemas, estados, limites, provas e rollback; não habilita voz para usuários nem homologa janela Tauri, áudio SVC/Plasmo ou novas redes.
 
+### 9.7 Porta descoberta na sessão TCP+UDP — incremento64
+
+O caller schema3 pode consumir a seleção opaca48 para game/TCP, conservando aux/UDP manual. O novo pedido não contém destino TCP nem identidade de processo fornecidos pelo frontend; ambos vêm do handle e listener previamente revisados. Capability própria, confirmação do digest, consumo único e monitor original permanecem. Perda da origem fecha ambos os transportes Connect, sem encerrar o jogo. [Contrato64](../aurora-connect-discovered-session-udp.md). O perfil curto57 continua manual; não inferir descoberta UDP, Minecraft LAN, áudio ou GUI homologados.
+
 ## 10. Validação, incrementalidade e liberação
 
 Ordem candidata: inventário/ADR → TCP autenticado → UDP simultâneo controlado → redes reais/relay verificado → Minecraft/convites/estados → SVC e Plasmo separadamente → robustez, manifesto e liberação. Reordenar se código/evidência mostrar incremento já pronto ou bloqueio mais importante; não refazer recovery/Doctor/Tools alpha.14. Testes completos e tarefas estão no [backlog](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md).

@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 mod fragmented_profile;
 pub use fragmented_profile::{
     FragmentedGuestState, FragmentedHostRequest, FragmentedUdpCapabilities, FragmentedUdpContract,
-    FragmentedUdpReview, SessionFragmentedHostRequest, SessionFragmentedUdpCapabilities,
-    UdpRecoveryCapabilities, UdpRecoveryState,
+    FragmentedUdpReview, SessionFragmentedDiscoveredHostRequest, SessionFragmentedHostRequest,
+    SessionFragmentedUdpCapabilities, UdpRecoveryCapabilities, UdpRecoveryState,
 };
 
 #[cfg(feature = "connect-lab")]
@@ -433,6 +433,16 @@ impl ConnectManager {
             let _ = (owner, request);
             Err(ConnectError::Disabled)
         }
+    }
+    #[cfg(all(windows, feature = "connect-lab"))]
+    pub fn prepare_session_fragmented_host_discovered(
+        &self,
+        owner: &str,
+        request: SessionFragmentedDiscoveredHostRequest,
+        target: super::connect_discovery::ApprovedTarget,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        self.live
+            .prepare_session_fragmented_host_discovered(owner, request, target)
     }
     #[cfg(all(windows, feature = "connect-lab"))]
     pub fn prepare_session_host_discovered(

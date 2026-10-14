@@ -18,7 +18,7 @@ export type FragmentedUdpContract = FragmentedUdpCommon & (
   | { profile: typeof SESSION_FRAGMENTED_PROFILE; invitationSchemaVersion: 3 }
 );
 export type FragmentedUdpCapability = FragmentedUdpCommon & { profile: typeof FRAGMENTED_PROFILE; invitationSchemaVersion: 1; maxLifetimeSeconds: typeof FRAGMENTED_LIFETIME_SECONDS };
-export type SessionFragmentedUdpCapability = FragmentedUdpCommon & { profile: typeof SESSION_FRAGMENTED_PROFILE; invitationSchemaVersion: 3; maxAdmissionSeconds: 600; maxSessionSeconds: 3600; udpRecovery?: { maxAttempts: 3 } };
+export type SessionFragmentedUdpCapability = FragmentedUdpCommon & { profile: typeof SESSION_FRAGMENTED_PROFILE; invitationSchemaVersion: 3; maxAdmissionSeconds: 600; maxSessionSeconds: 3600; udpRecovery?: { maxAttempts: 3 }; ownedGameTcpDiscovery?: boolean };
 export type SessionUdpRecovery = { attemptsUsed: number; maxAttempts: 3; pending: boolean };
 export type FragmentedUdpReview = FragmentedUdpContract & { udpTarget: string | null };
 export type FragmentedUdpState = "notStarted" | "starting" | "available" | "failed" | "closed";
@@ -76,9 +76,11 @@ export function fragmentedCapabilityFrom(value: unknown): FragmentedUdpCapabilit
 }
 export function sessionFragmentedCapabilityFrom(value: unknown): SessionFragmentedUdpCapability {
   const recovery = record(value) && Object.hasOwn(value, "udpRecovery");
-  const checked = contract(value, ["maxAdmissionSeconds", "maxSessionSeconds", ...(recovery ? ["udpRecovery"] : [])], SESSION_FRAGMENTED_PROFILE);
+  const discovery = record(value) && Object.hasOwn(value, "ownedGameTcpDiscovery");
+  const checked = contract(value, ["maxAdmissionSeconds", "maxSessionSeconds", ...(recovery ? ["udpRecovery"] : []), ...(discovery ? ["ownedGameTcpDiscovery"] : [])], SESSION_FRAGMENTED_PROFILE);
   if (checked.maxAdmissionSeconds !== 600 || checked.maxSessionSeconds !== 3600) return invalid();
   if (recovery && (!exact(checked.udpRecovery, ["maxAttempts"]) || checked.udpRecovery.maxAttempts !== 3)) return invalid();
+  if (discovery && typeof checked.ownedGameTcpDiscovery !== "boolean") return invalid();
   return checked as SessionFragmentedUdpCapability;
 }
 /** A local recovery projection never extends the signed transport authority. */
@@ -132,10 +134,12 @@ export function fragmentedReviewFieldsFrom(value: unknown, profile: FragmentedPr
       || service.serviceId !== expected[0] || service.protocol !== expected[1]
       || service.requiredCapability !== expected[2] || service.revision !== 1) return invalid();
   }
-  if (value.instanceId != null || value.runId != null) return invalid();
+  const ownedGame = profile === SESSION_FRAGMENTED_PROFILE && value.role === "host" && value.targetSource === "ownedInstance";
+  const sourceId = (id: unknown) => typeof id === "string" && id.length > 0 && id.length <= 256 && !/[\u0000-\u001f\u007f]/u.test(id);
+  if (ownedGame ? !sourceId(value.instanceId) || !sourceId(value.runId) : value.instanceId != null || value.runId != null) return invalid();
   if (value.role === "host") {
     if (!isLoopbackUdpTarget(checked.udpTarget) || !isLoopbackUdpTarget(value.gameTarget) || value.localTcpBind !== null
-      || !(value.targetSource === undefined || value.targetSource === "manual")) return invalid();
+      || !(ownedGame || value.targetSource === undefined || value.targetSource === "manual")) return invalid();
   } else if (checked.udpTarget !== null || value.gameTarget !== null || value.localTcpBind !== "127.0.0.1:0"
     || !(value.targetSource === undefined || value.targetSource === null)) return invalid();
   return checked as FragmentedUdpReview;

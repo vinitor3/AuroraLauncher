@@ -32,6 +32,7 @@ export function ConnectView() {
   const [gameTarget, setGameTarget] = useState("127.0.0.1:43001");
   const [targetMode, setTargetMode] = useState<"manual" | "ownedInstance">("manual");
   const [discoveredTarget, setDiscoveredTarget] = useState<DiscoveredTarget>();
+  const [discoveryEpoch, setDiscoveryEpoch] = useState(0);
   const [lifetime, setLifetime] = useState("600");
   const [invitationProfile, setInvitationProfile] = useState<"legacy" | ConnectInvitationProfile>("legacy");
   const [fragmentedLifetime, setFragmentedLifetime] = useState("120");
@@ -140,12 +141,14 @@ export function ConnectView() {
     if (active || !capabilities?.available) return;
     const sessionUdp = invitationProfile === SESSION_FRAGMENTED_PROFILE && Boolean(capabilities.sessionFragmentedUdpInvitations);
     const fragmented = sessionUdp || invitationProfile === FRAGMENTED_PROFILE && Boolean(capabilities.fragmentedUdpInvitations);
-    const discovery = !fragmented && selectedRole === "host" && targetMode === "ownedInstance";
+    const discoveryAvailable = sessionUdp ? capabilities.sessionFragmentedUdpInvitations?.ownedGameTcpDiscovery === true
+      : !fragmented && capabilities.ownedInstanceDiscovery === true;
+    const discovery = discoveryAvailable && selectedRole === "host" && targetMode === "ownedInstance";
     if (discovery && !discoveredTarget) return;
     const session = sessionUdp || invitationProfile === "sessionGameTcp" && Boolean(capabilities.sessionInvitations);
     const admission = Number(admissionSeconds), duration = Number(sessionSeconds);
     if (fragmented && selectedRole === "host" && ((!sessionUdp && !isFragmentedLifetime(Number(fragmentedLifetime)))
-      || !isLoopbackUdpTarget(udpTarget.trim()) || !isLoopbackUdpTarget(gameTarget.trim()))) {
+      || !isLoopbackUdpTarget(udpTarget.trim()) || (!discovery && !isLoopbackUdpTarget(gameTarget.trim())))) {
       setError(connectError("connect_invalid_request"));
       return;
     }
@@ -155,17 +158,22 @@ export function ConnectView() {
       return;
     }
     const command = selectedRole === "host"
-      ? sessionUdp ? "connect_prepare_session_fragmented_host" : fragmented ? "connect_prepare_fragmented_host" : session ? discovery ? "connect_prepare_session_host_discovered" : "connect_prepare_session_host"
+      ? sessionUdp ? discovery ? "connect_prepare_session_fragmented_host_discovered" : "connect_prepare_session_fragmented_host" : fragmented ? "connect_prepare_fragmented_host" : session ? discovery ? "connect_prepare_session_host_discovered" : "connect_prepare_session_host"
         : discovery ? "connect_prepare_discovered_host" : "connect_prepare_host"
       : sessionUdp ? "connect_prepare_session_fragmented_guest" : fragmented ? "connect_prepare_fragmented_guest" : session ? "connect_prepare_session_guest" : "connect_prepare_guest";
     const request = selectedRole === "host"
-      ? { mode, bindAddress: bindAddress.trim(), gameTarget: discovery ? discoveredTarget!.target : gameTarget.trim(),
+      ? { mode, bindAddress: bindAddress.trim(),
+        ...(sessionUdp && discovery ? {} : { gameTarget: discovery ? discoveredTarget!.target : gameTarget.trim() }),
         ...(fragmented ? { udpTarget: udpTarget.trim() } : {}),
         ...(session ? { admissionSeconds: admission, sessionSeconds: duration }
           : { lifetimeSeconds: Number(fragmented ? fragmentedLifetime : lifetime) }) }
       : { mode, expectedHostPublicId: hostPublicId.trim() };
+    const selectionId = discovery ? discoveredTarget!.selectionId : undefined;
     void perform(selectedRole === "host" ? "prepareHost" : "prepareGuest", async current => {
-      const value = preparationFrom(await invoke<unknown>(command, { request, ...(discovery ? { selectionId: discoveredTarget!.selectionId } : {}) }));
+      // A schema3 selection is single-use even when the IPC result is unknown.
+      // Rebuild the picker so a failed attempt cannot retain a selected source.
+      if (sessionUdp && discovery) { setDiscoveredTarget(undefined); setDiscoveryEpoch(value => value + 1); }
+      const value = preparationFrom(await invoke<unknown>(command, { request, ...(discovery ? { selectionId } : {}) }));
       if (!current()) return;
       setDiscoveredTarget(undefined);
       setKnownOperationId(value.operationId);
@@ -255,6 +263,8 @@ export function ConnectView() {
   const sessionUdpSelected = invitationProfile === SESSION_FRAGMENTED_PROFILE && Boolean(capabilities?.sessionFragmentedUdpInvitations);
   const sessionSelected = sessionUdpSelected || invitationProfile === "sessionGameTcp" && Boolean(capabilities?.sessionInvitations);
   const fragmentedSelected = sessionUdpSelected || invitationProfile === FRAGMENTED_PROFILE && Boolean(capabilities?.fragmentedUdpInvitations);
+  const discoveryAvailable = sessionUdpSelected ? capabilities?.sessionFragmentedUdpInvitations?.ownedGameTcpDiscovery === true
+    : !fragmentedSelected && capabilities?.ownedInstanceDiscovery === true;
   const displayedProfile = active ? snapshot?.invitationProfile : sessionSelected || fragmentedSelected ? invitationProfile : undefined;
   const sessionDisplayed = displayedProfile === "sessionGameTcp" || displayedProfile === SESSION_FRAGMENTED_PROFILE;
   const fragmentedDisplayed = displayedProfile === FRAGMENTED_PROFILE || displayedProfile === SESSION_FRAGMENTED_PROFILE;
@@ -323,9 +333,10 @@ export function ConnectView() {
           {mode === "externalIpv6" && <p>Use o endereço inicial IPv6 autorizado. Este modo compartilha informações de rede com o participante; não configura o roteador nem garante alcance.</p>}
           {selectedRole === "host" ? <div className="connect-fields">
             <label>Endereço inicial da conexão<input required maxLength={128} value={bindAddress} disabled={busy} placeholder={mode === "loopback" ? "127.0.0.1:42000" : "[IPv6 autorizado]:42000"} onChange={event => setBindAddress(event.target.value)} autoComplete="off" spellCheck={false} /></label>
-            {capabilities.ownedInstanceDiscovery && !fragmentedSelected && <label>Selecionar servidor<select disabled={busy} value={targetMode} onChange={event => { setTargetMode(event.target.value as "manual" | "ownedInstance"); setDiscoveredTarget(undefined); }}><option value="manual">Endereço manual · servidor dedicado ou local</option><option value="ownedInstance">Jogo aberto pelo Aurora · mundo LAN</option></select></label>}
-            {!fragmentedSelected && targetMode === "ownedInstance" && capabilities.ownedInstanceDiscovery
-              ? <DiscoveryPicker disabled={busy} onSelect={setDiscoveredTarget} />
+            {discoveryAvailable && <label>Selecionar servidor<select disabled={busy} value={targetMode} onChange={event => { setTargetMode(event.target.value as "manual" | "ownedInstance"); setDiscoveredTarget(undefined); }}><option value="manual">Endereço manual · servidor dedicado ou local</option><option value="ownedInstance">Jogo aberto pelo Aurora · mundo LAN</option></select></label>}
+            {discoveryAvailable && targetMode === "ownedInstance"
+              ? <><DiscoveryPicker key={`${invitationProfile}:${discoveryEpoch}`} disabled={busy} onSelect={setDiscoveredTarget} />
+                {sessionUdpSelected && <p>Esta seleção confere somente a porta TCP do jogo. O destino UDP abaixo continua manual e exige sua autorização separada; não foi conferido como parte desse processo.</p>}</>
               : <label>Servidor neste computador<input required maxLength={128} value={gameTarget} disabled={busy} onChange={event => setGameTarget(event.target.value)} autoComplete="off" spellCheck={false} /><small>Somente endereço loopback e porta do jogo que você autoriza compartilhar. A seleção manual não comprova qual processo possui essa porta.</small></label>}
             {fragmentedSelected && <FragmentedFields role="host" disabled={busy} udpTarget={udpTarget} lifetimeSeconds={fragmentedLifetime} separateSession={sessionSelected}
               onUdpTargetChange={setUdpTarget} onLifetimeChange={setFragmentedLifetime} />}
@@ -336,7 +347,7 @@ export function ConnectView() {
           </div> : <label>Código público do anfitrião<input required maxLength={64} value={hostPublicId} disabled={busy} onChange={event => setHostPublicId(event.target.value)} autoComplete="off" spellCheck={false} /><small>Receba este código diretamente do anfitrião, por um canal autorizado.</small></label>}
           {fragmentedSelected && selectedRole === "guest" && <FragmentedFields role="guest" disabled={busy} udpTarget={udpTarget} lifetimeSeconds={fragmentedLifetime}
             onUdpTargetChange={setUdpTarget} onLifetimeChange={setFragmentedLifetime} />}
-          <div><button type="submit" disabled={busy || (!fragmentedSelected && selectedRole === "host" && targetMode === "ownedInstance" && !discoveredTarget)}>{selectedRole === "host" ? "Preparar anfitrião" : "Preparar convidado"}</button></div>
+          <div><button type="submit" disabled={busy || (discoveryAvailable && selectedRole === "host" && targetMode === "ownedInstance" && !discoveredTarget)}>{selectedRole === "host" ? "Preparar anfitrião" : "Preparar convidado"}</button></div>
         </form>
       </section>}
       {prepared && <section className="connect-card"><h3>Troque os códigos públicos</h3><p>{snapshot?.role === "host" ? "Envie seu código ao convidado e receba o código gerado por ele nesta tentativa." : "Envie seu código ao anfitrião e aguarde o convite destinado a esta tentativa."}</p>
@@ -351,7 +362,8 @@ export function ConnectView() {
       {reviewed && snapshot?.phase === "reviewed" && <section className="connect-card connect-review" aria-labelledby="connect-review-title"><h3 id="connect-review-title">Revise antes de autorizar</h3>
         <dl><dt>Papel</dt><dd>{reviewed.role === "host" ? "Anfitrião" : "Convidado"}</dd><dt>Modo</dt><dd>{reviewed.mode === "loopback" ? "Neste computador" : "IPv6 externo autorizado"}</dd>
           <dt>Endereço inicial</dt><dd><code>{reviewed.directAddress}</code></dd>{reviewed.gameTarget && <><dt>Destino autorizado</dt><dd><code>{reviewed.gameTarget}</code></dd></>}
-          {reviewed.targetSource === "ownedInstance" && <><dt>Origem conferida</dt><dd>Instância {reviewed.instanceId} iniciada por este launcher. A conexão encerra se o processo ou a porta deixar de corresponder à seleção.</dd></>}
+          {reviewed.targetSource === "ownedInstance" && <><dt>Origem TCP conferida</dt><dd>Instância {reviewed.instanceId} iniciada por este launcher. A conexão encerra se o processo ou a porta TCP deixar de corresponder à seleção.</dd>
+            {reviewed.fragmentedUdp && <><dt>Origem UDP</dt><dd>Destino manual autorizado separadamente; não foi conferido como parte do processo do jogo.</dd></>}</>}
           <dt>Serviço</dt><dd>Minecraft · TCP · somente o destino aprovado pelo anfitrião</dd>
           {reviewed.fragmentedUdp && <FragmentedReviewFields review={reviewed.fragmentedUdp} />}
           {reviewed.sessionTiming ? <><dt>Prazo para entrar</dt><dd>{reviewed.sessionTiming.admissionSeconds} segundos desde a emissão</dd><dt>Duração máxima da sessão</dt><dd>{reviewed.sessionTiming.sessionSeconds} segundos desde a emissão, sem renovação</dd><dt>Autorize até</dt><dd>{connectDate(reviewed.expiresAtMs)}</dd><dt>Entrar até</dt><dd>{connectDate(reviewed.sessionTiming.admissionExpiresAtMs)}</dd><dt>Encerramento da sessão</dt><dd>{connectDate(reviewed.sessionTiming.sessionExpiresAtMs)}</dd></>

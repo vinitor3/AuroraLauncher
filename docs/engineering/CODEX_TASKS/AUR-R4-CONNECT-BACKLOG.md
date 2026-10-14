@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 14/10/2026
 
+Incremento64/003/005/008 permite game/TCP descoberto na sessão schema3, mantendo UDP manual e autorizado separadamente. Reutiliza seleção opaca48, guard do processo e monitor, encerrando ambos os transportes quando a origem muda. [Contrato64](../../aurora-connect-discovered-session-udp.md). **PROTÓTIPO**, sem nova prova de LAN Minecraft, janela Tauri, áudio ou rede externa. O perfil curto57 permanece manual.
+
 Incremento63/003/005/008 acrescenta recuperação manual de UDP somente dentro da sessão schema3 admitida: até três tentativas adicionais, fila limitada, mesma autorização e TCP preservado. [Contrato e evidências63](../../aurora-connect-desktop-udp-recovery.md). **PROTÓTIPO**; avanço local da parte de transporte do T-MIX-03 não conclui reconexão de áudio/credencial/rota de mod, rede externa ou estabilidade. Sem nova configuração, porta, identidade, prazo ou retry automático; demais fases e testes permanecem.
 
 Incremento62/003/005/008 integra61 ao caller/painel com perfil explícito, destino UDP manual, ingresso e sessão independentes e falha UDP preservando TCP. [Contrato e evidências62](../../aurora-connect-desktop-fragmented-session.md). **PROTÓTIPO**, desligado por padrão. CLI/Node e perfis anteriores conservam seus contratos; testes DOM/nativos não concluem GUI, estabilidade1h, T-VOICE, T-MC ou convites entre redes. Anúncio/configuração60 permanece independente, sem inferir mod pela porta.
@@ -149,7 +151,7 @@ IDs `AUR-R4-001` a `AUR-R4-008` são canônicos desta implementação, após com
 
 Referência histórica sem sufixo/SHA não autoriza reatribuir evidência. [Reconciliação completa](../AURORA_CONNECT_REVIEW.md) e [requisito → teste](../AURORA_CONNECT_TRACEABILITY.md). O arquivo alpha.13 `AURORA_CONNECT_BACKLOG.md` permanece histórico em Git; este é o único backlog ativo.
 
-Local efetivamente escolhido para 001–003: `apps/connect-lab/`, crate Rust independente e experimental; os caminhos `engine/connect/` nas propostas de tarefa abaixo só se aplicam a futura integração autorizada. Não adicionar dependência/ponto de entrada no desktop para declarar uma PoC como produto. O pin e a decisão estão na ADR; testes/limites efetivos no task. Estado por incremento deve ser atualizado apenas com essa evidência, preservando os critérios não executados.
+Local efetivamente escolhido para001–003: `apps/connect-lab/`, crate Rust independente e experimental. A integração posterior46/56/57/60/62/63 já existe em `engine/connect/` e nos painéis, sob features desligadas por padrão. Isso não transforma a PoC em produto homologado. As tabelas de contratos abaixo preservam propostas e estados da revisão documental de29/09; o resumo e os registros de incrementos no início são a evidência atual. Critérios ainda não executados permanecem obrigatórios.
 
 ```text
 AUR-R4-001 inventário/decisão/contratos
@@ -220,7 +222,7 @@ A ordem é ajustável ao bloqueio real. É útil investigar APIs/endereço dos m
 | Testes | T-NET-01..08, T-COST-01..03, T-MIX-02/03, T-SEC-05. Rede real com topologia registrada; loopback/mocks não passam nesses testes. |
 | Aceite | Caminho observado vem da biblioteca/backend; custos e termos comprovados para uso definido; indisponibilidade/quota falham claramente sem opção paga automática. Caso nenhum relay sirva, entregar modo direto experimental e tabela de limites reais, mantendo avaliação de alternativa gratuita pendente. Sem promessa universal NAT/CGNAT, migração sem interrupção ou latência igual entre caminhos. |
 | Rollback | Revogar config/credenciais efêmeras próprias, desligar relay afetado, remover mappings consentidos e encerrar sessões. Continuar apenas caminhos diretos autorizados; nenhuma ativação de faturamento. |
-| Estado/evidência | **NÃO IMPLEMENTADO**; traversal/relay **NÃO VERIFICADO**. Referências oficiais em matriz de dependências são pesquisa, não homologação Aurora. |
+| Estado/evidência | **PARCIAL** no laboratório: provas diretas e fixture de relay próprio50 estão delimitadas no resumo e task. Traversal/NAT/CGNAT e relay público continuam **NÃO VERIFICADO**; nenhum operador público está habilitado. Referências oficiais são pesquisa, não homologação Aurora. |
 
 ### AUR-R4-005 — Minecraft, convites e estados reais no launcher
 
