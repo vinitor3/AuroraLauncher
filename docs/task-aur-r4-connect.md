@@ -1733,6 +1733,28 @@ Padrão **246 PASS/7 ignorados/0 falhas**,155,89s de testes, compilação3m14s; 
 
 Revisões independentes da biblioteca e integração, além da revisão do coordenador, não identificaram bloqueador final no mapa de autoridades. Rollback fecha todos os próprios agentes, preserva os envelopes antigos e não reinterpreta grupo como autorização manual. Nenhuma intervenção humana necessária para continuar os testes locais.
 
+## Incremento71a — encerramento sem regredir o resultado publicado
+
+Base `5e84dcf`; corrige a falha encontrada pela regressão69–71 e preserva seu log reprovado. `engine/connect/live.rs` conserva `closed/failed` com cleanup final enquanto o worker ainda retorna; tarefa pendente continua pertencendo ao Attempt, inclusive se a primeira future IPC for abandonada. Stop duplicado e logout aguardam a mesma tarefa. O resultado de JoinHandle terminado ainda é recolhido, sem await sob mutex; erro de cleanup não libera o slot para outra operação. [Contrato71a](aurora-connect-stop-completion.md).
+
+Novo `engine/connect/stop_completion_tests.rs` cobre por barreiras causais publicação final antes do retorno, estados de sucesso/erro, perda do primeiro solicitante, stop duplicado/logout e reutilização do slot apenas depois do término. Uma expectativa inicial do teste foi corrigida: depois do latch de logout, novo preparo deve retornar Cancelled; antes do término continua Busy. Nenhuma asserção da regressão antiga foi enfraquecida.
+
+Comandos executados sobre fonte congelada antes do registro72:
+
+```powershell
+$env:CARGO_BUILD_JOBS='2'
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --all-features --lib stop_completion_tests -- --test-threads=1
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --all-features --lib tcp_and_two_udp_sources_continue_after_admission_then_revoke_with_cleanup -- --test-threads=1
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-features --all-targets -- --test-threads=1
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-targets --all-features -- -D warnings
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check
+git diff --check
+```
+
+Novos testes **2 PASS**,0,07s, compilação48,03s; caso original **1 PASS**,2,34s. Regressão integrada **389 PASS/61 ignorados/0 falhas**,200,66s de testes, compilação1m09s; Clippy combinado **PASS20,14s**, fmt/diff PASS. Logs privados `stop-completion-71a-{focused,original-regression,full,clippy}.log`. Contagens focais estão incluídas na rodada completa, não são evidências adicionais de runtime.
+
+Revisão independente e do coordenador confirmaram propriedade do worker e ausência de await sob mutex. TCP/UDP preservados; nenhuma alteração de autoridade, rede externa, Minecraft, SVC/Plasmo, configurações pessoais, dependências ou matriz. A correção só usa testes locais, incluindo os recursos de transporte próprios da regressão. Rollback não deve reinterpretar cleanup incerto como completo; encerrar recursos antes de reverter código. Nenhuma ação humana necessária.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.

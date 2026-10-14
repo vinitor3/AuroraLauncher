@@ -31,6 +31,9 @@ mod session_fragmented_tests;
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod session_tests;
+#[cfg(test)]
+#[path = "stop_completion_tests.rs"]
+mod stop_completion_tests;
 
 enum TargetGuard {
     Manual,
@@ -1113,7 +1116,7 @@ impl Manager {
         owner: &str,
         id: &str,
     ) -> Result<ConnectSnapshot, ConnectError> {
-        let (worker, already_closing) = {
+        let finish_without_worker = {
             let mut state = lock(&self.state)?;
             let a = selected(&mut state, owner, id)?;
             a.cancel.cancel();
@@ -1123,48 +1126,50 @@ impl Manager {
             a.export = None;
             a.snapshot.preparation = None;
             a.snapshot.review = None;
-            if terminal(a) {
-                return Ok(a.snapshot.clone());
-            }
+            let completion_published = matches!(a.snapshot.phase, "closed" | "failed")
+                && matches!(a.snapshot.cleanup_state, "complete" | "failed");
             let already_closing = a.snapshot.phase == "closing";
-            a.snapshot.phase = "closing";
-            a.snapshot.cleanup_state = "pending";
-            a.snapshot.generation = a.snapshot.generation.saturating_add(1);
-            (a.worker.take(), already_closing)
+            // The actor publishes cleanup before its task returns. Preserve that
+            // publication while retaining the task as the actual lifetime gate.
+            if !completion_published && !already_closing {
+                a.snapshot.phase = "closing";
+                a.snapshot.cleanup_state = "pending";
+                a.snapshot.generation = a.snapshot.generation.saturating_add(1);
+            }
+            a.worker.is_none() && !completion_published && !already_closing
         };
-        if let Some(worker) = worker {
-            if worker.await.is_err() {
-                update(&self.state, id, |a| {
-                    a.snapshot.phase = "failed";
-                    a.snapshot.cleanup_state = "failed";
-                    a.snapshot.error_code = Some(ConnectError::Internal.code());
-                });
-            }
-        } else if already_closing {
-            loop {
-                let snapshot = self.snapshot(owner)?;
-                if snapshot.operation_id.as_deref() != Some(id) {
-                    return Err(ConnectError::StaleOperation);
-                }
-                if snapshot.cleanup_state == "complete" || snapshot.cleanup_state == "failed" {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        } else {
+        if finish_without_worker {
             finish(&self.state, id, None);
         }
         loop {
-            let snapshot = self.snapshot(owner)?;
-            if snapshot.operation_id.as_deref() != Some(id) {
-                return Err(ConnectError::StaleOperation);
-            }
-            let active = {
+            let finished_worker = {
                 let mut state = lock(&self.state)?;
-                selected(&mut state, owner, id)?.probe_active
+                let a = selected(&mut state, owner, id)?;
+                // Never transfer an unfinished task to an IPC waiter: another
+                // stop, shutdown or preparation must still see its ownership if
+                // that waiter is dropped before the actor finishes.
+                if a.worker.as_ref().is_some_and(|worker| worker.is_finished()) {
+                    a.worker.take()
+                } else {
+                    if a.worker.is_none()
+                        && !a.probe_active
+                        && matches!(a.snapshot.phase, "closed" | "failed")
+                        && matches!(a.snapshot.cleanup_state, "complete" | "failed")
+                    {
+                        return Ok(a.snapshot.clone());
+                    }
+                    None
+                }
             };
-            if !active {
-                return Ok(snapshot);
+            if let Some(worker) = finished_worker {
+                if worker.await.is_err() {
+                    update(&self.state, id, |a| {
+                        a.snapshot.phase = "failed";
+                        a.snapshot.cleanup_state = "failed";
+                        a.snapshot.error_code = Some(ConnectError::Internal.code());
+                    });
+                }
+                continue;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
