@@ -27,8 +27,8 @@ pub(crate) use readonly::with_existing_observation;
 pub(crate) use readonly::{list_voice_receipts, load_voice_receipt};
 #[cfg(feature = "connect-voice-lab")]
 pub(crate) use voice_receipts::{
-    VoiceReceiptIntent, VoiceReceiptLoaded, VoiceReceiptMod, VoiceReceiptState,
-    VoiceReceiptSummary, VoiceReceiptToken,
+    retire_voice_receipt, VoiceReceiptIntent, VoiceReceiptLoaded, VoiceReceiptMod,
+    VoiceReceiptState, VoiceReceiptSummary, VoiceReceiptToken,
 };
 
 const VERSION: u32 = 1;
@@ -52,6 +52,10 @@ enum Fault {
     ReceiptBeforeCommit,
     ReceiptAfterCommit,
     ReceiptRollbackInterrupt,
+    #[cfg(feature = "connect-voice-lab")]
+    ReceiptRetireBeforeCommit,
+    #[cfg(feature = "connect-voice-lab")]
+    ReceiptRetireAfterCommit,
 }
 #[cfg(test)]
 thread_local! { static FAULT: std::cell::Cell<Fault> = const { std::cell::Cell::new(Fault::None) }; }

@@ -29,6 +29,10 @@ O laboratório descartável `apps/connect-runtime-tools` já executou Minecraft 
 
 ## Mapa do repositório
 
+Connect69 permite aposentar explicitamente a autoridade de um recibo de voz após revisão própria. Ready0 passa a Retired1 em uma transação do índice; nenhum arquivo de configuração é alterado e isso nunca significa Restored. Undo genérico não aposenta por inferência. Histórico continua contando no limite64; downgrade anterior recusa o estado novo, sem apagar ou reescrever o índice. Consulte `docs/aurora-connect-voice-receipt-retirement.md` antes de integrar essa ação.
+
+Connect70 expõe essa ação no painel por capability própria, preparo/confirm separados e consentimento novo. Cancelar conserva Ready para outra revisão; resultado incerto mantém barreira e não promete Retired. Listagem/fechamento distinguem histórico aposentado de restauração e perdaRAM. Consulte `docs/aurora-connect-desktop-receipt-retirement.md`; ambos os mods continuam sem homologação de áudio.
+
 Connect68 integra o recibo durável por ação explícita no painel: preparar, confirmar, listar e retomar somente para nova revisão. Campo opcional distingue planejado/salvo/incerto e fechamento conserva a barreira; RAM anterior mantém seus avisos. Consultar `docs/aurora-connect-desktop-durable-voice.md`. Retomada não executa jogo, transporte ou restauração automática.
 
 Connect66 acrescenta `directIpv4` ao caller/painel somente quando anunciado pela capability. Preserva os quatro perfis, revisão/digest, guardas e destinos loopback; não infere modo nem configura NAT/relay. Ensaios no IPv4 próprio são locais. Consultar `docs/aurora-connect-desktop-ipv4.md`; não usar isso como homologação entre redes.

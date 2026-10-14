@@ -1,3 +1,5 @@
+import { retirementReviewFrom, type RetirementReview } from "./retirement-types";
+
 export type VoiceMod = "simple_voice_chat" | "plasmo_voice";
 export const MODS = {
   simple_voice_chat: { name: "Simple Voice Chat", version: "2.6.22", sha256: "972a01592f670aa57f2dc2e3587a656b798106037468c61e4bfb49eba7d6ae36", bytes: 5369475, path: "config/voicechat/voicechat-server.properties" },
@@ -31,10 +33,10 @@ export type VoiceCapabilities = {
   available: boolean; experimental: true; diagnosticCopyOnly: true; mode: "dedicatedAuroraOnly";
   guestAddress: "127.0.0.1:35554"; mods: VoiceMod[]; restoration: "strictAndExplicitReconciled";
   audioState: "notVerified"; transportState: "notObserved";
-  durableReceipts?: { schemaVersion: 1; maxReceipts: 64 };
+  durableReceipts?: { schemaVersion: 1; maxReceipts: 64; retirement?: { schemaVersion: 1 } };
 };
-export type DurableReceipt = { state: "planned" | "saved" | "uncertain"; receiptId: string | null; generation: 0 | 1 | null };
-export type VoiceReceiptSummary = { receiptId: string; voiceMod: VoiceMod; state: "ready" | "restored"; generation: 0 | 1 };
+export type DurableReceipt = { state: "planned" | "saved" | "uncertain" | "retired"; receiptId: string | null; generation: 0 | 1 | null };
+export type VoiceReceiptSummary = { receiptId: string; voiceMod: VoiceMod; state: "ready" | "restored" | "retired"; generation: 0 | 1 };
 export type VoiceReceiptList = { instanceId: string; receipts: VoiceReceiptSummary[] };
 export type VoiceObservation = {
   voiceMod: VoiceMod; artifactVersion: string; artifactSha256: string; artifactBytes: number;
@@ -50,7 +52,7 @@ export type VoiceClose = {
   closeId: string; intent: "panel" | "logout" | "exit"; state: "waiting" | "reviewRequired" | "ready";
   review: { digest: string; expiresAtMs: number; instanceId: string; voiceMod: VoiceMod; state: "applied" | "needsRecovery"; selectiveRestorationLost: boolean; durableReceipt?: DurableReceipt } | null;
 };
-export type VoicePhase = "idle" | "resumingReceipt" | "inspecting" | "observed" | "preparingApply" | "reviewApply" | "applying" | "applied" | "preparingRestore" | "reviewRestore" | "restoring" | "restored" | "needsRecovery" | "failed" | "closing" | "closeReview" | "closed";
+export type VoicePhase = "idle" | "resumingReceipt" | "preparingRetirement" | "reviewRetirement" | "retiring" | "retired" | "inspecting" | "observed" | "preparingApply" | "reviewApply" | "applying" | "applied" | "preparingRestore" | "reviewRestore" | "restoring" | "restored" | "needsRecovery" | "failed" | "closing" | "closeReview" | "closed";
 export type VoiceSnapshot = {
   generation: number; operationId: string | null; instanceId: string | null; voiceMod: VoiceMod | null;
   phase: VoicePhase; busy: boolean; observation: VoiceObservation | null; review: VoiceReview | null;
@@ -58,9 +60,12 @@ export type VoiceSnapshot = {
   lastRecoveryResult: { restoredPointId: string; undoAvailable: boolean; recoveredInterrupted: boolean } | null;
   lastErrorCode: VoiceErrorCode | null; close: VoiceClose | null;
   durableReceipt?: DurableReceipt;
+  retirementReview?: RetirementReview;
 };
 export const phaseText: Record<VoicePhase, string> = {
   idle: "Selecione uma cópia e um mod", resumingReceipt: "Verificando recibo salvo…", inspecting: "Inspecionando configuração…", observed: "Anúncio configurado observado",
+  preparingRetirement: "Verificando recibo para aposentadoria…", reviewRetirement: "Aposentadoria aguardando sua revisão",
+  retiring: "Aposentando restauração seletiva…", retired: "Recibo aposentado; configuração inalterada",
   preparingApply: "Preparando revisão…", reviewApply: "Aplicação aguardando sua revisão", applying: "Aplicando configuração…",
   applied: "Anúncio aplicado somente na cópia", preparingRestore: "Preparando restauração…", reviewRestore: "Restauração aguardando sua revisão",
   restoring: "Restaurando anúncio…", restored: "Anúncio restaurado", needsRecovery: "Verificação na Recuperação necessária",
@@ -84,16 +89,18 @@ export function voiceCapabilitiesFrom(value: unknown): VoiceCapabilities {
   const item = optional(value, ["available", "experimental", "diagnosticCopyOnly", "mode", "guestAddress", "mods", "restoration", "audioState", "transportState"], ["durableReceipts"]);
   if (!bool(item.available) || item.experimental !== true || item.diagnosticCopyOnly !== true || item.mode !== "dedicatedAuroraOnly" || item.guestAddress !== "127.0.0.1:35554" || item.restoration !== "strictAndExplicitReconciled" || item.audioState !== "notVerified" || item.transportState !== "notObserved" || !Array.isArray(item.mods) || JSON.stringify(item.mods) !== JSON.stringify(item.available ? ["simple_voice_chat", "plasmo_voice"] : [])) invalid();
   if (Object.hasOwn(item, "durableReceipts")) {
-    const capability = exact(item.durableReceipts, ["schemaVersion", "maxReceipts"]);
+    const capability = optional(item.durableReceipts, ["schemaVersion", "maxReceipts"], ["retirement"]);
     if (!item.available || capability.schemaVersion !== 1 || capability.maxReceipts !== 64) invalid();
+    if (Object.hasOwn(capability, "retirement") && exact(capability.retirement, ["schemaVersion"]).schemaVersion !== 1) invalid();
   }
   return item as VoiceCapabilities;
 }
 export function durableReceiptFrom(value: unknown): DurableReceipt {
   const item = exact(value, ["state", "receiptId", "generation"]);
-  if (!["planned", "saved", "uncertain"].includes(item.state as string)) invalid();
+  if (!["planned", "saved", "uncertain", "retired"].includes(item.state as string)) invalid();
   if (item.receiptId === null ? item.generation !== null : !uuid(item.receiptId) || ![0, 1].includes(item.generation as number)) invalid();
   if (item.state === "planned" && item.receiptId !== null || item.state === "saved" && item.receiptId === null) invalid();
+  if (item.state === "retired" && (item.receiptId === null || item.generation !== 1)) invalid();
   return item as DurableReceipt;
 }
 export function voiceReceiptListFrom(value: unknown): VoiceReceiptList {
@@ -104,7 +111,7 @@ export function voiceReceiptListFrom(value: unknown): VoiceReceiptList {
   for (const raw of item.receipts) {
     const receipt = exact(raw, ["receiptId", "voiceMod", "state", "generation"]);
     if (!uuid(receipt.receiptId) || !mod(receipt.voiceMod) || ids.has(receipt.receiptId)
-      || !(receipt.state === "ready" && receipt.generation === 0 || receipt.state === "restored" && receipt.generation === 1)) return invalid();
+      || !(receipt.state === "ready" && receipt.generation === 0 || ["restored", "retired"].includes(receipt.state as string) && receipt.generation === 1)) return invalid();
     ids.add(receipt.receiptId);
     if (receipt.state === "ready") {
       if (readyMods.has(receipt.voiceMod)) invalid();
@@ -141,7 +148,7 @@ function closeFrom(value: unknown): VoiceClose {
     const review = optional(item.review, ["digest", "expiresAtMs", "instanceId", "voiceMod", "state", "selectiveRestorationLost"], ["durableReceipt"]);
     const receipt = Object.hasOwn(review, "durableReceipt") ? durableReceiptFrom(review.durableReceipt) : undefined;
     if (item.state !== "reviewRequired" || !hash(review.digest) || !integer(review.expiresAtMs) || !instanceId(review.instanceId) || !mod(review.voiceMod) || typeof review.state !== "string" || !["applied", "needsRecovery"].includes(review.state)
-      || !bool(review.selectiveRestorationLost) || receipt?.state === "planned"
+      || !bool(review.selectiveRestorationLost) || receipt?.state === "planned" || receipt?.state === "retired"
       || review.selectiveRestorationLost !== (receipt?.state !== "saved")
       || (receipt?.state === "saved" && (receipt.generation !== 0 || review.state !== "applied"))
       || (receipt?.state === "uncertain" && review.state !== "needsRecovery")) invalid();
@@ -149,13 +156,14 @@ function closeFrom(value: unknown): VoiceClose {
   return item as VoiceClose;
 }
 export function voiceSnapshotFrom(value: unknown): VoiceSnapshot {
-  const item = optional(value, ["generation", "operationId", "instanceId", "voiceMod", "phase", "busy", "observation", "review", "restorationState", "lastRecoveryResult", "lastErrorCode", "close"], ["durableReceipt"]);
+  const item = optional(value, ["generation", "operationId", "instanceId", "voiceMod", "phase", "busy", "observation", "review", "restorationState", "lastRecoveryResult", "lastErrorCode", "close"], ["durableReceipt", "retirementReview"]);
   if (!integer(item.generation) || typeof item.phase !== "string" || !Object.hasOwn(phaseText, item.phase) || !bool(item.busy) || (item.lastErrorCode !== null && (typeof item.lastErrorCode !== "string" || !Object.hasOwn(ERRORS, item.lastErrorCode))) || ![null, "ready", "needs_recovery", "restored"].includes(item.restorationState as null | string)) invalid();
   const phase = item.phase as VoicePhase;
   const hasContext = item.operationId !== null;
   if (hasContext ? !uuid(item.operationId) || !instanceId(item.instanceId) || !mod(item.voiceMod) : item.instanceId !== null || item.voiceMod !== null) invalid();
   const observation = nullable(item.observation, voiceObservationFrom);
   const review = nullable(item.review, voiceReviewFrom);
+  const retirement = Object.hasOwn(item, "retirementReview") ? retirementReviewFrom(item.retirementReview) : undefined;
   const close = nullable(item.close, closeFrom);
   const result = nullable(item.lastRecoveryResult, value => {
     const parsed = exact(value, ["restoredPointId", "undoAvailable", "recoveredInterrupted"]);
@@ -164,18 +172,20 @@ export function voiceSnapshotFrom(value: unknown): VoiceSnapshot {
   });
   if (observation && (!hasContext || observation.voiceMod !== item.voiceMod)) invalid();
   if (review && (!hasContext || review.voiceMod !== item.voiceMod)) invalid();
-  const working = ["inspecting", "resumingReceipt", "preparingApply", "applying", "preparingRestore", "restoring", "closing"].includes(phase);
+  const working = ["inspecting", "resumingReceipt", "preparingRetirement", "retiring", "preparingApply", "applying", "preparingRestore", "restoring", "closing"].includes(phase);
   if (item.busy !== working) invalid();
-  if (!hasContext && !["idle", "resumingReceipt", "closing", "closed"].includes(phase)) invalid();
+  if (!hasContext && !["idle", "resumingReceipt", "preparingRetirement", "closing", "closed"].includes(phase)) invalid();
   if (!hasContext && (observation || review || result || item.restorationState !== null)) invalid();
   if (item.phase === "idle" && (hasContext || close)) invalid();
-  if (item.phase === "resumingReceipt" && (hasContext || close || item.durableReceipt !== undefined)) invalid();
+  if (["resumingReceipt", "preparingRetirement"].includes(phase) && (hasContext || close || item.durableReceipt !== undefined)) invalid();
   if (item.phase === "closed" && (review || observation || item.restorationState === "ready" || item.restorationState === "needs_recovery")) invalid();
   if (item.phase === "observed" && !observation) invalid();
   if ((item.phase === "reviewApply") !== (review?.action === "setAnnouncement")) invalid();
   if ((item.phase === "reviewRestore") !== (!!review && review.action !== "setAnnouncement")) invalid();
+  if ((phase === "reviewRetirement") !== !!retirement) invalid();
+  if (retirement && (!hasContext || retirement.voiceMod !== item.voiceMod || observation || review || result || close)) invalid();
   if (item.phase === "reviewApply" && (!observation || review?.sourceSha256 !== observation.sourceSha256 || item.restorationState !== null)) invalid();
-  if (["applied", "preparingRestore", "reviewRestore", "restoring"].includes(phase) && item.restorationState !== "ready") invalid();
+  if (["applied", "preparingRestore", "reviewRestore", "restoring", "reviewRetirement", "retiring"].includes(phase) && item.restorationState !== "ready") invalid();
   if (item.phase === "restored" && item.restorationState !== "restored") invalid();
   if (item.restorationState === "needs_recovery" && !["needsRecovery", "closing", "closeReview"].includes(phase)) invalid();
   if (close && close.review && (close.review.instanceId !== item.instanceId || close.review.voiceMod !== item.voiceMod)) invalid();
@@ -183,13 +193,18 @@ export function voiceSnapshotFrom(value: unknown): VoiceSnapshot {
     const receipt = durableReceiptFrom(item.durableReceipt);
     if (!hasContext) invalid();
     if (receipt.state === "planned" && (!["preparingApply", "reviewApply", "applying", "closing"].includes(phase) || item.restorationState !== null)) invalid();
-    if (receipt.state === "saved" && (!["applied", "preparingRestore", "reviewRestore", "restoring", "restored", "closing", "closeReview", "closed"].includes(phase)
+    if (receipt.state === "saved" && (!["applied", "preparingRestore", "reviewRestore", "restoring", "restored", "reviewRetirement", "retiring", "closing", "closeReview", "closed"].includes(phase)
       || (item.restorationState !== null && item.restorationState !== (receipt.generation === 0 ? "ready" : "restored")))) invalid();
     if (receipt.state === "uncertain" && (!["needsRecovery", "closing", "closeReview", "closed"].includes(phase)
       || (phase !== "closed" && item.restorationState !== "needs_recovery"))) invalid();
+    if (receipt.state === "retired" && (!["retired", "closing", "closed"].includes(phase) || item.restorationState !== null || observation || review || result)) invalid();
+    if (retirement && (receipt.state !== "saved" || receipt.generation !== retirement.expectedGeneration || receipt.receiptId !== retirement.receiptId)) invalid();
     if (close?.review && (close.review.durableReceipt?.state !== receipt.state
       || close.review.durableReceipt?.receiptId !== receipt.receiptId || close.review.durableReceipt?.generation !== receipt.generation)) invalid();
   } else if (close?.review?.durableReceipt !== undefined) invalid();
+  const durable = item.durableReceipt as DurableReceipt | undefined;
+  if (["reviewRetirement", "retiring"].includes(phase) && (durable?.state !== "saved" || durable.generation !== 0 || observation || result)) invalid();
+  if (phase === "retired" && durable?.state !== "retired") invalid();
   if (close?.state === "waiting" && item.phase !== "closing") invalid();
   if (close?.state === "reviewRequired" && (item.phase !== "closeReview" || (!close.review && item.lastErrorCode !== "voice_stale_close"))) invalid();
   if (close?.state === "ready" && item.phase !== "closed") invalid();

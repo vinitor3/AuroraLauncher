@@ -408,6 +408,10 @@ Entradas `direct_ipv4` de emissão/verificação/Host/Guest acrescentam IPv4 lit
 
 ## 10. Validação, incrementalidade e liberação
 
+Incremento69: um recibo Ready pode ter sua autoridade seletiva aposentada por plano/digest e confirmação específicos. A transação altera somente o índice para Retired/geração1, nunca a configuração; cancelar preserva a autoridade e undo genérico não implica consumo. Prazo, fingerprint, guardas, CAS e geração são revalidados. [Contrato69](../aurora-connect-voice-receipt-retirement.md). Histórico não equivale a restauração, GC, áudio ou homologação.
+
+Integração70: capability opcional, seleção explícita de recibo Ready e revisão própria expõem essa operação no desktop. Retired é histórico sem retomada; fechar conserva o resultado real e não chama restauração. Resposta perdida nunca dispara confirmação novamente. [Contrato70 e evidências](../aurora-connect-desktop-receipt-retirement.md).
+
 Integração68: o painel recebe ações separadas de preparo durável, consulta de recibos e retomada; somente Ready/geração0 permite preparar nova restauração. Snapshot optional e domínio de fechamento distinguem persistência planejada, salva ou incerta, mantendo o JSON RAM anterior. Nenhuma operação é repetida após perda de resposta; a interface consulta estado. [Contrato e evidências68](../aurora-connect-desktop-durable-voice.md).
 
 Atualização67: o anúncio de voz possui preparo durável separado, com recibo publicado atomicamente com undo/encerramento do journal. Listagem/retomada são explícitas, somente em cópia diagnóstica válida, sem inicializar identidade, reviver aprovação ou escrever configuração na carga. Estrita e reconciliada conservam revisões novas e guardas; geração impede consumo duplo. [Contrato, limites e provas67](../aurora-connect-durable-voice-receipts.md). Recibo persistido não é voz validada nem execução de mod.

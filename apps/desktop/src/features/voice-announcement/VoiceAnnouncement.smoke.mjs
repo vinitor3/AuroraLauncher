@@ -553,3 +553,169 @@ test("durable receipt parsers enforce exact scope, state and bounded lists witho
     Array(65).fill(receiptRow()), [{ ...receiptRow(), voiceMod: "custom" }]]) assert.throws(() => types.voiceReceiptListFrom({ instanceId: copy, receipts }));
   assert.deepEqual(types.voiceReceiptListFrom({ instanceId: copy, receipts: [receiptRow()] }), { instanceId: copy, receipts: [receiptRow()] });
 });
+
+const retirementReview = (voiceMod = "simple_voice_chat") => ({ planId: PLAN, receiptId: RECEIPT, voiceMod, expectedGeneration: 0,
+  currentConfigSha256: hash, currentConfigBytes: 60, digest: "e".repeat(64), expiresAtMs: time + 300000,
+  warning: "Aposentar elimina a restauração seletiva futura. A configuração não será restaurada ou alterada." });
+const retirementSnapshot = (voiceMod = "simple_voice_chat") => ({ ...durableApplied(voiceMod), phase: "reviewRetirement", lastRecoveryResult: null, retirementReview: retirementReview(voiceMod) });
+const retiredSnapshot = (voiceMod = "simple_voice_chat") => ({ ...durableApplied(voiceMod), phase: "retired", restorationState: null,
+  lastRecoveryResult: null, durableReceipt: { state: "retired", receiptId: RECEIPT, generation: 1 } });
+function retirementFixtures(voiceMod = "simple_voice_chat") {
+  durableFixtures(voiceMod); capabilities.durableReceipts.retirement = { schemaVersion: 1 };
+  let retired = false;
+  handlers.set("voice_announcement_list_receipts", ({ request }) => ({ instanceId: request.instanceId, receipts: [receiptRow(voiceMod, retired ? "retired" : "ready")] }));
+  handlers.set("voice_announcement_prepare_retirement", () => move({ ...retirementSnapshot(voiceMod), generation: snapshot.generation }));
+  handlers.set("voice_announcement_confirm_retirement", () => {
+    retired = true; delete snapshot.retirementReview;
+    return move({ ...retiredSnapshot(voiceMod), generation: snapshot.generation });
+  });
+  handlers.set("voice_announcement_cancel_review", () => {
+    delete snapshot.retirementReview; return move({ phase: "applied", review: null });
+  });
+  handlers.set("voice_announcement_begin_close", ({ request }) => {
+    delete snapshot.retirementReview;
+    if (snapshot.restorationState !== null) return move({ ...durableClosing(request.intent, snapshot.durableReceipt, snapshot.voiceMod), generation: snapshot.generation });
+    return move({ phase: "closed", busy: false, close: { closeId: CLOSE, intent: request.intent, state: "ready", review: null } });
+  });
+}
+async function openRetirementReview() { await click("Consultar recibos salvos"); await click("Revisar aposentadoria do recibo"); }
+const hasButton = name => [...container.querySelectorAll("button")].some(button => button.textContent === name);
+
+for (const voiceMod of ["simple_voice_chat", "plasmo_voice"]) test(`${voiceMod}: explicit receipt retirement uses its own review and never restores the configuration`, async () => {
+  retirementFixtures(voiceMod); await render(); await chooseVoiceMod(voiceMod); await openRetirementReview();
+  assert.deepEqual(last("prepare_retirement").args, { request: { instanceId: copy, receiptId: RECEIPT, expectedGeneration: 0 } });
+  assert.equal(count("resume_receipt"), 0); assert.equal(count("confirm_retirement"), 0);
+  assert.equal(controller.snapshot.review, null); assert.equal(button("Confirmar aposentadoria do recibo").disabled, true);
+  assert.match(container.textContent, /configuração continuará como está/);
+  await check("Autorizo aposentar somente este recibo"); await click("Confirmar aposentadoria do recibo");
+  assert.deepEqual(last("confirm_retirement").args, { request: { operationId: OP, planId: PLAN, digest: "e".repeat(64) } });
+  assert.equal(controller.snapshot.phase, "retired"); assert.equal(controller.snapshot.restorationState, null);
+  assert.equal(count("confirm"), 0); assert.equal(count("prepare_restore"), 0); assert.equal(count("prepare_restore_reconciled"), 0);
+  assert.match(container.textContent, /Nenhuma configuração foi restaurada ou alterada/); assert.equal(hasButton("Retomar restauração"), false);
+  await click("Encerrar operação de anúncio"); assert.equal(count("confirm_close"), 0); await click("Consultar recibos salvos");
+  assert.match(container.textContent, /Recibo aposentado; não pode ser retomado/);
+  assert.equal(hasButton("Retomar restauração"), false); assert.equal(hasButton("Revisar aposentadoria do recibo"), false);
+});
+
+test("older durable capability cannot prepare or confirm retirement and retains resume", async () => {
+  durableFixtures(); await render(); await click("Consultar recibos salvos");
+  assert.equal(hasButton("Revisar aposentadoria do recibo"), false); assert.equal(hasButton("Retomar restauração"), true);
+  await act(async () => {
+    await assert.rejects(controller.run("prepare_retirement", { instanceId: copy, receiptId: RECEIPT, expectedGeneration: 0 }));
+    await assert.rejects(controller.run("confirm_retirement", { operationId: OP, planId: PLAN, digest }));
+  });
+  assert.equal(count("prepare_retirement"), 0); assert.equal(count("confirm_retirement"), 0);
+});
+
+test("cancel retirement preserves ready receipt without automatically restoring or preparing another plan", async () => {
+  retirementFixtures(); await render(); await openRetirementReview(); await check("Autorizo aposentar somente este recibo");
+  await click("Cancelar revisão e manter recibo");
+  assert.deepEqual(last("cancel_review").args, { request: { operationId: OP } });
+  assert.equal(controller.snapshot.phase, "applied"); assert.equal(controller.snapshot.durableReceipt.generation, 0);
+  assert.equal(Object.hasOwn(controller.snapshot, "retirementReview"), false); assert.equal(hasButton("Revisar restauração estrita"), true);
+  assert.equal(count("confirm_retirement"), 0); assert.equal(count("prepare_restore"), 0);
+  await click("Encerrar operação de anúncio"); await check("Autorizo sair mantendo a configuração"); await click("Sair mantendo alteração na cópia");
+  await openRetirementReview(); assert.equal(button("Confirmar aposentadoria do recibo").disabled, true);
+});
+
+test("retirement consent expires irreversibly and resets for a new digest, remount or selected copy", async () => {
+  retirementFixtures(); snapshot = retirementSnapshot(); snapshot.retirementReview.expiresAtMs = time + 20;
+  await render(); await check("Autorizo aposentar somente este recibo"); time += 30; await tick(); time -= 30; await tick();
+  assert.equal(button("Confirmar aposentadoria do recibo").disabled, true);
+  await check("Autorizo aposentar somente este recibo"); time += 30; await click("Confirmar aposentadoria do recibo");
+  time -= 30; await tick(); assert.equal(button("Confirmar aposentadoria do recibo").disabled, true);
+  assert.equal(count("confirm_retirement"), 0, "Click detected expiry between periodic clock ticks");
+  move({ retirementReview: { ...retirementReview(), digest: "f".repeat(64) } }); await refresh();
+  await check("Autorizo aposentar somente este recibo"); await render({ panel: false }); await render({ panel: true });
+  assert.equal(button("Confirmar aposentadoria do recibo").disabled, true);
+  await check("Autorizo aposentar somente este recibo"); await render({ instanceId: "another-copy", sourceInstanceId: "another-source" });
+  assert.equal(container.querySelector('[aria-label="Revisão da aposentadoria do recibo"]'), null);
+  await render({ instanceId: copy, sourceInstanceId: "original" }); assert.equal(button("Confirmar aposentadoria do recibo").disabled, true);
+  assert.equal(count("confirm_retirement"), 0);
+});
+
+test("retirement distinguishes an absent file, an empty file and restored versus retired history", async () => {
+  retirementFixtures(); snapshot = retirementSnapshot(); snapshot.retirementReview.currentConfigSha256 = null; snapshot.retirementReview.currentConfigBytes = null;
+  await render(); assert.match(container.textContent, /arquivo de configuração estava ausente/);
+  move({ retirementReview: { ...retirementReview(), currentConfigBytes: 0 } }); await refresh();
+  assert.match(container.textContent, /Arquivo observado: 0 bytes/); assert.doesNotMatch(container.textContent, /estava ausente/);
+  await click("Cancelar revisão e manter recibo"); await click("Encerrar operação de anúncio");
+  await check("Autorizo sair mantendo a configuração"); await click("Sair mantendo alteração na cópia");
+  handlers.set("voice_announcement_list_receipts", () => ({ instanceId: copy, receipts: [receiptRow("simple_voice_chat", "retired"), { ...receiptRow("simple_voice_chat", "restored"), receiptId: PLAN }] }));
+  await click("Consultar recibos salvos"); assert.match(container.textContent, /Restauração já concluída/); assert.match(container.textContent, /Recibo aposentado; não pode ser retomado/);
+  assert.equal(hasButton("Retomar restauração"), false); assert.equal(hasButton("Revisar aposentadoria do recibo"), false);
+});
+
+test("lost retirement preparation response only presents the retained review with fresh consent", async () => {
+  retirementFixtures(); handlers.set("voice_announcement_prepare_retirement", () => {
+    move({ ...retirementSnapshot(), generation: snapshot.generation }); throw "voice_storage";
+  });
+  await render(); await openRetirementReview(); await tick();
+  assert.equal(count("prepare_retirement"), 1); assert.equal(button("Confirmar aposentadoria do recibo").disabled, true);
+  assert.equal(count("confirm_retirement"), 0); assert.equal(count("confirm"), 0);
+});
+
+test("lost committed retirement response reconciles retired without replay or restoration", async () => {
+  retirementFixtures(); handlers.set("voice_announcement_confirm_retirement", () => {
+    delete snapshot.retirementReview; move({ ...retiredSnapshot(), generation: snapshot.generation }); throw "voice_storage";
+  });
+  await render(); await openRetirementReview(); await check("Autorizo aposentar somente este recibo"); await click("Confirmar aposentadoria do recibo"); await tick();
+  assert.equal(count("confirm_retirement"), 1); assert.equal(controller.snapshot.phase, "retired");
+  assert.equal(count("prepare_restore"), 0); assert.equal(count("resume_receipt"), 0); assert.equal(count("confirm"), 0);
+});
+
+test("retired close history never claims the record was lost or the configuration restored", async () => {
+  retirementFixtures(); snapshot = { ...retiredSnapshot(), phase: "closed", close: { closeId: CLOSE, intent: "panel", state: "ready", review: null } };
+  await render(); assert.match(container.textContent, /registro permanece no histórico; a configuração não foi restaurada/);
+  assert.doesNotMatch(container.textContent, /recibo não está mais disponível|recibo salvo permanece|Anúncio restaurado/);
+  await click("Retomar trabalho"); assert.equal(controller.snapshot.phase, "idle");
+  assert.equal(count("confirm_retirement"), 0); assert.equal(count("prepare_restore"), 0);
+});
+
+test("retirement executor uncertainty requires Recovery and cannot promise retired history", async () => {
+  retirementFixtures(); handlers.set("voice_announcement_confirm_retirement", () => {
+    delete snapshot.retirementReview; return move({ phase: "needsRecovery", restorationState: "needs_recovery", lastErrorCode: "voice_needs_recovery",
+      durableReceipt: { state: "uncertain", receiptId: RECEIPT, generation: 0 } });
+  });
+  await render(); await openRetirementReview(); await check("Autorizo aposentar somente este recibo"); await click("Confirmar aposentadoria do recibo");
+  assert.equal(hasButton("Revisar restauração estrita"), false); assert.doesNotMatch(container.textContent, /Recibo aposentado; configuração inalterada/);
+  await click("Encerrar operação de anúncio"); assert.match(container.textContent, /existência de um recibo utilizável ainda não está confirmada/);
+  assert.equal(count("prepare_restore"), 0); assert.equal(count("resume_receipt"), 0);
+});
+
+test("double retirement confirm and logout wait for the one worker before account cleanup", async () => {
+  retirementFixtures(); snapshot = retirementSnapshot(); const waiting = deferred();
+  handlers.set("voice_announcement_confirm_retirement", () => { delete snapshot.retirementReview; move({ phase: "retiring", busy: true }); return waiting.promise; });
+  const closing = deferred(); handlers.set("voice_announcement_begin_close", () => {
+    move({ phase: "closing", busy: true, close: { closeId: CLOSE, intent: "logout", state: "waiting", review: null } }); return closing.promise;
+  });
+  await render(); await check("Autorizo aposentar somente este recibo"); const confirm = button("Confirmar aposentadoria do recibo");
+  await act(async () => { confirm.dispatchEvent(new window.Event("click", { bubbles: true })); confirm.dispatchEvent(new window.Event("click", { bubbles: true })); });
+  assert.equal(count("confirm_retirement"), 1); await click("Sair da conta fixture"); await render({ panel: false }); assert.deepEqual(logoutSteps, []);
+  await act(async () => {
+    snapshot = { ...retiredSnapshot(), generation: 20, phase: "closed", close: { closeId: CLOSE, intent: "logout", state: "ready", review: null } };
+    waiting.resolve(snapshot); closing.resolve(snapshot);
+  }); await logoutPromise;
+  assert.deepEqual(logoutSteps, ["connect", "firebase"]); assert.equal(count("finish_close"), 1); assert.equal(count("confirm_close"), 0);
+  assert.equal(count("confirm_retirement"), 1);
+});
+
+test("retirement parsers reject cross-receipt reviews, wrong generations and configuration authority", () => {
+  const validCaps = { ...caps(true), durableReceipts: { schemaVersion: 1, maxReceipts: 64, retirement: { schemaVersion: 1 } } };
+  types.voiceCapabilitiesFrom(validCaps);
+  for (const retirement of [true, null, {}, { schemaVersion: 2 }, { schemaVersion: 1, automatic: true }]) assert.throws(() => types.voiceCapabilitiesFrom({ ...validCaps, durableReceipts: { ...validCaps.durableReceipts, retirement } }));
+  types.voiceSnapshotFrom(retirementSnapshot()); types.voiceSnapshotFrom(retiredSnapshot());
+  types.voiceSnapshotFrom({ ...idle(), phase: "preparingRetirement", busy: true });
+  for (const extra of [{ expectedGeneration: 1 }, { receiptId: POINT }, { voiceMod: "plasmo_voice" }, { currentConfigSha256: null },
+    { currentConfigBytes: null }, { currentConfigBytes: -1 }, { currentConfigBytes: 262145 }, { currentConfigBytes: 1.5 }, { currentConfigBytes: [0] },
+    { expiresAtMs: 1.5 }, { warning: "é".repeat(513) }, { warning: "bad\u0000text" }, { before: "arbitrary" }]) {
+    assert.throws(() => types.voiceSnapshotFrom({ ...retirementSnapshot(), retirementReview: { ...retirementReview(), ...extra } }));
+  }
+  for (const snapshot of [{ ...retirementSnapshot(), retirementReview: null }, { ...retirementSnapshot(), review: review() },
+    { ...retirementSnapshot(), durableReceipt: savedReceipt(1) }, { ...retirementSnapshot(), durableReceipt: undefined },
+    { ...retiredSnapshot(), restorationState: "restored" }, { ...retiredSnapshot(), durableReceipt: { state: "retired", receiptId: RECEIPT, generation: 0 } },
+    { ...retiredSnapshot(), phase: "restored" }, { ...retirementSnapshot(), phase: "retiring", busy: true },
+    { ...durableApplied(), phase: "preparingRetirement", busy: true }]) assert.throws(() => types.voiceSnapshotFrom(snapshot));
+  types.voiceReceiptListFrom({ instanceId: copy, receipts: [receiptRow("simple_voice_chat", "retired")] });
+  assert.throws(() => types.voiceReceiptListFrom({ instanceId: copy, receipts: [{ ...receiptRow("simple_voice_chat", "retired"), generation: 0 }] }));
+});

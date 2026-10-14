@@ -121,6 +121,8 @@ fn main() {
             voice_announcement_commands::voice_announcement_prepare_apply_durable,
             voice_announcement_commands::voice_announcement_list_receipts,
             voice_announcement_commands::voice_announcement_resume_receipt,
+            voice_announcement_commands::voice_announcement_prepare_retirement,
+            voice_announcement_commands::voice_announcement_confirm_retirement,
             voice_announcement_commands::voice_announcement_confirm,
             voice_announcement_commands::voice_announcement_prepare_restore,
             voice_announcement_commands::voice_announcement_prepare_restore_reconciled,

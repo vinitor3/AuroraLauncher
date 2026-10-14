@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useVoiceAnnouncement } from "./VoiceAnnouncementProvider";
 import { announcementText, MODS, phaseText, voiceDate, voiceError, type VoiceMod } from "./types";
 import { DurableReceipts } from "./DurableReceipts";
+import { ReceiptRetirementReview } from "./ReceiptRetirementReview";
 
 type Props = { instanceId: string | null; sourceInstanceId: string; busy: boolean; running: boolean; onChanged: () => Promise<void> };
 export function VoiceAnnouncementPanel({ instanceId, sourceInstanceId, busy, running, onChanged }: Props) {
@@ -28,12 +29,12 @@ export function VoiceAnnouncementPanel({ instanceId, sourceInstanceId, busy, run
   }, [reviewExpiry, review?.planId, review?.digest]);
   if (!voice?.capabilities?.available) return null;
 
-  async function act(command: "inspect" | "prepare_apply" | "prepare_apply_durable" | "resume_receipt" | "confirm" | "prepare_restore" | "prepare_restore_reconciled" | "cancel_review", request: Record<string, unknown>) {
+  async function act(command: "inspect" | "prepare_apply" | "prepare_apply_durable" | "resume_receipt" | "prepare_retirement" | "confirm_retirement" | "confirm" | "prepare_restore" | "prepare_restore_reconciled" | "cancel_review", request: Record<string, unknown>) {
     if (!voice || blocked || !sameSource) return;
     setConsent(false);
     try {
       const result = await voice.run(command, request);
-      if (["applied", "restored", "needsRecovery"].includes(result.phase)) await onChanged().catch(() => undefined);
+      if (["applied", "restored", "retired", "needsRecovery"].includes(result.phase)) await onChanged().catch(() => undefined);
     } catch { /* The global caller presents only reviewed native codes. */ }
   }
   const operationId = snapshot?.operationId;
@@ -50,7 +51,8 @@ export function VoiceAnnouncementPanel({ instanceId, sourceInstanceId, busy, run
     <button disabled={!canInspect} onClick={() => void act("inspect", { instanceId, voiceMod: selectedMod })} type="button">Inspecionar anúncio</button>
     <button className="secondary" disabled={voice.pending} onClick={() => void voice.refresh().catch(() => undefined)} type="button">Atualizar estado do anúncio</button>
     {voice.capabilities.durableReceipts && !active && <DurableReceipts key={snapshot?.close?.closeId ?? "open"} instanceId={instanceId} voiceMod={selectedMod} disabled={blocked}
-      onResume={receipt => act("resume_receipt", { instanceId, receiptId: receipt.receiptId, expectedGeneration: receipt.generation })} />}
+      onResume={receipt => act("resume_receipt", { instanceId, receiptId: receipt.receiptId, expectedGeneration: receipt.generation })}
+      onRetire={voice.capabilities.durableReceipts.retirement ? receipt => act("prepare_retirement", { instanceId, receiptId: receipt.receiptId, expectedGeneration: receipt.generation }) : undefined} />}
     {snapshot && <p role="status">{phaseText[snapshot.phase]}</p>}
     {running && <p>Feche o jogo antes de inspecionar, aplicar ou restaurar a configuração.</p>}
     {snapshot?.lastErrorCode && <p role="alert">{voiceError(snapshot.lastErrorCode)}</p>}
@@ -80,6 +82,11 @@ export function VoiceAnnouncementPanel({ instanceId, sourceInstanceId, busy, run
       <button disabled={blocked} onClick={() => void act("prepare_restore", { operationId })} type="button">Revisar restauração estrita</button>
       <button className="secondary" disabled={blocked} onClick={() => void act("prepare_restore_reconciled", { operationId })} type="button">Revisar restauração preservando outras edições</button>
     </div>}
+    {sameSource && snapshot?.retirementReview && snapshot.operationId && snapshot.instanceId && voice.capabilities.durableReceipts?.retirement && <ReceiptRetirementReview
+      key={`${snapshot.operationId}:${snapshot.retirementReview.planId}:${snapshot.retirementReview.digest}:${instanceId}`}
+      instanceId={snapshot.instanceId} operationId={snapshot.operationId} review={snapshot.retirementReview} disabled={blocked}
+      onConfirm={request => act("confirm_retirement", request)} onCancel={() => act("cancel_review", { operationId: snapshot.operationId })} />}
+    {sameSource && snapshot?.phase === "retired" && <p>A restauração seletiva deste recibo foi abandonada. Nenhuma configuração foi restaurada ou alterada; snapshots e histórico existentes permanecem sujeitos à Recuperação.</p>}
     {active && snapshot.instanceId && <div>
       <button className="secondary" disabled={voice.pending || !!snapshot.busy || !!snapshot.close} onClick={() => voice.navigate(snapshot.instanceId!, "recovery")} type="button">Abrir Recuperação da cópia</button>
       <button className="secondary" disabled={!!snapshot.close} onClick={() => void voice.beginPanelClose().catch(() => undefined)} type="button">Encerrar operação de anúncio</button>

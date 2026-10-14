@@ -1,6 +1,8 @@
 //! End-to-end native filesystem tests. Only explicitly supplied pinned public
 //! JARs are copied; no download, Minecraft process or personal instance is used.
 use super::*;
+#[path = "connect_voice_retirement_tests.rs"]
+mod retirement;
 
 fn fixture(voice_mod: VoiceMod, original: &[u8]) -> Fixture {
     let name = match voice_mod {
@@ -108,7 +110,7 @@ fn reopen_cycle(voice_mod: VoiceMod, original: &[u8], reconciled: bool) {
     drop(guard);
     let guard = fixture_voice_guard(&copy).unwrap();
     let summaries = list_restoration_receipts(&copy, &guard).unwrap();
-    assert_eq!(summaries[0].state, RestorationState::Restored);
+    assert_eq!(summaries[0].state, DurableReceiptState::Restored);
     assert_eq!(summaries[0].generation, 1);
     assert!(matches!(
         resume_restoration(&copy, &guard, &id),

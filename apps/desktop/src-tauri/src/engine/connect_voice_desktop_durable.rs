@@ -4,6 +4,13 @@ use super::*;
 
 impl Operation {
     pub(super) fn durable_projection(&self) -> Option<dto::DurableReceiptProjection> {
+        if let Some(receipt) = &self.retired_receipt {
+            return Some(dto::DurableReceiptProjection {
+                state: dto::DurableReceiptState::Retired,
+                receipt_id: Some(receipt.receipt_id.clone()),
+                generation: Some(receipt.generation),
+            });
+        }
         if let Some(controller) = &self.durable_controller {
             Some(dto::DurableReceiptProjection {
                 state: if self.executor_uncertain
@@ -34,6 +41,7 @@ impl Operation {
     }
     pub(super) fn restoration_ready(&self) -> bool {
         !self.executor_uncertain
+            && self.pending_retirement.is_none()
             && (self
                 .controller
                 .as_ref()
@@ -215,8 +223,9 @@ impl Manager {
                     .into_iter()
                     .map(|record| {
                         let state = match (record.state, record.generation) {
-                            (RestorationState::Ready, 0) => dto::SavedReceiptState::Ready,
-                            (RestorationState::Restored, 1) => dto::SavedReceiptState::Restored,
+                            (DurableReceiptState::Ready, 0) => dto::SavedReceiptState::Ready,
+                            (DurableReceiptState::Restored, 1) => dto::SavedReceiptState::Restored,
+                            (DurableReceiptState::Retired, 1) => dto::SavedReceiptState::Retired,
                             _ => return Err(Error::Integrity),
                         };
                         Ok(dto::SavedReceiptSummary {
@@ -296,6 +305,9 @@ impl Manager {
                     controller: None,
                     durable_controller: Some(controller),
                     durable_selected: true,
+                    pending_retirement: None,
+                    retirement_review: None,
+                    retired_receipt: None,
                     executor_uncertain: false,
                     observation: None,
                     review: None,

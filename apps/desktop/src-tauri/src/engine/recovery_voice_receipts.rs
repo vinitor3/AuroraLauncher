@@ -32,12 +32,14 @@ impl VoiceReceiptMod {
 pub(crate) enum VoiceReceiptState {
     Ready,
     Restored,
+    Retired,
 }
 impl VoiceReceiptState {
     fn key(self) -> &'static str {
         match self {
             Self::Ready => "ready",
             Self::Restored => "restored",
+            Self::Retired => "retired",
         }
     }
 }
@@ -163,7 +165,9 @@ fn shape(record: &Record, uuid: &str) -> Result<()> {
         || record.instance_uuid != uuid
         || !matches!(
             (record.state, record.generation),
-            (VoiceReceiptState::Ready, 0) | (VoiceReceiptState::Restored, 1)
+            (VoiceReceiptState::Ready, 0)
+                | (VoiceReceiptState::Restored, 1)
+                | (VoiceReceiptState::Retired, 1)
         )
         || record.original.path != record.voice_mod.config()
         || record.applied.path != record.voice_mod.config()
@@ -555,6 +559,81 @@ pub(super) fn load_existing(
         original,
         applied,
     })
+}
+
+/// Explicitly relinquish selective authority. This transaction changes no file,
+/// CAS reference, point, undo slot, preview or rename journal.
+#[cfg(feature = "connect-voice-lab")]
+pub(crate) fn retire_voice_receipt(
+    instance: &Instance,
+    guard: &InstanceMutationGuard,
+    token: &VoiceReceiptToken,
+    expected_fingerprint: &str,
+    before_commit: impl Fn() -> Result<()>,
+    on_executor_begin: impl FnOnce(),
+) -> Result<()> {
+    let _directories = check_guard(instance, guard)?;
+    valid_id(&token.id)?;
+    if token.generation != 0 || !valid_hash(&token.record_hash) {
+        return Err(RecoveryError::StalePreview);
+    }
+    let store = Store::open(instance)?;
+    reject_pending(&store)?;
+    let current = inventory(instance)?;
+    if fingerprint(&current)? != expected_fingerprint {
+        return Err(RecoveryError::StalePreview);
+    }
+    let mut record = load(&store.db, &store.uuid, &token.id)?;
+    if record.state != VoiceReceiptState::Ready
+        || record.generation != token.generation
+        || digest(&record_bytes(&record)?) != token.record_hash
+    {
+        return Err(RecoveryError::StalePreview);
+    }
+    let runtime = verified(&store.root, &store.db, &store.uuid, &record)?;
+    if runtime != current.runtime {
+        return Err(RecoveryError::Compatibility);
+    }
+    // Build the full publication before starting the executor. No fallible
+    // post-commit metadata read may report a committed state as uncommitted.
+    record.state = VoiceReceiptState::Retired;
+    record.generation = 1;
+    let bytes = record_bytes(&record)?;
+    shape(&record, &store.uuid)?;
+    let transaction = store.db.unchecked_transaction()?;
+    reject_pending(&store)?;
+    let latest = load(&transaction, &store.uuid, &token.id)?;
+    if latest.state != VoiceReceiptState::Ready
+        || latest.generation != token.generation
+        || digest(&record_bytes(&latest)?) != token.record_hash
+    {
+        return Err(RecoveryError::StalePreview);
+    }
+    // Recheck the original process/deadline guard after historical CAS reads.
+    before_commit()?;
+    if fingerprint(&inventory(instance)?)? != expected_fingerprint {
+        return Err(RecoveryError::StalePreview);
+    }
+    // Inventory hashing can itself be slow; keep the deadline/process sample
+    // on the publication side of that work as well.
+    before_commit()?;
+    on_executor_begin();
+    if transaction.execute(
+        "UPDATE voice_receipts SET state='retired',data=?1 WHERE id=?2 AND instance_uuid=?3 AND state='ready'",
+        params![bytes, token.id, store.uuid],
+    )? != 1 {
+        return Err(RecoveryError::StalePreview);
+    }
+    #[cfg(test)]
+    if FAULT.with(|fault| fault.get() == Fault::ReceiptRetireBeforeCommit) {
+        return Err(RecoveryError::Storage);
+    }
+    transaction.commit()?;
+    #[cfg(test)]
+    if FAULT.with(|fault| fault.get() == Fault::ReceiptRetireAfterCommit) {
+        return Err(RecoveryError::Storage);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,6 +1,8 @@
 use super::*;
 #[path = "connect_voice_desktop_durable_tests.rs"]
 mod durable_tests;
+#[path = "connect_voice_desktop_retirement_tests.rs"]
+mod retirement_tests;
 use crate::engine::{acquire_instance_recovery_lock, InstanceId, InstanceLayout};
 use std::{
     path::PathBuf,

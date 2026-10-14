@@ -9,6 +9,8 @@ use std::{
 use tauri::async_runtime::Mutex as AsyncMutex;
 #[path = "connect_voice_desktop_durable.rs"]
 mod durable;
+#[path = "connect_voice_desktop_retirement.rs"]
+mod retirement;
 
 type Outcome<T> = dto::VoiceAnnouncementResult<T>;
 const MAX_GENERATION: u64 = 9_007_199_254_740_991;
@@ -38,6 +40,7 @@ enum TestStage {
     CancelCloseTask,
     ListReceipts,
     ResumeReceipt,
+    PrepareRetirement,
 }
 #[cfg(test)]
 type TestProbe = Arc<dyn Fn() -> Result<()> + Send + Sync>;
@@ -64,6 +67,9 @@ struct Operation {
     controller: Option<RestorationController>,
     durable_controller: Option<DurableRestorationController>,
     durable_selected: bool,
+    pending_retirement: Option<PreparedRetirement>,
+    retirement_review: Option<dto::ReceiptRetirementReview>,
+    retired_receipt: Option<DurableRestorationSummary>,
     executor_uncertain: bool,
     observation: Option<dto::AnnouncementInspection>,
     review: Option<dto::VoiceAnnouncementReview>,
@@ -197,6 +203,9 @@ impl Operation {
             })
     }
     fn stable_phase(&self) -> Phase {
+        if self.retired_receipt.is_some() {
+            return Phase::Retired;
+        }
         match self.restoration_state() {
             Some(dto::RestorationState::Ready) => Phase::Applied,
             Some(dto::RestorationState::NeedsRecovery) => Phase::NeedsRecovery,
@@ -208,6 +217,8 @@ impl Operation {
     fn cancel_review(&mut self) {
         self.pending_apply = None;
         self.pending_durable = None;
+        self.pending_retirement = None;
+        self.retirement_review = None;
         self.review = None;
         self.cancel_controller_reviews();
     }
@@ -298,6 +309,7 @@ impl Shared {
         Self::advance(&mut view)?;
         view.snapshot.last_error_code = None;
         view.snapshot.review = None;
+        view.snapshot.retirement_review = None;
         if phase == Phase::Applying {
             view.snapshot.observation = None;
         }
@@ -327,6 +339,11 @@ impl Shared {
                 None
             } else {
                 op.review.clone()
+            };
+            view.snapshot.retirement_review = if view.snapshot.close.is_some() {
+                None
+            } else {
+                op.retirement_review.clone()
             };
         }
         view.snapshot.last_error_code = failure;
@@ -371,6 +388,7 @@ impl Manager {
                 if op.restoration_state().is_some()
                     || op.pending_apply.is_some()
                     || op.pending_durable.is_some()
+                    || op.retired_receipt.is_some()
                 {
                     return Err(Error::ContextActive);
                 }
@@ -386,6 +404,9 @@ impl Manager {
                 controller: None,
                 durable_controller: None,
                 durable_selected: false,
+                pending_retirement: None,
+                retirement_review: None,
+                retired_receipt: None,
                 executor_uncertain: false,
                 observation: None,
                 review: None,
@@ -731,6 +752,7 @@ impl Manager {
         let phase = op.stable_phase();
         view.snapshot.durable_receipt = op.durable_projection();
         view.snapshot.review = None;
+        view.snapshot.retirement_review = None;
         view.snapshot.last_error_code = None;
         Shared::phase(&mut view, phase, false);
         Shared::advance(&mut view)?;
@@ -779,6 +801,7 @@ impl Manager {
                     review: None,
                 });
                 view.snapshot.review = None;
+                view.snapshot.retirement_review = None;
                 view.snapshot.phase = Phase::Closing;
                 view.snapshot.busy = true;
                 close_id
@@ -806,6 +829,7 @@ impl Manager {
                 .as_ref()
                 .and_then(Operation::durable_projection);
             view.snapshot.review = None;
+            view.snapshot.retirement_review = None;
             view.base_phase = core
                 .operation
                 .as_ref()
@@ -914,6 +938,7 @@ impl Manager {
                 op.cancel_review();
             }
             view.snapshot.review = None;
+            view.snapshot.retirement_review = None;
             view.snapshot.close = None;
             view.snapshot.durable_receipt = core
                 .operation

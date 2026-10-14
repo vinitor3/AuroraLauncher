@@ -26,6 +26,10 @@ pub enum VoiceAnnouncementPhase {
     Idle,
     Inspecting,
     ResumingReceipt,
+    PreparingRetirement,
+    ReviewRetirement,
+    Retiring,
+    Retired,
     Observed,
     PreparingApply,
     ReviewApply,
@@ -235,6 +239,8 @@ pub struct VoiceAnnouncementSnapshot {
     pub close: Option<VoiceAnnouncementClose>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub durable_receipt: Option<DurableReceiptProjection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retirement_review: Option<ReceiptRetirementReview>,
 }
 impl Default for VoiceAnnouncementSnapshot {
     fn default() -> Self {
@@ -252,6 +258,7 @@ impl Default for VoiceAnnouncementSnapshot {
             last_error_code: None,
             close: None,
             durable_receipt: None,
+            retirement_review: None,
         }
     }
 }
@@ -350,6 +357,7 @@ impl VoiceAnnouncementManager {
             durable_receipts: available.then_some(DurableReceiptCapabilities {
                 schema_version: 1,
                 max_receipts: 64,
+                retirement: Some(ReceiptRetirementCapabilities { schema_version: 1 }),
             }),
         }
     }
@@ -386,6 +394,7 @@ impl VoiceAnnouncementManager {
     }
     forward!(prepare_apply, PrepareApplyRequest);
     forward!(prepare_apply_durable, PrepareApplyRequest);
+    forward!(confirm_retirement, ConfirmRequest);
     forward!(confirm, ConfirmRequest);
     forward!(prepare_restore, OperationRequest);
     forward!(prepare_restore_reconciled, OperationRequest);
@@ -421,6 +430,23 @@ impl VoiceAnnouncementManager {
         #[cfg(all(windows, feature = "connect-voice-lab"))]
         {
             self.inner.resume_receipt(data_dir, request).await
+        }
+        #[cfg(not(all(windows, feature = "connect-voice-lab")))]
+        {
+            let _ = (data_dir, request);
+            Err(VoiceAnnouncementError::Unavailable)
+        }
+    }
+    pub async fn prepare_retirement(
+        &self,
+        owner_label: &str,
+        data_dir: &Path,
+        request: ResumeReceiptRequest,
+    ) -> VoiceAnnouncementResult<VoiceAnnouncementSnapshot> {
+        owner(owner_label)?;
+        #[cfg(all(windows, feature = "connect-voice-lab"))]
+        {
+            self.inner.prepare_retirement(data_dir, request).await
         }
         #[cfg(not(all(windows, feature = "connect-voice-lab")))]
         {

@@ -8,6 +8,13 @@ use serde::{Deserialize, Serialize};
 pub struct DurableReceiptCapabilities {
     pub schema_version: u8,
     pub max_receipts: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retirement: Option<ReceiptRetirementCapabilities>,
+}
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiptRetirementCapabilities {
+    pub schema_version: u8,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +22,7 @@ pub enum DurableReceiptState {
     Planned,
     Saved,
     Uncertain,
+    Retired,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +36,20 @@ pub struct DurableReceiptProjection {
 pub enum SavedReceiptState {
     Ready,
     Restored,
+    Retired,
+}
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiptRetirementReview {
+    pub plan_id: String,
+    pub receipt_id: String,
+    pub voice_mod: VoiceMod,
+    pub expected_generation: u64,
+    pub current_config_sha256: Option<String>,
+    pub current_config_bytes: Option<u64>,
+    pub digest: String,
+    pub expires_at_ms: u64,
+    pub warning: String,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,13 +126,14 @@ mod tests {
         if available {
             assert_eq!(
                 capability["durableReceipts"],
-                json!({"schemaVersion":1,"maxReceipts":64})
+                json!({"schemaVersion":1,"maxReceipts":64,"retirement":{"schemaVersion":1}})
             );
         } else {
             assert!(capability.get("durableReceipts").is_none());
         }
         let snapshot = serde_json::to_value(VoiceAnnouncementSnapshot::default()).unwrap();
         assert!(snapshot.get("durableReceipt").is_none());
+        assert!(snapshot.get("retirementReview").is_none());
         let id = uuid::Uuid::new_v4().to_string();
         assert_eq!(
             serde_json::to_value(DurableReceiptProjection {
@@ -171,6 +194,35 @@ mod tests {
                             PrepareApplyRequest {
                                 operation_id: "not-used".into(),
                                 generation: 0
+                            }
+                        )
+                        .await
+                        .err(),
+                    Some(expected)
+                );
+                assert_eq!(
+                    manager
+                        .prepare_retirement(
+                            owner,
+                            Path::new("not-read"),
+                            ResumeReceiptRequest {
+                                instance_id: "copy".into(),
+                                receipt_id: "not-used".into(),
+                                expected_generation: 0,
+                            }
+                        )
+                        .await
+                        .err(),
+                    Some(expected)
+                );
+                assert_eq!(
+                    manager
+                        .confirm_retirement(
+                            owner,
+                            super::super::ConfirmRequest {
+                                operation_id: "not-used".into(),
+                                plan_id: "not-used".into(),
+                                digest: String::new(),
                             }
                         )
                         .await

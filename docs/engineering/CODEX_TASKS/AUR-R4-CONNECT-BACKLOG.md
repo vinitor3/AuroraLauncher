@@ -8,6 +8,10 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 14/10/2026
 
+Incremento70/005/006/007/008 integra a aposentadoria69 ao painel, com revisão e consentimento próprios, cancelamento sem consumo e histórico Retired distinto. [Contrato70](../../aurora-connect-desktop-receipt-retirement.md). **PROTÓTIPO**, validado por arquivos descartáveis e DOM; não conclui GUI, áudio ou redes externas.
+
+Incremento69/006/007/008 permite aposentar um recibo seletivo conflituoso ou já superado por undo genérico, somente por revisão e aprovação novas. Ready0 → Retired1 altera o índice, preservando bytes, snapshots e histórico; não é restauração nem GC. [Contrato69](../../aurora-connect-voice-receipt-retirement.md). **PROTÓTIPO**, com teste e revisão registrados no task; áudio e demais gates permanecem separados.
+
 Incremento68/005/006/007/008 integra recibos duráveis ao painel por preparo separado, listagem e retomada explícitas, mantendo RAM60, guardas e barreira de saída. [Contrato68](../../aurora-connect-desktop-durable-voice.md). **PROTÓTIPO**; provas locais de ambos os mods, arquivos e DOM não concluem áudio, GUI, participante/anúncio, Minecraft ou redes. Não confundir recibo salvo com serviço de voz disponível.
 
 Incremento67/006/007/008 acrescenta recibos duráveis por opt-in nativo, atômicos com journal/undo de Recovery, retomada e nova aprovação para restauração seletiva. [Contrato67](../../aurora-connect-durable-voice-receipts.md). **PROTÓTIPO**, restrito a cópias diagnósticas; RAM60 preservado até integração68. Testes de interrupção/reabertura e arquivos dos dois mods não homologam áudio, GUI, queda física de energia ou configurações pessoais. Undo genérico não aposenta recibos seletivos automaticamente.

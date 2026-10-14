@@ -2,12 +2,26 @@
 //! loading verified history only permits preparing a fresh guarded review.
 use super::*;
 
+#[path = "connect_voice_retirement.rs"]
+mod retirement;
+pub use retirement::{prepare_retirement, PreparedRetirement, RetirementReview};
+
+/// Durable history is distinct from the existing RAM restoration lifecycle.
+/// Retired never implies that any configuration bytes were restored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DurableReceiptState {
+    Ready,
+    Restored,
+    Retired,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DurableRestorationSummary {
     pub receipt_id: String,
     pub voice_mod: VoiceMod,
-    pub state: RestorationState,
+    pub state: DurableReceiptState,
     pub generation: u64,
 }
 
@@ -36,10 +50,11 @@ fn public_mod(value: recovery::VoiceReceiptMod) -> VoiceMod {
         recovery::VoiceReceiptMod::PlasmoVoice => VoiceMod::PlasmoVoice,
     }
 }
-fn public_state(value: recovery::VoiceReceiptState) -> RestorationState {
+fn public_state(value: recovery::VoiceReceiptState) -> DurableReceiptState {
     match value {
-        recovery::VoiceReceiptState::Ready => RestorationState::Ready,
-        recovery::VoiceReceiptState::Restored => RestorationState::Restored,
+        recovery::VoiceReceiptState::Ready => DurableReceiptState::Ready,
+        recovery::VoiceReceiptState::Restored => DurableReceiptState::Restored,
+        recovery::VoiceReceiptState::Retired => DurableReceiptState::Retired,
     }
 }
 
@@ -189,7 +204,9 @@ pub fn resume_restoration(
         applied: loaded.applied,
         previous_announcement,
         applied_announcement,
-        state: public_state(loaded.state),
+        // checked_loaded accepts only a current Ready record; history never
+        // becomes callable restoration authority merely by deserialization.
+        state: RestorationState::Ready,
     };
     Ok(DurableRestorationController {
         receipt,

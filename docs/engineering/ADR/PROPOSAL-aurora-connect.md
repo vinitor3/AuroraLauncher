@@ -144,6 +144,10 @@ Adicionar entradas próprias para endereço inicial IPv4 literal nos quatro perf
 
 ## Decisões pendentes e condições de aceitação
 
+Decisão70: a ação de aposentar seleciona um recibo disponível e cria revisão própria. Compartilha a autoridade exclusiva e barreira de saída do painel, conservando o resultado mesmo com IPC abandonado; Retired nunca é apresentado como Restored ou recibo RAM perdido. Cancelar conserva a possibilidade de preparar restauração separada. [Contrato70](../../aurora-connect-desktop-receipt-retirement.md).
+
+Decisão69: aposentadoria explícita de recibo tem revisão, domínio e prazo próprios; não inferir restauração ou consumo pelo conteúdo atual do arquivo. A publicação Ready0 → Retired1 é uma única transação SQLiteFULL, com metadados preparados antes do commit e rechecagem do guard/fingerprint. Não cria journal de renames porque não altera configuração. Histórico e downgrade conservador são obrigatórios; não implementar GC implícito. [Contrato69](../../aurora-connect-voice-receipt-retirement.md).
+
 Decisão68: escolha de persistência antecede a revisão; listagem/retomada compartilham a autoridade exclusiva e a barreira de saída do caller60. O resultado distingue planned/saved/uncertain e o fechamento vincula essa distinção no próprio digest, sem prometer recibo salvo por aparência de arquivo. Imagens integrais e tokens privados permanecem no nativo. [Contrato68](../../aurora-connect-desktop-durable-voice.md). RAM e avisos anteriores continuam disponíveis.
 
 Decisão67: persistir o recibo seletivo na mesma transação SQLiteFULL que publica undo e remove journal, com transição registrada antes de renames. Um sidecar posterior ao commit deixaria uma janela sem autoridade recuperável. Preparação durável tem domínio/digest próprios; carregar histórico nunca revive revisão/prazo ou aplica bytes. Journal2 é reconhecido também sem a feature de voz, conservando journals1. [Contrato e rollback67](../../aurora-connect-durable-voice-receipts.md). A restauração genérica não consome esse recibo por inferência.

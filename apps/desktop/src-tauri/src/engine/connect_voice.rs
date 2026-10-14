@@ -43,10 +43,11 @@ pub use process::{acquire_voice_mutation_guard, VoiceMutationGuard};
 #[path = "connect_voice_restore.rs"]
 mod restoration;
 pub use restoration::{
-    list_restoration_receipts, prepare_durable_announcement, resume_restoration,
-    DurableAppliedAnnouncement, DurableRestorationController, DurableRestorationSummary,
-    PreparedDurableAnnouncement, PreparedRestoration, RestorationController, RestorationReceipt,
-    RestorationState,
+    list_restoration_receipts, prepare_durable_announcement, prepare_retirement,
+    resume_restoration, DurableAppliedAnnouncement, DurableReceiptState,
+    DurableRestorationController, DurableRestorationSummary, PreparedDurableAnnouncement,
+    PreparedRestoration, PreparedRetirement, RestorationController, RestorationReceipt,
+    RestorationState, RetirementReview,
 };
 
 pub struct AppliedAnnouncement {

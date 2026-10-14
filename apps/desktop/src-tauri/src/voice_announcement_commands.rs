@@ -127,6 +127,36 @@ pub async fn voice_announcement_confirm(
 }
 
 #[tauri::command]
+pub async fn voice_announcement_prepare_retirement(
+    app: AppHandle,
+    window: WebviewWindow,
+    manager: State<'_, VoiceAnnouncementManager>,
+    request: ResumeReceiptRequest,
+) -> Result<VoiceAnnouncementSnapshot, &'static str> {
+    let owner = owner_label(window.label())?;
+    if !manager.capabilities().available {
+        return Err("voice_unavailable");
+    }
+    let data_dir = app.path().app_data_dir().map_err(|_| "voice_storage")?;
+    manager
+        .prepare_retirement(owner, &data_dir, request)
+        .await
+        .map_err(|error| error.code())
+}
+
+#[tauri::command]
+pub async fn voice_announcement_confirm_retirement(
+    window: WebviewWindow,
+    manager: State<'_, VoiceAnnouncementManager>,
+    request: ConfirmRequest,
+) -> Result<VoiceAnnouncementSnapshot, &'static str> {
+    manager
+        .confirm_retirement(owner_label(window.label())?, request)
+        .await
+        .map_err(|error| error.code())
+}
+
+#[tauri::command]
 pub async fn voice_announcement_prepare_restore(
     window: WebviewWindow,
     manager: State<'_, VoiceAnnouncementManager>,

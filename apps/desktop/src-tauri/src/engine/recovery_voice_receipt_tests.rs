@@ -1,6 +1,8 @@
 //! These tests also run with voice disabled: Recovery must understand attached
 //! transactions and retain authority through interruptions independently of UI.
 use super::*;
+#[path = "recovery_voice_retirement_tests.rs"]
+mod retirement;
 use crate::engine::{acquire_instance_recovery_lock, InstanceId, InstanceLayout};
 
 const ORIGINAL: &[u8] = b"voice_host=\nport=24454\n";

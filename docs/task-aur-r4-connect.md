@@ -1649,6 +1649,56 @@ Logs `.aurora/connect-validation/durable-voice-68-{pinned,frontend-final,fronten
 
 TCP, UDP, direto, relay, Minecraft e convites externos conservam os gates existentes. SVC/Plasmo avançam somente em configuração/recuperação; não há áudio ou mod carregado. Não iniciar Java, alterar original ou restaurar silenciosamente. Rollback preserva cópia/índice/CAS e resolve journals2 antes de downgrade. Nenhuma intervenção humana necessária.
 
+## Incremento69 — aposentadoria explícita da autoridade seletiva
+
+Base `0893c51`, após68. Um undo genérico ou edição divergente deixa corretamente o recibo seletivo Ready, mas bloqueia outra aplicação durável. A nova ação exige revisão/digest próprios, observação atual, guard de processos, proveniência, CAS, token e prazo original; confirma somente Ready0 → Retired1 no índice. Nenhum arquivo de configuração, ponto, CAS ou snapshot é modificado/apagado. Não equivale a restauração e não ocorre automaticamente após erro. [Contrato69 e downgrade](aurora-connect-voice-receipt-retirement.md).
+
+Arquivos: `engine/connect_voice{,_restore,_durable}.rs`, novo `connect_voice_retirement.rs`; `recovery.rs`, `recovery_voice_receipts.rs`, novos testes de aposentadoria e seus registros nas suites67. Enum durável separada preserva o ciclo RAM. Histórico continua contando no limite64; não há GC. Caller70 é registrado separadamente.
+
+Comandos executados na worktree:
+
+```powershell
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-features --lib retirement -- --test-threads=1
+# Binário dessa compilação copiado para diretório novo e preservado:
+# .aurora/connect-validation/receipt-retirement-69-70-reviewed/core-tests.exe
+# SHA256 2cb024c56390f123f89009ac7613317d2e537ba549c9be801bb5e7548cf88d04
+# AURORA_CONNECT_ARTIFACT_DIR definida só no processo para os JARs fixados locais e removida depois:
+& .aurora/connect-validation/receipt-retirement-69-70-reviewed/core-tests.exe retirement --ignored --test-threads=1
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-targets -- --test-threads=1
+```
+
+Foco69/70: **8 PASS/7 ignorados**,4,72s, compilação43,49s. Seis comuns são69: relógios originais, histórico default-off, fronteiras de commit/reabertura, rechecagem de configuração/callback, CAS/journal/token e undo→aposentadoria→novo recibo. Opt-ins **7 PASS/0 ignorados**,152,58s; três são69 e quatro70. Núcleo69 percorre ambos os mods e confirma bytes da fonte intactos, cancelamento/digest/configuração posterior, duas revisões e arquivo ausente/JAR removido/limite. As provas não são áudio, Java, janela gráfica ou queda física de energia.
+
+Regressão padrão **278 PASS/5 ignorados**, zero falhas,57,24s somados de testes, compilação1m03s. Logs `.aurora/connect-validation/receipt-retirement-69-70-{focused,pinned,full-default}.log`. Testes foram executados contra69/70 congelados antes de71; o executável preservado evita recompilar fontes em edição. Revisão independente e do coordenador sem bloqueador final. Não somar rodadas sobrepostas.
+
+TCP/UDP/direto/relay/Minecraft/convites mantêm os estados anteriores. SVC e Plasmo avançam apenas na gestão da recuperação. Nenhuma configuração pessoal, versão, lock, matriz, Core/Skins ou outra worktree foi alterada. Rollback preserva índice e histórico, resolve journals pendentes por versão compatível e não converte Retired em Ready/Restored. Nenhuma ação humana necessária.
+
+## Incremento70 — aposentadoria pelo painel com barreira de saída
+
+Integração direta69/70 sobre `0893c51`, mantida no mesmo commit para que a enum durável nova e seu consumidor nativo continuem compatíveis. O painel permite consultar Ready, revisar a perda da restauração seletiva e confirmar separadamente. Cancelamento conserva controlador Ready; falha anterior ao executor não consome o registro; resultado incerto recusa nova mutação até consulta/recuperação apropriadas. Sucesso Retired1 tem apresentação própria, inclusive no fechamento, sem promessa de arquivo restaurado. [Contrato70](aurora-connect-desktop-receipt-retirement.md).
+
+Arquivos: `engine/connect_voice_desktop{,_live,_durable,_durable_types,_tests}.rs`, novos `connect_voice_desktop_retirement{,_tests}.rs`, `voice_announcement_commands.rs` e dois registros `main.rs`; frontend `features/voice-announcement/{types.ts,retirement-types.ts,ReceiptRetirementReview.tsx,DurableReceipts.tsx,VoiceAnnouncementPanel.tsx,VoiceAnnouncementProvider.tsx,VoiceAnnouncement.smoke.mjs}`. Sem alteração dos monolíticos App/commands, transporte ou configurações pessoais.
+
+Dois testes comuns70 passaram no foco8/7 do69: recusas/proveniência/journal sem escrita e preparo abandonado com saída aguardando. Quatro opt-ins passaram na rodada7/7 de152,58s: ambos os mods, cancelamento preservando autoridade, configuração divergente, dois planos concorrentes, resultado confirmado retido após perda da future, saída aguardando e incerteza conservadora após início do executor. Não somar contagens sobrepostas.
+
+Comandos adicionais realmente executados:
+
+```powershell
+& .aurora/connect-validation/receipt-retirement-69-70-reviewed/core-tests.exe durable_desktop_abandoned_list_and_resume_hold_the_exit_barrier --test-threads=1
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-targets --features connect-voice-lab -- -D warnings
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check
+node --test apps/desktop/src/features/voice-announcement/VoiceAnnouncement.smoke.mjs
+# Em apps/desktop:
+npm.cmd run build
+git diff --check
+```
+
+Regressão da sincronização68 **1 PASS**,0,93s, encerrando a pendência de teste documentada68. Clippy voz **PASS13,99s**; fmt/diff PASS. Frontend final **58 PASS/0 ignorados**,1353,3704ms; TypeScript/Vite364 módulos PASS, aviso preexistente de chunk>500kB. QA corrigiu a mensagem de fechamento que confundia Retired com perdaRAM e limpou consentimento quando o clique detecta vencimento entre ticks. Revisões independentes de núcleo/caller/UI e revisão do coordenador sem bloqueador final.
+
+Logs `receipt-retirement-70-{resume-race-regression,frontend-final,frontend-build-final}.log` e `receipt-retirement-69-70-clippy-voice.log` no diretório privado de validação. Regressão padrão278/5 está em69. Locks/matriz foram reconferidos e permaneceram nos hashes anteriores. O próximo full combinado será registrado em sua própria rodada; nenhum resultado futuro é atribuído aqui.
+
+Estado separado: TCP e UDP preservados; diretoIPv4/IPv6 sem nova prova externa; relay público desativado; Minecraft sem nova execução; convites externos ainda pendentes; interface de voz avançou localmente; SVC e Plasmo continuam sem áudio homologado. Rollback conserva índice/histórico e respeita os journals/estados novos, sem apagar ou converter recibos. Nenhuma intervenção humana necessária.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.
