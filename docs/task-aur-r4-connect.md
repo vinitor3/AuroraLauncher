@@ -1574,6 +1574,29 @@ Regressão completa: **236 PASS/7 ignorados padrão**,145,69s somados de testes;
 
 TCP/UDP ganham este caminho local autenticado; direto IPv4 **PROTÓTIPO**, alcance LAN/internet/NAT/CGNAT **PRECISA DE TESTE**. Relay público permanece desativado. Minecraft, convites externos, áudio SVC e áudio Plasmo não foram testados nesta etapa. Rollback é encerrar os próprios Host/Guest e aguardar recursos livres, seguido de revert local revisado se necessário. Nenhuma configuração pessoal foi alterada e nenhuma intervenção humana é necessária.
 
+## Incremento66 — IPv4 explícito no caller e na interface
+
+Clippy final: `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-targets --features connect-lab -- -D warnings` **PASS**,13,41s, log `direct-ipv4-66-clippy-connect-final.log`. Rustfmt focal dos quatro arquivos nativos e `git diff --check` passaram. A regressão integrada posterior67/68 será registrada separadamente, sem atribuir execução futura a66.
+
+Base `b1a16ea` após65. Integração local nos quatro perfis, sem ampliar autoridade ou inferir modo pelo convite. Produção nativa em `engine/connect/{mod,live,session_authority}.rs`; testes novos `direct_ipv4_tests.rs`. Frontend em `features/connect/{ConnectView.tsx,types.ts,fragmented-types.ts}` e respectivos testes. [Contrato66](aurora-connect-desktop-ipv4.md), domínio desktop, spec/ADR/backlog/matriz/AGENTS atualizados. Corrigida descrição geral antiga que ainda dizia que schema3 não aceitava descoberta64.
+
+Foco nativo: **4 PASS/3 ignorados**,0,66s; opt-in próprio **3 PASS/0 ignorados**,17,17s. Compilação30,54s/8,88s. Quatro perfis TCP/STATUS767 sintético e dois perfis UDP4096 de duas origens, total16384B de aplicação por direção no primeiro ensaio. Sessão após ingresso, TCP aberto durante UDP, oversize sem endpoint, expiração/revogação e liberação/rebind aprovados. Falha de porta UDP conserva TCP; recuperação manual posterior mantém identidade, listener e prazo original. Nenhuma consulta produziu `worldJoined` ou estado de voz.
+
+Frontend **95 PASS/0 falhas/0 ignorados**,1689,6739ms, e build TypeScript/Vite PASS361módulos,1,47s de bundling. A rodada inicial teve11falhas no harness Linkedom: `input` sem type não refletia o default HTML e a seleção com três opções precisava limpar a opção anterior. Corrigida somente a fixture; rodada final aprovada. Aviso de chunk>500kB preexistente permanece. Revisões cruzadas independentes do nativo e frontend e revisão do coordenador sem bloqueador final.
+
+Comandos realmente executados:
+
+```powershell
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --features connect-lab --lib engine::connect::live::direct_ipv4_tests -- --test-threads=1
+# IPv4 próprio explicitamente observado, variável de processo removida depois:
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --features connect-lab --lib engine::connect::live::direct_ipv4_tests -- --ignored --test-threads=1
+node --test apps/desktop/src/features/connect/ConnectView.smoke.mjs apps/desktop/src/features/connect/fragmented-types.test.mjs
+# Em apps/desktop:
+npm.cmd run build
+```
+
+Logs `.aurora/connect-validation/direct-ipv4-66-{native-focused,native-own-address,frontend-first,frontend-final,frontend-build}.log`. Os arquivos66 foram congelados durante a validação; o núcleo Recovery67 em preparação foi compilado junto, com checks finais registrados na etapa correspondente. A primeira execução de Clippy encontrou somente enum grande no módulo67, corrigido por indirection sem alterar serde. Nenhuma configuração pessoal/instância/Java foi alterada. TCP/UDP/direto avançam localmente; relay público, Minecraft, convites externos, SVC e Plasmo conservam os gates anteriores. Encerramento e revert revisado da integração são o rollback; nenhum instalador ou publicação. Nenhuma ação humana necessária.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.

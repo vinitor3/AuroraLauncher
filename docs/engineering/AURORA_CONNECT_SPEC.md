@@ -402,6 +402,8 @@ O caller schema3 pode consumir a seleção opaca48 para game/TCP, conservando au
 
 ### 9.8 IPv4 inicial explicitamente selecionado — incremento65
 
+Integração66: capability anuncia o terceiro modo apenas no build experimental; painel exige escolha e endereço local explícitos. Os quatro perfis usam emissão/verificação/Host/Guest próprios, com revisão e digest vinculados ao modo. Listas anteriores de capabilities continuam aceitas; desconhecidos/duplicados são recusados. [Caller, interface e provas66](../aurora-connect-desktop-ipv4.md).
+
 Entradas `direct_ipv4` de emissão/verificação/Host/Guest acrescentam IPv4 literal aos quatro perfis, conservando schema/domínio/grants/relógios e recusando modos/perfis incompatíveis antes de I/O. Política permite RFC1918 e unicast ordinário, com bloqueios conservadores; não promete roteabilidade ou classificar broadcast de toda sub-rede. Bind Host é exatamente o endereço assinado local; Guest usa transporteIPv4 wildcard efêmero. Sem DNS, mapping, firewall, relay ou fallback. [Contrato, fonte oficial e testes65](../aurora-connect-direct-ipv4.md). Um ensaio no próprio IPv4 não comprova LAN, IPv4 público ou NAT/CGNAT. Callers antigos permanecem nos modos anteriores até integração própria.
 
 ## 10. Validação, incrementalidade e liberação

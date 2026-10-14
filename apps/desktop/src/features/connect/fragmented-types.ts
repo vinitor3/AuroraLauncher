@@ -111,6 +111,19 @@ export function isLoopbackUdpTarget(value: unknown): value is string {
   const ipv4 = /^(127\.(?:0|[1-9][0-9]{0,2})\.(?:0|[1-9][0-9]{0,2})\.(?:0|[1-9][0-9]{0,2})):([1-9][0-9]{0,4})$/.exec(value);
   return !!ipv4 && ipv4[1].split(".").every(part => Number(part) <= 255) && Number(ipv4[2]) <= 65535;
 }
+/** Mirrors the native initial-address policy; this never proves local ownership or reachability. */
+export function isDirectIpv4Address(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 128) return false;
+  const parsed = /^((?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}):([1-9][0-9]{0,4})$/.exec(value);
+  if (!parsed || Number(parsed[2]) > 65535) return false;
+  const octets = parsed[1].split(".").map(Number);
+  if (octets.some(part => part > 255)) return false;
+  const [a, b, c] = octets;
+  return !(a === 0 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254)
+    || (a === 192 && ((b === 0 && (c === 0 || c === 2)) || (b === 31 && c === 196) || (b === 52 && c === 193)
+      || (b === 88 && c === 99) || (b === 175 && c === 48)))
+    || (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) || (a === 203 && b === 0 && c === 113));
+}
 export function fragmentedPreparationFieldsFrom(value: unknown, profile: FragmentedProfile = FRAGMENTED_PROFILE): { invitationProfile: FragmentedProfile } {
   if (!record(value) || value.invitationProfile !== profile || value.fragmentedUdp !== undefined
     || value.udpTarget !== undefined || value.udpRecovery !== undefined || UDP_KEYS.some(key => value[key] !== undefined)) return invalid();
@@ -119,7 +132,8 @@ export function fragmentedPreparationFieldsFrom(value: unknown, profile: Fragmen
 }
 export function fragmentedReviewFieldsFrom(value: unknown, profile: FragmentedProfile = FRAGMENTED_PROFILE): FragmentedUdpReview {
   if (!record(value) || value.invitationProfile !== undefined || !["host", "guest"].includes(value.role as string)
-    || !["loopback", "externalIpv6"].includes(value.mode as string)
+    || !["loopback", "externalIpv6", "directIpv4"].includes(value.mode as string)
+    || (value.mode === "directIpv4" && !isDirectIpv4Address(value.directAddress))
     || !(profile === FRAGMENTED_PROFILE ? isFragmentedLifetime(value.lifetimeSeconds) : integer(value.lifetimeSeconds) && value.lifetimeSeconds >= 1 && value.lifetimeSeconds <= 600)
     || !integer(value.expiresAtMs) || !integer(value.invitationExpiresAtMs) || value.expiresAtMs > value.invitationExpiresAtMs
     || !Array.isArray(value.services) || value.services.length !== 2 || value.udpTarget !== undefined || value.udpRecovery !== undefined

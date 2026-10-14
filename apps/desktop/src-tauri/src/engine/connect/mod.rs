@@ -20,6 +20,7 @@ mod tests;
 pub enum ConnectMode {
     Loopback,
     ExternalIpv6,
+    DirectIpv4,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -296,7 +297,15 @@ impl ConnectManager {
             available: cfg!(feature = "connect-lab"),
             experimental: true,
             max_lifetime_seconds: 600,
-            modes: vec![ConnectMode::Loopback, ConnectMode::ExternalIpv6],
+            modes: if cfg!(feature = "connect-lab") {
+                vec![
+                    ConnectMode::Loopback,
+                    ConnectMode::ExternalIpv6,
+                    ConnectMode::DirectIpv4,
+                ]
+            } else {
+                vec![ConnectMode::Loopback, ConnectMode::ExternalIpv6]
+            },
             services: vec!["game"],
             voice_enabled: false,
             relay_enabled: false,
@@ -585,6 +594,20 @@ mod disabled_tests {
         let manager = ConnectManager::default();
         assert!(!manager.capabilities().available);
         let caps = serde_json::to_value(manager.capabilities()).unwrap();
+        assert_eq!(
+            caps["modes"],
+            serde_json::json!(["loopback", "externalIpv6"])
+        );
+        assert!(matches!(
+            manager.prepare_guest(
+                "main",
+                GuestRequest {
+                    mode: ConnectMode::DirectIpv4,
+                    expected_host_public_id: String::new(),
+                }
+            ),
+            Err(ConnectError::Disabled)
+        ));
         assert!(caps.get("sessionInvitations").is_none());
         assert!(caps.get("fragmentedUdpInvitations").is_none());
         assert!(caps.get("sessionFragmentedUdpInvitations").is_none());

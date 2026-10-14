@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 14/10/2026
 
+Incremento66/004/005/008 integra IPv4 explícito ao caller e painel dos quatro perfis, por capability e revisão próprias, sem fallback ou alteração dos prazos/guardas. [Contrato66](../../aurora-connect-desktop-ipv4.md). **PROTÓTIPO**; testes de DOM e transporte no próprio endereço não fecham alcance externo, NAT/CGNAT, janela Tauri, Minecraft ou voz.
+
 Incremento65/004/005/008 acrescenta APIs de IPv4 inicial explícito aos quatro perfis assinados, com filtro conservador e bind próprio exato. [Contrato65](../../aurora-connect-direct-ipv4.md). **PROTÓTIPO**; testes no próprio computador não fecham T-NET externo, NAT/CGNAT, relay público, Minecraft ou áudio. CLI/Node/desktop só podem adotá-lo em integração explícita posterior.
 
 Incremento64/003/005/008 permite game/TCP descoberto na sessão schema3, mantendo UDP manual e autorizado separadamente. Reutiliza seleção opaca48, guard do processo e monitor, encerrando ambos os transportes quando a origem muda. [Contrato64](../../aurora-connect-discovered-session-udp.md). **PROTÓTIPO**, sem nova prova de LAN Minecraft, janela Tauri, áudio ou rede externa. O perfil curto57 permanece manual.

@@ -81,6 +81,23 @@ test("fragmented endpoint and lifetime validation refuses DNS, external destinat
   for (const value of [0, -1, 121, 600, 1.5, NaN, Infinity, "120", null]) assert.equal(types.isFragmentedLifetime(value), false);
 });
 
+test("explicit direct IPv4 initial addresses are canonical and retain the native conservative block policy", () => {
+  for (const address of ["10.0.0.1:1", "172.16.1.2:42000", "192.168.1.2:65535", "8.8.8.8:42000"]) {
+    assert.equal(types.isDirectIpv4Address(address), true, address);
+    assert.equal(types.isLoopbackUdpTarget(address), false, "Allowing an initial address never allows an application target");
+  }
+  for (const address of [null, "", "localhost:42000", "[::1]:42000", "[::ffff:192.168.1.2]:42000", "192.168.1.2:0",
+    "192.168.1.2:65536", "192.168.1.2:042000", "192.168.001.2:42000", "192.168.1:42000", "192.168.1.256:42000",
+    "192.168.1.2:42000 ", " 192.168.1.2:42000", "0.1.2.3:42000", "127.1.2.3:42000", "100.64.0.1:42000",
+    "100.127.255.255:42000", "169.254.2.3:42000", "224.0.0.1:42000", "255.255.255.255:42000", "240.0.0.1:42000",
+    "192.0.0.9:42000", "192.0.2.1:42000", "192.31.196.1:42000", "192.52.193.1:42000", "192.88.99.1:42000",
+    "192.175.48.1:42000", "198.18.0.1:42000", "198.19.255.255:42000", "198.51.100.1:42000", "203.0.113.1:42000"]) {
+    assert.equal(types.isDirectIpv4Address(address), false, String(address));
+  }
+  assert.deepEqual(types.fragmentedReviewFieldsFrom({ ...hostReview, mode: "directIpv4", directAddress: "192.168.1.2:42000" }), hostReview.fragmentedUdp);
+  assert.throws(() => types.fragmentedReviewFieldsFrom({ ...hostReview, mode: "directIpv4", directAddress: "[::1]:42000" }));
+});
+
 test("review separates the private UDP target from the fixed guest bind and exactly two grants", () => {
   assert.deepEqual(types.fragmentedReviewFieldsFrom(hostReview), hostReview.fragmentedUdp);
   assert.deepEqual(types.fragmentedReviewFieldsFrom(guestReview), guestReview.fragmentedUdp);

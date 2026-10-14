@@ -8,7 +8,7 @@ import {
 import "./connect.css";
 import { DiscoveryPicker, type DiscoveredTarget } from "./DiscoveryPicker";
 import { FragmentedFields, FragmentedReviewFields, FragmentedStatusFields } from "./FragmentedFields";
-import { FRAGMENTED_PROFILE, SESSION_FRAGMENTED_PROFILE, fragmentedGuestUdpFrom, isFragmentedLifetime, isLoopbackUdpTarget } from "./fragmented-types";
+import { FRAGMENTED_PROFILE, SESSION_FRAGMENTED_PROFILE, fragmentedGuestUdpFrom, isDirectIpv4Address, isFragmentedLifetime, isLoopbackUdpTarget } from "./fragmented-types";
 
 type Action = "prepareHost" | "prepareGuest" | "reviewHost" | "reviewGuest" | "confirm" | "export" | "probe" | "retryUdp" | "stop" | "refresh";
 const actionText: Record<Action, string> = {
@@ -139,6 +139,10 @@ export function ConnectView() {
   function prepare(event: FormEvent) {
     event.preventDefault();
     if (active || !capabilities?.available) return;
+    if (!capabilities.modes.includes(mode) || (selectedRole === "host" && mode === "directIpv4" && !isDirectIpv4Address(bindAddress.trim()))) {
+      setError(connectError("connect_invalid_request"));
+      return;
+    }
     const sessionUdp = invitationProfile === SESSION_FRAGMENTED_PROFILE && Boolean(capabilities.sessionFragmentedUdpInvitations);
     const fragmented = sessionUdp || invitationProfile === FRAGMENTED_PROFILE && Boolean(capabilities.fragmentedUdpInvitations);
     const discoveryAvailable = sessionUdp ? capabilities.sessionFragmentedUdpInvitations?.ownedGameTcpDiscovery === true
@@ -329,10 +333,11 @@ export function ConnectView() {
             setDiscoveredTarget(undefined);
             if (next === FRAGMENTED_PROFILE || next === SESSION_FRAGMENTED_PROFILE) setTargetMode("manual");
           }}><option value="legacy">Convite curto · até 10 minutos</option>{capabilities.sessionInvitations && <option value="sessionGameTcp">Sessão de jogo · até 1 hora</option>}{capabilities.fragmentedUdpInvitations && <option value={FRAGMENTED_PROFILE}>Transporte TCP e UDP · até 2 minutos</option>}{capabilities.sessionFragmentedUdpInvitations && <option value={SESSION_FRAGMENTED_PROFILE}>Sessão TCP e UDP · até 1 hora</option>}</select></label>}
-          <label>Modo de conexão<select value={mode} disabled={busy} onChange={event => { const next = event.target.value as ConnectMode; setMode(next); setBindAddress(next === "loopback" ? "127.0.0.1:42000" : ""); }}><option value="loopback">Ensaio neste computador</option><option value="externalIpv6">IPv6 externo autorizado</option></select></label>
+          <label>Modo de conexão<select value={mode} disabled={busy} onChange={event => { const next = event.target.value as ConnectMode; if (!capabilities.modes.includes(next)) return; setMode(next); setBindAddress(next === "loopback" ? "127.0.0.1:42000" : ""); }}><option value="loopback">Ensaio neste computador</option><option value="externalIpv6">IPv6 externo autorizado</option>{capabilities.modes.includes("directIpv4") && <option value="directIpv4">IPv4 direto autorizado</option>}</select></label>
           {mode === "externalIpv6" && <p>Use o endereço inicial IPv6 autorizado. Este modo compartilha informações de rede com o participante; não configura o roteador nem garante alcance.</p>}
+          {mode === "directIpv4" && <p>{selectedRole === "host" ? "Informe um IPv4 deste computador e a porta autorizada, alcançáveis pelo convidado." : "O convite deve usar o IPv4 e a porta autorizados do anfitrião, alcançáveis por este computador."} Este modo compartilha esse endereço, não configura NAT ou roteador e não habilita relay; redes diferentes podem não alcançar esse endereço.</p>}
           {selectedRole === "host" ? <div className="connect-fields">
-            <label>Endereço inicial da conexão<input required maxLength={128} value={bindAddress} disabled={busy} placeholder={mode === "loopback" ? "127.0.0.1:42000" : "[IPv6 autorizado]:42000"} onChange={event => setBindAddress(event.target.value)} autoComplete="off" spellCheck={false} /></label>
+            <label>Endereço inicial da conexão<input required maxLength={128} value={bindAddress} disabled={busy} placeholder={mode === "loopback" ? "127.0.0.1:42000" : mode === "directIpv4" ? "IPv4 local autorizado:porta" : "[IPv6 autorizado]:42000"} onChange={event => setBindAddress(event.target.value)} autoComplete="off" spellCheck={false} /></label>
             {discoveryAvailable && <label>Selecionar servidor<select disabled={busy} value={targetMode} onChange={event => { setTargetMode(event.target.value as "manual" | "ownedInstance"); setDiscoveredTarget(undefined); }}><option value="manual">Endereço manual · servidor dedicado ou local</option><option value="ownedInstance">Jogo aberto pelo Aurora · mundo LAN</option></select></label>}
             {discoveryAvailable && targetMode === "ownedInstance"
               ? <><DiscoveryPicker key={`${invitationProfile}:${discoveryEpoch}`} disabled={busy} onSelect={setDiscoveredTarget} />
@@ -360,7 +365,7 @@ export function ConnectView() {
         <div><button type="submit" disabled={busy}>Revisar convite</button></div>
       </form>}
       {reviewed && snapshot?.phase === "reviewed" && <section className="connect-card connect-review" aria-labelledby="connect-review-title"><h3 id="connect-review-title">Revise antes de autorizar</h3>
-        <dl><dt>Papel</dt><dd>{reviewed.role === "host" ? "Anfitrião" : "Convidado"}</dd><dt>Modo</dt><dd>{reviewed.mode === "loopback" ? "Neste computador" : "IPv6 externo autorizado"}</dd>
+        <dl><dt>Papel</dt><dd>{reviewed.role === "host" ? "Anfitrião" : "Convidado"}</dd><dt>Modo</dt><dd>{reviewed.mode === "loopback" ? "Neste computador" : reviewed.mode === "directIpv4" ? "IPv4 direto autorizado" : "IPv6 externo autorizado"}</dd>
           <dt>Endereço inicial</dt><dd><code>{reviewed.directAddress}</code></dd>{reviewed.gameTarget && <><dt>Destino autorizado</dt><dd><code>{reviewed.gameTarget}</code></dd></>}
           {reviewed.targetSource === "ownedInstance" && <><dt>Origem TCP conferida</dt><dd>Instância {reviewed.instanceId} iniciada por este launcher. A conexão encerra se o processo ou a porta TCP deixar de corresponder à seleção.</dd>
             {reviewed.fragmentedUdp && <><dt>Origem UDP</dt><dd>Destino manual autorizado separadamente; não foi conferido como parte do processo do jogo.</dd></>}</>}

@@ -1,6 +1,9 @@
 use super::fragmented_profile::{self, FragmentedGuestState, UdpFailure};
 use super::session_authority::{Authority, HostDraftRequest, Profile};
 use super::*;
+#[cfg(test)]
+#[path = "direct_ipv4_tests.rs"]
+mod direct_ipv4_tests;
 use aurora_connect_lab as lab;
 use sha2::{Digest, Sha256};
 use std::{
@@ -160,6 +163,8 @@ fn canonical(text: &str) -> Result<SocketAddr, ConnectError> {
 }
 fn policy(mode: ConnectMode, address: SocketAddr) -> Result<(), ConnectError> {
     match mode {
+        ConnectMode::DirectIpv4 => lab::validate_direct_ipv4_invitation_address(address)
+            .map_err(|_| ConnectError::InvalidRequest),
         ConnectMode::ExternalIpv6 => lab::validate_external_invitation_address(address)
             .map_err(|_| ConnectError::InvalidRequest),
         ConnectMode::Loopback
@@ -779,12 +784,16 @@ impl Manager {
                 let issue = match request.mode {
                     ConnectMode::Loopback => lab::Invitation::issue,
                     ConnectMode::ExternalIpv6 => lab::Invitation::issue_external_ipv6,
+                    ConnectMode::DirectIpv4 => lab::Invitation::issue_direct_ipv4,
                 };
                 issue(key, recipient, id, *bind, services, admission_expires).map(Authority::Legacy)
             }
             Profile::Fragmented => {
                 let issue = match request.mode {
                     ConnectMode::Loopback => lab::Invitation::issue_fragmented_for_lifetime,
+                    ConnectMode::DirectIpv4 => {
+                        lab::Invitation::issue_fragmented_direct_ipv4_for_lifetime
+                    }
                     ConnectMode::ExternalIpv6 => {
                         lab::Invitation::issue_fragmented_external_ipv6_for_lifetime
                     }
@@ -802,6 +811,9 @@ impl Manager {
             Profile::Session => {
                 let issue = match request.mode {
                     ConnectMode::Loopback => lab::SessionInvitation::issue_loopback_for_lifetimes,
+                    ConnectMode::DirectIpv4 => {
+                        lab::SessionInvitation::issue_direct_ipv4_for_lifetimes
+                    }
                     ConnectMode::ExternalIpv6 => {
                         lab::SessionInvitation::issue_external_ipv6_for_lifetimes
                     }
@@ -821,6 +833,9 @@ impl Manager {
                 let issue = match request.mode {
                     ConnectMode::Loopback => {
                         lab::SessionInvitation::issue_fragmented_loopback_for_lifetimes
+                    }
+                    ConnectMode::DirectIpv4 => {
+                        lab::SessionInvitation::issue_fragmented_direct_ipv4_for_lifetimes
                     }
                     ConnectMode::ExternalIpv6 => {
                         lab::SessionInvitation::issue_fragmented_external_ipv6_for_lifetimes
@@ -877,6 +892,7 @@ impl Manager {
                 let verify = match request.mode {
                     ConnectMode::Loopback => lab::Invitation::verify,
                     ConnectMode::ExternalIpv6 => lab::Invitation::verify_external_ipv6,
+                    ConnectMode::DirectIpv4 => lab::Invitation::verify_direct_ipv4,
                 };
                 verify(encoded, *host, key.public()).map(Authority::Legacy)
             }
@@ -884,6 +900,7 @@ impl Manager {
                 let verify = match request.mode {
                     ConnectMode::Loopback => lab::Invitation::verify_fragmented,
                     ConnectMode::ExternalIpv6 => lab::Invitation::verify_fragmented_external_ipv6,
+                    ConnectMode::DirectIpv4 => lab::Invitation::verify_fragmented_direct_ipv4,
                 };
                 verify(encoded, *host, key.public()).map(Authority::Fragmented)
             }
@@ -891,12 +908,16 @@ impl Manager {
                 let verify = match request.mode {
                     ConnectMode::Loopback => lab::SessionInvitation::verify_loopback,
                     ConnectMode::ExternalIpv6 => lab::SessionInvitation::verify_external_ipv6,
+                    ConnectMode::DirectIpv4 => lab::SessionInvitation::verify_direct_ipv4,
                 };
                 verify(encoded, *host, key.public()).map(Authority::Session)
             }
             Profile::SessionFragmented => {
                 let verify = match request.mode {
                     ConnectMode::Loopback => lab::SessionInvitation::verify_fragmented_loopback,
+                    ConnectMode::DirectIpv4 => {
+                        lab::SessionInvitation::verify_fragmented_direct_ipv4
+                    }
                     ConnectMode::ExternalIpv6 => {
                         lab::SessionInvitation::verify_fragmented_external_ipv6
                     }

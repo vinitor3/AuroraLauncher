@@ -15,6 +15,11 @@ const { window, document } = parseHTML("<html><body><div id='root'></div></body>
 // modern event path. Set the prototype value below to model user editing rather
 // than a programmatic setter already observed by React's value tracker.
 document.oninput = null;
+// Browsers reflect an omitted input type as "text"; Linkedom omits this
+// default, which otherwise prevents React's text-input change event path.
+Object.defineProperty(window.HTMLInputElement.prototype, "type", {
+  configurable: true, get() { return this.getAttribute("type") || "text"; }, set(value) { this.setAttribute("type", value); },
+});
 // Linkedom omits the browser textarea.defaultValue reflection used by React 19
 // on initial mount. Supply that DOM behavior only inside this synthetic fixture.
 Object.defineProperty(window.HTMLTextAreaElement.prototype, "defaultValue", {
@@ -1448,4 +1453,136 @@ test("schema3 discovery capability is optional, strictly boolean and absent from
   assert.throws(() => types.exportFrom({ ...sessionFragmentedExport, fragmentedUdp: { ...sessionFragmentedContract, ownedGameTcpDiscovery: true } }));
   assert.deepEqual(types.capabilitiesFrom({ ...caps, sessionFragmentedUdpInvitations: sessionFragmentedCapability }).sessionFragmentedUdpInvitations,
     sessionFragmentedCapability, "The older schema3 capability remains readable without the new action");
+});
+
+async function chooseMode(mode) {
+  const select = [...container.querySelectorAll("select")].find(element => element.querySelector('option[value="loopback"]'));
+  assert.ok(select?.querySelector(`option[value="${mode}"]`));
+  await act(async () => {
+    for (const option of select.querySelectorAll("option")) option.selected = false;
+    select.querySelector(`option[value="${mode}"]`).selected = true;
+    assert.equal(select.value, mode);
+    select.dispatchEvent(new window.Event("change", { bubbles: true }));
+  });
+}
+function directIpv4Fixtures(profile, role) {
+  const suffix = profile === "legacy" ? "" : profile === "sessionGameTcp" ? "session_" : profile === "fragmentedGameUdp" ? "fragmented_" : "session_fragmented_";
+  if (profile === "sessionGameTcp") sessionFixtures();
+  if (profile === "fragmentedGameUdp") fragmentedFixtures();
+  if (profile === sessionFragmentedProfile) sessionFragmentedFixtures();
+  capabilities.modes = [...caps.modes, "directIpv4"];
+  const prepared = profile === sessionFragmentedProfile ? preparedSessionFragmented(role) : profile === "fragmentedGameUdp" ? preparedFragmented(role)
+    : profile === "sessionGameTcp" ? preparedSession(role) : { ...idle(), operationId, generation: 1, role,
+      phase: role === "host" ? "hostPrepared" : "guestPrepared", preparation, expiresAtMs: preparation.expiresAtMs };
+  const reviewed = profile === sessionFragmentedProfile ? reviewedSessionFragmented(role) : profile === "fragmentedGameUdp" ? reviewedFragmented(role)
+    : profile === "sessionGameTcp" ? reviewedSession(role) : { ...prepared, phase: "reviewed", review: { ...review, role,
+      gameTarget: role === "host" ? review.gameTarget : null, localTcpBind: role === "host" ? null : "127.0.0.1:0" } };
+  const command = `connect_prepare_${suffix}${role}`;
+  handlers.set(command, () => { snapshot = structuredClone(prepared); return snapshot.preparation; });
+  handlers.set(`connect_review_${role}`, () => {
+    snapshot = structuredClone(reviewed); snapshot.review.mode = "directIpv4"; snapshot.review.directAddress = "192.168.1.2:42000";
+    return snapshot.review;
+  });
+  return command;
+}
+
+for (const profile of ["legacy", "sessionGameTcp", "fragmentedGameUdp", sessionFragmentedProfile]) {
+  test(`direct IPv4 host ${profile} requires an explicit local initial address and preserves approved loopback services`, async () => {
+    const command = directIpv4Fixtures(profile, "host"); await render();
+    assert.equal(container.querySelector('option[value="loopback"]').selected, true);
+    if (profile !== "legacy") await chooseProfile(profile);
+    await chooseMode("directIpv4");
+    assert.equal(labeledInput("Endereço inicial").value, "");
+    assert.match(container.textContent, /não configura NAT ou roteador e não habilita relay/);
+    await submit(); assert.equal(count(command), 0);
+    await editInput(labeledInput("Endereço inicial"), "192.168.1.2:42000");
+    if (profile.includes("Udp")) await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002");
+    await submit();
+    const request = calls.find(call => call.command === command).args.request;
+    assert.equal(request.mode, "directIpv4"); assert.equal(request.bindAddress, "192.168.1.2:42000");
+    assert.equal(request.gameTarget, "127.0.0.1:43001");
+    if (profile.includes("Udp")) assert.equal(request.udpTarget, "127.0.0.1:43002");
+    await submit();
+    assert.match(container.textContent, /ModoIPv4 direto autorizadoEndereço inicial192\.168\.1\.2:42000/);
+    assert.equal(button("Autorizar conexão").disabled, true); assert.equal(count("connect_confirm"), 0);
+    await checkConsent(); await click("Autorizar conexão");
+    assert.deepEqual(calls.find(call => call.command === "connect_confirm").args, { operationId, digest });
+    assert.match(container.textContent, /Não confirmado · relay desligado/);
+    assert.equal(calls.filter(call => call.command.startsWith("connect_prepare_")).length, 1);
+  });
+
+  test(`direct IPv4 guest ${profile} selects its mode before any invitation and has no host endpoint override`, async () => {
+    const command = directIpv4Fixtures(profile, "guest"); await render(); await click("Convidado");
+    if (profile !== "legacy") await chooseProfile(profile);
+    await chooseMode("directIpv4"); await editInput(labeledInput("Código público do anfitrião"), hostId);
+    assert.equal([...container.querySelectorAll("label")].some(element => element.textContent.startsWith("Endereço inicial")), false);
+    assert.match(container.textContent, /convite deve usar o IPv4 e a porta autorizados do anfitrião/);
+    assert.equal(count("connect_review_guest"), 0);
+    await submit();
+    assert.deepEqual(calls.find(call => call.command === command).args, { request: { mode: "directIpv4", expectedHostPublicId: hostId } });
+    await submit(); assert.equal(button("Autorizar conexão").disabled, true);
+    assert.match(container.textContent, /ModoIPv4 direto autorizado/);
+    assert.equal(count("connect_confirm"), 0);
+    assert.equal(calls.filter(call => call.command.startsWith("connect_prepare_")).length, 1);
+  });
+}
+
+test("direct IPv4 capability accepts only complete old or new mode sets and remains absent from an older backend", async () => {
+  for (const modes of [["loopback", "externalIpv6"], ["directIpv4", "externalIpv6", "loopback"]]) {
+    assert.deepEqual(types.capabilitiesFrom({ ...caps, modes }).modes, modes);
+  }
+  for (const modes of [[], ["directIpv4"], ["loopback", "directIpv4"], ["externalIpv6", "directIpv4"],
+    ["loopback", "externalIpv6", "directIpv4", "directIpv4"], ["loopback", "externalIpv6", "loopback"],
+    ["loopback", "externalIpv6", "auto"], ["loopback", "externalIpv6", "directIpv4", "auto"]]) assert.throws(() => types.capabilitiesFrom({ ...caps, modes }));
+  assert.throws(() => types.capabilitiesFrom({ ...caps, available: false, modes: [...caps.modes, "directIpv4"] }));
+  await render(); assert.equal(container.querySelector('option[value="directIpv4"]'), null);
+  assert.equal(container.querySelector('option[value="loopback"]').selected, true);
+  await submit(); assert.equal(calls.find(call => call.command === "connect_prepare_host").args.request.mode, "loopback");
+});
+
+test("direct IPv4 selection refuses invalid initial addresses without IPC and clearing the mode never retains a personal address", async () => {
+  directIpv4Fixtures("legacy", "host"); await render(); await chooseMode("directIpv4");
+  for (const address of ["", "127.0.0.1:42000", "0.0.0.0:42000", "[::1]:42000", "localhost:42000", "192.168.1.2:0", "192.168.001.2:42000", "100.64.0.1:42000"]) {
+    await editInput(labeledInput("Endereço inicial"), address); await submit(); assert.equal(count("connect_prepare_host"), 0);
+  }
+  await editInput(labeledInput("Endereço inicial"), "192.168.1.2:42000"); await chooseMode("externalIpv6");
+  assert.equal(labeledInput("Endereço inicial").value, "");
+  await chooseMode("loopback"); assert.equal(labeledInput("Endereço inicial").value, "127.0.0.1:42000");
+  await chooseMode("directIpv4"); assert.equal(labeledInput("Endereço inicial").value, "");
+});
+
+test("direct IPv4 connection failure never selects another mode, profile or relay", async () => {
+  const command = directIpv4Fixtures(sessionFragmentedProfile, "host"); await render(); await chooseProfile(sessionFragmentedProfile);
+  await chooseMode("directIpv4"); await editInput(labeledInput("Endereço inicial"), "192.168.1.2:42000");
+  await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002"); await submit(); await submit(); await checkConsent();
+  handlers.set("connect_confirm", () => Promise.reject("connect_transport_failed")); await click("Autorizar conexão");
+  assert.equal(button("Autorizar conexão").disabled, true);
+  await click("Atualizar estado");
+  assert.equal(count(command), 1); assert.equal(count("connect_confirm"), 1);
+  assert.equal(calls.filter(call => call.command.startsWith("connect_prepare_")).length, 1);
+  assert.match(container.textContent, /ModoIPv4 direto autorizado/);
+  assert.match(container.textContent, /Não confirmado · relay desligado/);
+});
+
+test("direct IPv4 schema3 discovery still sends only the selected TCP authority and a manual UDP destination", async () => {
+  discoveredSessionFragmentedFixtures(); capabilities.modes = [...caps.modes, "directIpv4"];
+  await render(); await chooseProfile(sessionFragmentedProfile); await chooseMode("directIpv4");
+  await editInput(labeledInput("Endereço inicial"), "192.168.1.2:42000"); await discoveryToReview();
+  await click("Autorizar consulta e selecionar porta"); await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002"); await submit();
+  assert.deepEqual(calls.find(call => call.command === "connect_prepare_session_fragmented_host_discovered").args,
+    { selectionId: discoverySelected.selectionId, request: { mode: "directIpv4", bindAddress: "192.168.1.2:42000", udpTarget: "127.0.0.1:43002", admissionSeconds: 600, sessionSeconds: 3600 } });
+  assert.equal(count("connect_prepare_session_fragmented_host"), 0);
+});
+
+test("direct IPv4 review parsers reject inconsistent initial addresses across all profiles and preserve opaque invitation bytes", () => {
+  for (const base of [review, sessionReview, fragmentedReview, reviewedSessionFragmented().review]) {
+    const valid = { ...base, mode: "directIpv4", directAddress: "192.168.1.2:42000" };
+    assert.deepEqual(types.reviewFrom(valid), valid);
+    for (const directAddress of ["[::1]:42000", "127.0.0.1:42000", "0.0.0.0:42000", "localhost:42000", "192.168.1.2:0", "192.0.2.1:42000"]) {
+      assert.throws(() => types.reviewFrom({ ...valid, directAddress }));
+    }
+    assert.throws(() => types.reviewFrom({ ...valid, mode: "automaticIpv4" }));
+  }
+  const opaque = { ...sessionFragmentedExport, invitation: '{"mode":"externalIpv6","directAddress":"arbitrary opaque input"}' };
+  assert.equal(types.exportFrom(opaque).invitation, opaque.invitation, "Projection parsing never selects transport by inspecting encoded invitation data");
 });

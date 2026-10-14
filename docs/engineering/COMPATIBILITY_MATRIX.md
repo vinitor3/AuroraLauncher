@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 14/10/2026
 
+Incremento66: IPv4 explícito disponível no painel/caller experimental dos quatro perfis. [Contrato e provas66](../aurora-connect-desktop-ipv4.md). **PROTÓTIPO**, off por padrão; não promove homologação de redes externas, GUI, jogo, áudio ou qualquer par Core/Skins.
+
 Incremento65: convites assinados recebem modo IPv4 explícito na biblioteca, com testes dos quatro perfis no IPv4 próprio. [Contrato65](../aurora-connect-direct-ipv4.md). **PROTÓTIPO**; não é evidência de LAN entre máquinas, IPv4 público, NAT/CGNAT, áudio ou Minecraft. Nenhuma célula dos nove pares foi promovida; relay público segue desligado.
 
 Incremento64: a sessãoTCP+UDP recebe descoberta do game/TCP por filho próprio, mantendo aux/UDP manual e fechamento de ambos pela perda da origem. [Contrato e evidências64](../aurora-connect-discovered-session-udp.md). **PROTÓTIPO**, off por padrão; processo de fixture/STATUS sintético e DOM não homologam Minecraft LAN, janela Tauri, SVC/Plasmo, rede externa ou os nove pares.

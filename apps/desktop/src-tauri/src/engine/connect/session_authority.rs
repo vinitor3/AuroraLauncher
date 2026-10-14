@@ -283,11 +283,17 @@ impl Authority {
             (Self::Legacy(v), ConnectMode::ExternalIpv6) => {
                 lab::Host::start_invited_external_ipv6(config, v).await
             }
+            (Self::Legacy(v), ConnectMode::DirectIpv4) => {
+                lab::Host::start_invited_direct_ipv4(config, v).await
+            }
             (Self::Fragmented(v), ConnectMode::Loopback) => {
                 lab::Host::start_invited_fragmented(config, v).await
             }
             (Self::Fragmented(v), ConnectMode::ExternalIpv6) => {
                 lab::Host::start_invited_fragmented_external_ipv6(config, v).await
+            }
+            (Self::Fragmented(v), ConnectMode::DirectIpv4) => {
+                lab::Host::start_invited_fragmented_direct_ipv4(config, v).await
             }
             (Self::Session(v), ConnectMode::Loopback) => {
                 lab::Host::start_invited_session(config, v).await
@@ -295,11 +301,17 @@ impl Authority {
             (Self::Session(v), ConnectMode::ExternalIpv6) => {
                 lab::Host::start_invited_session_external_ipv6(config, v).await
             }
+            (Self::Session(v), ConnectMode::DirectIpv4) => {
+                lab::Host::start_invited_session_direct_ipv4(config, v).await
+            }
             (Self::SessionFragmented(v), ConnectMode::Loopback) => {
                 lab::Host::start_invited_fragmented_session(config, v).await
             }
             (Self::SessionFragmented(v), ConnectMode::ExternalIpv6) => {
                 lab::Host::start_invited_fragmented_session_external_ipv6(config, v).await
+            }
+            (Self::SessionFragmented(v), ConnectMode::DirectIpv4) => {
+                lab::Host::start_invited_fragmented_session_direct_ipv4(config, v).await
             }
         }
     }
@@ -315,11 +327,18 @@ impl Authority {
             (Self::Legacy(v), ConnectMode::ExternalIpv6) => {
                 lab::Guest::connect_invited_external_ipv6(key, v, lab::Limits::default()).await
             }
+            (Self::Legacy(v), ConnectMode::DirectIpv4) => {
+                lab::Guest::connect_invited_direct_ipv4(key, v, lab::Limits::default()).await
+            }
             (Self::Fragmented(v), ConnectMode::Loopback) => {
                 lab::Guest::connect_invited_fragmented(key, v, lab::Limits::default()).await
             }
             (Self::Fragmented(v), ConnectMode::ExternalIpv6) => {
                 lab::Guest::connect_invited_fragmented_external_ipv6(key, v, lab::Limits::default())
+                    .await
+            }
+            (Self::Fragmented(v), ConnectMode::DirectIpv4) => {
+                lab::Guest::connect_invited_fragmented_direct_ipv4(key, v, lab::Limits::default())
                     .await
             }
             (Self::Session(v), ConnectMode::Loopback) => {
@@ -329,11 +348,23 @@ impl Authority {
                 lab::Guest::connect_invited_session_external_ipv6(key, v, lab::Limits::default())
                     .await
             }
+            (Self::Session(v), ConnectMode::DirectIpv4) => {
+                lab::Guest::connect_invited_session_direct_ipv4(key, v, lab::Limits::default())
+                    .await
+            }
             (Self::SessionFragmented(v), ConnectMode::Loopback) => {
                 lab::Guest::connect_invited_fragmented_session(key, v, lab::Limits::default()).await
             }
             (Self::SessionFragmented(v), ConnectMode::ExternalIpv6) => {
                 lab::Guest::connect_invited_fragmented_session_external_ipv6(
+                    key,
+                    v,
+                    lab::Limits::default(),
+                )
+                .await
+            }
+            (Self::SessionFragmented(v), ConnectMode::DirectIpv4) => {
+                lab::Guest::connect_invited_fragmented_session_direct_ipv4(
                     key,
                     v,
                     lab::Limits::default(),

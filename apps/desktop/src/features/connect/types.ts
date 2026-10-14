@@ -1,10 +1,10 @@
 import {
   FRAGMENTED_PROFILE, SESSION_FRAGMENTED_PROFILE, sessionFragmentedCapabilityFrom, fragmentedCapabilityFrom, fragmentedExportFieldsFrom, fragmentedPreparationFieldsFrom,
   fragmentedReviewFieldsFrom, fragmentedSnapshotFieldsFrom, type FragmentedGuestUdp, type FragmentedUdpCapability,
-  type FragmentedUdpContract, type FragmentedUdpReview, type SessionFragmentedUdpCapability, type SessionUdpRecovery,
+  type FragmentedUdpContract, type FragmentedUdpReview, type SessionFragmentedUdpCapability, type SessionUdpRecovery, isDirectIpv4Address,
 } from "./fragmented-types";
 
-export type ConnectMode = "loopback" | "externalIpv6";
+export type ConnectMode = "loopback" | "externalIpv6" | "directIpv4";
 export type ConnectRole = "host" | "guest";
 export type ConnectSessionProfile = "sessionGameTcp" | typeof SESSION_FRAGMENTED_PROFILE;
 export type ConnectInvitationProfile = ConnectSessionProfile | typeof FRAGMENTED_PROFILE;
@@ -97,7 +97,7 @@ const protocol = (value: unknown): value is number => Number.isInteger(value) &&
 const text = (value: unknown, max = 256): value is string => typeof value === "string" && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/u.test(value);
 const hash = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const role = (value: unknown): value is ConnectRole => value === "host" || value === "guest";
-const mode = (value: unknown): value is ConnectMode => value === "loopback" || value === "externalIpv6";
+const mode = (value: unknown): value is ConnectMode => value === "loopback" || value === "externalIpv6" || value === "directIpv4";
 const statusContract = (value: Record<string, unknown>) => value.statusProtocol === 767 && value.statusHandshakeHost === "localhost" && value.statusHandshakePort === 43001;
 const invalid = (): never => { throw new Error("Invalid Connect projection"); };
 const invitationProfile = (value: unknown) => value === undefined || value === "sessionGameTcp" || value === FRAGMENTED_PROFILE || value === SESSION_FRAGMENTED_PROFILE;
@@ -130,8 +130,9 @@ export function capabilitiesFrom(value: unknown): ConnectCapabilities {
     || value.udpRecovery !== undefined
     || !(value.ownedInstanceDiscovery === undefined || typeof value.ownedInstanceDiscovery === "boolean")
     || value.maxLifetimeSeconds !== 600 || value.voiceEnabled !== false || value.relayEnabled !== false || !statusContract(value)
-    || !Array.isArray(value.modes) || value.modes.length !== 2 || !value.modes.every(mode)
-    || new Set(value.modes).size !== 2 || !Array.isArray(value.services)
+    || !Array.isArray(value.modes) || ![2, 3].includes(value.modes.length) || !value.modes.every(mode)
+    || new Set(value.modes).size !== value.modes.length || !value.modes.includes("loopback") || !value.modes.includes("externalIpv6")
+    || (value.modes.includes("directIpv4") && !value.available) || !Array.isArray(value.services)
     || value.services.length !== 1 || value.services[0] !== "game") return invalid();
   if (value.sessionInvitations !== undefined) {
     const session = value.sessionInvitations;
@@ -201,6 +202,7 @@ export function reviewFrom(value: unknown): ConnectReview {
   if (!record(value) || !text(value.operationId) || !integer(value.generation) || !hash(value.digest)
     || !hash(value.invitationDigest) || !hash(value.hostPublicId) || !hash(value.guestPublicId)
     || !role(value.role) || !mode(value.mode) || !text(value.directAddress)
+    || (value.mode === "directIpv4" && !isDirectIpv4Address(value.directAddress))
     || !(value.gameTarget === null || text(value.gameTarget)) || !(value.localTcpBind === null || value.localTcpBind === "127.0.0.1:0")
     || !integer(value.expiresAtMs) || !integer(value.invitationExpiresAtMs) || value.expiresAtMs > value.invitationExpiresAtMs
     || !statusContract(value) || !integer(value.lifetimeSeconds) || value.lifetimeSeconds < 1 || value.lifetimeSeconds > 600

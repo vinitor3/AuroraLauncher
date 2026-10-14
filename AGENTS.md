@@ -29,6 +29,8 @@ O laboratório descartável `apps/connect-runtime-tools` já executou Minecraft 
 
 ## Mapa do repositório
 
+Connect66 acrescenta `directIpv4` ao caller/painel somente quando anunciado pela capability. Preserva os quatro perfis, revisão/digest, guardas e destinos loopback; não infere modo nem configura NAT/relay. Ensaios no IPv4 próprio são locais. Consultar `docs/aurora-connect-desktop-ipv4.md`; não usar isso como homologação entre redes.
+
 Connect65 acrescenta modo inicial IPv4 direto explicitamente selecionado nas quatro famílias de convite, com APIs próprias e filtro conservador, mantendo os contratos anteriores. Host exige bind igual ao endereço assinado local; Guest usa transporte0.0.0.0:0 e aplicações loopback. [Contrato65](docs/aurora-connect-direct-ipv4.md). Não inferir NAT, endereço público mapeado, LAN entre máquinas ou compatibilidade de áudio de ensaio no próprioIPv4; CLI/Node/desktop anteriores não mudam implicitamente.
 
 Connect64 compõe descoberta48 de game/TCP com sessão schema3 e aux/UDP manual. O comando próprio consome seleção opaca e não recebe destino TCP/PID do frontend; revisão vincula ambas as origens e o monitor conserva o processo original. Perda do processo/listener fecha TCP+UDP Connect sem encerrar jogo. Capability própria não amplia o perfil curto57. [Contrato64](docs/aurora-connect-discovered-session-udp.md); não inferir descoberta UDP, áudio, mundo LAN ou GUI homologados.

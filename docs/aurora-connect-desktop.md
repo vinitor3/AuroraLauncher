@@ -4,11 +4,13 @@ Este documento descreve o caller local46, descoberta48, sessão TCP56, TCP+UDP c
 
 ## Perfil explícito de sessão TCP+UDP — incremento62
 
+Atualização66: os quatro perfis oferecem também **IPv4 direto autorizado**, somente quando anunciado pelo backend, com endereço local explícito e revisão própria. [Contrato e provas66](aurora-connect-desktop-ipv4.md). Não configura NAT/roteador ou relay e não garante alcance entre redes.
+
 Atualização64: no Windows, esse perfil também aceita a seleção de game/TCP descoberta do processo próprio, conservando aux/UDP manual e a revisão conjunta. A perda do processo ou listener encerra os recursos Connect. [Contrato64](aurora-connect-discovered-session-udp.md). Essa seleção não identifica o serviço UDP nem comprova Minecraft LAN ou áudio.
 
 Atualização63: o convidado deste perfil dispõe de **Tentar UDP novamente** depois de falha, até três tentativas adicionais dentro da mesma sessão. A ação é manual, conserva a autorização e o TCP, e não altera configuração de voz. [Contrato, testes e encerramento63](aurora-connect-desktop-udp-recovery.md). O perfil curto57 continua sem recuperação; liberar a porta não dispara nenhuma tentativa automática.
 
-**Sessão TCP e UDP · até 1 hora** seleciona `sessionFragmentedGameUdp` antes de preparar. Usa convite schema3, preservando todos os perfis anteriores: ingresso de1–600s e encerramento absoluto até3600s desde emissão, sem renovação. Exige destinos loopback manuais game/TCP e aux/UDP; não reutiliza seleção descoberta. Revisão60s vincula ambos os prazos, destinos e limites. Após admissão, novas conexões/associações continuam autorizadas até a sessão terminar; exportar continua limitado ao ingresso não consumido.
+**Sessão TCP e UDP · até 1 hora** seleciona `sessionFragmentedGameUdp` antes de preparar. Usa convite schema3, preservando todos os perfis anteriores: ingresso de1–600s e encerramento absoluto até3600s desde emissão, sem renovação. Exige destinos loopback: game/TCP manual ou descoberto conforme64, aux/UDP manual. Revisão60s vincula ambos os prazos, destinos e limites. Após admissão, novas conexões/associações continuam autorizadas até a sessão terminar; exportar continua limitado ao ingresso não consumido.
 
 UDP mantém original4096B/frame1264B e porta de convidado35554. TCP pode funcionar enquanto UDP prepara ou falha. Porta ocupada não causa troca de porta nem tentativa automática. Não aplica configuração de mod ou inicia Java. [Contrato, comandos, testes e rollback62](aurora-connect-desktop-fragmented-session.md). **PROTÓTIPO**, desligado por padrão; o prazo máximo não é prova de estabilidade1h ou áudio. O painel de anúncio60 continua independente, em cópia diagnóstica com aprovação/restauração próprias.
 
