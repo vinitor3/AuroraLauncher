@@ -11,6 +11,36 @@ pub const MAX_FRAGMENT_FRAME_BYTES: u16 = 1264;
 pub const LOCAL_UDP_BIND: &str = "127.0.0.1:35554";
 pub const PROFILE: &str = "fragmentedGameUdp";
 pub const SESSION_PROFILE: &str = "sessionFragmentedGameUdp";
+pub const MAX_RECOVERY_ATTEMPTS: u8 = 3;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UdpRecoveryCapabilities {
+    pub max_attempts: u8,
+}
+impl Default for UdpRecoveryCapabilities {
+    fn default() -> Self {
+        Self {
+            max_attempts: MAX_RECOVERY_ATTEMPTS,
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UdpRecoveryState {
+    pub attempts_used: u8,
+    pub max_attempts: u8,
+    pub pending: bool,
+}
+impl Default for UdpRecoveryState {
+    fn default() -> Self {
+        Self {
+            attempts_used: 0,
+            max_attempts: MAX_RECOVERY_ATTEMPTS,
+            pending: false,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -86,6 +116,7 @@ pub struct SessionFragmentedUdpCapabilities {
     pub contract: FragmentedUdpContract,
     pub max_admission_seconds: u16,
     pub max_session_seconds: u16,
+    pub udp_recovery: UdpRecoveryCapabilities,
 }
 impl Default for SessionFragmentedUdpCapabilities {
     fn default() -> Self {
@@ -93,6 +124,7 @@ impl Default for SessionFragmentedUdpCapabilities {
             contract: FragmentedUdpContract::session(),
             max_admission_seconds: 600,
             max_session_seconds: 3600,
+            udp_recovery: UdpRecoveryCapabilities::default(),
         }
     }
 }

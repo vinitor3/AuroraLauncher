@@ -10,11 +10,11 @@ import { DiscoveryPicker, type DiscoveredTarget } from "./DiscoveryPicker";
 import { FragmentedFields, FragmentedReviewFields, FragmentedStatusFields } from "./FragmentedFields";
 import { FRAGMENTED_PROFILE, SESSION_FRAGMENTED_PROFILE, fragmentedGuestUdpFrom, isFragmentedLifetime, isLoopbackUdpTarget } from "./fragmented-types";
 
-type Action = "prepareHost" | "prepareGuest" | "reviewHost" | "reviewGuest" | "confirm" | "export" | "probe" | "stop" | "refresh";
+type Action = "prepareHost" | "prepareGuest" | "reviewHost" | "reviewGuest" | "confirm" | "export" | "probe" | "retryUdp" | "stop" | "refresh";
 const actionText: Record<Action, string> = {
   prepareHost: "Preparando anfitrião…", prepareGuest: "Preparando convidado…", reviewHost: "Preparando revisão…",
   reviewGuest: "Verificando convite…", confirm: "Estabelecendo conexão…", export: "Obtendo convite…",
-  probe: "Consultando servidor…", stop: "Encerrando recursos…", refresh: "Consultando estado…",
+  probe: "Consultando servidor…", retryUdp: "Solicitando nova tentativa UDP…", stop: "Encerrando recursos…", refresh: "Consultando estado…",
 };
 const finalPhase = (snapshot: ConnectSnapshot) => ["idle", "closed", "failed"].includes(snapshot.phase);
 
@@ -44,16 +44,23 @@ export function ConnectView() {
   const [exportedInvitation, setExportedInvitation] = useState("");
   const [acknowledged, setAcknowledged] = useState(false);
   const [knownOperationId, setKnownOperationId] = useState<string>();
+  const [udpRecoveryAwaitingSnapshot, setUdpRecoveryAwaitingSnapshot] = useState(false);
   const epoch = useRef(0);
   const mounted = useRef(false);
   const pendingRef = useRef<Action | undefined>(undefined);
   const snapshotRef = useRef<ConnectSnapshot | undefined>(undefined);
   const observedReview = useRef<string | undefined>(undefined);
   const exportedFor = useRef<string | undefined>(undefined);
+  const udpRetryContext = useRef<{ operationId: string; generation: number } | undefined>(undefined);
 
   function acceptSnapshot(value: unknown) {
     const next = snapshotFrom(value);
     if (snapshotRef.current && next.generation < snapshotRef.current.generation) return;
+    const recovering = udpRetryContext.current;
+    if (recovering && (next.operationId !== recovering.operationId || next.generation >= recovering.generation)) {
+      udpRetryContext.current = undefined;
+      setUdpRecoveryAwaitingSnapshot(false);
+    }
     snapshotRef.current = next;
     setSnapshot(next);
     setKnownOperationId(next.operationId ?? undefined);
@@ -199,6 +206,31 @@ export function ConnectView() {
       if (current()) acceptSnapshot(value);
     });
   }
+  function udpRetryAllowed(value: ConnectSnapshot | undefined): value is ConnectSnapshot & { operationId: string } {
+    return !!(capabilities?.sessionFragmentedUdpInvitations?.udpRecovery && value?.operationId
+      && value.invitationProfile === SESSION_FRAGMENTED_PROFILE && value.role === "guest" && value.phase === "guestConnected"
+      && value.transportState === "authenticated" && value.udpState === "failed" && value.udpRecovery
+      && !value.udpRecovery.pending && value.udpRecovery.attemptsUsed < value.udpRecovery.maxAttempts
+      && value.sessionTiming && Date.now() < value.sessionTiming.sessionExpiresAtMs);
+  }
+  function retryUdp() {
+    const baseline = snapshotRef.current;
+    if (pendingRef.current || udpRetryContext.current || !udpRetryAllowed(baseline) || baseline.operationId !== operationId) return;
+    const { operationId: retryOperation, generation: expectedGeneration } = baseline;
+    udpRetryContext.current = { operationId: retryOperation, generation: expectedGeneration };
+    setUdpRecoveryAwaitingSnapshot(true);
+    // A lost IPC reply remains uncertain until a validated observation arrives.
+    // Neither this callback nor polling submits another recovery command.
+    void perform("retryUdp", async current => {
+      const value = snapshotFrom(await invoke<unknown>("connect_retry_session_udp", { operationId: retryOperation, expectedGeneration }));
+      if (!current()) return;
+      if (value.operationId !== retryOperation || value.invitationProfile !== SESSION_FRAGMENTED_PROFILE || value.role !== "guest"
+        || value.generation < expectedGeneration || !value.udpRecovery || !baseline.sessionTiming || !value.sessionTiming
+        || !sameSessionTiming(baseline.sessionTiming, value.sessionTiming)
+        || (value.phase === "guestConnected" && value.tcpAddress !== baseline.tcpAddress)) throw new Error("Wrong UDP recovery projection");
+      acceptSnapshot(value);
+    });
+  }
   function exportInvitation() {
     if (!operationId) return;
     void perform("export", async current => {
@@ -259,6 +291,15 @@ export function ConnectView() {
             {snapshot.cleanupState !== "notStarted" && <><dt>Encerramento</dt><dd>{{ pending: "Aguardando liberação dos recursos", complete: "Recursos liberados", failed: "Liberação não confirmada" }[snapshot.cleanupState]}</dd></>}
           </dl>
           {snapshot.errorCode && <p className="connect-error" role="alert">{connectError(snapshot.errorCode)}</p>}
+          {snapshot.udpRecovery && <div className="connect-hint">
+            <p>Novas tentativas UDP utilizadas: {snapshot.udpRecovery.attemptsUsed} de {snapshot.udpRecovery.maxAttempts}.</p>
+            <p>A nova tentativa mantém a porta, o participante, os destinos e o encerramento da sessão já aprovados. O jogo continua independente; isto não confirma áudio.</p>
+            {snapshot.udpRecovery.pending && <p role="status">Preparando novamente a ponte UDP…</p>}
+            {udpRecoveryAwaitingSnapshot && !pending && <p role="status">Aguardando confirmar o estado da tentativa UDP. Nenhuma solicitação será repetida automaticamente.</p>}
+            {udpRetryAllowed(snapshot) && <button type="button" disabled={busy || udpRecoveryAwaitingSnapshot || snapshot.udpRecovery.pending} onClick={retryUdp}>Tentar UDP novamente</button>}
+            {snapshot.udpRecovery.attemptsUsed >= snapshot.udpRecovery.maxAttempts && snapshot.udpState === "failed"
+              && <p>O limite de novas tentativas UDP desta sessão foi atingido.</p>}
+          </div>}
           {snapshot.statusSummary && <div className="connect-status-summary"><p>Última resposta: protocolo {snapshot.statusSummary.reportedProtocol}, {snapshot.statusSummary.protocolMatchesRequested ? "correspondente ao solicitado" : "diferente do solicitado"}.</p>
             <p>Jogadores informados pelo servidor: {snapshot.statusSummary.reportedPlayersOnline ?? "não informado"} / {snapshot.statusSummary.reportedPlayersMax ?? "não informado"}. Essa contagem não confirma quem entrou no mundo.</p></div>}
           {snapshot.tcpAddress && snapshot.phase === "guestConnected" && <div className="connect-output"><label htmlFor="connect-local-address">Endereço para Conexão direta no Minecraft</label><input id="connect-local-address" readOnly value={snapshot.tcpAddress} />

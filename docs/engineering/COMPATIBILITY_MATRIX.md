@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 14/10/2026
 
+Incremento63: recuperação manual e limitada da ponte UDP na sessão schema3, sem derrubar TCP ou renovar autorização. [Contrato e evidências63](../aurora-connect-desktop-udp-recovery.md). **PROTÓTIPO**, off por padrão. Não amplia homologação SVC/Plasmo, GUI, Minecraft, redes ou pares Core/Skins; T-MIX-03 de áudio real permanece pendente.
+
 Incremento62: caller e painel recebem perfil explícito de sessão TCP+UDP, duas durações e estados UDP independentes. [Contrato e validação62](../aurora-connect-desktop-fragmented-session.md). **PROTÓTIPO**, off por padrão; testes locais/DOM não homologam janela Tauri, áudio, estabilidade1h, rede externa, jogo ou novos pares Core/Skins. Preservadas versões e provas anteriores.
 
 Incremento61: APIs explícitas de sessão TCP+UDP fragmentado separam ingresso e prazo absoluto, conservando autoridade nas fronteiras de datagramas e recusa de perfis cruzados. [Contrato e validação61](../aurora-connect-fragmented-session.md). **PROTÓTIPO**; provas locais de transporte não ampliam rede externa, estabilidade de uma hora, interface, Minecraft, SVC/Plasmo ou os nove pares Core/Skins. Callers anteriores preservam seus prazos até integração própria.

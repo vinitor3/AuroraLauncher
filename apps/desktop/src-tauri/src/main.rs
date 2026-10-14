@@ -136,6 +136,7 @@ fn main() {
             connect_commands::connect_prepare_fragmented_guest,
             connect_commands::connect_prepare_session_fragmented_host,
             connect_commands::connect_prepare_session_fragmented_guest,
+            connect_commands::connect_retry_session_udp,
             connect_commands::connect_prepare_session_guest,
             connect_commands::connect_prepare_session_host_discovered,
             connect_commands::connect_snapshot,

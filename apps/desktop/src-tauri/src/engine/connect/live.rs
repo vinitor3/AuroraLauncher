@@ -10,6 +10,11 @@ use std::{
 };
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+#[path = "udp_recovery.rs"]
+mod udp_recovery;
+#[cfg(test)]
+#[path = "udp_recovery_tests.rs"]
+mod udp_recovery_tests;
 
 #[cfg(test)]
 #[path = "fragmented_desktop.rs"]
@@ -100,6 +105,9 @@ struct Attempt {
     session_deadline: Option<Instant>,
     admission_deadline: Option<Instant>,
     authority: Option<Authority>,
+    recovery: Option<udp_recovery::RecoveryControl>,
+    #[cfg(test)]
+    recovery_gate: Option<Arc<udp_recovery::TestGate>>,
 }
 #[derive(Default)]
 struct State {
@@ -244,6 +252,7 @@ fn update(state: &Mutex<State>, id: &str, change: impl FnOnce(&mut Attempt)) {
 }
 fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
     update(state, id, |a| {
+        udp_recovery::clear(a);
         a.snapshot.phase = if error.is_some() { "failed" } else { "closed" };
         a.snapshot.transport_state = "closed";
         a.snapshot.cleanup_state = "complete";
@@ -282,6 +291,7 @@ async fn close_operation(
 ) {
     update(state, id, |a| {
         a.snapshot.phase = "closing";
+        udp_recovery::clear(a);
         a.snapshot.cleanup_state = "pending";
     });
     cancel.cancel();
@@ -405,6 +415,9 @@ impl Manager {
             session_deadline: None,
             admission_deadline: None,
             authority: None,
+            recovery: None,
+            #[cfg(test)]
+            recovery_gate: None,
         });
         Ok(preparation)
     }
@@ -1052,6 +1065,7 @@ impl Manager {
             let mut state = lock(&self.state)?;
             let a = selected(&mut state, owner, id)?;
             a.cancel.cancel();
+            udp_recovery::clear(a);
             a.draft = None;
             a.reviewed = None;
             a.export = None;
@@ -1276,6 +1290,8 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                 return;
             };
             let mut udp_bridge = None;
+            let recoverable = matches!(invitation, Authority::SessionFragmented(_));
+            let (recovery_sender, mut recovery_receiver) = tokio::sync::mpsc::channel(1);
             if !cancel.is_cancelled()
                 && Instant::now() < deadline
                 && invitation.check_session().is_ok()
@@ -1287,6 +1303,11 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                         a.snapshot.tcp_address = Some(bridge.local_addr().to_string());
                         if invitation.is_fragmented() {
                             a.snapshot.udp = Some(FragmentedGuestState::starting());
+                        }
+                        if recoverable {
+                            a.recovery =
+                                Some(udp_recovery::RecoveryControl::new(recovery_sender, &guest));
+                            a.snapshot.udp_recovery = Some(UdpRecoveryState::default());
                         }
                     }
                 });
@@ -1318,6 +1339,27 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                         _=cancel.cancelled()=>break,
                         _=tokio::time::sleep_until(deadline.into())=>break,
                         _=guest.connection().closed()=>break,
+                        request=recovery_receiver.recv(), if recoverable=>{
+                            let Some(sequence)=request else { break; };
+                            if !udp_recovery::current(&state,&id,sequence) { break; }
+                            if let Some(udp)=udp_bridge.take() {
+                                let (_,interrupted)=await_udp_work(&guest,&cancel,deadline,||invitation.check_session().is_ok(),udp.shutdown()).await;
+                                drop(udp);
+                                if interrupted || !udp_recovery::current(&state,&id,sequence) { break; }
+                            }
+                            #[cfg(test)]
+                            let gate=state.lock().ok().and_then(|state|state.attempt.as_ref().and_then(|a|a.recovery_gate.clone()));
+                            if guest.connection().close_reason().is_some() || !udp_recovery::current(&state,&id,sequence) { break; }
+                            let setup=async {
+                                let result=fragmented_profile::open_guest_bridge(&guest).await;
+                                #[cfg(test)]
+                                if let Some(gate)=gate { gate.entered.notify_one(); gate.release.notified().await; }
+                                result
+                            };
+                            let ((opened,projection),interrupted)=await_udp_work(&guest,&cancel,deadline,||invitation.check_session().is_ok(),setup).await;
+                            udp_bridge=opened;
+                            if interrupted || !udp_recovery::complete(&state,&id,sequence,projection) { break; }
+                        }
                         _=tick.tick()=>{
                             if invitation.check_session().is_err() { break; }
                             let failure=udp_bridge.as_ref().and_then(|udp| {
@@ -1336,6 +1378,7 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
             cancel.cancel();
             update(&state, &id, |a| {
                 a.snapshot.phase = "closing";
+                udp_recovery::clear(a);
             });
             guest.shutdown().await;
             bridge.shutdown().await;

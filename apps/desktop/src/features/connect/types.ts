@@ -1,7 +1,7 @@
 import {
   FRAGMENTED_PROFILE, SESSION_FRAGMENTED_PROFILE, sessionFragmentedCapabilityFrom, fragmentedCapabilityFrom, fragmentedExportFieldsFrom, fragmentedPreparationFieldsFrom,
   fragmentedReviewFieldsFrom, fragmentedSnapshotFieldsFrom, type FragmentedGuestUdp, type FragmentedUdpCapability,
-  type FragmentedUdpContract, type FragmentedUdpReview, type SessionFragmentedUdpCapability,
+  type FragmentedUdpContract, type FragmentedUdpReview, type SessionFragmentedUdpCapability, type SessionUdpRecovery,
 } from "./fragmented-types";
 
 export type ConnectMode = "loopback" | "externalIpv6";
@@ -38,6 +38,7 @@ export type ConnectSnapshot = {
   cleanupState: "notStarted" | "pending" | "complete" | "failed";
   invitationProfile?: ConnectInvitationProfile; sessionTiming?: ConnectSessionTiming;
   fragmentedUdp?: FragmentedUdpContract;
+  udpRecovery?: SessionUdpRecovery;
 } & Partial<FragmentedGuestUdp>;
 export type ConnectPreparation = { operationId: string; generation: number; publicId: string; expiresAtMs: number; invitationProfile?: ConnectInvitationProfile };
 export type ConnectReview = {
@@ -102,7 +103,7 @@ const invalid = (): never => { throw new Error("Invalid Connect projection"); };
 const invitationProfile = (value: unknown) => value === undefined || value === "sessionGameTcp" || value === FRAGMENTED_PROFILE || value === SESSION_FRAGMENTED_PROFILE;
 const fragmentedProfile = (value: unknown): value is typeof FRAGMENTED_PROFILE | typeof SESSION_FRAGMENTED_PROFILE => value === FRAGMENTED_PROFILE || value === SESSION_FRAGMENTED_PROFILE;
 const noFragmentedFields = (value: Record<string, unknown>) => {
-  if (["fragmentedUdp", "udpState", "udpAddress", "udpErrorCode", "udpOriginalCapacity", "udpCapacityScope", "udpTarget"]
+  if (["fragmentedUdp", "udpState", "udpAddress", "udpErrorCode", "udpOriginalCapacity", "udpCapacityScope", "udpTarget", "udpRecovery"]
     .some(key => value[key] !== undefined)) invalid();
 };
 export const sameSessionTiming = (left: ConnectSessionTiming, right: ConnectSessionTiming) =>
@@ -126,6 +127,7 @@ export function sessionTimingFrom(value: unknown): ConnectSessionTiming {
 
 export function capabilitiesFrom(value: unknown): ConnectCapabilities {
   if (!record(value) || typeof value.available !== "boolean" || value.experimental !== true
+    || value.udpRecovery !== undefined
     || !(value.ownedInstanceDiscovery === undefined || typeof value.ownedInstanceDiscovery === "boolean")
     || value.maxLifetimeSeconds !== 600 || value.voiceEnabled !== false || value.relayEnabled !== false || !statusContract(value)
     || !Array.isArray(value.modes) || value.modes.length !== 2 || !value.modes.every(mode)

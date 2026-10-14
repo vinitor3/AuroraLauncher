@@ -26,7 +26,7 @@ fn request(
         session_seconds: session,
     }
 }
-async fn until(
+pub(super) async fn until(
     manager: &ConnectManager,
     accept: impl Fn(&ConnectSnapshot) -> bool,
 ) -> ConnectSnapshot {
@@ -43,7 +43,7 @@ async fn until(
     .await
     .unwrap()
 }
-async fn eof(stream: &mut TcpStream) {
+pub(super) async fn eof(stream: &mut TcpStream) {
     assert!(matches!(
         timeout(Duration::from_secs(3), stream.read(&mut [0]))
             .await
@@ -51,7 +51,7 @@ async fn eof(stream: &mut TcpStream) {
         Ok(0) | Err(_)
     ));
 }
-async fn transfer(stream: &mut TcpStream) {
+pub(super) async fn transfer(stream: &mut TcpStream) {
     timeout(Duration::from_secs(3), async {
         let data = vec![0x46; 65536];
         stream.write_all(&data).await.unwrap();
@@ -62,14 +62,14 @@ async fn transfer(stream: &mut TcpStream) {
     .await
     .unwrap();
 }
-struct Echo {
-    address: SocketAddr,
+pub(super) struct Echo {
+    pub(super) address: SocketAddr,
     closed: Arc<AtomicUsize>,
     cancel: CancellationToken,
     task: JoinHandle<()>,
 }
 impl Echo {
-    async fn new() -> Self {
+    pub(super) async fn new() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let closed = Arc::new(AtomicUsize::new(0));
@@ -110,23 +110,28 @@ impl Echo {
         .await
         .unwrap();
     }
-    async fn stop(self) {
+    pub(super) async fn stop(self) {
         self.cancel.cancel();
         self.task.await.unwrap();
         drop(std::net::TcpListener::bind(self.address).unwrap());
     }
 }
-struct Pair {
-    host: ConnectManager,
-    guest: ConnectManager,
-    host_id: String,
-    guest_id: String,
-    bind: SocketAddr,
-    tcp: SocketAddr,
-    timing: SessionTiming,
+pub(super) struct Pair {
+    pub(super) host: ConnectManager,
+    pub(super) guest: ConnectManager,
+    pub(super) host_id: String,
+    pub(super) guest_id: String,
+    pub(super) bind: SocketAddr,
+    pub(super) tcp: SocketAddr,
+    pub(super) timing: SessionTiming,
 }
 impl Pair {
-    async fn new(game: SocketAddr, udp: SocketAddr, admission: u16, session: u16) -> Self {
+    pub(super) async fn new(
+        game: SocketAddr,
+        udp: SocketAddr,
+        admission: u16,
+        session: u16,
+    ) -> Self {
         let held = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let bind = held.local_addr().unwrap();
         let host = ConnectManager::default();
@@ -218,18 +223,18 @@ impl Pair {
             timing,
         }
     }
-    async fn udp(&self, expected: UdpState) -> ConnectSnapshot {
+    pub(super) async fn udp(&self, expected: UdpState) -> ConnectSnapshot {
         until(&self.guest, |s| {
             s.udp.as_ref().is_some_and(|u| u.udp_state == expected)
         })
         .await
     }
-    async fn after_ingress(&self) {
+    pub(super) async fn after_ingress(&self) {
         while lab::unix_millis() <= self.timing.admission_expires_at_ms {
             sleep(Duration::from_millis(5)).await;
         }
     }
-    async fn stop(&self) {
+    pub(super) async fn stop(&self) {
         let (h, g) = tokio::join!(
             self.host.stop("main", &self.host_id),
             self.guest.stop("main", &self.guest_id)
@@ -242,7 +247,12 @@ impl Pair {
         drop(std::net::UdpSocket::bind(self.bind).unwrap());
     }
 }
-async fn datagram(source: &UdpSocket, endpoint: &UdpSocket, size: usize, tag: u8) -> SocketAddr {
+pub(super) async fn datagram(
+    source: &UdpSocket,
+    endpoint: &UdpSocket,
+    size: usize,
+    tag: u8,
+) -> SocketAddr {
     let payload = vec![tag; size];
     source.send_to(&payload, LOCAL_UDP_BIND).await.unwrap();
     let mut received = vec![0; 65536];
@@ -273,7 +283,7 @@ fn profile_capability_and_request_are_explicit_without_changing_previous_contrac
             "profile":"sessionFragmentedGameUdp","invitationSchemaVersion":3,"udpEnvelopeVersion":2,
             "approvedOriginalDatagramBytes":4096,"maxFragmentFrameBytes":1264,"localUdpBind":"127.0.0.1:35554",
             "udpReturnPolicy":{"type":"authorizedDownstream","bytesPerSecond":16384,"datagramsPerSecond":20},
-            "maxAdmissionSeconds":600,"maxSessionSeconds":3600,
+            "maxAdmissionSeconds":600,"maxSessionSeconds":3600,"udpRecovery":{"maxAttempts":3},
         })
     );
     let valid = json!({"mode":"loopback","bindAddress":"127.0.0.1:42000","gameTarget":"127.0.0.1:43001","udpTarget":"127.0.0.1:43002","admissionSeconds":600,"sessionSeconds":3600});

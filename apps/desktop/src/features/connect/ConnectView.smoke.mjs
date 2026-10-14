@@ -1068,3 +1068,238 @@ test("schema3 capability is exact, omitted by default and never creates operatio
   assert.deepEqual(calls.map(c => c.command), ["connect_capabilities"]);
   assert.equal(container.querySelector("form"), null);
 });
+
+const udpRecovery = { attemptsUsed: 0, maxAttempts: 3, pending: false };
+function failedRecoverableUdp() {
+  return { ...activeSessionFragmented("guest", { ...udpNotStarted, udpState: "failed", udpErrorCode: "connect_udp_setup_failed" }),
+    udpRecovery: { ...udpRecovery } };
+}
+function recoveryFixtures() {
+  sessionFragmentedFixtures();
+  capabilities.sessionFragmentedUdpInvitations = { ...sessionFragmentedCapability, udpRecovery: { maxAttempts: 3 } };
+  snapshot = failedRecoverableUdp();
+  handlers.set("connect_retry_session_udp", () => {
+    snapshot = { ...snapshot, generation: snapshot.generation + 1, ...udpNotStarted, udpState: "starting",
+      udpRecovery: { ...snapshot.udpRecovery, attemptsUsed: snapshot.udpRecovery.attemptsUsed + 1, pending: true } };
+    return structuredClone(snapshot);
+  });
+  handlers.set("connect_stop", () => {
+    snapshot = { ...snapshot, generation: snapshot.generation + 1, phase: "closed", transportState: "closed",
+      ...udpNotStarted, udpState: "closed", udpRecovery: { ...snapshot.udpRecovery, pending: false },
+      preparation: null, review: null, tcpAddress: null, cleanupState: "complete" };
+    return structuredClone(snapshot);
+  });
+}
+const hasRetryButton = () => [...container.querySelectorAll("button")].some(b => b.textContent === "Tentar UDP novamente");
+
+test("UDP recovery is a separate manual action preserving session authority, TCP and destination", async () => {
+  recoveryFixtures(); await render();
+  const originalTiming = structuredClone(snapshot.sessionTiming);
+  assert.equal(count("connect_retry_session_udp"), 0);
+  assert.match(container.textContent, /Novas tentativas UDP utilizadas: 0 de 3/);
+  await click("Atualizar estado"); assert.equal(count("connect_retry_session_udp"), 0);
+  await click("Tentar UDP novamente");
+  assert.deepEqual(calls.find(c => c.command === "connect_retry_session_udp").args, { operationId, expectedGeneration: 1 });
+  assert.equal(container.querySelector("#connect-local-address").value, "127.0.0.1:42123");
+  assert.deepEqual(snapshot.sessionTiming, originalTiming);
+  assert.match(container.textContent, /Novas tentativas UDP utilizadas: 1 de 3/);
+  assert.match(container.textContent, /Preparando novamente a ponte UDP/);
+  assert.equal(hasRetryButton(), false);
+  assert.equal(count("connect_prepare_session_fragmented_guest"), 0);
+  assert.equal(count("connect_confirm"), 0);
+  snapshot = { ...snapshot, generation: 3, ...udpAvailable, udpRecovery: { ...snapshot.udpRecovery, pending: false } };
+  await click("Atualizar estado");
+  assert.match(container.textContent, /Ponte UDP disponível/);
+  assert.equal(count("connect_retry_session_udp"), 1);
+  await click("Consultar servidor"); assert.match(container.textContent, /Servidor respondeu/);
+  assert.match(container.textContent, /isto não confirma áudio/);
+});
+
+test("UDP recovery permits exactly three additional manual attempts without automatic repeats", async () => {
+  recoveryFixtures(); await render();
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    assert.equal(hasRetryButton(), true); await click("Tentar UDP novamente");
+    assert.equal(count("connect_retry_session_udp"), attempt);
+    snapshot = { ...snapshot, generation: snapshot.generation + 1, ...udpNotStarted, udpState: "failed",
+      udpErrorCode: "connect_udp_setup_failed", udpRecovery: { ...snapshot.udpRecovery, pending: false } };
+    await click("Atualizar estado");
+    assert.equal(count("connect_retry_session_udp"), attempt);
+  }
+  assert.equal(hasRetryButton(), false);
+  assert.match(container.textContent, /limite de novas tentativas UDP desta sessão foi atingido/);
+  assert.equal(button("Consultar servidor").disabled, false);
+  assert.equal(count("connect_stop"), 0);
+  assert.equal(container.querySelector("#connect-local-address").value, "127.0.0.1:42123");
+});
+
+test("UDP recovery uses admitted session expiry after admission has already elapsed", async () => {
+  recoveryFixtures(); const admissionExpiresAtMs = Date.now() - 1000;
+  snapshot = { ...snapshot, sessionTiming: { ...sessionFragmentedTiming, admissionExpiresAtMs, sessionExpiresAtMs: admissionExpiresAtMs + 3000000 },
+    expiresAtMs: admissionExpiresAtMs + 3000000 };
+  await render(); assert.equal(hasRetryButton(), true); await click("Tentar UDP novamente");
+  assert.equal(count("connect_retry_session_udp"), 1);
+  assert.equal(snapshot.sessionTiming.admissionExpiresAtMs, admissionExpiresAtMs);
+  assert.equal(snapshot.sessionTiming.sessionExpiresAtMs, admissionExpiresAtMs + 3000000);
+});
+
+test("UDP recovery cannot be requested after the observed absolute session deadline", async () => {
+  recoveryFixtures(); const sessionExpiresAtMs = Date.now() - 1000;
+  snapshot = { ...snapshot, expiresAtMs: sessionExpiresAtMs,
+    sessionTiming: { ...sessionFragmentedTiming, admissionExpiresAtMs: sessionExpiresAtMs - 3000000, sessionExpiresAtMs } };
+  await render(); assert.equal(hasRetryButton(), false); await click("Atualizar estado");
+  assert.equal(count("connect_retry_session_udp"), 0);
+});
+
+test("lost UDP recovery IPC outcome waits for observation and never submits a replacement", async () => {
+  recoveryFixtures();
+  handlers.set("connect_retry_session_udp", () => {
+    snapshot = { ...snapshot, generation: 2, ...udpNotStarted, udpState: "starting",
+      udpRecovery: { attemptsUsed: 1, maxAttempts: 3, pending: true } };
+    return Promise.reject("PRIVATE_LOST_IPC_REPLY");
+  });
+  await render(); await click("Tentar UDP novamente");
+  assert.match(container.textContent, /Aguardando confirmar o estado da tentativa UDP/);
+  assert.equal(button("Tentar UDP novamente").disabled, true);
+  assert.doesNotMatch(container.textContent, /PRIVATE_LOST_IPC_REPLY/);
+  assert.equal(count("connect_retry_session_udp"), 1);
+  await click("Atualizar estado");
+  assert.match(container.textContent, /Preparando novamente a ponte UDP/);
+  assert.equal(hasRetryButton(), false);
+  assert.doesNotMatch(container.textContent, /Aguardando confirmar o estado/);
+  await act(async () => root.unmount()); root = createRoot(container); await render();
+  assert.equal(count("connect_retry_session_udp"), 1, "Remount must only observe the accepted request");
+  snapshot = { ...snapshot, generation: 3, ...udpAvailable, udpRecovery: { ...snapshot.udpRecovery, pending: false } };
+  await click("Atualizar estado"); assert.equal(count("connect_retry_session_udp"), 1);
+  assert.match(container.textContent, /Ponte UDP disponível/);
+});
+
+test("unknown UDP recovery outcome remains blocked while snapshot reads fail", async () => {
+  recoveryFixtures(); await render();
+  handlers.set("connect_retry_session_udp", () => Promise.reject("PRIVATE_REQUEST_FAILURE"));
+  handlers.set("connect_snapshot", () => Promise.reject("PRIVATE_SNAPSHOT_FAILURE"));
+  await click("Tentar UDP novamente"); await click("Atualizar estado");
+  assert.equal(button("Tentar UDP novamente").disabled, true);
+  assert.equal(count("connect_retry_session_udp"), 1);
+  assert.doesNotMatch(container.textContent, /PRIVATE_REQUEST_FAILURE|PRIVATE_SNAPSHOT_FAILURE/);
+  handlers.delete("connect_snapshot"); await click("Atualizar estado");
+  assert.equal(button("Tentar UDP novamente").disabled, false, "An observed unchanged state permits another user action, not an automatic repeat");
+  assert.equal(count("connect_retry_session_udp"), 1);
+});
+
+test("stale or invalid UDP recovery observations cannot resolve an unknown IPC outcome", async () => {
+  recoveryFixtures(); snapshot = { ...snapshot, generation: 5 }; await render();
+  handlers.set("connect_retry_session_udp", () => Promise.reject("PRIVATE_UNKNOWN_OUTCOME"));
+  await click("Tentar UDP novamente");
+  for (const observed of [{ ...snapshot, generation: 4 },
+    { ...snapshot, generation: 6, udpRecovery: { attemptsUsed: 4, maxAttempts: 3, pending: false } }]) {
+    handlers.set("connect_snapshot", () => observed); await click("Atualizar estado");
+    assert.equal(button("Tentar UDP novamente").disabled, true);
+    assert.equal(count("connect_retry_session_udp"), 1);
+  }
+  handlers.delete("connect_snapshot"); await click("Atualizar estado");
+  assert.equal(button("Tentar UDP novamente").disabled, false);
+  assert.equal(count("connect_retry_session_udp"), 1);
+  await click("Tentar UDP novamente");
+  assert.equal(count("connect_retry_session_udp"), 2, "Only this second user click resubmits the idempotent generation");
+  assert.deepEqual(calls.filter(c => c.command === "connect_retry_session_udp").map(c => c.args),
+    [{ operationId, expectedGeneration: 5 }, { operationId, expectedGeneration: 5 }]);
+});
+
+test("stop supersedes pending UDP recovery and rejects its late successful response", async () => {
+  recoveryFixtures(); let complete;
+  handlers.set("connect_retry_session_udp", () => new Promise(resolve => { complete = resolve; }));
+  await render(); await click("Tentar UDP novamente");
+  assert.equal(button("Tentar UDP novamente").disabled, true);
+  // Even an event dispatched past native disabled-button behavior cannot cause
+  // a second submission while the original command remains unresolved.
+  await act(async () => button("Tentar UDP novamente").dispatchEvent(new window.Event("click", { bubbles: true })));
+  assert.equal(count("connect_retry_session_udp"), 1);
+  await click("Encerrar Connect");
+  await act(async () => complete({ ...activeSessionFragmented("guest", udpAvailable), generation: 99,
+    udpRecovery: { attemptsUsed: 1, maxAttempts: 3, pending: false } }));
+  assert.match(container.textContent, /Recursos liberados/);
+  assert.doesNotMatch(container.textContent, /Ponte UDP disponível/);
+  assert.equal(hasRetryButton(), false);
+  assert.equal(container.querySelector("#connect-local-address"), null);
+});
+
+test("mismatched UDP recovery response cannot change operation, TCP address or signed timing", async () => {
+  recoveryFixtures(); await render();
+  const original = structuredClone(snapshot);
+  for (const delta of [{ operationId: "another-operation" }, { tcpAddress: "127.0.0.1:49999" },
+    { sessionTiming: { ...sessionFragmentedTiming, admissionExpiresAtMs: sessionFragmentedTiming.admissionExpiresAtMs + 1000,
+      sessionExpiresAtMs: sessionFragmentedTiming.sessionExpiresAtMs + 1000 }, expiresAtMs: sessionFragmentedTiming.sessionExpiresAtMs + 1000 }]) {
+    handlers.set("connect_retry_session_udp", () => ({ ...original, generation: 2, ...udpNotStarted, udpState: "starting",
+      udpRecovery: { attemptsUsed: 1, maxAttempts: 3, pending: true }, ...delta }));
+    await click("Tentar UDP novamente");
+    assert.equal(container.querySelector("#connect-local-address").value, "127.0.0.1:42123");
+    assert.match(container.textContent, /Não foi possível concluir/);
+    assert.equal(button("Tentar UDP novamente").disabled, true);
+    await click("Atualizar estado");
+  }
+  assert.equal(count("connect_retry_session_udp"), 3);
+  assert.doesNotMatch(container.textContent, /49999|another-operation/);
+});
+
+test("UDP recovery capability absent, old profiles and non-failed states never offer retry", async () => {
+  sessionFragmentedFixtures(); snapshot = failedRecoverableUdp(); await render();
+  assert.equal(hasRetryButton(), false, "Schema3 implementation62 has no retry capability");
+  await act(async () => root.unmount()); root = createRoot(container);
+  recoveryFixtures(); snapshot = activeFragmented("guest", { ...udpNotStarted, udpState: "failed", udpErrorCode: "connect_udp_setup_failed" });
+  await render(); assert.equal(hasRetryButton(), false);
+  for (const next of [activeSessionFragmented("host"), activeSessionFragmented("guest", udpAvailable),
+    { ...activeSessionFragmented(), udpRecovery },
+    { ...failedRecoverableUdp(), ...udpNotStarted, udpState: "closed", udpErrorCode: "connect_udp_closed" },
+    { ...failedRecoverableUdp(), phase: "closing", udpRecovery: { ...udpRecovery, attemptsUsed: 1 }, cleanupState: "pending" }]) {
+    snapshot = next; await click("Atualizar estado"); assert.equal(hasRetryButton(), false);
+  }
+  assert.equal(count("connect_retry_session_udp"), 0);
+});
+
+test("UDP recovery strict projection rejects malformed counts, cross-profile scope and contradictory pending states", () => {
+  const active = failedRecoverableUdp();
+  assert.deepEqual(types.snapshotFrom(active).udpRecovery, udpRecovery);
+  for (const malformed of [null, [], {}, { ...udpRecovery, attemptsUsed: -1 }, { ...udpRecovery, attemptsUsed: 0.5 },
+    { ...udpRecovery, attemptsUsed: 4 }, { ...udpRecovery, maxAttempts: 4 }, { ...udpRecovery, pending: "false" },
+    { ...udpRecovery, unknown: true }, { ...udpRecovery, pending: true }]) {
+    assert.throws(() => types.snapshotFrom({ ...active, udpRecovery: malformed }));
+  }
+  for (const misplaced of [idle(), preparedSessionFragmented("guest"), reviewedSessionFragmented("guest"),
+    activeSessionFragmented("host"), activeSession(), activeFragmented("guest"),
+    { ...active, role: "host" }, { ...active, tcpAddress: null }, { ...active, tcpAddress: "192.168.1.10:42123" },
+    { ...active, transportState: "closed" }, { ...active, phase: "starting" }]) {
+    assert.throws(() => types.snapshotFrom({ ...misplaced, udpRecovery }));
+  }
+  for (const impossible of [
+    { ...active, udpState: "failed", udpRecovery: { attemptsUsed: 1, maxAttempts: 3, pending: true } },
+    { ...active, ...udpNotStarted, udpState: "starting", udpRecovery: { attemptsUsed: 1, maxAttempts: 3, pending: false } },
+    { ...active, phase: "closing", ...udpNotStarted, udpState: "starting", udpRecovery: { attemptsUsed: 1, maxAttempts: 3, pending: true } },
+    { ...active, phase: "closed", tcpAddress: null, transportState: "closed", udpRecovery },
+  ]) assert.throws(() => types.snapshotFrom(impossible));
+  const closing = { ...active, phase: "closing", ...udpNotStarted, udpState: "starting",
+    udpRecovery: { attemptsUsed: 1, maxAttempts: 3, pending: false }, cleanupState: "pending" };
+  assert.deepEqual(types.snapshotFrom(closing), closing);
+  const closed = { ...closing, phase: "closed", udpState: "closed", transportState: "closed", tcpAddress: null, cleanupState: "complete" };
+  assert.deepEqual(types.snapshotFrom(closed), closed);
+  for (const base of [review, sessionReview, fragmentedReview, reviewedSessionFragmented().review]) {
+    assert.throws(() => types.reviewFrom({ ...base, udpRecovery }));
+  }
+  for (const base of [preparation, sessionPreparation, fragmentedPreparation, preparedSessionFragmented().preparation]) {
+    assert.throws(() => types.preparationFrom({ ...base, udpRecovery }));
+  }
+  for (const base of [sessionExport, fragmentedExport, sessionFragmentedExport]) assert.throws(() => types.exportFrom({ ...base, udpRecovery }));
+  assert.throws(() => types.sessionTimingFrom({ ...sessionFragmentedTiming, udpRecovery }));
+});
+
+test("UDP recovery capability permits only an exact optional max-three local policy", () => {
+  const capable = { ...sessionFragmentedCapability, udpRecovery: { maxAttempts: 3 } };
+  assert.deepEqual(types.capabilitiesFrom({ ...caps, sessionFragmentedUdpInvitations: capable }).sessionFragmentedUdpInvitations, capable);
+  assert.deepEqual(types.capabilitiesFrom({ ...caps, sessionFragmentedUdpInvitations: sessionFragmentedCapability }).sessionFragmentedUdpInvitations,
+    sessionFragmentedCapability, "Older schema3 capability remains readable without enabling recovery");
+  for (const malformed of [null, [], {}, { maxAttempts: 0 }, { maxAttempts: 3.5 }, { maxAttempts: 4 }, { maxAttempts: 3, automatic: true }]) {
+    assert.throws(() => types.capabilitiesFrom({ ...caps, sessionFragmentedUdpInvitations: { ...sessionFragmentedCapability, udpRecovery: malformed } }));
+  }
+  assert.throws(() => types.capabilitiesFrom({ ...caps, udpRecovery: { maxAttempts: 3 } }));
+  assert.throws(() => types.capabilitiesFrom({ ...caps, sessionInvitations: { ...sessionCapability, udpRecovery: { maxAttempts: 3 } } }));
+  assert.throws(() => types.capabilitiesFrom({ ...caps, fragmentedUdpInvitations: { ...fragmentedCapability, udpRecovery: { maxAttempts: 3 } } }));
+});

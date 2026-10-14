@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 14/10/2026
 
+Incremento63/003/005/008 acrescenta recuperação manual de UDP somente dentro da sessão schema3 admitida: até três tentativas adicionais, fila limitada, mesma autorização e TCP preservado. [Contrato e evidências63](../../aurora-connect-desktop-udp-recovery.md). **PROTÓTIPO**; avanço local da parte de transporte do T-MIX-03 não conclui reconexão de áudio/credencial/rota de mod, rede externa ou estabilidade. Sem nova configuração, porta, identidade, prazo ou retry automático; demais fases e testes permanecem.
+
 Incremento62/003/005/008 integra61 ao caller/painel com perfil explícito, destino UDP manual, ingresso e sessão independentes e falha UDP preservando TCP. [Contrato e evidências62](../../aurora-connect-desktop-fragmented-session.md). **PROTÓTIPO**, desligado por padrão. CLI/Node e perfis anteriores conservam seus contratos; testes DOM/nativos não concluem GUI, estabilidade1h, T-VOICE, T-MC ou convites entre redes. Anúncio/configuração60 permanece independente, sem inferir mod pela porta.
 
 Incremento61/003/005/008 acrescenta sessão TCP+UDP com ingresso separado por APIs explícitas de schema3, mantendo schema2/gameTCP e schema1 anteriores. Autoridade original é conferida também nas fronteiras UDP, antes da execução do watcher. [Contrato e evidências61](../../aurora-connect-fragmented-session.md). **PROTÓTIPO**; ainda não integra este perfil ao desktop, CLI ou Node e não conclui estabilidade prolongada, rede externa, Minecraft ou áudio. Testes locais independentes continuam; novo ensaio entre PCs será preparado quando as máquinas estiverem disponíveis.

@@ -5,6 +5,7 @@ mod fragmented_profile;
 pub use fragmented_profile::{
     FragmentedGuestState, FragmentedHostRequest, FragmentedUdpCapabilities, FragmentedUdpContract,
     FragmentedUdpReview, SessionFragmentedHostRequest, SessionFragmentedUdpCapabilities,
+    UdpRecoveryCapabilities, UdpRecoveryState,
 };
 
 #[cfg(feature = "connect-lab")]
@@ -183,6 +184,8 @@ pub struct ConnectSnapshot {
     pub fragmented_udp: Option<FragmentedUdpContract>,
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     pub udp: Option<FragmentedGuestState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub udp_recovery: Option<UdpRecoveryState>,
 }
 impl ConnectSnapshot {
     fn idle() -> Self {
@@ -210,6 +213,7 @@ impl ConnectSnapshot {
             session_timing: None,
             fragmented_udp: None,
             udp: None,
+            udp_recovery: None,
         }
     }
 }
@@ -270,6 +274,23 @@ pub struct ConnectManager {
     live: live::Manager,
 }
 impl ConnectManager {
+    pub fn retry_session_udp(
+        &self,
+        owner: &str,
+        operation_id: &str,
+        expected_generation: u64,
+    ) -> Result<ConnectSnapshot, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live
+                .retry_session_udp(owner, operation_id, expected_generation)
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, operation_id, expected_generation);
+            Err(ConnectError::Disabled)
+        }
+    }
     pub fn capabilities(&self) -> ConnectCapabilities {
         ConnectCapabilities {
             available: cfg!(feature = "connect-lab"),
@@ -557,6 +578,14 @@ mod disabled_tests {
         assert!(caps.get("sessionInvitations").is_none());
         assert!(caps.get("fragmentedUdpInvitations").is_none());
         assert!(caps.get("sessionFragmentedUdpInvitations").is_none());
+        assert!(serde_json::to_value(manager.snapshot("main").unwrap())
+            .unwrap()
+            .get("udpRecovery")
+            .is_none());
+        assert!(matches!(
+            manager.retry_session_udp("main", "none", 0),
+            Err(ConnectError::Disabled)
+        ));
         assert!(matches!(
             manager.prepare_session_fragmented_host(
                 "main",

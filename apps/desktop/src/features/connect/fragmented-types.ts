@@ -18,7 +18,8 @@ export type FragmentedUdpContract = FragmentedUdpCommon & (
   | { profile: typeof SESSION_FRAGMENTED_PROFILE; invitationSchemaVersion: 3 }
 );
 export type FragmentedUdpCapability = FragmentedUdpCommon & { profile: typeof FRAGMENTED_PROFILE; invitationSchemaVersion: 1; maxLifetimeSeconds: typeof FRAGMENTED_LIFETIME_SECONDS };
-export type SessionFragmentedUdpCapability = FragmentedUdpCommon & { profile: typeof SESSION_FRAGMENTED_PROFILE; invitationSchemaVersion: 3; maxAdmissionSeconds: 600; maxSessionSeconds: 3600 };
+export type SessionFragmentedUdpCapability = FragmentedUdpCommon & { profile: typeof SESSION_FRAGMENTED_PROFILE; invitationSchemaVersion: 3; maxAdmissionSeconds: 600; maxSessionSeconds: 3600; udpRecovery?: { maxAttempts: 3 } };
+export type SessionUdpRecovery = { attemptsUsed: number; maxAttempts: 3; pending: boolean };
 export type FragmentedUdpReview = FragmentedUdpContract & { udpTarget: string | null };
 export type FragmentedUdpState = "notStarted" | "starting" | "available" | "failed" | "closed";
 export type FragmentedUdpError = "connect_udp_setup_failed" | "connect_udp_capacity_unavailable" | "connect_udp_closed";
@@ -74,9 +75,29 @@ export function fragmentedCapabilityFrom(value: unknown): FragmentedUdpCapabilit
   return checked as FragmentedUdpCapability;
 }
 export function sessionFragmentedCapabilityFrom(value: unknown): SessionFragmentedUdpCapability {
-  const checked = contract(value, ["maxAdmissionSeconds", "maxSessionSeconds"], SESSION_FRAGMENTED_PROFILE);
+  const recovery = record(value) && Object.hasOwn(value, "udpRecovery");
+  const checked = contract(value, ["maxAdmissionSeconds", "maxSessionSeconds", ...(recovery ? ["udpRecovery"] : [])], SESSION_FRAGMENTED_PROFILE);
   if (checked.maxAdmissionSeconds !== 600 || checked.maxSessionSeconds !== 3600) return invalid();
+  if (recovery && (!exact(checked.udpRecovery, ["maxAttempts"]) || checked.udpRecovery.maxAttempts !== 3)) return invalid();
   return checked as SessionFragmentedUdpCapability;
+}
+/** A local recovery projection never extends the signed transport authority. */
+export function sessionUdpRecoveryFrom(value: unknown): SessionUdpRecovery | undefined {
+  if (!record(value)) return invalid();
+  if (!Object.hasOwn(value, "udpRecovery")) return undefined;
+  const recovery = value.udpRecovery;
+  if (!exact(recovery, ["attemptsUsed", "maxAttempts", "pending"])
+    || !integer(recovery.attemptsUsed) || recovery.attemptsUsed > 3 || recovery.maxAttempts !== 3
+    || typeof recovery.pending !== "boolean" || value.invitationProfile !== SESSION_FRAGMENTED_PROFILE || value.role !== "guest"
+    || !["guestConnected", "closing", "closed", "failed"].includes(value.phase as string)
+    || value.sessionTiming === undefined || value.fragmentedUdp === undefined) return invalid();
+  if (value.phase === "guestConnected" && (value.transportState !== "authenticated" || !isLoopbackUdpTarget(value.tcpAddress)
+    || value.udpState === "notStarted")) return invalid();
+  if (recovery.pending && (recovery.attemptsUsed === 0 || value.phase !== "guestConnected" || value.udpState !== "starting")) return invalid();
+  if (value.phase === "guestConnected" && value.udpState === "starting" && recovery.attemptsUsed > 0 && !recovery.pending) return invalid();
+  if (value.phase === "closed" && value.udpState !== "closed") return invalid();
+  if (value.phase === "failed" && !["closed", "failed"].includes(value.udpState as string)) return invalid();
+  return recovery as SessionUdpRecovery;
 }
 export function isFragmentedLifetime(value: unknown): value is number {
   return integer(value) && value >= 1 && value <= FRAGMENTED_LIFETIME_SECONDS;
@@ -90,7 +111,7 @@ export function isLoopbackUdpTarget(value: unknown): value is string {
 }
 export function fragmentedPreparationFieldsFrom(value: unknown, profile: FragmentedProfile = FRAGMENTED_PROFILE): { invitationProfile: FragmentedProfile } {
   if (!record(value) || value.invitationProfile !== profile || value.fragmentedUdp !== undefined
-    || value.udpTarget !== undefined || UDP_KEYS.some(key => value[key] !== undefined)) return invalid();
+    || value.udpTarget !== undefined || value.udpRecovery !== undefined || UDP_KEYS.some(key => value[key] !== undefined)) return invalid();
   noSession(value);
   return value as { invitationProfile: FragmentedProfile };
 }
@@ -99,7 +120,7 @@ export function fragmentedReviewFieldsFrom(value: unknown, profile: FragmentedPr
     || !["loopback", "externalIpv6"].includes(value.mode as string)
     || !(profile === FRAGMENTED_PROFILE ? isFragmentedLifetime(value.lifetimeSeconds) : integer(value.lifetimeSeconds) && value.lifetimeSeconds >= 1 && value.lifetimeSeconds <= 600)
     || !integer(value.expiresAtMs) || !integer(value.invitationExpiresAtMs) || value.expiresAtMs > value.invitationExpiresAtMs
-    || !Array.isArray(value.services) || value.services.length !== 2 || value.udpTarget !== undefined
+    || !Array.isArray(value.services) || value.services.length !== 2 || value.udpTarget !== undefined || value.udpRecovery !== undefined
     || UDP_KEYS.some(key => value[key] !== undefined)) return invalid();
   profileTiming(value, profile);
   if (profile === SESSION_FRAGMENTED_PROFILE && record(value.sessionTiming)
@@ -121,7 +142,7 @@ export function fragmentedReviewFieldsFrom(value: unknown, profile: FragmentedPr
 }
 export function fragmentedExportFieldsFrom(value: unknown, profile: FragmentedProfile = FRAGMENTED_PROFILE): FragmentedUdpContract {
   if (!record(value) || value.invitationProfile !== undefined || !integer(value.expiresAtMs)
-    || value.udpTarget !== undefined || UDP_KEYS.some(key => value[key] !== undefined)) return invalid();
+    || value.udpTarget !== undefined || value.udpRecovery !== undefined || UDP_KEYS.some(key => value[key] !== undefined)) return invalid();
   profileTiming(value, profile);
   if (profile === SESSION_FRAGMENTED_PROFILE && record(value.sessionTiming) && value.expiresAtMs !== value.sessionTiming.admissionExpiresAtMs) return invalid();
   return fragmentedContractFrom(value.fragmentedUdp, profile);
@@ -132,6 +153,7 @@ export function fragmentedGuestUdpFrom(value: unknown, profile: FragmentedProfil
     || !["notStarted", "starting", "available", "failed", "closed"].includes(value.udpState as string)
     || !(value.udpErrorCode === null || UDP_ERRORS.includes(value.udpErrorCode as FragmentedUdpError))) return invalid();
   profileTiming(value, profile, false);
+  sessionUdpRecoveryFrom(value);
   if (value.udpState === "available") {
     if (value.udpAddress !== FRAGMENTED_UDP_BIND || value.udpOriginalCapacity !== 4096
       || value.udpCapacityScope !== "initialAssociation" || value.udpErrorCode !== null) return invalid();
@@ -146,6 +168,7 @@ export function fragmentedSnapshotFieldsFrom(value: unknown, profile: Fragmented
   if (!record(value) || value.invitationProfile !== profile || !["host", "guest"].includes(value.role as string)
     || !PHASES.includes(value.phase as string) || value.udpTarget !== undefined) return invalid();
   profileTiming(value, profile, ["reviewed", "starting", "hostListening", "guestConnected"].includes(value.phase as string));
+  sessionUdpRecoveryFrom(value);
   if (["hostPrepared", "hostListening"].includes(value.phase as string) && value.role !== "host") return invalid();
   if (["guestPrepared", "guestConnected"].includes(value.phase as string) && value.role !== "guest") return invalid();
   const prepared = value.phase === "hostPrepared" || value.phase === "guestPrepared";

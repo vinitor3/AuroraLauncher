@@ -17,6 +17,18 @@ fn owner(window: &WebviewWindow) -> Result<&str, &'static str> {
 }
 
 #[tauri::command]
+pub fn connect_retry_session_udp(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    operation_id: String,
+    expected_generation: u64,
+) -> Result<ConnectSnapshot, &'static str> {
+    manager
+        .retry_session_udp(owner(&window)?, &operation_id, expected_generation)
+        .map_err(|error| error.code())
+}
+
+#[tauri::command]
 pub fn connect_prepare_session_fragmented_host(
     window: WebviewWindow,
     manager: State<'_, ConnectManager>,
