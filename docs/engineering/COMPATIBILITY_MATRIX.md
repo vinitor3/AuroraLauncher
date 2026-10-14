@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 14/10/2026
 
+Incremento68: painel permite salvar e retomar recibos seletivos, com estados de persistência comprovada/incerta e nova aprovação. [Contrato68](../aurora-connect-desktop-durable-voice.md). **PROTÓTIPO**, com provas locais de arquivo e DOM; áudio SVC/Plasmo, GUI e nove pares permanecem nos gates anteriores.
+
 Incremento67: recibos duráveis e retomada segura de restauração em cópias diagnósticas, com provas independentes SVC/Plasmo de arquivo e Recovery. [Contrato67](../aurora-connect-durable-voice-receipts.md). **PROTÓTIPO**; sem áudio, JVM, rede externa ou promoção de qualquer um dos nove pares.
 
 Incremento66: IPv4 explícito disponível no painel/caller experimental dos quatro perfis. [Contrato e provas66](../aurora-connect-desktop-ipv4.md). **PROTÓTIPO**, off por padrão; não promove homologação de redes externas, GUI, jogo, áudio ou qualquer par Core/Skins.

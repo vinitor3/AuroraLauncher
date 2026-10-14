@@ -1,9 +1,9 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { MODS, uuid, voiceCapabilitiesFrom, voiceDate, voiceError, voiceSnapshotFrom, type VoiceCapabilities, type VoiceSnapshot } from "./types";
+import { MODS, uuid, voiceCapabilitiesFrom, voiceDate, voiceError, voiceReceiptListFrom, voiceSnapshotFrom, type VoiceCapabilities, type VoiceReceiptList, type VoiceSnapshot } from "./types";
 
-type Command = "inspect" | "prepare_apply" | "confirm" | "prepare_restore" | "prepare_restore_reconciled" | "cancel_review" | "begin_close" | "cancel_close" | "confirm_close" | "finish_close";
+type Command = "inspect" | "prepare_apply" | "prepare_apply_durable" | "resume_receipt" | "confirm" | "prepare_restore" | "prepare_restore_reconciled" | "cancel_review" | "begin_close" | "cancel_close" | "confirm_close" | "finish_close";
 type Navigate = (instanceId: string, target: "voice" | "recovery") => void;
 type PendingLogoutTransition = {
   kind: "confirm" | "cancel"; closeId: string; operationId: string | null;
@@ -16,6 +16,7 @@ export type VoiceAnnouncementController = {
   isBlocking: () => boolean;
   run: (command: Command, request: Record<string, unknown>) => Promise<VoiceSnapshot>;
   refresh: () => Promise<VoiceSnapshot>;
+  listReceipts: (instanceId: string) => Promise<VoiceReceiptList>;
   beginPanelClose: () => Promise<void>;
   prepareLogout: () => Promise<string | null | false>;
   finishLogout: (closeId: string | null) => Promise<void>;
@@ -78,6 +79,7 @@ export function VoiceAnnouncementProvider({ children }: { children: ReactNode })
     catch { if (mounted.current) { setValid(false); setError(voiceError(null)); } throw new Error("voice_internal"); }
   }, [accept]);
   const run = useCallback(async (command: Command, request: Record<string, unknown>) => {
+    if ((command === "prepare_apply_durable" || command === "resume_receipt") && !capabilities?.durableReceipts) throw new Error("voice_unavailable");
     // Close is deliberately allowed while a file worker runs: native quiesce
     // waits for it and incorporates its result. Never abort the command promise.
     if (calls.current && command !== "begin_close" && command !== "cancel_close") throw new Error("voice_busy");
@@ -89,7 +91,22 @@ export function VoiceAnnouncementProvider({ children }: { children: ReactNode })
       await refresh().catch(() => undefined);
       throw new Error(typeof cause === "string" ? voiceError(cause) : voiceError(null));
     } finally { calls.current -= 1; if (mounted.current) setPendingCount(calls.current); }
-  }, [accept, refresh]);
+  }, [accept, refresh, capabilities]);
+  const listReceipts = useCallback(async (instanceId: string) => {
+    if (!capabilities?.durableReceipts || calls.current || current.current?.busy || current.current?.close
+      || (current.current?.operationId && current.current.phase !== "closed")) throw new Error("voice_busy");
+    calls.current += 1;
+    if (mounted.current) { setPendingCount(calls.current); setError(""); }
+    try {
+      const result = voiceReceiptListFrom(await invoke("voice_announcement_list_receipts", { request: { instanceId } }));
+      if (result.instanceId !== instanceId) throw new Error("voice_context_changed");
+      return result;
+    } catch (cause) {
+      if (mounted.current) setError(voiceError(cause));
+      await refresh().catch(() => undefined);
+      throw new Error("voice_internal");
+    } finally { calls.current -= 1; if (mounted.current) setPendingCount(calls.current); }
+  }, [capabilities, refresh]);
 
   useEffect(() => {
     mounted.current = true;
@@ -226,7 +243,7 @@ export function VoiceAnnouncementProvider({ children }: { children: ReactNode })
   const pending = pendingCount > 0;
   const controller: VoiceAnnouncementController = {
     capabilities, snapshot, error, valid, pending, blocking: pending || !!snapshot?.busy || !!closing,
-    run, refresh, beginPanelClose, prepareLogout, finishLogout, registerNavigator, navigate, isBlocking,
+    run, refresh, listReceipts, beginPanelClose, prepareLogout, finishLogout, registerNavigator, navigate, isBlocking,
   };
   return <Context.Provider value={controller}>
     {children}
@@ -234,12 +251,14 @@ export function VoiceAnnouncementProvider({ children }: { children: ReactNode })
       <header><h2 id="voice-close-title">{closing?.state === "waiting" ? "Aguardando a operação de arquivos" : resumableReady ? "Fechamento registrado" : "Sair mantendo a alteração na cópia?"}</h2></header>
       <div className="recovery-review-body">
         {orphanLogout && <p role="status">O pedido de saída da conta foi interrompido. Retome o trabalho e, se desejar sair, faça um novo pedido.</p>}
-        {closing?.state === "waiting" ? <p>O launcher aguardará a operação iniciada e mostrará seu resultado antes de sair.</p> : closing?.state === "ready" ? <p>O fechamento já foi autorizado; o recibo não está mais disponível. Retomar libera a interface sem alterar arquivos ou sair da conta.</p> : <>
+        {closing?.state === "waiting" ? <p>O launcher aguardará a operação iniciada e mostrará seu resultado antes de sair.</p> : closing?.state === "ready" ? <p>{snapshot?.durableReceipt?.state === "saved" ? "O fechamento já foi autorizado; o recibo salvo permanece no histórico da cópia." : snapshot?.durableReceipt?.state === "uncertain" ? "O fechamento já foi autorizado; a operação ainda exige verificação na Recuperação." : "O fechamento já foi autorizado; o recibo não está mais disponível."} Retomar libera a interface sem alterar arquivos ou sair da conta.</p> : <>
           <p>Cópia: <strong>{snapshot?.instanceId}</strong> · {snapshot?.voiceMod ? MODS[snapshot.voiceMod].name : ""}</p>
-          <p>A configuração permanecerá como está. Sair descarta a restauração seletiva que existe somente na memória deste processo. Nenhuma restauração será feita automaticamente.</p>
-          <p>A Recuperação mantém seu próprio histórico e pode tratar operações interrompidas; ela não recria este recibo.</p>
+          {closing?.review?.durableReceipt?.state === "saved" ? <p>A configuração permanecerá como está. O recibo salvo fica no histórico desta cópia para uma retomada explícita, com nova verificação e aprovação. Nenhuma restauração será feita automaticamente.</p>
+            : closing?.review?.durableReceipt?.state === "uncertain" ? <p>O resultado da alteração precisa ser verificado na Recuperação. A existência de um recibo utilizável ainda não está confirmada. Nenhuma restauração será feita automaticamente.</p>
+            : <><p>A configuração permanecerá como está. Sair descarta a restauração seletiva que existe somente na memória deste processo. Nenhuma restauração será feita automaticamente.</p>
+              <p>A Recuperação mantém seu próprio histórico e pode tratar operações interrompidas; ela não recria este recibo.</p></>}
           {closing?.review ? <><p>Revisão válida até {voiceDate(closing.review.expiresAtMs)}.</p>
-            <label><input aria-label="Aceito perder o recibo de restauração" type="checkbox" checked={consent} disabled={pending || !valid || orphanLogout || now >= closing.review.expiresAtMs} onChange={event => setConsent(event.target.checked)} />Entendi que a cópia continuará alterada e que perderei este recibo.</label>
+            <label><input aria-label={closing.review.durableReceipt ? "Autorizo sair mantendo a configuração" : "Aceito perder o recibo de restauração"} type="checkbox" checked={consent} disabled={pending || !valid || orphanLogout || now >= closing.review.expiresAtMs} onChange={event => setConsent(event.target.checked)} />{closing.review.durableReceipt?.state === "saved" ? "Entendi que a cópia continuará alterada e que restaurar exige retomar o recibo e aprovar uma nova revisão." : closing.review.durableReceipt?.state === "uncertain" ? "Entendi que preciso conferir a Recuperação antes de tentar outra alteração." : "Entendi que a cópia continuará alterada e que perderei este recibo."}</label>
             {now >= closing.review.expiresAtMs && <p role="alert">A revisão venceu. Cancele e revise novamente.</p>}
           </> : <p role="alert">Esta revisão não pode mais ser usada. Cancele e revise novamente; o recibo foi preservado.</p>}
         </>}

@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 14/10/2026
 
+Incremento68/005/006/007/008 integra recibos duráveis ao painel por preparo separado, listagem e retomada explícitas, mantendo RAM60, guardas e barreira de saída. [Contrato68](../../aurora-connect-desktop-durable-voice.md). **PROTÓTIPO**; provas locais de ambos os mods, arquivos e DOM não concluem áudio, GUI, participante/anúncio, Minecraft ou redes. Não confundir recibo salvo com serviço de voz disponível.
+
 Incremento67/006/007/008 acrescenta recibos duráveis por opt-in nativo, atômicos com journal/undo de Recovery, retomada e nova aprovação para restauração seletiva. [Contrato67](../../aurora-connect-durable-voice-receipts.md). **PROTÓTIPO**, restrito a cópias diagnósticas; RAM60 preservado até integração68. Testes de interrupção/reabertura e arquivos dos dois mods não homologam áudio, GUI, queda física de energia ou configurações pessoais. Undo genérico não aposenta recibos seletivos automaticamente.
 
 Incremento66/004/005/008 integra IPv4 explícito ao caller e painel dos quatro perfis, por capability e revisão próprias, sem fallback ou alteração dos prazos/guardas. [Contrato66](../../aurora-connect-desktop-ipv4.md). **PROTÓTIPO**; testes de DOM e transporte no próprio endereço não fecham alcance externo, NAT/CGNAT, janela Tauri, Minecraft ou voz.

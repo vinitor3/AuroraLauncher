@@ -32,6 +32,8 @@ Preparação, fonte descoberta, consulta STATUS, cancelamento, logout e encerram
 
 ## Disponibilidade e limites
 
+O painel de anúncio separado também oferece o caminho explícito de recibos salvos68: aplicação durável, consulta e retomada para revisão nova. [Contrato68](aurora-connect-desktop-durable-voice.md). Não configura transporte ou áudio automaticamente; o caminho RAM60 permanece disponível.
+
 A feature Rust `connect-lab` é opcional e desligada por padrão. O build normal registra os comandos estreitos, mas não compila nem instancia o transporte; `connect_capabilities.available=false` mantém a navegação Connect oculta. A feature independente `connect-voice-lab` não habilita voz neste painel. Não foi criado instalador ou alterada versão de release.
 
 O caller usa diretamente a biblioteca real `apps/connect-lab`, sem subprocesso PowerShell, chave privada no frontend, Firebase social ou persistência de convites. Os perfis curto e de sessão TCP autorizam somente `game/tcp`, revisão1 e `reliableStream`; os opt-ins57/62 acrescentam `aux/udp` conforme as seções próprias. Destinos loopback são selecionados explicitamente pelo anfitrião. Digitar uma porta não comprova que pertence ao Minecraft ou a uma instância gerenciada. A alternativa Windows de descoberta confere o processo filho já iniciado pelo Aurora, conforme o contrato abaixo. Connect não inicia Java, abre o mundo para LAN ou entra automaticamente no jogo.

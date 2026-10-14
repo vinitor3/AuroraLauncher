@@ -31,7 +31,11 @@ export type VoiceCapabilities = {
   available: boolean; experimental: true; diagnosticCopyOnly: true; mode: "dedicatedAuroraOnly";
   guestAddress: "127.0.0.1:35554"; mods: VoiceMod[]; restoration: "strictAndExplicitReconciled";
   audioState: "notVerified"; transportState: "notObserved";
+  durableReceipts?: { schemaVersion: 1; maxReceipts: 64 };
 };
+export type DurableReceipt = { state: "planned" | "saved" | "uncertain"; receiptId: string | null; generation: 0 | 1 | null };
+export type VoiceReceiptSummary = { receiptId: string; voiceMod: VoiceMod; state: "ready" | "restored"; generation: 0 | 1 };
+export type VoiceReceiptList = { instanceId: string; receipts: VoiceReceiptSummary[] };
 export type VoiceObservation = {
   voiceMod: VoiceMod; artifactVersion: string; artifactSha256: string; artifactBytes: number;
   configPath: string; sourceSha256: string; sourceBytes: number; limitations: string[];
@@ -44,18 +48,19 @@ export type VoiceReview = {
 };
 export type VoiceClose = {
   closeId: string; intent: "panel" | "logout" | "exit"; state: "waiting" | "reviewRequired" | "ready";
-  review: { digest: string; expiresAtMs: number; instanceId: string; voiceMod: VoiceMod; state: "applied" | "needsRecovery"; selectiveRestorationLost: true } | null;
+  review: { digest: string; expiresAtMs: number; instanceId: string; voiceMod: VoiceMod; state: "applied" | "needsRecovery"; selectiveRestorationLost: boolean; durableReceipt?: DurableReceipt } | null;
 };
-export type VoicePhase = "idle" | "inspecting" | "observed" | "preparingApply" | "reviewApply" | "applying" | "applied" | "preparingRestore" | "reviewRestore" | "restoring" | "restored" | "needsRecovery" | "failed" | "closing" | "closeReview" | "closed";
+export type VoicePhase = "idle" | "resumingReceipt" | "inspecting" | "observed" | "preparingApply" | "reviewApply" | "applying" | "applied" | "preparingRestore" | "reviewRestore" | "restoring" | "restored" | "needsRecovery" | "failed" | "closing" | "closeReview" | "closed";
 export type VoiceSnapshot = {
   generation: number; operationId: string | null; instanceId: string | null; voiceMod: VoiceMod | null;
   phase: VoicePhase; busy: boolean; observation: VoiceObservation | null; review: VoiceReview | null;
   restorationState: "ready" | "needs_recovery" | "restored" | null;
   lastRecoveryResult: { restoredPointId: string; undoAvailable: boolean; recoveredInterrupted: boolean } | null;
   lastErrorCode: VoiceErrorCode | null; close: VoiceClose | null;
+  durableReceipt?: DurableReceipt;
 };
 export const phaseText: Record<VoicePhase, string> = {
-  idle: "Selecione uma cópia e um mod", inspecting: "Inspecionando configuração…", observed: "Anúncio configurado observado",
+  idle: "Selecione uma cópia e um mod", resumingReceipt: "Verificando recibo salvo…", inspecting: "Inspecionando configuração…", observed: "Anúncio configurado observado",
   preparingApply: "Preparando revisão…", reviewApply: "Aplicação aguardando sua revisão", applying: "Aplicando configuração…",
   applied: "Anúncio aplicado somente na cópia", preparingRestore: "Preparando restauração…", reviewRestore: "Restauração aguardando sua revisão",
   restoring: "Restaurando anúncio…", restored: "Anúncio restaurado", needsRecovery: "Verificação na Recuperação necessária",
@@ -64,6 +69,9 @@ export const phaseText: Record<VoicePhase, string> = {
 const invalid = (): never => { throw new Error("Invalid voice projection"); };
 const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : invalid();
 function exact(value: unknown, fields: string[]) { const item = object(value); if (Object.keys(item).length !== fields.length || fields.some(key => !Object.hasOwn(item, key))) invalid(); return item; }
+function optional(value: unknown, fields: string[], additions: string[]) {
+  const item = object(value); return exact(item, [...fields, ...additions.filter(key => Object.hasOwn(item, key))]);
+}
 export const uuid = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const hash = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const integer = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number => Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= max;
@@ -73,9 +81,37 @@ const text = (value: unknown, max: number, multiline = false): value is string =
 const bool = (value: unknown): value is boolean => typeof value === "boolean";
 const nullable = <T,>(value: unknown, parse: (value: unknown) => T): T | null => value === null ? null : parse(value);
 export function voiceCapabilitiesFrom(value: unknown): VoiceCapabilities {
-  const item = exact(value, ["available", "experimental", "diagnosticCopyOnly", "mode", "guestAddress", "mods", "restoration", "audioState", "transportState"]);
+  const item = optional(value, ["available", "experimental", "diagnosticCopyOnly", "mode", "guestAddress", "mods", "restoration", "audioState", "transportState"], ["durableReceipts"]);
   if (!bool(item.available) || item.experimental !== true || item.diagnosticCopyOnly !== true || item.mode !== "dedicatedAuroraOnly" || item.guestAddress !== "127.0.0.1:35554" || item.restoration !== "strictAndExplicitReconciled" || item.audioState !== "notVerified" || item.transportState !== "notObserved" || !Array.isArray(item.mods) || JSON.stringify(item.mods) !== JSON.stringify(item.available ? ["simple_voice_chat", "plasmo_voice"] : [])) invalid();
+  if (Object.hasOwn(item, "durableReceipts")) {
+    const capability = exact(item.durableReceipts, ["schemaVersion", "maxReceipts"]);
+    if (!item.available || capability.schemaVersion !== 1 || capability.maxReceipts !== 64) invalid();
+  }
   return item as VoiceCapabilities;
+}
+export function durableReceiptFrom(value: unknown): DurableReceipt {
+  const item = exact(value, ["state", "receiptId", "generation"]);
+  if (!["planned", "saved", "uncertain"].includes(item.state as string)) invalid();
+  if (item.receiptId === null ? item.generation !== null : !uuid(item.receiptId) || ![0, 1].includes(item.generation as number)) invalid();
+  if (item.state === "planned" && item.receiptId !== null || item.state === "saved" && item.receiptId === null) invalid();
+  return item as DurableReceipt;
+}
+export function voiceReceiptListFrom(value: unknown): VoiceReceiptList {
+  const item = exact(value, ["instanceId", "receipts"]);
+  if (!instanceId(item.instanceId) || !Array.isArray(item.receipts) || item.receipts.length > 64) return invalid();
+  const ids = new Set<string>();
+  const readyMods = new Set<VoiceMod>();
+  for (const raw of item.receipts) {
+    const receipt = exact(raw, ["receiptId", "voiceMod", "state", "generation"]);
+    if (!uuid(receipt.receiptId) || !mod(receipt.voiceMod) || ids.has(receipt.receiptId)
+      || !(receipt.state === "ready" && receipt.generation === 0 || receipt.state === "restored" && receipt.generation === 1)) return invalid();
+    ids.add(receipt.receiptId);
+    if (receipt.state === "ready") {
+      if (readyMods.has(receipt.voiceMod)) invalid();
+      readyMods.add(receipt.voiceMod);
+    }
+  }
+  return item as VoiceReceiptList;
 }
 export function voiceObservationFrom(value: unknown): VoiceObservation {
   const item = exact(value, ["voiceMod", "artifactVersion", "artifactSha256", "artifactBytes", "configPath", "sourceSha256", "sourceBytes", "limitations", "announcement"]);
@@ -102,13 +138,18 @@ function closeFrom(value: unknown): VoiceClose {
   const item = exact(value, ["closeId", "intent", "state", "review"]);
   if (!uuid(item.closeId) || typeof item.intent !== "string" || !["panel", "logout", "exit"].includes(item.intent) || typeof item.state !== "string" || !["waiting", "reviewRequired", "ready"].includes(item.state)) invalid();
   if (item.review !== null) {
-    const review = exact(item.review, ["digest", "expiresAtMs", "instanceId", "voiceMod", "state", "selectiveRestorationLost"]);
-    if (item.state !== "reviewRequired" || !hash(review.digest) || !integer(review.expiresAtMs) || !instanceId(review.instanceId) || !mod(review.voiceMod) || typeof review.state !== "string" || !["applied", "needsRecovery"].includes(review.state) || review.selectiveRestorationLost !== true) invalid();
+    const review = optional(item.review, ["digest", "expiresAtMs", "instanceId", "voiceMod", "state", "selectiveRestorationLost"], ["durableReceipt"]);
+    const receipt = Object.hasOwn(review, "durableReceipt") ? durableReceiptFrom(review.durableReceipt) : undefined;
+    if (item.state !== "reviewRequired" || !hash(review.digest) || !integer(review.expiresAtMs) || !instanceId(review.instanceId) || !mod(review.voiceMod) || typeof review.state !== "string" || !["applied", "needsRecovery"].includes(review.state)
+      || !bool(review.selectiveRestorationLost) || receipt?.state === "planned"
+      || review.selectiveRestorationLost !== (receipt?.state !== "saved")
+      || (receipt?.state === "saved" && (receipt.generation !== 0 || review.state !== "applied"))
+      || (receipt?.state === "uncertain" && review.state !== "needsRecovery")) invalid();
   }
   return item as VoiceClose;
 }
 export function voiceSnapshotFrom(value: unknown): VoiceSnapshot {
-  const item = exact(value, ["generation", "operationId", "instanceId", "voiceMod", "phase", "busy", "observation", "review", "restorationState", "lastRecoveryResult", "lastErrorCode", "close"]);
+  const item = optional(value, ["generation", "operationId", "instanceId", "voiceMod", "phase", "busy", "observation", "review", "restorationState", "lastRecoveryResult", "lastErrorCode", "close"], ["durableReceipt"]);
   if (!integer(item.generation) || typeof item.phase !== "string" || !Object.hasOwn(phaseText, item.phase) || !bool(item.busy) || (item.lastErrorCode !== null && (typeof item.lastErrorCode !== "string" || !Object.hasOwn(ERRORS, item.lastErrorCode))) || ![null, "ready", "needs_recovery", "restored"].includes(item.restorationState as null | string)) invalid();
   const phase = item.phase as VoicePhase;
   const hasContext = item.operationId !== null;
@@ -123,11 +164,12 @@ export function voiceSnapshotFrom(value: unknown): VoiceSnapshot {
   });
   if (observation && (!hasContext || observation.voiceMod !== item.voiceMod)) invalid();
   if (review && (!hasContext || review.voiceMod !== item.voiceMod)) invalid();
-  const working = ["inspecting", "preparingApply", "applying", "preparingRestore", "restoring", "closing"].includes(phase);
+  const working = ["inspecting", "resumingReceipt", "preparingApply", "applying", "preparingRestore", "restoring", "closing"].includes(phase);
   if (item.busy !== working) invalid();
-  if (!hasContext && !["idle", "closing", "closed"].includes(phase)) invalid();
+  if (!hasContext && !["idle", "resumingReceipt", "closing", "closed"].includes(phase)) invalid();
   if (!hasContext && (observation || review || result || item.restorationState !== null)) invalid();
   if (item.phase === "idle" && (hasContext || close)) invalid();
+  if (item.phase === "resumingReceipt" && (hasContext || close || item.durableReceipt !== undefined)) invalid();
   if (item.phase === "closed" && (review || observation || item.restorationState === "ready" || item.restorationState === "needs_recovery")) invalid();
   if (item.phase === "observed" && !observation) invalid();
   if ((item.phase === "reviewApply") !== (review?.action === "setAnnouncement")) invalid();
@@ -137,6 +179,17 @@ export function voiceSnapshotFrom(value: unknown): VoiceSnapshot {
   if (item.phase === "restored" && item.restorationState !== "restored") invalid();
   if (item.restorationState === "needs_recovery" && !["needsRecovery", "closing", "closeReview"].includes(phase)) invalid();
   if (close && close.review && (close.review.instanceId !== item.instanceId || close.review.voiceMod !== item.voiceMod)) invalid();
+  if (Object.hasOwn(item, "durableReceipt")) {
+    const receipt = durableReceiptFrom(item.durableReceipt);
+    if (!hasContext) invalid();
+    if (receipt.state === "planned" && (!["preparingApply", "reviewApply", "applying", "closing"].includes(phase) || item.restorationState !== null)) invalid();
+    if (receipt.state === "saved" && (!["applied", "preparingRestore", "reviewRestore", "restoring", "restored", "closing", "closeReview", "closed"].includes(phase)
+      || (item.restorationState !== null && item.restorationState !== (receipt.generation === 0 ? "ready" : "restored")))) invalid();
+    if (receipt.state === "uncertain" && (!["needsRecovery", "closing", "closeReview", "closed"].includes(phase)
+      || (phase !== "closed" && item.restorationState !== "needs_recovery"))) invalid();
+    if (close?.review && (close.review.durableReceipt?.state !== receipt.state
+      || close.review.durableReceipt?.receiptId !== receipt.receiptId || close.review.durableReceipt?.generation !== receipt.generation)) invalid();
+  } else if (close?.review?.durableReceipt !== undefined) invalid();
   if (close?.state === "waiting" && item.phase !== "closing") invalid();
   if (close?.state === "reviewRequired" && (item.phase !== "closeReview" || (!close.review && item.lastErrorCode !== "voice_stale_close"))) invalid();
   if (close?.state === "ready" && item.phase !== "closed") invalid();

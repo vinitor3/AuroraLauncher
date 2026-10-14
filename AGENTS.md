@@ -29,6 +29,8 @@ O laboratório descartável `apps/connect-runtime-tools` já executou Minecraft 
 
 ## Mapa do repositório
 
+Connect68 integra o recibo durável por ação explícita no painel: preparar, confirmar, listar e retomar somente para nova revisão. Campo opcional distingue planejado/salvo/incerto e fechamento conserva a barreira; RAM anterior mantém seus avisos. Consultar `docs/aurora-connect-desktop-durable-voice.md`. Retomada não executa jogo, transporte ou restauração automática.
+
 Connect66 acrescenta `directIpv4` ao caller/painel somente quando anunciado pela capability. Preserva os quatro perfis, revisão/digest, guardas e destinos loopback; não infere modo nem configura NAT/relay. Ensaios no IPv4 próprio são locais. Consultar `docs/aurora-connect-desktop-ipv4.md`; não usar isso como homologação entre redes.
 
 Connect65 acrescenta modo inicial IPv4 direto explicitamente selecionado nas quatro famílias de convite, com APIs próprias e filtro conservador, mantendo os contratos anteriores. Host exige bind igual ao endereço assinado local; Guest usa transporte0.0.0.0:0 e aplicações loopback. [Contrato65](docs/aurora-connect-direct-ipv4.md). Não inferir NAT, endereço público mapeado, LAN entre máquinas ou compatibilidade de áudio de ensaio no próprioIPv4; CLI/Node/desktop anteriores não mudam implicitamente.

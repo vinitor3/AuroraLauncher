@@ -1623,6 +1623,32 @@ Regressão padrão anterior ao último negativo de ID: **273 PASS/5 ignorados**,
 
 Limite conhecido: undo genérico não consome recibo seletivo; se a configuração mudar por outro executor, restauração pode recusar e o recibo ativo bloqueia nova aplicação do mesmo mod. Aposentadoria explícita será contrato próprio69, nunca inferida pelos bytes atuais. TCP, UDP, direto, relay, Minecraft e convites externos não mudam nesta etapa. SVC/Plasmo avançam somente no ciclo de configuração/recuperação; áudio continua **PRECISA DE TESTE**. Rollback operacional preserva cópia/CAS/índice; resolver journals2 antes de downgrade. Nenhuma ação humana necessária.
 
+## Incremento68 — recibos salvos e retomada no painel
+
+Regressão integrada completa: `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-features -- --test-threads=1` **379 PASS/54 ignorados**, zero falhas,158,45s somados, compilação1m25s; log `durable-voice-68-full-combined.log`. Inclui transporte/descoberta/recovery/Doctor e os novos casos comuns64–68. Os opt-ins pertinentes foram executados separadamente:3 próprios IPv4 biblioteca65,3 próprios IPv4 desktop66,4 arquivos67 e5 arquivos68; demais gates continuam ignorados por requisito próprio, não homologados. Produção67/68 congelada durante compilação; implementação69 começou depois que o binário já executava. O único ajuste posterior68 é a espera explícita do lock em teste, a conferir no foco seguinte. Não somar as contagens das rodadas sobrepostas.
+
+Base `53df136` após67. O painel60 só conservava reciboRAM e não permitia retomar restauração após reiniciar. A alternativa explícita68 prepara a aplicação durável antes da aprovação, lista recibos da cópia escolhida e retoma somente Ready/geração0 para uma revisão nova. Snapshot distingue planned/saved/uncertain; fechamento usa domínio/digest próprio para os casos duráveis e só informa recibo salvo após commit comprovado. RAM permanece sem campos novos. [Contrato68, comandos e rollback](aurora-connect-desktop-durable-voice.md).
+
+Arquivos: `engine/connect_voice_desktop{,_live,_durable,_durable_types,_tests,_durable_tests}.rs`, `voice_announcement_commands.rs`, três registros em `main.rs`; frontend `features/voice-announcement/{types.ts,VoiceAnnouncementProvider.tsx,VoiceAnnouncementPanel.tsx,DurableReceipts.tsx,VoiceAnnouncement.smoke.mjs}`. Nada de App/commands monolítico, transporte, locks, matriz, versão ou configuração pessoal foi alterado.
+
+Seis testes nativos comuns (3 DTO/gate/owner,3 listagem/retomada/barreira/journal) passaram no foco integrado67/68 registrado acima. Cinco opt-ins reais de arquivo **PASS/0 ignorados**,59,73s, compile1,21s: ambos os mods com aplicar/fechar/destruir manager/listar/retomar/revisar/restaurar, JAR retirado, via reconciliada preservando edição alheia, conflito próprio recusado, digest RAM/durável sem reutilização, resultado incerto sem promessa de persistência, futures abandonadas e saída aguardando retenção. Fonte pessoal das fixtures intacta e locks liberados. Não são execuções de áudio ou janela Tauri.
+
+Frontend final **46 PASS/0 falhas/0 ignorados**,1126,7628ms; TypeScript/Vite362módulos PASS, com aviso anterior de chunk>500kB. Rodada anterior44 também passou, não somada. Novos casos incluem resposta perdida da retomada sem repetição e listagem tardia atravessando fechamento sem ressuscitar botão. Revisões independentes cruzadas e revisão do coordenador sem bloqueador final.
+
+Comandos realmente executados:
+
+```powershell
+# AURORA_CONNECT_ARTIFACT_DIR aponta somente aos JARs fixados locais e é removida após execução:
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-features --lib durable_desktop -- --ignored --test-threads=1
+node --test apps/desktop/src/features/voice-announcement/VoiceAnnouncement.smoke.mjs
+# Em apps/desktop:
+npm.cmd run build
+```
+
+Logs `.aurora/connect-validation/durable-voice-68-{pinned,frontend-final,frontend-build-final}.log`; Clippy combinado final67/68 já passou12,95s conforme67. A regressão completa integrada usa snapshot anterior a69; resultado será registrado após conclusão. Um ajuste posterior somente no teste abandonado espera liberação efetiva da mutex após `exit_ready`, sem alterar produção; seu foco precisa ser conferido após o ajuste.
+
+TCP, UDP, direto, relay, Minecraft e convites externos conservam os gates existentes. SVC/Plasmo avançam somente em configuração/recuperação; não há áudio ou mod carregado. Não iniciar Java, alterar original ou restaurar silenciosamente. Rollback preserva cópia/índice/CAS e resolve journals2 antes de downgrade. Nenhuma intervenção humana necessária.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useVoiceAnnouncement } from "./VoiceAnnouncementProvider";
 import { announcementText, MODS, phaseText, voiceDate, voiceError, type VoiceMod } from "./types";
+import { DurableReceipts } from "./DurableReceipts";
 
 type Props = { instanceId: string | null; sourceInstanceId: string; busy: boolean; running: boolean; onChanged: () => Promise<void> };
 export function VoiceAnnouncementPanel({ instanceId, sourceInstanceId, busy, running, onChanged }: Props) {
@@ -16,7 +17,7 @@ export function VoiceAnnouncementPanel({ instanceId, sourceInstanceId, busy, run
   const canInspect = !!instanceId && !blocked && (!active || (sameSource && snapshot?.voiceMod === selectedMod && ["observed", "failed"].includes(snapshot.phase)));
   const reviewExpiry = voice?.capabilities?.available && sameSource ? review?.expiresAtMs : undefined;
 
-  useEffect(() => { setConsent(false); }, [instanceId, sourceInstanceId, review?.planId, review?.digest]);
+  useEffect(() => { setConsent(false); }, [instanceId, sourceInstanceId, review?.planId, review?.digest, snapshot?.durableReceipt?.state]);
   useEffect(() => { if (review && now >= review.expiresAtMs) setConsent(false); }, [now, review]);
   useEffect(() => { if (snapshot?.voiceMod && active) setSelectedMod(snapshot.voiceMod); }, [snapshot?.voiceMod, active]);
   useEffect(() => {
@@ -27,7 +28,7 @@ export function VoiceAnnouncementPanel({ instanceId, sourceInstanceId, busy, run
   }, [reviewExpiry, review?.planId, review?.digest]);
   if (!voice?.capabilities?.available) return null;
 
-  async function act(command: "inspect" | "prepare_apply" | "confirm" | "prepare_restore" | "prepare_restore_reconciled" | "cancel_review", request: Record<string, unknown>) {
+  async function act(command: "inspect" | "prepare_apply" | "prepare_apply_durable" | "resume_receipt" | "confirm" | "prepare_restore" | "prepare_restore_reconciled" | "cancel_review", request: Record<string, unknown>) {
     if (!voice || blocked || !sameSource) return;
     setConsent(false);
     try {
@@ -48,6 +49,8 @@ export function VoiceAnnouncementPanel({ instanceId, sourceInstanceId, busy, run
     </select></label>
     <button disabled={!canInspect} onClick={() => void act("inspect", { instanceId, voiceMod: selectedMod })} type="button">Inspecionar anúncio</button>
     <button className="secondary" disabled={voice.pending} onClick={() => void voice.refresh().catch(() => undefined)} type="button">Atualizar estado do anúncio</button>
+    {voice.capabilities.durableReceipts && !active && <DurableReceipts key={snapshot?.close?.closeId ?? "open"} instanceId={instanceId} voiceMod={selectedMod} disabled={blocked}
+      onResume={receipt => act("resume_receipt", { instanceId, receiptId: receipt.receiptId, expectedGeneration: receipt.generation })} />}
     {snapshot && <p role="status">{phaseText[snapshot.phase]}</p>}
     {running && <p>Feche o jogo antes de inspecionar, aplicar ou restaurar a configuração.</p>}
     {snapshot?.lastErrorCode && <p role="alert">{voiceError(snapshot.lastErrorCode)}</p>}
@@ -55,11 +58,13 @@ export function VoiceAnnouncementPanel({ instanceId, sourceInstanceId, busy, run
       <p><strong>Valor configurado:</strong> {announcementText(snapshot.observation.announcement)}</p>
       <p>Arquivo: <code>{snapshot.observation.configPath}</code></p>
       <details><summary>Versão e hashes verificados</summary><p>{MODS[snapshot.observation.voiceMod].name} {snapshot.observation.artifactVersion}</p><p>Mod: <code>{snapshot.observation.artifactSha256}</code></p><p>Configuração: <code>{snapshot.observation.sourceSha256}</code> · {snapshot.observation.sourceBytes} bytes</p></details>
-      {snapshot.phase === "observed" && <button disabled={blocked} onClick={() => void act("prepare_apply", { operationId, generation: snapshot.generation })} type="button">Revisar aplicação na cópia</button>}
+      {snapshot.phase === "observed" && <><button disabled={blocked} onClick={() => void act("prepare_apply", { operationId, generation: snapshot.generation })} type="button">Revisar aplicação na cópia</button>
+        {voice.capabilities.durableReceipts && <button className="secondary" disabled={blocked} onClick={() => void act("prepare_apply_durable", { operationId, generation: snapshot.generation })} type="button">Revisar aplicação com recibo salvo</button>}</>}
     </div>}
     {sameSource && review && <section aria-label="Revisão do anúncio">
       <h4>{review.action === "setAnnouncement" ? "Aplicar anúncio" : review.action === "restoreOriginal" ? "Restaurar arquivo anterior" : "Restaurar anúncio preservando outras edições"}</h4>
       <p><code>{review.configPath}</code></p><p>{review.warning}</p>
+      {snapshot?.durableReceipt?.state === "planned" && <p>Esta revisão prevê salvar o recibo no histórico da cópia junto com a alteração. Restaurar depois de reiniciar exigirá uma nova revisão e aprovação.</p>}
       <label>Antes<pre>{review.before || "(vazio)"}</pre></label><label>Depois<pre>{review.after || "(vazio)"}</pre></label>
       <details><summary>Hashes da revisão</summary><p>Atual: <code>{review.sourceSha256}</code></p><p>Previsto: <code>{review.replacementSha256}</code></p><p>Aprovação: <code>{review.digest}</code></p></details>
       <p>Válida até {voiceDate(review.expiresAtMs)}.</p>
@@ -71,7 +76,7 @@ export function VoiceAnnouncementPanel({ instanceId, sourceInstanceId, busy, run
       <button className="secondary" disabled={blocked} onClick={() => void act("cancel_review", { operationId })} type="button">Cancelar revisão</button>
     </section>}
     {sameSource && restoreReady && <div>
-      <p>O recibo existe somente nesta execução do launcher. Cada restauração exige nova revisão; sair não restaura automaticamente.</p>
+      <p>{snapshot.durableReceipt?.state === "saved" ? "O recibo está salvo no histórico desta cópia e pode ser retomado após reiniciar." : "O recibo existe somente nesta execução do launcher."} Cada restauração exige nova revisão; sair não restaura automaticamente.</p>
       <button disabled={blocked} onClick={() => void act("prepare_restore", { operationId })} type="button">Revisar restauração estrita</button>
       <button className="secondary" disabled={blocked} onClick={() => void act("prepare_restore_reconciled", { operationId })} type="button">Revisar restauração preservando outras edições</button>
     </div>}

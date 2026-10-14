@@ -1,6 +1,9 @@
 //! Local, opt-in announcement workflow. Presentation never carries mutation authority.
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+#[path = "connect_voice_desktop_durable_types.rs"]
+mod durable_types;
+pub use durable_types::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -22,6 +25,7 @@ pub enum CloseIntent {
 pub enum VoiceAnnouncementPhase {
     Idle,
     Inspecting,
+    ResumingReceipt,
     Observed,
     PreparingApply,
     ReviewApply,
@@ -142,6 +146,8 @@ pub struct VoiceAnnouncementCapabilities {
     pub restoration: &'static str,
     pub audio_state: &'static str,
     pub transport_state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub durable_receipts: Option<DurableReceiptCapabilities>,
 }
 
 #[derive(Clone, Serialize)]
@@ -201,6 +207,8 @@ pub struct CloseReview {
     pub voice_mod: VoiceMod,
     pub state: VoiceAnnouncementPhase,
     pub selective_restoration_lost: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub durable_receipt: Option<DurableReceiptProjection>,
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -225,6 +233,8 @@ pub struct VoiceAnnouncementSnapshot {
     pub last_recovery_result: Option<RecoverySummary>,
     pub last_error_code: Option<VoiceAnnouncementError>,
     pub close: Option<VoiceAnnouncementClose>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub durable_receipt: Option<DurableReceiptProjection>,
 }
 impl Default for VoiceAnnouncementSnapshot {
     fn default() -> Self {
@@ -241,6 +251,7 @@ impl Default for VoiceAnnouncementSnapshot {
             last_recovery_result: None,
             last_error_code: None,
             close: None,
+            durable_receipt: None,
         }
     }
 }
@@ -336,6 +347,10 @@ impl VoiceAnnouncementManager {
             restoration: "strictAndExplicitReconciled",
             audio_state: "notVerified",
             transport_state: "notObserved",
+            durable_receipts: available.then_some(DurableReceiptCapabilities {
+                schema_version: 1,
+                max_receipts: 64,
+            }),
         }
     }
     pub fn snapshot(
@@ -370,6 +385,7 @@ impl VoiceAnnouncementManager {
         }
     }
     forward!(prepare_apply, PrepareApplyRequest);
+    forward!(prepare_apply_durable, PrepareApplyRequest);
     forward!(confirm, ConfirmRequest);
     forward!(prepare_restore, OperationRequest);
     forward!(prepare_restore_reconciled, OperationRequest);
@@ -378,6 +394,40 @@ impl VoiceAnnouncementManager {
     forward!(cancel_close, CloseRequest);
     forward!(confirm_close, ConfirmCloseRequest);
     forward!(finish_close, CloseRequest);
+    pub async fn list_receipts(
+        &self,
+        owner_label: &str,
+        data_dir: &Path,
+        request: ListReceiptsRequest,
+    ) -> VoiceAnnouncementResult<ReceiptList> {
+        owner(owner_label)?;
+        #[cfg(all(windows, feature = "connect-voice-lab"))]
+        {
+            self.inner.list_receipts(data_dir, request).await
+        }
+        #[cfg(not(all(windows, feature = "connect-voice-lab")))]
+        {
+            let _ = (data_dir, request);
+            Err(VoiceAnnouncementError::Unavailable)
+        }
+    }
+    pub async fn resume_receipt(
+        &self,
+        owner_label: &str,
+        data_dir: &Path,
+        request: ResumeReceiptRequest,
+    ) -> VoiceAnnouncementResult<VoiceAnnouncementSnapshot> {
+        owner(owner_label)?;
+        #[cfg(all(windows, feature = "connect-voice-lab"))]
+        {
+            self.inner.resume_receipt(data_dir, request).await
+        }
+        #[cfg(not(all(windows, feature = "connect-voice-lab")))]
+        {
+            let _ = (data_dir, request);
+            Err(VoiceAnnouncementError::Unavailable)
+        }
+    }
     pub async fn begin_exit(&self) -> VoiceAnnouncementResult<VoiceAnnouncementSnapshot> {
         #[cfg(all(windows, feature = "connect-voice-lab"))]
         {

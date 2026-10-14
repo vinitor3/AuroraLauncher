@@ -7,6 +7,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tauri::async_runtime::Mutex as AsyncMutex;
+#[path = "connect_voice_desktop_durable.rs"]
+mod durable;
 
 type Outcome<T> = dto::VoiceAnnouncementResult<T>;
 const MAX_GENERATION: u64 = 9_007_199_254_740_991;
@@ -34,6 +36,8 @@ enum TestStage {
     CompletionPublished,
     CloseTask,
     CancelCloseTask,
+    ListReceipts,
+    ResumeReceipt,
 }
 #[cfg(test)]
 type TestProbe = Arc<dyn Fn() -> Result<()> + Send + Sync>;
@@ -56,7 +60,10 @@ struct Operation {
     voice_mod: VoiceMod,
     observed_hash: Option<String>,
     pending_apply: Option<PreparedAnnouncement>,
+    pending_durable: Option<PreparedDurableAnnouncement>,
     controller: Option<RestorationController>,
+    durable_controller: Option<DurableRestorationController>,
+    durable_selected: bool,
     executor_uncertain: bool,
     observation: Option<dto::AnnouncementInspection>,
     review: Option<dto::VoiceAnnouncementReview>,
@@ -179,11 +186,15 @@ impl Operation {
         if self.executor_uncertain {
             return Some(dto::RestorationState::NeedsRecovery);
         }
-        self.controller.as_ref().map(|c| match c.state() {
-            RestorationState::Ready => dto::RestorationState::Ready,
-            RestorationState::NeedsRecovery => dto::RestorationState::NeedsRecovery,
-            RestorationState::Restored => dto::RestorationState::Restored,
-        })
+        self.controller
+            .as_ref()
+            .map(|c| c.state())
+            .or_else(|| self.durable_controller.as_ref().map(|c| c.state()))
+            .map(|state| match state {
+                RestorationState::Ready => dto::RestorationState::Ready,
+                RestorationState::NeedsRecovery => dto::RestorationState::NeedsRecovery,
+                RestorationState::Restored => dto::RestorationState::Restored,
+            })
     }
     fn stable_phase(&self) -> Phase {
         match self.restoration_state() {
@@ -196,10 +207,9 @@ impl Operation {
     }
     fn cancel_review(&mut self) {
         self.pending_apply = None;
+        self.pending_durable = None;
         self.review = None;
-        if let Some(c) = self.controller.as_mut() {
-            c.cancel_review();
-        }
+        self.cancel_controller_reviews();
     }
 }
 impl Shared {
@@ -306,6 +316,10 @@ impl Shared {
             .operation
             .as_ref()
             .and_then(Operation::restoration_state);
+        view.snapshot.durable_receipt = core
+            .operation
+            .as_ref()
+            .and_then(Operation::durable_projection);
         if let Some(op) = core.operation.as_ref() {
             view.snapshot.observation = op.observation.clone();
             view.snapshot.last_recovery_result = op.last_recovery.clone();
@@ -354,7 +368,10 @@ impl Manager {
                 {
                     return Err(Error::ContextActive);
                 }
-                if op.restoration_state().is_some() || op.pending_apply.is_some() {
+                if op.restoration_state().is_some()
+                    || op.pending_apply.is_some()
+                    || op.pending_durable.is_some()
+                {
                     return Err(Error::ContextActive);
                 }
             }
@@ -365,7 +382,10 @@ impl Manager {
                 voice_mod: from_mod(request.voice_mod),
                 observed_hash: None,
                 pending_apply: None,
+                pending_durable: None,
                 controller: None,
+                durable_controller: None,
+                durable_selected: false,
                 executor_uncertain: false,
                 observation: None,
                 review: None,
@@ -436,6 +456,7 @@ impl Manager {
             let op = core.operation.as_ref().ok_or(Error::ContextChanged)?;
             if op.observed_hash.is_none()
                 || op.pending_apply.is_some()
+                || op.pending_durable.is_some()
                 || op.restoration_state().is_some()
             {
                 return Err(Error::StaleReview);
@@ -443,6 +464,10 @@ impl Manager {
         }
         self.shared
             .start(&core, &request.operation_id, Phase::PreparingApply)?;
+        core.operation
+            .as_mut()
+            .ok_or(Error::Internal)?
+            .durable_selected = false;
         let shared = self.shared.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -514,12 +539,7 @@ impl Manager {
             .try_lock_owned()
             .map_err(|_| Error::Busy)?;
         let op = core.operation.as_ref().ok_or(Error::ContextChanged)?;
-        if op.executor_uncertain
-            || op
-                .controller
-                .as_ref()
-                .is_none_or(|c| c.state() != RestorationState::Ready || c.has_pending_review())
-        {
+        if !op.restoration_ready() {
             return Err(Error::StaleReview);
         }
         self.shared
@@ -531,8 +551,7 @@ impl Manager {
                 #[cfg(test)]
                 shared.hook(TestStage::Prepare);
                 let guard = shared.guard(&op.instance).map_err(error)?;
-                let controller = op.controller.as_mut().ok_or(Error::StaleReview)?;
-                let review = if reconciled {
+                let current_hash = if reconciled {
                     // The strict read-only DB pin ends before the writer-based
                     // preparation. No mod/JAR gate or arbitrary path is used.
                     let hash = recovery::with_existing_observation(
@@ -550,15 +569,17 @@ impl Manager {
                     )
                     .map_err(error)?;
                     guard.recheck().map_err(error)?;
-                    controller.prepare_reconciled(&op.instance, &guard, &hash)
+                    Some(hash)
                 } else {
-                    controller.prepare_strict(&op.instance, &guard)
-                }
-                .map_err(error)?;
+                    None
+                };
+                let review = op
+                    .prepare_selected_restoration(&guard, current_hash.as_deref())
+                    .map_err(error)?;
                 let presented = match present_review(&review) {
                     Ok(r) => r,
                     Err(e) => {
-                        controller.cancel_review();
+                        op.cancel_controller_reviews();
                         return Err(e);
                     }
                 };
@@ -625,37 +646,50 @@ impl Manager {
                 #[cfg(test)]
                 shared.hook(TestStage::Confirm);
                 if apply {
-                    let prepared = op.pending_apply.take().ok_or(Error::StaleReview)?;
                     op.observed_hash = None;
                     op.observation = None;
-                    let guard = shared.guard(&op.instance).map_err(error)?;
-                    let receipt = RestorationReceipt::from_plan(&prepared);
-                    let recovery = prepared
-                        .apply(&op.instance, &guard, &request.digest, || {
-                            op.executor_uncertain = true;
-                            #[cfg(test)]
-                            shared.hook(TestStage::ExecutorBegin);
-                        })
-                        .map_err(error)?;
-                    op.controller = Some(receipt.into_controller());
+                    if let Some(prepared) = op.pending_durable.take() {
+                        let guard = shared.guard(&op.instance).map_err(error)?;
+                        let applied = prepared
+                            .confirm_with_executor_begin(
+                                &op.instance,
+                                &guard,
+                                &request.digest,
+                                || {
+                                    op.executor_uncertain = true;
+                                    #[cfg(test)]
+                                    shared.hook(TestStage::ExecutorBegin);
+                                },
+                            )
+                            .map_err(error)?;
+                        op.durable_controller = Some(applied.receipt);
+                        op.last_recovery = Some(present_recovery(applied.recovery));
+                    } else {
+                        let prepared = op.pending_apply.take().ok_or(Error::StaleReview)?;
+                        let guard = shared.guard(&op.instance).map_err(error)?;
+                        let receipt = RestorationReceipt::from_plan(&prepared);
+                        let recovery = prepared
+                            .apply(&op.instance, &guard, &request.digest, || {
+                                op.executor_uncertain = true;
+                                #[cfg(test)]
+                                shared.hook(TestStage::ExecutorBegin);
+                            })
+                            .map_err(error)?;
+                        op.controller = Some(receipt.into_controller());
+                        op.last_recovery = Some(present_recovery(recovery));
+                    }
                     op.executor_uncertain = false;
-                    op.last_recovery = Some(present_recovery(recovery));
                 } else {
                     // Even failure acquiring a fresh guard consumes the review.
                     let guard = match shared.guard(&op.instance) {
                         Ok(g) => g,
                         Err(e) => {
-                            if let Some(c) = op.controller.as_mut() {
-                                c.cancel_review();
-                            }
+                            op.cancel_controller_reviews();
                             return Err(error(e));
                         }
                     };
                     let result = op
-                        .controller
-                        .as_mut()
-                        .ok_or(Error::StaleReview)?
-                        .confirm(&op.instance, &guard, &request.digest)
+                        .confirm_selected_restoration(&guard, &request.digest)
                         .map_err(error)?;
                     op.last_recovery = Some(present_recovery(result));
                 }
@@ -695,6 +729,7 @@ impl Manager {
         }
         op.cancel_review();
         let phase = op.stable_phase();
+        view.snapshot.durable_receipt = op.durable_projection();
         view.snapshot.review = None;
         view.snapshot.last_error_code = None;
         Shared::phase(&mut view, phase, false);
@@ -766,6 +801,10 @@ impl Manager {
             if let Some(op) = core.operation.as_mut() {
                 op.cancel_review();
             }
+            view.snapshot.durable_receipt = core
+                .operation
+                .as_ref()
+                .and_then(Operation::durable_projection);
             view.snapshot.review = None;
             view.base_phase = core
                 .operation
@@ -789,29 +828,37 @@ impl Manager {
                         .filter(|n| *n <= MAX_GENERATION)
                         .ok_or(Error::Limit)?;
                     let phase = op.stable_phase();
-                    let hash = digest(
-                        &serde_json::to_vec(&(
-                            "aurora.voice.close.v1",
-                            "main",
-                            &close_id,
-                            &op.id,
-                            view.snapshot.generation,
-                            intent,
-                            op.instance.id().as_str(),
-                            to_mod(op.voice_mod),
-                            phase,
-                            &view.snapshot.last_recovery_result,
-                            expires_at_ms,
-                        ))
-                        .map_err(|_| Error::Internal)?,
+                    let durable_receipt = op.durable_projection();
+                    let common = (
+                        "aurora.voice.close.v1",
+                        "main",
+                        &close_id,
+                        &op.id,
+                        view.snapshot.generation,
+                        intent,
+                        op.instance.id().as_str(),
+                        to_mod(op.voice_mod),
+                        phase,
+                        &view.snapshot.last_recovery_result,
+                        expires_at_ms,
                     );
+                    let bytes = if let Some(receipt) = &durable_receipt {
+                        serde_json::to_vec(&("aurora.voice.close.durable.v1", &common, receipt))
+                    } else {
+                        serde_json::to_vec(&common)
+                    }
+                    .map_err(|_| Error::Internal)?;
+                    let hash = digest(&bytes);
                     Ok(dto::CloseReview {
                         digest: hash,
                         expires_at_ms,
                         instance_id: op.instance.id().as_str().into(),
                         voice_mod: to_mod(op.voice_mod),
                         state: phase,
-                        selective_restoration_lost: true,
+                        selective_restoration_lost: !durable_receipt.as_ref().is_some_and(
+                            |receipt| receipt.state == dto::DurableReceiptState::Saved,
+                        ),
+                        durable_receipt,
                     })
                 })();
                 view.close_deadline = close_review
@@ -868,6 +915,10 @@ impl Manager {
             }
             view.snapshot.review = None;
             view.snapshot.close = None;
+            view.snapshot.durable_receipt = core
+                .operation
+                .as_ref()
+                .and_then(Operation::durable_projection);
             view.close_deadline = None;
             view.base_phase = core
                 .operation

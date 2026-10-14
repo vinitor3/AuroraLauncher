@@ -144,6 +144,8 @@ Adicionar entradas próprias para endereço inicial IPv4 literal nos quatro perf
 
 ## Decisões pendentes e condições de aceitação
 
+Decisão68: escolha de persistência antecede a revisão; listagem/retomada compartilham a autoridade exclusiva e a barreira de saída do caller60. O resultado distingue planned/saved/uncertain e o fechamento vincula essa distinção no próprio digest, sem prometer recibo salvo por aparência de arquivo. Imagens integrais e tokens privados permanecem no nativo. [Contrato68](../../aurora-connect-desktop-durable-voice.md). RAM e avisos anteriores continuam disponíveis.
+
 Decisão67: persistir o recibo seletivo na mesma transação SQLiteFULL que publica undo e remove journal, com transição registrada antes de renames. Um sidecar posterior ao commit deixaria uma janela sem autoridade recuperável. Preparação durável tem domínio/digest próprios; carregar histórico nunca revive revisão/prazo ou aplica bytes. Journal2 é reconhecido também sem a feature de voz, conservando journals1. [Contrato e rollback67](../../aurora-connect-durable-voice-receipts.md). A restauração genérica não consome esse recibo por inferência.
 
 Decisão66: expor IPv4 no desktop por capability explícita e seleção anterior ao preparo, com endereço inicialmente vazio. Dispatch nativo usa as quatro entradas65, preservando os guardas e digest de revisão; nenhuma inferência pelo convite ou fallback. [Contrato66](../../aurora-connect-desktop-ipv4.md). As provas locais do endereço próprio não substituem testes externos ou homologação gráfica.

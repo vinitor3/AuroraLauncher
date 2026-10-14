@@ -1,8 +1,9 @@
 //! Main-window-only configuration caller. Instance paths and authority stay native.
 use aurora_launcher_core::engine::connect_voice_desktop::{
     BeginCloseRequest, CloseIntent, CloseRequest, ConfirmCloseRequest, ConfirmRequest,
-    InspectRequest, OperationRequest, PrepareApplyRequest, VoiceAnnouncementCapabilities,
-    VoiceAnnouncementManager, VoiceAnnouncementSnapshot,
+    InspectRequest, ListReceiptsRequest, OperationRequest, PrepareApplyRequest, ReceiptList,
+    ResumeReceiptRequest, VoiceAnnouncementCapabilities, VoiceAnnouncementManager,
+    VoiceAnnouncementSnapshot,
 };
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 
@@ -61,6 +62,54 @@ pub async fn voice_announcement_prepare_apply(
 ) -> Result<VoiceAnnouncementSnapshot, &'static str> {
     manager
         .prepare_apply(owner_label(window.label())?, request)
+        .await
+        .map_err(|error| error.code())
+}
+
+#[tauri::command]
+pub async fn voice_announcement_prepare_apply_durable(
+    window: WebviewWindow,
+    manager: State<'_, VoiceAnnouncementManager>,
+    request: PrepareApplyRequest,
+) -> Result<VoiceAnnouncementSnapshot, &'static str> {
+    manager
+        .prepare_apply_durable(owner_label(window.label())?, request)
+        .await
+        .map_err(|error| error.code())
+}
+
+#[tauri::command]
+pub async fn voice_announcement_list_receipts(
+    app: AppHandle,
+    window: WebviewWindow,
+    manager: State<'_, VoiceAnnouncementManager>,
+    request: ListReceiptsRequest,
+) -> Result<ReceiptList, &'static str> {
+    let owner = owner_label(window.label())?;
+    if !manager.capabilities().available {
+        return Err("voice_unavailable");
+    }
+    let data_dir = app.path().app_data_dir().map_err(|_| "voice_storage")?;
+    manager
+        .list_receipts(owner, &data_dir, request)
+        .await
+        .map_err(|error| error.code())
+}
+
+#[tauri::command]
+pub async fn voice_announcement_resume_receipt(
+    app: AppHandle,
+    window: WebviewWindow,
+    manager: State<'_, VoiceAnnouncementManager>,
+    request: ResumeReceiptRequest,
+) -> Result<VoiceAnnouncementSnapshot, &'static str> {
+    let owner = owner_label(window.label())?;
+    if !manager.capabilities().available {
+        return Err("voice_unavailable");
+    }
+    let data_dir = app.path().app_data_dir().map_err(|_| "voice_storage")?;
+    manager
+        .resume_receipt(owner, &data_dir, request)
         .await
         .map_err(|error| error.code())
 }

@@ -32,6 +32,7 @@ async function sourceModule(source) {
 }
 const types = await import(await sourceModule(new URL("./types.ts", import.meta.url)));
 const OP = "11111111-1111-4111-8111-111111111111", PLAN = "22222222-2222-4222-8222-222222222222", CLOSE = "33333333-3333-4333-8333-333333333333", POINT = "44444444-4444-4444-8444-444444444444";
+const RECEIPT = "55555555-5555-4555-8555-555555555555";
 const hash = "a".repeat(64), digest = "b".repeat(64);
 const copy = "aurora-test-synthetic";
 const caps = available => ({ available, experimental: true, diagnosticCopyOnly: true, mode: "dedicatedAuroraOnly", guestAddress: "127.0.0.1:35554", mods: available ? ["simple_voice_chat", "plasmo_voice"] : [], restoration: "strictAndExplicitReconciled", audioState: "notVerified", transportState: "notObserved" });
@@ -348,4 +349,207 @@ test("parsers enforce bounded text/pins/hashes and impossible state combinations
   assert.throws(() => types.voiceSnapshotFrom({ ...applied(), restorationState: null }));
   assert.throws(() => types.voiceSnapshotFrom({ ...selected(), phase: "closing", busy: true }));
   assert.throws(() => types.voiceSnapshotFrom({ ...selected({ phase: "reviewApply", review: review() }), review: { ...review(), sourceSha256: "d".repeat(64) } }));
+});
+
+const plannedReceipt = () => ({ state: "planned", receiptId: null, generation: null });
+const savedReceipt = (generation = 0) => ({ state: "saved", receiptId: RECEIPT, generation });
+const receiptRow = (voiceMod = "simple_voice_chat", state = "ready") => ({ receiptId: RECEIPT, voiceMod, state, generation: state === "ready" ? 0 : 1 });
+const durableApplied = (voiceMod = "simple_voice_chat") => ({ ...applied(), voiceMod, durableReceipt: savedReceipt() });
+function durableClosing(intent = "panel", receipt = savedReceipt(), voiceMod = "simple_voice_chat") {
+  const uncertain = receipt.state === "uncertain";
+  const base = { ...closeReview(intent), voiceMod, observation: null, durableReceipt: receipt,
+    restorationState: uncertain ? "needs_recovery" : "ready" };
+  base.close.review = { ...base.close.review, voiceMod, state: uncertain ? "needsRecovery" : "applied",
+    selectiveRestorationLost: uncertain, durableReceipt: receipt };
+  return base;
+}
+function durableFixtures(voiceMod = "simple_voice_chat") {
+  capabilities.durableReceipts = { schemaVersion: 1, maxReceipts: 64 };
+  handlers.set("voice_announcement_prepare_apply_durable", () => move({ phase: "reviewApply", review: { ...review("setAnnouncement", snapshot.voiceMod),
+    digest: "d".repeat(64), warning: "Recibo salvo na mesma transação; nova revisão para restaurar." }, durableReceipt: plannedReceipt() }));
+  handlers.set("voice_announcement_confirm", () => {
+    const apply = snapshot.review.action === "setAnnouncement";
+    return move({ phase: apply ? "applied" : "restored", review: null, observation: null, restorationState: apply ? "ready" : "restored",
+      lastRecoveryResult: applied().lastRecoveryResult, durableReceipt: savedReceipt(apply ? 0 : 1) });
+  });
+  handlers.set("voice_announcement_begin_close", ({ request }) => move({ ...durableClosing(request.intent, snapshot.durableReceipt, snapshot.voiceMod), generation: snapshot.generation }));
+  handlers.set("voice_announcement_list_receipts", ({ request }) => ({ instanceId: request.instanceId, receipts: [receiptRow(voiceMod)] }));
+  handlers.set("voice_announcement_resume_receipt", () => move({ ...durableApplied(voiceMod), generation: snapshot.generation, lastRecoveryResult: null }));
+  handlers.set("voice_announcement_finish_close", () => { const generation = snapshot.generation + 1; snapshot = { ...idle(), generation }; return snapshot; });
+  handlers.set("voice_announcement_cancel_review", () => {
+    if (snapshot.durableReceipt?.state === "planned") delete snapshot.durableReceipt;
+    return move({ phase: snapshot.restorationState === "ready" ? "applied" : "observed", review: null });
+  });
+}
+async function chooseVoiceMod(voiceMod) {
+  await act(async () => {
+    const select = container.querySelector('select[aria-label="Mod de voz a inspecionar"]');
+    for (const option of select.querySelectorAll("option")) option.selected = false;
+    select.querySelector(`option[value="${voiceMod}"]`).selected = true;
+    select.dispatchEvent(new window.Event("change", { bubbles: true }));
+  });
+}
+
+for (const voiceMod of ["simple_voice_chat", "plasmo_voice"]) test(`${voiceMod}: durable choice precedes consent and a reopened panel resumes only a fresh restore review`, async () => {
+  durableFixtures(voiceMod); await render(); await chooseVoiceMod(voiceMod);
+  assert.equal(count("list_receipts"), 0); assert.equal(count("resume_receipt"), 0);
+  await click("Inspecionar anúncio"); await click("Revisar aplicação com recibo salvo");
+  assert.deepEqual(last("prepare_apply_durable").args, { request: { operationId: OP, generation: 1 } });
+  assert.equal(count("prepare_apply"), 0); assert.equal(button("Confirmar alteração revisada").disabled, true);
+  assert.match(container.textContent, /revisão prevê salvar o recibo/); assert.equal(count("confirm"), 0);
+  await check("Autorizo esta alteração do anúncio"); await click("Confirmar alteração revisada");
+  assert.deepEqual(last("confirm").args, { request: { operationId: OP, planId: PLAN, digest: "d".repeat(64) } });
+  assert.match(container.textContent, /recibo está salvo no histórico/);
+  await click("Encerrar operação de anúncio");
+  assert.doesNotMatch(container.textContent, /Sair descarta a restauração seletiva/);
+  assert.match(container.textContent, /recibo salvo fica no histórico/);
+  await check("Autorizo sair mantendo a configuração"); await click("Sair mantendo alteração na cópia");
+  await act(async () => root.unmount()); root = createRoot(container); await render(); await chooseVoiceMod(voiceMod);
+  await click("Consultar recibos salvos");
+  assert.deepEqual(last("list_receipts").args, { request: { instanceId: copy } });
+  assert.equal(count("resume_receipt"), 0); await click("Retomar restauração");
+  assert.deepEqual(last("resume_receipt").args, { request: { instanceId: copy, receiptId: RECEIPT, expectedGeneration: 0 } });
+  assert.equal(controller.snapshot.observation, null); assert.equal(controller.snapshot.review, null);
+  assert.equal(count("prepare_restore"), 0); assert.equal(count("confirm"), 1);
+  await click("Revisar restauração estrita"); assert.equal(button("Confirmar alteração revisada").disabled, true);
+  await check("Autorizo esta alteração do anúncio"); await click("Confirmar alteração revisada");
+  assert.equal(controller.snapshot.durableReceipt.generation, 1); assert.match(container.textContent, /Anúncio restaurado/);
+  assert.equal(count("prepare_restore_reconciled"), 0);
+});
+
+test("absent durable capability preserves RAM and cannot invoke durable caller methods", async () => {
+  await render(); assert.equal(container.querySelector('[aria-label="Recibos salvos do anúncio"]'), null);
+  await act(async () => { await assert.rejects(controller.listReceipts(copy)); await assert.rejects(controller.run("prepare_apply_durable", { operationId: OP, generation: 1 })); });
+  assert.equal(count("list_receipts"), 0); assert.equal(count("prepare_apply_durable"), 0);
+  await click("Inspecionar anúncio"); assert.equal([...container.querySelectorAll("button")].some(b => b.textContent === "Revisar aplicação com recibo salvo"), false);
+  assert.equal(Object.hasOwn(controller.snapshot, "durableReceipt"), false);
+});
+
+test("cancelled durable plan does not retain a receipt or transfer consent to the RAM alternative", async () => {
+  durableFixtures(); await render(); await click("Inspecionar anúncio"); await click("Revisar aplicação com recibo salvo");
+  await check("Autorizo esta alteração do anúncio"); await click("Cancelar revisão");
+  assert.equal(Object.hasOwn(controller.snapshot, "durableReceipt"), false);
+  await click("Revisar aplicação na cópia"); assert.equal(controller.snapshot.review.digest, digest);
+  assert.equal(button("Confirmar alteração revisada").disabled, true); assert.equal(count("confirm"), 0);
+});
+
+test("durable list results from another copy or an earlier mod selection never offer resume", async () => {
+  durableFixtures(); const waiting = deferred(); handlers.set("voice_announcement_list_receipts", () => waiting.promise);
+  await render(); await click("Consultar recibos salvos"); await render({ instanceId: "other-copy" });
+  await act(async () => waiting.resolve({ instanceId: copy, receipts: [receiptRow()] }));
+  assert.equal([...container.querySelectorAll("button")].some(b => b.textContent === "Retomar restauração"), false);
+  assert.equal(count("resume_receipt"), 0);
+  handlers.set("voice_announcement_list_receipts", () => ({ instanceId: copy, receipts: [receiptRow()] }));
+  await click("Consultar recibos salvos");
+  assert.equal([...container.querySelectorAll("button")].some(b => b.textContent === "Retomar restauração"), false);
+  await render({ instanceId: copy }); handlers.set("voice_announcement_list_receipts", () => ({ instanceId: copy, receipts: [receiptRow()] }));
+  await click("Consultar recibos salvos"); assert.ok(button("Retomar restauração"));
+  await chooseVoiceMod("plasmo_voice"); assert.equal([...container.querySelectorAll("button")].some(b => b.textContent === "Retomar restauração"), false);
+});
+
+test("restored records are history only and a failed resume requires an explicit fresh list", async () => {
+  durableFixtures(); handlers.set("voice_announcement_list_receipts", () => ({ instanceId: copy, receipts: [receiptRow("simple_voice_chat", "restored")] }));
+  await render(); await click("Consultar recibos salvos"); assert.match(container.textContent, /Restauração já concluída/);
+  assert.equal([...container.querySelectorAll("button")].some(b => b.textContent === "Retomar restauração"), false);
+  handlers.set("voice_announcement_list_receipts", () => ({ instanceId: copy, receipts: [receiptRow()] }));
+  await click("Consultar recibos salvos"); handlers.set("voice_announcement_resume_receipt", () => { throw "voice_stale_review"; });
+  await click("Retomar restauração"); await tick();
+  assert.equal(count("resume_receipt"), 1); assert.equal(count("list_receipts"), 2);
+  assert.equal([...container.querySelectorAll("button")].some(b => b.textContent === "Retomar restauração"), false);
+  assert.equal(count("confirm"), 0);
+});
+
+test("lost durable application response observes the committed record without repeating the mutation", async () => {
+  durableFixtures(); await render(); await click("Inspecionar anúncio"); await click("Revisar aplicação com recibo salvo");
+  handlers.set("voice_announcement_confirm", () => { move({ ...durableApplied(), generation: snapshot.generation }); throw "voice_internal"; });
+  await check("Autorizo esta alteração do anúncio"); await click("Confirmar alteração revisada"); await tick();
+  assert.equal(count("confirm"), 1); assert.equal(controller.snapshot.durableReceipt.state, "saved");
+  assert.match(container.textContent, /recibo está salvo/); assert.equal(count("resume_receipt"), 0);
+});
+
+test("uncertain durable executor never promises a usable saved receipt or an automatic restore", async () => {
+  durableFixtures(); const uncertain = { state: "uncertain", receiptId: null, generation: null };
+  snapshot = selected({ phase: "needsRecovery", observation: null, restorationState: "needs_recovery", durableReceipt: uncertain, lastErrorCode: "voice_needs_recovery" });
+  await render(); assert.equal([...container.querySelectorAll("button")].some(b => b.textContent === "Revisar restauração estrita"), false);
+  await click("Encerrar operação de anúncio");
+  assert.match(container.textContent, /existência de um recibo utilizável ainda não está confirmada/);
+  assert.doesNotMatch(container.textContent, /recibo salvo fica no histórico|recibo está salvo/);
+  await check("Autorizo sair mantendo a configuração"); await click("Sair mantendo alteração na cópia");
+  assert.equal(count("prepare_restore"), 0); assert.equal(count("prepare_restore_reconciled"), 0);
+});
+
+test("lost resume response is reconciled as the native operation without another resume or restore", async () => {
+  durableFixtures(); handlers.set("voice_announcement_resume_receipt", () => {
+    move({ ...durableApplied(), generation: snapshot.generation, lastRecoveryResult: null }); throw "voice_storage";
+  });
+  await render(); await click("Consultar recibos salvos"); await click("Retomar restauração"); await tick();
+  assert.equal(count("resume_receipt"), 1); assert.equal(count("list_receipts"), 1);
+  assert.equal(controller.snapshot.phase, "applied"); assert.equal(controller.snapshot.observation, null);
+  assert.equal(controller.snapshot.review, null); assert.equal(controller.snapshot.lastRecoveryResult, null);
+  assert.equal(controller.snapshot.durableReceipt.receiptId, RECEIPT);
+  assert.equal(button("Revisar restauração estrita").disabled, false);
+  assert.equal(count("prepare_restore"), 0); assert.equal(count("confirm"), 0);
+});
+
+test("listing that outlives panel close cannot republish rows after the close barrier is released", async () => {
+  durableFixtures(); const waiting = deferred(); handlers.set("voice_announcement_list_receipts", () => waiting.promise);
+  await render(); await click("Consultar recibos salvos");
+  const closing = deferred(); handlers.set("voice_announcement_begin_close", () => {
+    move({ phase: "closing", busy: true, close: { closeId: CLOSE, intent: "panel", state: "waiting", review: null } }); return closing.promise;
+  });
+  let closed; await act(async () => { closed = controller.beginPanelClose(); }); await refresh();
+  await act(async () => {
+    waiting.resolve({ instanceId: copy, receipts: [receiptRow()] });
+    closing.resolve(move({ phase: "closed", busy: false, close: { closeId: CLOSE, intent: "panel", state: "ready", review: null } }));
+  }); await closed;
+  assert.equal(controller.snapshot.phase, "idle"); assert.equal(count("finish_close"), 1);
+  assert.equal([...container.querySelectorAll("button")].some(b => b.textContent === "Retomar restauração"), false);
+  assert.equal(count("resume_receipt"), 0);
+});
+
+test("durable resume busy snapshot has no invented mod/context and close waits for its actual result", async () => {
+  durableFixtures(); const waiting = deferred(); handlers.set("voice_announcement_resume_receipt", () => {
+    move({ ...idle(), generation: snapshot.generation, phase: "resumingReceipt", busy: true }); return waiting.promise;
+  });
+  await render(); await click("Consultar recibos salvos"); await click("Retomar restauração"); await refresh();
+  assert.equal(controller.snapshot.operationId, null); assert.equal(controller.snapshot.voiceMod, null);
+  assert.match(container.textContent, /Verificando recibo salvo/); assert.equal(button("Inspecionar anúncio").disabled, true);
+  const closing = deferred(); handlers.set("voice_announcement_begin_close", () => {
+    move({ phase: "closing", busy: true, close: { closeId: CLOSE, intent: "exit", state: "waiting", review: null } }); return closing.promise;
+  });
+  let closePromise; await act(async () => { closePromise = controller.run("begin_close", { operationId: null, intent: "exit" }); }); await refresh();
+  await act(async () => { snapshot = { ...durableClosing("exit"), generation: 20 }; waiting.resolve(snapshot); closing.resolve(snapshot); }); await closePromise;
+  assert.match(container.textContent, /recibo salvo fica no histórico/); assert.equal(count("confirm_close"), 0); assert.equal(count("confirm"), 0);
+});
+
+test("durable logout retains the receipt, requires close consent and preserves Connect/account ordering", async () => {
+  durableFixtures(); snapshot = durableApplied(); await render();
+  await click("Sair da conta fixture"); assert.deepEqual(logoutSteps, []);
+  await check("Autorizo sair mantendo a configuração"); await click("Sair mantendo alteração na cópia"); await logoutPromise;
+  assert.deepEqual(logoutSteps, ["connect", "firebase"]); assert.equal(count("finish_close"), 1);
+  assert.equal(count("confirm"), 0); assert.equal(count("prepare_restore"), 0);
+});
+
+test("durable receipt parsers enforce exact scope, state and bounded lists without altering RAM snapshots", () => {
+  const capability = { ...caps(true), durableReceipts: { schemaVersion: 1, maxReceipts: 64 } };
+  assert.deepEqual(types.voiceCapabilitiesFrom(capability), capability);
+  for (const malformed of [null, { schemaVersion: 2, maxReceipts: 64 }, { schemaVersion: 1, maxReceipts: 65 }, { schemaVersion: 1, maxReceipts: 64, automatic: true }]) {
+    assert.throws(() => types.voiceCapabilitiesFrom({ ...caps(true), durableReceipts: malformed }));
+  }
+  assert.throws(() => types.voiceCapabilitiesFrom({ ...caps(false), durableReceipts: capability.durableReceipts }));
+  assert.deepEqual(types.voiceSnapshotFrom(applied()), applied());
+  assert.deepEqual(types.voiceSnapshotFrom(durableApplied()), durableApplied());
+  assert.deepEqual(types.voiceSnapshotFrom({ ...idle(), phase: "resumingReceipt", busy: true }), { ...idle(), phase: "resumingReceipt", busy: true });
+  for (const bad of [{ ...idle(), durableReceipt: plannedReceipt() }, { ...durableApplied(), durableReceipt: plannedReceipt() },
+    { ...durableApplied(), durableReceipt: savedReceipt(1) }, { ...durableApplied(), durableReceipt: { ...savedReceipt(), receiptId: null } },
+    { ...durableApplied(), durableReceipt: { ...savedReceipt(), configPath: "injected" } },
+    { ...durableApplied(), phase: "resumingReceipt", busy: true }, { ...selected(), durableReceipt: plannedReceipt() },
+    { ...selected({ phase: "reviewApply", review: review() }), durableReceipt: savedReceipt() }]) assert.throws(() => types.voiceSnapshotFrom(bad));
+  const closing = durableClosing(); assert.deepEqual(types.voiceSnapshotFrom(closing), closing);
+  const forged = structuredClone(closing); forged.close.review.selectiveRestorationLost = true; assert.throws(() => types.voiceSnapshotFrom(forged));
+  delete forged.durableReceipt; forged.close.review.selectiveRestorationLost = false; assert.throws(() => types.voiceSnapshotFrom(forged));
+  for (const receipts of [[{ ...receiptRow(), generation: 1 }], [{ ...receiptRow("simple_voice_chat", "restored"), generation: 0 }],
+    [{ ...receiptRow(), path: "untrusted" }], [receiptRow(), receiptRow()], [receiptRow(), { ...receiptRow(), receiptId: PLAN }],
+    Array(65).fill(receiptRow()), [{ ...receiptRow(), voiceMod: "custom" }]]) assert.throws(() => types.voiceReceiptListFrom({ instanceId: copy, receipts }));
+  assert.deepEqual(types.voiceReceiptListFrom({ instanceId: copy, receipts: [receiptRow()] }), { instanceId: copy, receipts: [receiptRow()] });
 });
