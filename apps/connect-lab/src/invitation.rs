@@ -22,6 +22,7 @@ const DOMAIN: &[u8] = b"aurora/connect-lab/invitation/v1\0";
 pub(crate) enum InvitationAddressMode {
     Loopback,
     ExternalIpv6,
+    DirectIpv4,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -76,6 +77,34 @@ pub fn validate_external_invitation_address(address: SocketAddr) -> Result<()> {
     Ok(())
 }
 
+/// Conservative, explicit IPv4 initial-address policy, including RFC1918.
+/// This does not discover routes, prove reachability/NAT traversal, or classify
+/// directed broadcast for every subnet. No socket or lookup is opened here.
+pub fn validate_direct_ipv4_invitation_address(address: SocketAddr) -> Result<()> {
+    let SocketAddr::V4(address) = address else {
+        return Err(Error::Configuration);
+    };
+    let [a, b, c, _] = address.ip().octets();
+    // IANA special-purpose registry reviewed for this explicit profile. The
+    // whole listed blocks are refused, including their exceptional subranges.
+    if address.port() == 0
+        || matches!(a, 0 | 127)
+        || a >= 224
+        || (a == 100 && (64..=127).contains(&b))
+        || (a == 169 && b == 254)
+        || (a == 192
+            && matches!(
+                (b, c),
+                (0, 0 | 2) | (31, 196) | (52, 193) | (88, 99) | (175, 48)
+            ))
+        || (a == 198 && (matches!(b, 18 | 19) || (b == 51 && c == 100)))
+        || (a == 203 && b == 0 && c == 113)
+    {
+        return Err(Error::Configuration);
+    }
+    Ok(())
+}
+
 impl InvitationAddressMode {
     pub(crate) fn validate(self, address: SocketAddr) -> Result<()> {
         match self {
@@ -89,6 +118,7 @@ impl InvitationAddressMode {
                 Ok(())
             }
             Self::ExternalIpv6 => validate_external_invitation_address(address),
+            Self::DirectIpv4 => validate_direct_ipv4_invitation_address(address),
         }
     }
 }
@@ -334,6 +364,27 @@ impl Invitation {
         )
     }
 
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub fn issue_direct_ipv4(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        expires_at_unix_ms: u64,
+    ) -> Result<Self> {
+        Self::issue_in_mode(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            IssueExpiry::Absolute(expires_at_unix_ms),
+            InvitationPolicy::legacy(InvitationAddressMode::DirectIpv4),
+        )
+    }
+
     /// Explicit V2 grant profile, still limited to a loopback initial address.
     /// Legacy issue/verify and legacy Host/Guest entry points reject this profile.
     pub fn issue_fragmented(
@@ -375,6 +426,27 @@ impl Invitation {
         )
     }
 
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub fn issue_fragmented_direct_ipv4(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        expires_at_unix_ms: u64,
+    ) -> Result<Self> {
+        Self::issue_in_mode(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            IssueExpiry::Absolute(expires_at_unix_ms),
+            InvitationPolicy::fragmented(InvitationAddressMode::DirectIpv4),
+        )
+    }
+
     /// Explicit V2 issuance with one civil-clock sample for both signed times.
     /// Duration must be an exact positive number of milliseconds, at most 600s.
     pub fn issue_fragmented_for_lifetime(
@@ -413,6 +485,27 @@ impl Invitation {
             services,
             IssueExpiry::Lifetime(lifetime),
             InvitationPolicy::fragmented(InvitationAddressMode::ExternalIpv6),
+        )
+    }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub fn issue_fragmented_direct_ipv4_for_lifetime(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        lifetime: Duration,
+    ) -> Result<Self> {
+        Self::issue_in_mode(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            IssueExpiry::Lifetime(lifetime),
+            InvitationPolicy::fragmented(InvitationAddressMode::DirectIpv4),
         )
     }
 
@@ -494,6 +587,22 @@ impl Invitation {
         )
     }
 
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub fn verify_direct_ipv4(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+    ) -> Result<Self> {
+        Self::verify_at_in_mode(
+            encoded,
+            expected_host,
+            guest,
+            unix_millis(),
+            InvitationPolicy::legacy(InvitationAddressMode::DirectIpv4),
+        )
+    }
+
     /// Verify a signed V2 profile only after explicit local transport opt-in.
     pub fn verify_fragmented(
         encoded: &str,
@@ -520,6 +629,22 @@ impl Invitation {
             guest,
             unix_millis(),
             InvitationPolicy::fragmented(InvitationAddressMode::ExternalIpv6),
+        )
+    }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub fn verify_fragmented_direct_ipv4(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+    ) -> Result<Self> {
+        Self::verify_at_in_mode(
+            encoded,
+            expected_host,
+            guest,
+            unix_millis(),
+            InvitationPolicy::fragmented(InvitationAddressMode::DirectIpv4),
         )
     }
     fn verify_at(
@@ -720,6 +845,15 @@ impl Invitation {
             InvitationPolicy::legacy(InvitationAddressMode::ExternalIpv6),
         )
     }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub(crate) fn check_host_direct_ipv4(&self, config: &HostConfig) -> Result<()> {
+        self.check_host_in_policy(
+            config,
+            InvitationPolicy::legacy(InvitationAddressMode::DirectIpv4),
+        )
+    }
     pub(crate) fn check_host_fragmented(&self, config: &HostConfig) -> Result<()> {
         self.check_host_in_policy(
             config,
@@ -730,6 +864,15 @@ impl Invitation {
         self.check_host_in_policy(
             config,
             InvitationPolicy::fragmented(InvitationAddressMode::ExternalIpv6),
+        )
+    }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub(crate) fn check_host_fragmented_direct_ipv4(&self, config: &HostConfig) -> Result<()> {
+        self.check_host_in_policy(
+            config,
+            InvitationPolicy::fragmented(InvitationAddressMode::DirectIpv4),
         )
     }
     fn check_host_in_policy(&self, config: &HostConfig, policy: InvitationPolicy) -> Result<()> {

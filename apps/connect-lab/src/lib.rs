@@ -20,7 +20,8 @@ pub use fragment::Completed as ReassembledDatagram;
 pub use guest::{FragmentedUdpAssociation, Guest, TcpBridge, UdpAssociation, UdpBridge};
 pub use host::Host;
 pub use invitation::{
-    Invitation, MAX_INVITATION_BYTES, MAX_INVITATION_LIFETIME, validate_external_invitation_address,
+    Invitation, MAX_INVITATION_BYTES, MAX_INVITATION_LIFETIME,
+    validate_direct_ipv4_invitation_address, validate_external_invitation_address,
 };
 pub use iroh::{EndpointAddr, EndpointId, SecretKey};
 #[cfg(feature = "local-relay-lab")]

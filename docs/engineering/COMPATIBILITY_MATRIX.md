@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 14/10/2026
 
+Incremento65: convites assinados recebem modo IPv4 explícito na biblioteca, com testes dos quatro perfis no IPv4 próprio. [Contrato65](../aurora-connect-direct-ipv4.md). **PROTÓTIPO**; não é evidência de LAN entre máquinas, IPv4 público, NAT/CGNAT, áudio ou Minecraft. Nenhuma célula dos nove pares foi promovida; relay público segue desligado.
+
 Incremento64: a sessãoTCP+UDP recebe descoberta do game/TCP por filho próprio, mantendo aux/UDP manual e fechamento de ambos pela perda da origem. [Contrato e evidências64](../aurora-connect-discovered-session-udp.md). **PROTÓTIPO**, off por padrão; processo de fixture/STATUS sintético e DOM não homologam Minecraft LAN, janela Tauri, SVC/Plasmo, rede externa ou os nove pares.
 
 Incremento63: recuperação manual e limitada da ponte UDP na sessão schema3, sem derrubar TCP ou renovar autorização. [Contrato e evidências63](../aurora-connect-desktop-udp-recovery.md). **PROTÓTIPO**, off por padrão. Não amplia homologação SVC/Plasmo, GUI, Minecraft, redes ou pares Core/Skins; T-MIX-03 de áudio real permanece pendente.

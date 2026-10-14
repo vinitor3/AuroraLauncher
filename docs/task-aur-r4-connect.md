@@ -1549,6 +1549,31 @@ Regressões completas: **266 PASS/5 ignorados padrão** e **357 PASS/42 ignorado
 
 TCP/UDP avançam na composição local com origem observada. Direto/relay, Minecraft, convites externos, SVC e Plasmo mantêm provas anteriores; nenhum gate de homologação ou distribuição foi fechado. Rollback: encerrar somente Connect e aguardar cleanup; revert local revisado de64, sem apagar instâncias/recuperação/artefatos. Nenhuma ação humana necessária para estas verificações.
 
+## Incremento65 — convites e transporte com IPv4 inicial explícito
+
+Base `f9e2d75` após64. Bloqueio local: as entradas assinadas aceitavam loopback ou IPv6 externo, mas não IPv4 direto. Implementadas APIs explícitas para os quatro perfis na biblioteca, com filtro conservador de endereço e verificação de modo antes de qualquer endpoint. Host precisa possuir o endereço assinado; destinos de aplicação continuam loopback, serviços/assinaturas/consumo único/prazos intactos. Nenhuma abertura de firewall, mapping, descoberta, relay público ou fallback. [Contrato, política e fonte IANA](aurora-connect-direct-ipv4.md).
+
+Arquivos: `apps/connect-lab/src/{invitation,session_invitation,host,guest,lib}.rs`, novo `tests/direct_ipv4.rs`; documentação canônica e ADR incluem decisões64/65. Manifests, locks, matriz ativa, Core/Skins e demais worktrees preservados. Interface/nativo66 são incremento posterior, sem inclusão neste commit.
+
+Comandos efetivamente executados (paths relativos à worktree):
+
+```powershell
+cargo test --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --test direct_ipv4 -- --test-threads=1
+# AURORA_CONNECT_TEST_IPV4 definido somente no processo com o IPv4 próprio observado,
+# removido após esta execução; endereço omitido deste registro.
+cargo test --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --test direct_ipv4 -- --ignored --test-threads=1
+cargo test --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --all-targets -- --test-threads=1
+cargo test --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --all-targets --features local-relay-lab -- --test-threads=1
+cargo clippy --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --all-targets -- -D warnings
+cargo clippy --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --all-targets --features local-relay-lab -- -D warnings
+```
+
+Foco: **5 PASS/3 ignorados** sem transporte,0,28s; opt-in **3 PASS/0 ignorados**,7,41s. Os opt-in exigem endereço próprio bindável, falham quando ausente e foram realmente executados. Quatro perfis transferiram262144B TCP por direção no total; três perfis UDP, duas origens cada, somaram17408B por direção. Caminhos observados IPv4 sem relay. Schema3 manteve TCP aberto/UDP4096 após ingresso, recusou4097 antes do endpoint e encerrou no prazo original. Replay e revogação elevaram denied sem novo destino TCP, associação UDP ou payload; todas as fixtures confirmaram cleanup/rebind. Os JSON de sucesso emitidos pelos testes ficam capturados pelo runner; estas provas são asserções aprovadas, não uma transcrição JSON externa.
+
+Regressão completa: **236 PASS/7 ignorados padrão**,145,69s somados de testes; **246 PASS/8 ignorados com relay local**,152,24s. Três ignorados são os IPv4 opt-in executados separadamente; demais gates externos permanecem. Compilações2m38s/3m22s. Clippy ambos PASS42,90s/14,25s. Logs sob `.aurora/connect-validation/direct-ipv4-65-{focused,own-address,full-default,full-relay,clippy-default,clippy-relay}.log`. Revisão independente e revisão do coordenador sem bloqueador final; não somar rodadas sobrepostas.
+
+TCP/UDP ganham este caminho local autenticado; direto IPv4 **PROTÓTIPO**, alcance LAN/internet/NAT/CGNAT **PRECISA DE TESTE**. Relay público permanece desativado. Minecraft, convites externos, áudio SVC e áudio Plasmo não foram testados nesta etapa. Rollback é encerrar os próprios Host/Guest e aguardar recursos livres, seguido de revert local revisado se necessário. Nenhuma configuração pessoal foi alterada e nenhuma intervenção humana é necessária.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.

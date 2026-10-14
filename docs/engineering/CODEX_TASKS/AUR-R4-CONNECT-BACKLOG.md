@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 14/10/2026
 
+Incremento65/004/005/008 acrescenta APIs de IPv4 inicial explícito aos quatro perfis assinados, com filtro conservador e bind próprio exato. [Contrato65](../../aurora-connect-direct-ipv4.md). **PROTÓTIPO**; testes no próprio computador não fecham T-NET externo, NAT/CGNAT, relay público, Minecraft ou áudio. CLI/Node/desktop só podem adotá-lo em integração explícita posterior.
+
 Incremento64/003/005/008 permite game/TCP descoberto na sessão schema3, mantendo UDP manual e autorizado separadamente. Reutiliza seleção opaca48, guard do processo e monitor, encerrando ambos os transportes quando a origem muda. [Contrato64](../../aurora-connect-discovered-session-udp.md). **PROTÓTIPO**, sem nova prova de LAN Minecraft, janela Tauri, áudio ou rede externa. O perfil curto57 permanece manual.
 
 Incremento63/003/005/008 acrescenta recuperação manual de UDP somente dentro da sessão schema3 admitida: até três tentativas adicionais, fila limitada, mesma autorização e TCP preservado. [Contrato e evidências63](../../aurora-connect-desktop-udp-recovery.md). **PROTÓTIPO**; avanço local da parte de transporte do T-MIX-03 não conclui reconexão de áudio/credencial/rota de mod, rede externa ou estabilidade. Sem nova configuração, porta, identidade, prazo ou retry automático; demais fases e testes permanecem.

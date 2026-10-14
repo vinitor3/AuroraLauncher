@@ -111,6 +111,24 @@ impl Guest {
         )
         .await
     }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub async fn connect_invited_direct_ipv4(
+        secret_key: SecretKey,
+        invitation: &Invitation,
+        limits: Limits,
+    ) -> Result<Self> {
+        Self::connect_invited_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            InvitationAddressMode::DirectIpv4,
+            InvitationProfile::Legacy,
+            None,
+        )
+        .await
+    }
     /// Explicit signed V2 grants over a loopback initial address. Legacy and
     /// external invitations are rejected before opening any endpoint.
     pub async fn connect_invited_fragmented(
@@ -140,6 +158,24 @@ impl Guest {
             invitation,
             limits,
             InvitationAddressMode::ExternalIpv6,
+            InvitationProfile::FragmentedV2,
+            None,
+        )
+        .await
+    }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub async fn connect_invited_fragmented_direct_ipv4(
+        secret_key: SecretKey,
+        invitation: &Invitation,
+        limits: Limits,
+    ) -> Result<Self> {
+        Self::connect_invited_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            InvitationAddressMode::DirectIpv4,
             InvitationProfile::FragmentedV2,
             None,
         )
@@ -208,6 +244,7 @@ impl Guest {
         invitation.check_current()?;
         let direct = invitation.direct_addr();
         let bind_addr = match mode {
+            InvitationAddressMode::DirectIpv4 => "0.0.0.0:0",
             InvitationAddressMode::ExternalIpv6 => "[::]:0",
             InvitationAddressMode::Loopback if direct.is_ipv4() => "127.0.0.1:0",
             InvitationAddressMode::Loopback => "[::1]:0",
@@ -262,6 +299,23 @@ impl Guest {
         )
         .await
     }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub async fn connect_invited_session_direct_ipv4(
+        secret_key: SecretKey,
+        invitation: &SessionInvitation,
+        limits: Limits,
+    ) -> Result<Self> {
+        invitation.check_profile(SessionInvitationProfile::GameTcp)?;
+        Self::connect_session_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            InvitationAddressMode::DirectIpv4,
+        )
+        .await
+    }
     /// Explicit schema-3 game/TCP plus fragmented aux/UDP session. The
     /// already verified authority keeps its original clocks through all I/O.
     pub async fn connect_invited_fragmented_session(
@@ -293,6 +347,23 @@ impl Guest {
         )
         .await
     }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub async fn connect_invited_fragmented_session_direct_ipv4(
+        secret_key: SecretKey,
+        invitation: &SessionInvitation,
+        limits: Limits,
+    ) -> Result<Self> {
+        invitation.check_profile(SessionInvitationProfile::FragmentedGameUdp)?;
+        Self::connect_session_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            InvitationAddressMode::DirectIpv4,
+        )
+        .await
+    }
     async fn connect_session_in_mode(
         secret_key: SecretKey,
         invitation: &SessionInvitation,
@@ -306,6 +377,7 @@ impl Guest {
         invitation.check_admission_current()?;
         let direct = invitation.direct_addr();
         let bind_addr = match mode {
+            InvitationAddressMode::DirectIpv4 => "0.0.0.0:0",
             InvitationAddressMode::ExternalIpv6 => "[::]:0",
             InvitationAddressMode::Loopback if direct.is_ipv4() => "127.0.0.1:0",
             InvitationAddressMode::Loopback => "[::1]:0",

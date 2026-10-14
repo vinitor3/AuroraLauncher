@@ -306,6 +306,27 @@ impl SessionInvitation {
         )
     }
 
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub fn issue_direct_ipv4(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        deadlines: SessionDeadlines,
+    ) -> Result<Self> {
+        Self::issue_in_mode(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            IssueTiming::Absolute(deadlines),
+            AddressMode::DirectIpv4,
+        )
+    }
+
     /// Compute both signed expiries from the same clock as issuedAt. Durations
     /// are exact milliseconds, bounded by the existing admission/session rules.
     pub fn issue_loopback_for_lifetimes(
@@ -345,6 +366,28 @@ impl SessionInvitation {
             services,
             IssueTiming::Lifetimes { admission, session },
             AddressMode::ExternalIpv6,
+        )
+    }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub fn issue_direct_ipv4_for_lifetimes(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        admission: Duration,
+        session: Duration,
+    ) -> Result<Self> {
+        Self::issue_in_mode(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            IssueTiming::Lifetimes { admission, session },
+            AddressMode::DirectIpv4,
         )
     }
 
@@ -392,6 +435,31 @@ impl SessionInvitation {
             IssueOptions {
                 timing: IssueTiming::Lifetimes { admission, session },
                 mode: AddressMode::ExternalIpv6,
+                profile: SessionInvitationProfile::FragmentedGameUdp,
+            },
+        )
+    }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub fn issue_fragmented_direct_ipv4_for_lifetimes(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        admission: Duration,
+        session: Duration,
+    ) -> Result<Self> {
+        Self::issue_in_profile(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            IssueOptions {
+                timing: IssueTiming::Lifetimes { admission, session },
+                mode: AddressMode::DirectIpv4,
                 profile: SessionInvitationProfile::FragmentedGameUdp,
             },
         )
@@ -519,6 +587,24 @@ impl SessionInvitation {
         Ok(value)
     }
 
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub fn verify_direct_ipv4(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+    ) -> Result<Self> {
+        let value = Self::verify_in_mode(
+            encoded,
+            expected_host,
+            guest,
+            Clock::now(),
+            AddressMode::DirectIpv4,
+        )?;
+        value.check_admission_current()?;
+        Ok(value)
+    }
+
     pub fn verify_fragmented_loopback(
         encoded: &str,
         expected_host: EndpointId,
@@ -550,6 +636,27 @@ impl SessionInvitation {
             VerificationOptions {
                 clock: Clock::now(),
                 mode: AddressMode::ExternalIpv6,
+                profile: SessionInvitationProfile::FragmentedGameUdp,
+            },
+        )?;
+        value.check_admission_current()?;
+        Ok(value)
+    }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub fn verify_fragmented_direct_ipv4(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+    ) -> Result<Self> {
+        let value = Self::verify_in_profile(
+            encoded,
+            expected_host,
+            guest,
+            VerificationOptions {
+                clock: Clock::now(),
+                mode: AddressMode::DirectIpv4,
                 profile: SessionInvitationProfile::FragmentedGameUdp,
             },
         )?;
@@ -777,6 +884,12 @@ impl SessionInvitation {
     pub(crate) fn check_host_external_ipv6(&self, config: &HostConfig) -> Result<()> {
         self.check_host_at(config, AddressMode::ExternalIpv6, Clock::now())
     }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub(crate) fn check_host_direct_ipv4(&self, config: &HostConfig) -> Result<()> {
+        self.check_host_at(config, AddressMode::DirectIpv4, Clock::now())
+    }
     pub(crate) fn check_host_fragmented(&self, config: &HostConfig) -> Result<()> {
         self.check_host_profile_at(
             config,
@@ -793,6 +906,19 @@ impl SessionInvitation {
             VerificationOptions {
                 clock: Clock::now(),
                 mode: AddressMode::ExternalIpv6,
+                profile: SessionInvitationProfile::FragmentedGameUdp,
+            },
+        )
+    }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub(crate) fn check_host_fragmented_direct_ipv4(&self, config: &HostConfig) -> Result<()> {
+        self.check_host_profile_at(
+            config,
+            VerificationOptions {
+                clock: Clock::now(),
+                mode: AddressMode::DirectIpv4,
                 profile: SessionInvitationProfile::FragmentedGameUdp,
             },
         )

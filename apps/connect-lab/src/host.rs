@@ -258,6 +258,21 @@ impl Host {
         )
         .await
     }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub async fn start_invited_direct_ipv4(
+        config: HostConfig,
+        invitation: &Invitation,
+    ) -> Result<Self> {
+        invitation.check_host_direct_ipv4(&config)?;
+        Self::start_inner(
+            config,
+            Some(InvitationAuthority::Legacy(invitation.clone())),
+            transport::EndpointMode::Direct,
+        )
+        .await
+    }
     /// One-use V2 invitation, requiring the exact signed game/TCP and
     /// aux/fragmented-UDP registry before opening a loopback endpoint.
     pub async fn start_invited_fragmented(
@@ -279,6 +294,21 @@ impl Host {
         invitation: &Invitation,
     ) -> Result<Self> {
         invitation.check_host_fragmented_external_ipv6(&config)?;
+        Self::start_inner(
+            config,
+            Some(InvitationAuthority::Legacy(invitation.clone())),
+            transport::EndpointMode::Direct,
+        )
+        .await
+    }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub async fn start_invited_fragmented_direct_ipv4(
+        config: HostConfig,
+        invitation: &Invitation,
+    ) -> Result<Self> {
+        invitation.check_host_fragmented_direct_ipv4(&config)?;
         Self::start_inner(
             config,
             Some(InvitationAuthority::Legacy(invitation.clone())),
@@ -313,6 +343,21 @@ impl Host {
         )
         .await
     }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub async fn start_invited_session_direct_ipv4(
+        config: HostConfig,
+        invitation: &SessionInvitation,
+    ) -> Result<Self> {
+        invitation.check_host_direct_ipv4(&config)?;
+        Self::start_inner(
+            config,
+            Some(InvitationAuthority::Session(invitation.clone())),
+            transport::EndpointMode::Direct,
+        )
+        .await
+    }
     /// Explicit schema-3 session: signed game/TCP and fragmented aux/UDP,
     /// with independent, immutable admission and session deadlines.
     pub async fn start_invited_fragmented_session(
@@ -333,6 +378,21 @@ impl Host {
         invitation: &SessionInvitation,
     ) -> Result<Self> {
         invitation.check_host_fragmented_external_ipv6(&config)?;
+        Self::start_inner(
+            config,
+            Some(InvitationAuthority::Session(invitation.clone())),
+            transport::EndpointMode::Direct,
+        )
+        .await
+    }
+
+    /// Explicit direct IPv4 opt-in; preserves this profile's grants and original
+    /// deadlines. No relay, address discovery, port mapping or route guarantee.
+    pub async fn start_invited_fragmented_session_direct_ipv4(
+        config: HostConfig,
+        invitation: &SessionInvitation,
+    ) -> Result<Self> {
+        invitation.check_host_fragmented_direct_ipv4(&config)?;
         Self::start_inner(
             config,
             Some(InvitationAuthority::Session(invitation.clone())),

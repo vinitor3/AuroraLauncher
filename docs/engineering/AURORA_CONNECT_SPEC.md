@@ -400,6 +400,10 @@ Trabalho síncrono já iniciado conserva autoridade e publica resultado mesmo ap
 
 O caller schema3 pode consumir a seleção opaca48 para game/TCP, conservando aux/UDP manual. O novo pedido não contém destino TCP nem identidade de processo fornecidos pelo frontend; ambos vêm do handle e listener previamente revisados. Capability própria, confirmação do digest, consumo único e monitor original permanecem. Perda da origem fecha ambos os transportes Connect, sem encerrar o jogo. [Contrato64](../aurora-connect-discovered-session-udp.md). O perfil curto57 continua manual; não inferir descoberta UDP, Minecraft LAN, áudio ou GUI homologados.
 
+### 9.8 IPv4 inicial explicitamente selecionado — incremento65
+
+Entradas `direct_ipv4` de emissão/verificação/Host/Guest acrescentam IPv4 literal aos quatro perfis, conservando schema/domínio/grants/relógios e recusando modos/perfis incompatíveis antes de I/O. Política permite RFC1918 e unicast ordinário, com bloqueios conservadores; não promete roteabilidade ou classificar broadcast de toda sub-rede. Bind Host é exatamente o endereço assinado local; Guest usa transporteIPv4 wildcard efêmero. Sem DNS, mapping, firewall, relay ou fallback. [Contrato, fonte oficial e testes65](../aurora-connect-direct-ipv4.md). Um ensaio no próprio IPv4 não comprova LAN, IPv4 público ou NAT/CGNAT. Callers antigos permanecem nos modos anteriores até integração própria.
+
 ## 10. Validação, incrementalidade e liberação
 
 Ordem candidata: inventário/ADR → TCP autenticado → UDP simultâneo controlado → redes reais/relay verificado → Minecraft/convites/estados → SVC e Plasmo separadamente → robustez, manifesto e liberação. Reordenar se código/evidência mostrar incremento já pronto ou bloqueio mais importante; não refazer recovery/Doctor/Tools alpha.14. Testes completos e tarefas estão no [backlog](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md).

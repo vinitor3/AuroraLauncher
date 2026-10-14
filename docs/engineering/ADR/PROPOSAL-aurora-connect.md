@@ -134,6 +134,14 @@ Falha da ponte UDP não deve exigir derrubar TCP para liberar e reutilizar a por
 
 O worker mantém posse de setup/teardown e aguarda a mesma future no encerramento; resultado tardio não reabre uma sessão fechada. A interface reconcilia resultado IPC desconhecido consultando estado, sem repetir o comando automaticamente. Isso recupera transporte e avança T-MIX-03, sem afirmar recuperação de credencial ou áudio de SVC/Plasmo. [Contrato e validação63](../../aurora-connect-desktop-udp-recovery.md).
 
+### Incremento64 — origem TCP observada e UDP manual na mesma sessão
+
+Reutilizar a seleção opaca48 no perfil schema3, sem deduzir origem UDP pela porta ou pelo processo do jogo. O pedido de preparo descoberto não aceita destino TCP livre; consome o alvo revisto e conserva o mesmo guard até encerrar. Revisão e digest distinguem origem TCP e destino UDP manual. Perda da origem fecha os recursos Connect, sem controlar Java. [Contrato64](../../aurora-connect-discovered-session-udp.md). Isso reduz configuração manual sem inventar produtor de mundo, abertura LAN automática ou compatibilidade de voz.
+
+### Incremento65 — IPv4 explícito com bind próprio
+
+Adicionar entradas próprias para endereço inicial IPv4 literal nos quatro perfis, conservando envelopes, domínios e relógios. Não selecionar modo pelo JSON nem ampliar implicitamente APIs loopback/IPv6. Permitir endereços privados e unicast ordinário sob filtro conservador documentado; bind do Host deve ser o endereço assinado local. Separar bind privado de endereço público mapeado exigirá outro contrato. [Política, fontes e limites65](../../aurora-connect-direct-ipv4.md). Nenhuma abertura de porta, NAT traversal, relay ou infraestrutura é criada por aceitar essa família.
+
 ## Decisões pendentes e condições de aceitação
 
 Decisão do incremento27: convites manuais assinados usam Ed25519 já fornecido por Iroh1.3.0 e SHA256 já fixado, sem dependência nova. Formato canônico estrito, host pin obtido por canal autorizado, destinatário preso à chave TLS, prazo≤600s/generation1 e admissão consumida antes do ACK. Caminho separado preserva reconexão/quota das leases manuais existentes. Endereço permanece somente loopback; renovar/reentrar exige novas chaves/sessão/convite, pois replay state é de memória. Isso resolve a troca fragmentada de metadados na CLI e testa autorização, sem instituir schema Firestore, conta social ou distribuição. [Contrato §8.1](../AURORA_CONNECT_SPEC.md#81-convite-manual-assinado--laboratório). A aplicação aguarda TLS completo; não alegar desativação global de early data upstream. Testes e limitações registrados no task antes de concluir o incremento.
