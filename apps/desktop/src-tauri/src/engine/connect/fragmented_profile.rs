@@ -10,6 +10,7 @@ pub const ORIGINAL_DATAGRAM_BYTES: u16 = 4096;
 pub const MAX_FRAGMENT_FRAME_BYTES: u16 = 1264;
 pub const LOCAL_UDP_BIND: &str = "127.0.0.1:35554";
 pub const PROFILE: &str = "fragmentedGameUdp";
+pub const SESSION_PROFILE: &str = "sessionFragmentedGameUdp";
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -19,6 +20,17 @@ pub struct FragmentedHostRequest {
     pub game_target: String,
     pub udp_target: String,
     pub lifetime_seconds: u16,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionFragmentedHostRequest {
+    pub mode: ConnectMode,
+    pub bind_address: String,
+    pub game_target: String,
+    pub udp_target: String,
+    pub admission_seconds: u16,
+    pub session_seconds: u16,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -55,6 +67,32 @@ impl Default for FragmentedUdpContract {
                 bytes_per_second: 16384,
                 datagrams_per_second: 20,
             },
+        }
+    }
+}
+impl FragmentedUdpContract {
+    pub(super) fn session() -> Self {
+        Self {
+            profile: SESSION_PROFILE,
+            invitation_schema_version: 3,
+            ..Self::default()
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionFragmentedUdpCapabilities {
+    #[serde(flatten)]
+    pub contract: FragmentedUdpContract,
+    pub max_admission_seconds: u16,
+    pub max_session_seconds: u16,
+}
+impl Default for SessionFragmentedUdpCapabilities {
+    fn default() -> Self {
+        Self {
+            contract: FragmentedUdpContract::session(),
+            max_admission_seconds: 600,
+            max_session_seconds: 3600,
         }
     }
 }

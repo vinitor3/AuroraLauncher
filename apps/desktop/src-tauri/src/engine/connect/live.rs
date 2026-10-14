@@ -15,6 +15,9 @@ use tokio_util::sync::CancellationToken;
 #[path = "fragmented_desktop.rs"]
 mod fragmented_desktop;
 #[cfg(test)]
+#[path = "session_fragmented_tests.rs"]
+mod session_fragmented_tests;
+#[cfg(test)]
 #[path = "session_tests.rs"]
 mod session_tests;
 
@@ -383,7 +386,7 @@ impl Manager {
         };
         snapshot.preparation = Some(preparation.clone());
         snapshot.invitation_profile = profile.name();
-        if profile == Profile::Fragmented && role == "guest" {
+        if profile.is_fragmented() && role == "guest" {
             snapshot.udp = Some(FragmentedGuestState::default());
         }
         state.attempt = Some(Attempt {
@@ -439,6 +442,13 @@ impl Manager {
         &self,
         owner: &str,
         request: SessionHostRequest,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        self.prepare_host_internal(owner, request.into(), TargetGuard::Manual)
+    }
+    pub(super) fn prepare_session_fragmented_host(
+        &self,
+        owner: &str,
+        request: SessionFragmentedHostRequest,
     ) -> Result<ConnectPreparation, ConnectError> {
         self.prepare_host_internal(owner, request.into(), TargetGuard::Manual)
     }
@@ -513,6 +523,13 @@ impl Manager {
     ) -> Result<ConnectPreparation, ConnectError> {
         self.prepare_guest_internal(owner, request, Profile::Session)
     }
+    pub(super) fn prepare_session_fragmented_guest(
+        &self,
+        owner: &str,
+        request: GuestRequest,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        self.prepare_guest_internal(owner, request, Profile::SessionFragmented)
+    }
     fn prepare_guest_internal(
         &self,
         owner: &str,
@@ -585,13 +602,15 @@ impl Manager {
             ),
         };
         let session_timing = invitation.timing()?;
-        let fragmented_udp = invitation.is_fragmented().then(|| FragmentedUdpReview {
-            contract: FragmentedUdpContract::default(),
-            udp_target: match &draft {
-                Draft::Host { request, .. } => request.udp_target.clone(),
-                Draft::Guest { .. } => None,
-            },
-        });
+        let fragmented_udp = invitation
+            .fragmented_contract()
+            .map(|contract| FragmentedUdpReview {
+                contract,
+                udp_target: match &draft {
+                    Draft::Host { request, .. } => request.udp_target.clone(),
+                    Draft::Guest { .. } => None,
+                },
+            });
         let lifetime = invitation.fragmented_seconds().unwrap_or(lifetime);
         let lifetime = session_timing
             .as_ref()
@@ -754,6 +773,26 @@ impl Manager {
                 )
                 .map(Authority::Session)
             }
+            Profile::SessionFragmented => {
+                let issue = match request.mode {
+                    ConnectMode::Loopback => {
+                        lab::SessionInvitation::issue_fragmented_loopback_for_lifetimes
+                    }
+                    ConnectMode::ExternalIpv6 => {
+                        lab::SessionInvitation::issue_fragmented_external_ipv6_for_lifetimes
+                    }
+                };
+                issue(
+                    key,
+                    recipient,
+                    id,
+                    *bind,
+                    services,
+                    Duration::from_secs(request.admission_seconds.into()),
+                    Duration::from_secs(request.session_seconds.into()),
+                )
+                .map(Authority::SessionFragmented)
+            }
         };
         let invitation = match issued {
             Ok(invitation) => invitation,
@@ -810,6 +849,15 @@ impl Manager {
                     ConnectMode::ExternalIpv6 => lab::SessionInvitation::verify_external_ipv6,
                 };
                 verify(encoded, *host, key.public()).map(Authority::Session)
+            }
+            Profile::SessionFragmented => {
+                let verify = match request.mode {
+                    ConnectMode::Loopback => lab::SessionInvitation::verify_fragmented_loopback,
+                    ConnectMode::ExternalIpv6 => {
+                        lab::SessionInvitation::verify_fragmented_external_ipv6
+                    }
+                };
+                verify(encoded, *host, key.public()).map(Authority::SessionFragmented)
             }
         };
         let invitation = match verified {

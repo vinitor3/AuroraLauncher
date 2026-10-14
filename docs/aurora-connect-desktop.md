@@ -1,6 +1,12 @@
 # Aurora Connect no desktop — laboratório experimental
 
-Este documento descreve o caller local acrescentado no incremento46, a descoberta de portas do incremento48, o perfil de sessão do incremento56 e o transporte TCP+UDP explícito do incremento57. O [task](task-aur-r4-connect.md) registra os comandos executados e seus resultados; instruções abaixo não constituem prova de execução gráfica. Todos os gates de [R4](engineering/MASTER_ROADMAP.md), nove pares Core/Skins, Assistente desktop e recovery/CAS/Doctor permanecem válidos.
+Este documento descreve o caller local46, descoberta48, sessão TCP56, TCP+UDP curto57 e sessão TCP+UDP62. O [task](task-aur-r4-connect.md) registra os comandos executados e seus resultados; instruções abaixo não constituem prova de execução gráfica. Todos os gates de [R4](engineering/MASTER_ROADMAP.md), nove pares Core/Skins, Assistente desktop e recovery/CAS/Doctor permanecem válidos.
+
+## Perfil explícito de sessão TCP+UDP — incremento62
+
+**Sessão TCP e UDP · até 1 hora** seleciona `sessionFragmentedGameUdp` antes de preparar. Usa convite schema3, preservando todos os perfis anteriores: ingresso de1–600s e encerramento absoluto até3600s desde emissão, sem renovação. Exige destinos loopback manuais game/TCP e aux/UDP; não reutiliza seleção descoberta. Revisão60s vincula ambos os prazos, destinos e limites. Após admissão, novas conexões/associações continuam autorizadas até a sessão terminar; exportar continua limitado ao ingresso não consumido.
+
+UDP mantém original4096B/frame1264B e porta de convidado35554. TCP pode funcionar enquanto UDP prepara ou falha. Porta ocupada não causa troca de porta nem tentativa automática. Não aplica configuração de mod ou inicia Java. [Contrato, comandos, testes e rollback62](aurora-connect-desktop-fragmented-session.md). **PROTÓTIPO**, desligado por padrão; o prazo máximo não é prova de estabilidade1h ou áudio. O painel de anúncio60 continua independente, em cópia diagnóstica com aprovação/restauração próprias.
 
 ## Perfil explícito TCP+UDP — incremento57
 
@@ -22,7 +28,7 @@ Preparação, fonte descoberta, consulta STATUS, cancelamento, logout e encerram
 
 A feature Rust `connect-lab` é opcional e desligada por padrão. O build normal registra os comandos estreitos, mas não compila nem instancia o transporte; `connect_capabilities.available=false` mantém a navegação Connect oculta. A feature independente `connect-voice-lab` não habilita voz neste painel. Não foi criado instalador ou alterada versão de release.
 
-O caller usa diretamente a biblioteca real `apps/connect-lab`, sem subprocesso PowerShell, chave privada no frontend, Firebase social ou persistência de convites. Os perfis curto e de sessão autorizam somente `game/tcp`, revisão1 e `reliableStream`; o opt-in57 acrescenta `aux/udp` conforme a seção própria. Destinos loopback são selecionados explicitamente pelo anfitrião. Digitar uma porta não comprova que pertence ao Minecraft ou a uma instância gerenciada. A alternativa Windows de descoberta confere o processo filho já iniciado pelo Aurora, conforme o contrato abaixo. Connect não inicia Java, abre o mundo para LAN ou entra automaticamente no jogo.
+O caller usa diretamente a biblioteca real `apps/connect-lab`, sem subprocesso PowerShell, chave privada no frontend, Firebase social ou persistência de convites. Os perfis curto e de sessão TCP autorizam somente `game/tcp`, revisão1 e `reliableStream`; os opt-ins57/62 acrescentam `aux/udp` conforme as seções próprias. Destinos loopback são selecionados explicitamente pelo anfitrião. Digitar uma porta não comprova que pertence ao Minecraft ou a uma instância gerenciada. A alternativa Windows de descoberta confere o processo filho já iniciado pelo Aurora, conforme o contrato abaixo. Connect não inicia Java, abre o mundo para LAN ou entra automaticamente no jogo.
 
 Há uma tentativa por processo/janela principal do launcher. As chaves privadas e o estado de consumo permanecem somente na memória do backend. O proprietário deriva da janela Tauri, não de argumento enviado pelo frontend. Essa propriedade local não equivale a autenticação Microsoft, identidade de jogador ou amizade Aurora.
 

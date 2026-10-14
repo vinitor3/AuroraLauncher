@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 mod fragmented_profile;
 pub use fragmented_profile::{
     FragmentedGuestState, FragmentedHostRequest, FragmentedUdpCapabilities, FragmentedUdpContract,
-    FragmentedUdpReview,
+    FragmentedUdpReview, SessionFragmentedHostRequest, SessionFragmentedUdpCapabilities,
 };
 
 #[cfg(feature = "connect-lab")]
@@ -79,6 +79,8 @@ pub struct ConnectCapabilities {
     pub session_invitations: Option<SessionInvitationCapabilities>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fragmented_udp_invitations: Option<FragmentedUdpCapabilities>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_fragmented_udp_invitations: Option<SessionFragmentedUdpCapabilities>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -291,6 +293,8 @@ impl ConnectManager {
             ),
             fragmented_udp_invitations: cfg!(feature = "connect-lab")
                 .then(FragmentedUdpCapabilities::default),
+            session_fragmented_udp_invitations: cfg!(feature = "connect-lab")
+                .then(SessionFragmentedUdpCapabilities::default),
         }
     }
     pub fn snapshot(&self, owner: &str) -> Result<ConnectSnapshot, ConnectError> {
@@ -342,6 +346,36 @@ impl ConnectManager {
         #[cfg(feature = "connect-lab")]
         {
             self.live.prepare_fragmented_guest(owner, request)
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, request);
+            Err(ConnectError::Disabled)
+        }
+    }
+    pub fn prepare_session_fragmented_host(
+        &self,
+        owner: &str,
+        request: SessionFragmentedHostRequest,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live.prepare_session_fragmented_host(owner, request)
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, request);
+            Err(ConnectError::Disabled)
+        }
+    }
+    pub fn prepare_session_fragmented_guest(
+        &self,
+        owner: &str,
+        request: GuestRequest,
+    ) -> Result<ConnectPreparation, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live.prepare_session_fragmented_guest(owner, request)
         }
         #[cfg(not(feature = "connect-lab"))]
         {
@@ -522,6 +556,31 @@ mod disabled_tests {
         let caps = serde_json::to_value(manager.capabilities()).unwrap();
         assert!(caps.get("sessionInvitations").is_none());
         assert!(caps.get("fragmentedUdpInvitations").is_none());
+        assert!(caps.get("sessionFragmentedUdpInvitations").is_none());
+        assert!(matches!(
+            manager.prepare_session_fragmented_host(
+                "main",
+                SessionFragmentedHostRequest {
+                    mode: ConnectMode::Loopback,
+                    bind_address: "127.0.0.1:32000".into(),
+                    game_target: "127.0.0.1:32001".into(),
+                    udp_target: "127.0.0.1:32002".into(),
+                    admission_seconds: 600,
+                    session_seconds: 3600,
+                }
+            ),
+            Err(ConnectError::Disabled)
+        ));
+        assert!(matches!(
+            manager.prepare_session_fragmented_guest(
+                "main",
+                GuestRequest {
+                    mode: ConnectMode::Loopback,
+                    expected_host_public_id: String::new(),
+                }
+            ),
+            Err(ConnectError::Disabled)
+        ));
         assert!(matches!(
             manager.prepare_fragmented_host(
                 "main",

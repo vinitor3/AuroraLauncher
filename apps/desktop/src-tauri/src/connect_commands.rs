@@ -1,7 +1,8 @@
 //! Narrow local-window caller. Private transport keys never cross this boundary.
 use aurora_launcher_core::engine::connect::{
     ConnectCapabilities, ConnectManager, ConnectPreparation, ConnectReview, ConnectSnapshot,
-    FragmentedHostRequest, GuestRequest, HostRequest, InvitationExport, SessionHostRequest,
+    FragmentedHostRequest, GuestRequest, HostRequest, InvitationExport,
+    SessionFragmentedHostRequest, SessionHostRequest,
 };
 use aurora_launcher_core::engine::connect_discovery::{
     DiscoveryManager, Inventory, TargetReview, TargetStatus,
@@ -13,6 +14,28 @@ fn owner(window: &WebviewWindow) -> Result<&str, &'static str> {
         return Err("connect_owner_mismatch");
     }
     Ok(window.label())
+}
+
+#[tauri::command]
+pub fn connect_prepare_session_fragmented_host(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    request: SessionFragmentedHostRequest,
+) -> Result<ConnectPreparation, &'static str> {
+    manager
+        .prepare_session_fragmented_host(owner(&window)?, request)
+        .map_err(|error| error.code())
+}
+
+#[tauri::command]
+pub fn connect_prepare_session_fragmented_guest(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    request: GuestRequest,
+) -> Result<ConnectPreparation, &'static str> {
+    manager
+        .prepare_session_fragmented_guest(owner(&window)?, request)
+        .map_err(|error| error.code())
 }
 
 #[tauri::command]

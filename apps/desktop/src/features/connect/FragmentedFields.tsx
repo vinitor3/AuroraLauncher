@@ -4,6 +4,7 @@ import { FRAGMENTED_LIFETIME_SECONDS, FRAGMENTED_UDP_BIND, fragmentedUdpErrorTex
 
 type FieldsProps = {
   role: ConnectRole; disabled: boolean; udpTarget: string; lifetimeSeconds: string;
+  separateSession?: boolean;
   onUdpTargetChange: (value: string) => void; onLifetimeChange: (value: string) => void;
 };
 
@@ -14,9 +15,9 @@ export function FragmentedFields(props: FieldsProps) {
       <label>Serviço UDP neste computador<input required type="text" maxLength={128} value={props.udpTarget} disabled={props.disabled}
         onChange={event => props.onUdpTargetChange(event.target.value)} autoComplete="off" spellCheck={false} />
         <small>Informe o endereço loopback e a porta que você autoriza compartilhar. A porta não comprova qual mod está em execução.</small></label>
-      <label>Prazo do convite e da conexão, em segundos<input required type="number" min={1} max={FRAGMENTED_LIFETIME_SECONDS} step={1}
+      {!props.separateSession && <label>Prazo do convite e da conexão, em segundos<input required type="number" min={1} max={FRAGMENTED_LIFETIME_SECONDS} step={1}
         value={props.lifetimeSeconds} disabled={props.disabled} onChange={event => props.onLifetimeChange(event.target.value)} />
-        <small>Este perfil tem um único vencimento, contado desde a emissão e sem renovação.</small></label>
+        <small>Este perfil tem um único vencimento, contado desde a emissão e sem renovação.</small></label>}
     </>}
     <p>A ponte UDP do convidado usa {FRAGMENTED_UDP_BIND}. Se ela não puder abrir, a conexão do jogo permanece independente; outra porta não será escolhida automaticamente.</p>
     <p>Somente transporte experimental. Anúncio e configuração dos mods exigem plano e aprovação separados; áudio não testado. Este perfil não configura mundos LAN nem modo misto.</p>

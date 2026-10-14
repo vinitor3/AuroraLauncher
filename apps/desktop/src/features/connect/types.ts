@@ -1,25 +1,26 @@
 import {
-  FRAGMENTED_PROFILE, fragmentedCapabilityFrom, fragmentedExportFieldsFrom, fragmentedPreparationFieldsFrom,
+  FRAGMENTED_PROFILE, SESSION_FRAGMENTED_PROFILE, sessionFragmentedCapabilityFrom, fragmentedCapabilityFrom, fragmentedExportFieldsFrom, fragmentedPreparationFieldsFrom,
   fragmentedReviewFieldsFrom, fragmentedSnapshotFieldsFrom, type FragmentedGuestUdp, type FragmentedUdpCapability,
-  type FragmentedUdpContract, type FragmentedUdpReview,
+  type FragmentedUdpContract, type FragmentedUdpReview, type SessionFragmentedUdpCapability,
 } from "./fragmented-types";
 
 export type ConnectMode = "loopback" | "externalIpv6";
 export type ConnectRole = "host" | "guest";
-export type ConnectSessionProfile = "sessionGameTcp";
+export type ConnectSessionProfile = "sessionGameTcp" | typeof SESSION_FRAGMENTED_PROFILE;
 export type ConnectInvitationProfile = ConnectSessionProfile | typeof FRAGMENTED_PROFILE;
 export type ConnectSessionTiming = {
-  profile: ConnectSessionProfile; schemaVersion: 2; admissionSeconds: number; sessionSeconds: number;
+  admissionSeconds: number; sessionSeconds: number;
   admissionExpiresAtMs: number; sessionExpiresAtMs: number;
-};
+} & ({ profile: "sessionGameTcp"; schemaVersion: 2 } | { profile: typeof SESSION_FRAGMENTED_PROFILE; schemaVersion: 3 });
 export type ConnectPhase = "idle" | "hostPrepared" | "guestPrepared" | "reviewed" | "starting" | "hostListening" | "guestConnected" | "closing" | "closed" | "failed";
 export type ConnectCapabilities = {
   available: boolean; experimental: true; maxLifetimeSeconds: number;
   modes: ConnectMode[]; services: string[]; voiceEnabled: false; relayEnabled: false;
   statusProtocol: 767; statusHandshakeHost: "localhost"; statusHandshakePort: 43001;
   ownedInstanceDiscovery?: boolean;
-  sessionInvitations?: { profile: ConnectSessionProfile; schemaVersion: 2; maxAdmissionSeconds: 600; maxSessionSeconds: 3600 };
+  sessionInvitations?: { profile: "sessionGameTcp"; schemaVersion: 2; maxAdmissionSeconds: 600; maxSessionSeconds: 3600 };
   fragmentedUdpInvitations?: FragmentedUdpCapability;
+  sessionFragmentedUdpInvitations?: SessionFragmentedUdpCapability;
 };
 export type ConnectStatusSummary = {
   requestedProtocol: number; reportedProtocol: number; protocolMatchesRequested: boolean;
@@ -98,18 +99,21 @@ const role = (value: unknown): value is ConnectRole => value === "host" || value
 const mode = (value: unknown): value is ConnectMode => value === "loopback" || value === "externalIpv6";
 const statusContract = (value: Record<string, unknown>) => value.statusProtocol === 767 && value.statusHandshakeHost === "localhost" && value.statusHandshakePort === 43001;
 const invalid = (): never => { throw new Error("Invalid Connect projection"); };
-const invitationProfile = (value: unknown) => value === undefined || value === "sessionGameTcp" || value === FRAGMENTED_PROFILE;
+const invitationProfile = (value: unknown) => value === undefined || value === "sessionGameTcp" || value === FRAGMENTED_PROFILE || value === SESSION_FRAGMENTED_PROFILE;
+const fragmentedProfile = (value: unknown): value is typeof FRAGMENTED_PROFILE | typeof SESSION_FRAGMENTED_PROFILE => value === FRAGMENTED_PROFILE || value === SESSION_FRAGMENTED_PROFILE;
 const noFragmentedFields = (value: Record<string, unknown>) => {
   if (["fragmentedUdp", "udpState", "udpAddress", "udpErrorCode", "udpOriginalCapacity", "udpCapacityScope", "udpTarget"]
     .some(key => value[key] !== undefined)) invalid();
 };
-const sameTiming = (left: ConnectSessionTiming, right: ConnectSessionTiming) =>
+export const sameSessionTiming = (left: ConnectSessionTiming, right: ConnectSessionTiming) =>
   left.profile === right.profile && left.schemaVersion === right.schemaVersion
   && left.admissionSeconds === right.admissionSeconds && left.sessionSeconds === right.sessionSeconds
   && left.admissionExpiresAtMs === right.admissionExpiresAtMs && left.sessionExpiresAtMs === right.sessionExpiresAtMs;
 
 export function sessionTimingFrom(value: unknown): ConnectSessionTiming {
-  if (!record(value) || value.profile !== "sessionGameTcp" || value.schemaVersion !== 2
+  if (!record(value) || !((value.profile === "sessionGameTcp" && value.schemaVersion === 2)
+    || (value.profile === SESSION_FRAGMENTED_PROFILE && value.schemaVersion === 3))
+    || Object.keys(value).length !== 6
     || !integer(value.admissionSeconds) || value.admissionSeconds < 1 || value.admissionSeconds > 600
     || !integer(value.sessionSeconds) || value.sessionSeconds < value.admissionSeconds || value.sessionSeconds > 3600
     || !integer(value.admissionExpiresAtMs) || !integer(value.sessionExpiresAtMs)
@@ -137,6 +141,10 @@ export function capabilitiesFrom(value: unknown): ConnectCapabilities {
     if (!value.available) return invalid();
     fragmentedCapabilityFrom(value.fragmentedUdpInvitations);
   }
+  if (value.sessionFragmentedUdpInvitations !== undefined) {
+    if (!value.available) return invalid();
+    sessionFragmentedCapabilityFrom(value.sessionFragmentedUdpInvitations);
+  }
   return value as ConnectCapabilities;
 }
 export function snapshotFrom(value: unknown): ConnectSnapshot {
@@ -150,13 +158,13 @@ export function snapshotFrom(value: unknown): ConnectSnapshot {
     || value.relayEnabled !== false || value.pathState !== "notVerified"
     || !invitationProfile(value.invitationProfile)
     || !["notStarted", "pending", "complete", "failed"].includes(value.cleanupState as string)) return invalid();
-  if (value.invitationProfile === FRAGMENTED_PROFILE) fragmentedSnapshotFieldsFrom(value);
+  if (fragmentedProfile(value.invitationProfile)) fragmentedSnapshotFieldsFrom(value, value.invitationProfile);
   else noFragmentedFields(value);
   const timing = value.sessionTiming === undefined ? undefined : sessionTimingFrom(value.sessionTiming);
   if (value.phase === "idle" && value.invitationProfile !== undefined) return invalid();
-  if (timing && value.invitationProfile !== "sessionGameTcp") return invalid();
+  if (timing && value.invitationProfile !== timing.profile) return invalid();
   if (timing && ["hostPrepared", "guestPrepared"].includes(value.phase as string)) return invalid();
-  if (value.invitationProfile === "sessionGameTcp"
+  if ((value.invitationProfile === "sessionGameTcp" || value.invitationProfile === SESSION_FRAGMENTED_PROFILE)
     && ["reviewed", "starting", "hostListening", "guestConnected"].includes(value.phase as string) && !timing) return invalid();
   if (timing && ["hostListening", "guestConnected"].includes(value.phase as string)
     && value.expiresAtMs !== timing.sessionExpiresAtMs) return invalid();
@@ -166,9 +174,10 @@ export function snapshotFrom(value: unknown): ConnectSnapshot {
   }
   if (value.review !== null) {
     const reviewed = reviewFrom(value.review);
-    if (Boolean(reviewed.fragmentedUdp) !== (value.invitationProfile === FRAGMENTED_PROFILE)) return invalid();
+    if (Boolean(reviewed.fragmentedUdp) !== fragmentedProfile(value.invitationProfile)
+      || (reviewed.fragmentedUdp && reviewed.fragmentedUdp.profile !== value.invitationProfile)) return invalid();
     if (Boolean(reviewed.sessionTiming) !== Boolean(timing)
-      || (timing && reviewed.sessionTiming && !sameTiming(timing, reviewed.sessionTiming))) return invalid();
+      || (timing && reviewed.sessionTiming && !sameSessionTiming(timing, reviewed.sessionTiming))) return invalid();
   }
   if (value.statusSummary !== null) {
     const summary = value.statusSummary;
@@ -182,7 +191,7 @@ export function snapshotFrom(value: unknown): ConnectSnapshot {
 export function preparationFrom(value: unknown): ConnectPreparation {
   if (!record(value) || !text(value.operationId) || !integer(value.generation) || !hash(value.publicId) || !integer(value.expiresAtMs)
     || !invitationProfile(value.invitationProfile) || value.sessionTiming !== undefined) return invalid();
-  if (value.invitationProfile === FRAGMENTED_PROFILE) fragmentedPreparationFieldsFrom(value);
+  if (fragmentedProfile(value.invitationProfile)) fragmentedPreparationFieldsFrom(value, value.invitationProfile);
   else noFragmentedFields(value);
   return value as ConnectPreparation;
 }
@@ -194,13 +203,14 @@ export function reviewFrom(value: unknown): ConnectReview {
     || !integer(value.expiresAtMs) || !integer(value.invitationExpiresAtMs) || value.expiresAtMs > value.invitationExpiresAtMs
     || !statusContract(value) || !integer(value.lifetimeSeconds) || value.lifetimeSeconds < 1 || value.lifetimeSeconds > 600
     || !Array.isArray(value.services) || value.invitationProfile !== undefined) return invalid();
-  if (value.fragmentedUdp !== undefined) fragmentedReviewFieldsFrom(value);
+  const timing = value.sessionTiming === undefined ? undefined : sessionTimingFrom(value.sessionTiming);
+  if (value.fragmentedUdp !== undefined) fragmentedReviewFieldsFrom(value, timing?.profile === SESSION_FRAGMENTED_PROFILE ? SESSION_FRAGMENTED_PROFILE : FRAGMENTED_PROFILE);
   else {
     noFragmentedFields(value);
+    if (timing?.profile === SESSION_FRAGMENTED_PROFILE) return invalid();
     if (value.services.length !== 1) return invalid();
   }
-  if (value.sessionTiming !== undefined) {
-    const timing = sessionTimingFrom(value.sessionTiming);
+  if (timing) {
     if (value.invitationExpiresAtMs !== timing.admissionExpiresAtMs || value.lifetimeSeconds !== timing.admissionSeconds) return invalid();
   }
   if (value.targetSource !== undefined) {
@@ -218,9 +228,13 @@ export function exportFrom(value: unknown): ConnectExport {
   if (!record(value) || typeof value.invitation !== "string" || !value.invitation.length
     || new TextEncoder().encode(value.invitation).length > 4096 || !hash(value.hostPublicId) || !integer(value.expiresAtMs)) return invalid();
   if (value.invitationProfile !== undefined) return invalid();
-  if (value.fragmentedUdp !== undefined) fragmentedExportFieldsFrom(value);
-  else noFragmentedFields(value);
-  if (value.sessionTiming !== undefined && value.expiresAtMs !== sessionTimingFrom(value.sessionTiming).admissionExpiresAtMs) return invalid();
+  const timing = value.sessionTiming === undefined ? undefined : sessionTimingFrom(value.sessionTiming);
+  if (value.fragmentedUdp !== undefined) fragmentedExportFieldsFrom(value, timing?.profile === SESSION_FRAGMENTED_PROFILE ? SESSION_FRAGMENTED_PROFILE : FRAGMENTED_PROFILE);
+  else {
+    noFragmentedFields(value);
+    if (timing?.profile === SESSION_FRAGMENTED_PROFILE) return invalid();
+  }
+  if (timing && value.expiresAtMs !== timing.admissionExpiresAtMs) return invalid();
   return value as ConnectExport;
 }
 

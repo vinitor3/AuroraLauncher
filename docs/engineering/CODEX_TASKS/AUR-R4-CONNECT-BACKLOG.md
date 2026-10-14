@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 14/10/2026
 
+Incremento62/003/005/008 integra61 ao caller/painel com perfil explícito, destino UDP manual, ingresso e sessão independentes e falha UDP preservando TCP. [Contrato e evidências62](../../aurora-connect-desktop-fragmented-session.md). **PROTÓTIPO**, desligado por padrão. CLI/Node e perfis anteriores conservam seus contratos; testes DOM/nativos não concluem GUI, estabilidade1h, T-VOICE, T-MC ou convites entre redes. Anúncio/configuração60 permanece independente, sem inferir mod pela porta.
+
 Incremento61/003/005/008 acrescenta sessão TCP+UDP com ingresso separado por APIs explícitas de schema3, mantendo schema2/gameTCP e schema1 anteriores. Autoridade original é conferida também nas fronteiras UDP, antes da execução do watcher. [Contrato e evidências61](../../aurora-connect-fragmented-session.md). **PROTÓTIPO**; ainda não integra este perfil ao desktop, CLI ou Node e não conclui estabilidade prolongada, rede externa, Minecraft ou áudio. Testes locais independentes continuam; novo ensaio entre PCs será preparado quando as máquinas estiverem disponíveis.
 
 Incremento60/005/006/007/008 integra o caller e painel de anúncio em cópia diagnóstica: inspeção, revisão/aplicação, recibo RAM e restauração estrita ou reconciliada explicitamente selecionada. Fechamento aguarda trabalho iniciado e exige consentimento próprio antes de perder o recibo. [Contrato, provas e limites60](../../aurora-connect-desktop-voice.md). **PROTÓTIPO**, desligado por padrão; não conclui áudio, anúncio integrado a cada participante, janela Tauri, T-VOICE ou teste externo de convites. Recibo durável, integração ao ciclo real de jogo e demais gates continuam pendentes.

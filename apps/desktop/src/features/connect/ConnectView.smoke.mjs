@@ -817,3 +817,254 @@ test("absent fragmented capability never offers UDP and a mismatched export is n
   assert.deepEqual(copied, []);
   assert.doesNotMatch(container.textContent, /session invitation/);
 });
+
+const sessionFragmentedProfile = "sessionFragmentedGameUdp";
+const sessionFragmentedContract = { ...fragmentedContract, profile: sessionFragmentedProfile, invitationSchemaVersion: 3 };
+const sessionFragmentedCapability = { ...sessionFragmentedContract, maxAdmissionSeconds: 600, maxSessionSeconds: 3600 };
+const sessionFragmentedTiming = { ...sessionTiming, profile: sessionFragmentedProfile, schemaVersion: 3 };
+const sessionFragmentedExport = { ...sessionExport, invitation: '{"fixture":"schema3 opaque invitation"}',
+  fragmentedUdp: sessionFragmentedContract, sessionTiming: sessionFragmentedTiming };
+function preparedSessionFragmented(role = "host") {
+  const base = preparedFragmented(role);
+  return { ...base, invitationProfile: sessionFragmentedProfile,
+    preparation: { ...base.preparation, invitationProfile: sessionFragmentedProfile } };
+}
+function reviewedSessionFragmented(role = "host") {
+  const base = reviewedFragmented(role);
+  return { ...base, invitationProfile: sessionFragmentedProfile,
+    preparation: { ...base.preparation, invitationProfile: sessionFragmentedProfile },
+    fragmentedUdp: sessionFragmentedContract, sessionTiming: sessionFragmentedTiming,
+    review: { ...base.review, lifetimeSeconds: 600, invitationExpiresAtMs: sessionFragmentedTiming.admissionExpiresAtMs,
+      fragmentedUdp: { ...sessionFragmentedContract, udpTarget: base.review.fragmentedUdp.udpTarget }, sessionTiming: sessionFragmentedTiming } };
+}
+function activeSessionFragmented(role = "guest", udp = { ...udpNotStarted, udpState: "starting" }) {
+  return { ...reviewedSessionFragmented(role), phase: role === "host" ? "hostListening" : "guestConnected",
+    transportState: role === "guest" ? "authenticated" : "listening", preparation: null, review: null,
+    expiresAtMs: sessionFragmentedTiming.sessionExpiresAtMs, tcpAddress: role === "guest" ? "127.0.0.1:42123" : null,
+    ...(role === "guest" ? udp : {}) };
+}
+function sessionFragmentedFixtures() {
+  capabilities.sessionFragmentedUdpInvitations = sessionFragmentedCapability;
+  for (const role of ["host", "guest"]) {
+    handlers.set(`connect_prepare_session_fragmented_${role}`, () => { snapshot = preparedSessionFragmented(role); return snapshot.preparation; });
+    handlers.set(`connect_review_${role}`, () => { snapshot = reviewedSessionFragmented(role); return snapshot.review; });
+  }
+  handlers.set("connect_confirm", () => { snapshot = activeSessionFragmented(snapshot.role); return structuredClone(snapshot); });
+  handlers.set("connect_export_invitation", () => sessionFragmentedExport);
+  handlers.set("connect_stop", () => {
+    snapshot = { ...snapshot, phase: "closed", transportState: "closed", preparation: null, review: null,
+      tcpAddress: null, cleanupState: "complete", ...(snapshot.role === "guest" ? { ...udpNotStarted, udpState: "closed" } : {}) };
+    return structuredClone(snapshot);
+  });
+}
+
+test("schema3 capability requires explicit selection and leaves every existing default unchanged", async () => {
+  sessionFixtures(); fragmentedFixtures(); sessionFragmentedFixtures(); await render();
+  assert.equal(container.querySelector('option[value="legacy"]').selected, true);
+  assert.equal(labeledInput("Prazo da sessão").value, "600");
+  await chooseProfile(sessionFragmentedProfile);
+  assert.equal(labeledInput("Prazo para entrar").value, "600");
+  assert.equal(labeledInput("Duração máxima").value, "3600");
+  assert.equal(labeledInput("Serviço UDP").value, "");
+  assert.equal(container.querySelectorAll('input[type="number"]').length, 2);
+  assert.doesNotMatch(container.textContent, /Convite e conexão expiram juntos|um único vencimento/);
+  await chooseProfile("fragmentedGameUdp");
+  assert.equal(labeledInput("Prazo do convite e da conexão").value, "120");
+  await chooseProfile("legacy"); await submit();
+  assert.equal(count("connect_prepare_host"), 1);
+  assert.equal(count("connect_prepare_session_fragmented_host"), 0);
+});
+
+test("schema3 host reviews both grants and deadlines before digest-only authorization", async () => {
+  sessionFragmentedFixtures(); await render(); await chooseProfile(sessionFragmentedProfile);
+  await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002"); await submit();
+  assert.deepEqual(calls.find(c => c.command === "connect_prepare_session_fragmented_host").args,
+    { request: { mode: "loopback", bindAddress: "127.0.0.1:42000", gameTarget: "127.0.0.1:43001",
+      udpTarget: "127.0.0.1:43002", admissionSeconds: 600, sessionSeconds: 3600 } });
+  assert.equal(count("connect_prepare_fragmented_host"), 0); await submit();
+  assert.match(container.textContent, /Destino UDP autorizado127\.0\.0\.1:43002/);
+  assert.match(container.textContent, /600 segundos desde a emissão/);
+  assert.match(container.textContent, /3600 segundos desde a emissão, sem renovação/);
+  assert.match(container.textContent, /porta local e os dois prazos/);
+  assert.match(container.textContent, /20 fragmentos por segundo/);
+  assert.equal(button("Autorizar conexão").disabled, true);
+  await checkConsent(); await click("Autorizar conexão");
+  assert.deepEqual(calls.find(c => c.command === "connect_confirm").args, { operationId, digest });
+  await click("Copiar convite"); assert.equal(copied.at(-1), sessionFragmentedExport.invitation);
+  assert.doesNotMatch(container.querySelector("textarea").value, /udpTarget|43002/);
+  await click("Encerrar Connect"); assert.match(container.textContent, /Recursos liberados/);
+});
+
+test("schema3 host rejects fractional durations, reversed deadlines and unapproved UDP targets before IPC", async () => {
+  sessionFragmentedFixtures(); await render(); await chooseProfile(sessionFragmentedProfile);
+  for (const [admission, session, target] of [["0", "3600", "127.0.0.1:43002"], ["601", "3600", "127.0.0.1:43002"],
+    ["600", "599", "127.0.0.1:43002"], ["600", "3601", "127.0.0.1:43002"], ["1.5", "60", "127.0.0.1:43002"],
+    ["1", "60.5", "127.0.0.1:43002"], ["600", "3600", ""], ["600", "3600", "localhost:43002"],
+    ["600", "3600", "192.168.1.2:43002"], ["600", "3600", "127.0.0.1:0"]]) {
+    await editInput(labeledInput("Prazo para entrar"), admission);
+    await editInput(labeledInput("Duração máxima"), session);
+    await editInput(labeledInput("Serviço UDP"), target); await submit();
+    assert.equal(count("connect_prepare_session_fragmented_host"), 0);
+  }
+  await editInput(labeledInput("Prazo para entrar"), "10");
+  await editInput(labeledInput("Duração máxima"), "60");
+  await editInput(labeledInput("Serviço UDP"), "[::1]:43003"); await submit();
+  assert.deepEqual(calls.find(c => c.command === "connect_prepare_session_fragmented_host").args.request,
+    { mode: "loopback", bindAddress: "127.0.0.1:42000", gameTarget: "127.0.0.1:43001", udpTarget: "[::1]:43003", admissionSeconds: 10, sessionSeconds: 60 });
+});
+
+test("schema3 selection discards a LAN selection and never reuses discovery authorization", async () => {
+  discoveryFixtures(); sessionFragmentedFixtures(); await render(); await discoveryToReview();
+  await click("Autorizar consulta e selecionar porta"); await chooseProfile(sessionFragmentedProfile);
+  assert.equal(container.querySelector('option[value="ownedInstance"]'), null);
+  assert.doesNotMatch(container.textContent, /Servidor respondeu em/);
+  await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002"); await submit();
+  const args = calls.find(c => c.command === "connect_prepare_session_fragmented_host").args;
+  assert.equal(Object.hasOwn(args, "selectionId"), false);
+  assert.equal(args.request.gameTarget, "127.0.0.1:43001");
+  assert.equal(count("connect_prepare_discovered_host"), 0);
+  assert.equal(count("connect_prepare_session_host_discovered"), 0);
+});
+
+test("schema3 guest uses its explicit command and keeps TCP and STATUS through separate UDP failure", async () => {
+  sessionFragmentedFixtures(); await render(); await click("Convidado"); await chooseProfile(sessionFragmentedProfile);
+  assert.equal(container.querySelector('input[type="number"]'), null);
+  assert.equal([...container.querySelectorAll("label")].some(l => l.textContent.startsWith("Serviço UDP")), false);
+  await submit();
+  assert.deepEqual(calls.find(c => c.command === "connect_prepare_session_fragmented_guest").args,
+    { request: { mode: "loopback", expectedHostPublicId: "" } });
+  await submit(); assert.deepEqual(calls.find(c => c.command === "connect_review_guest").args, { operationId, encodedInvitation: "" });
+  await checkConsent(); await click("Autorizar conexão");
+  assert.match(container.textContent, /Preparando ponte UDP/);
+  await click("Consultar servidor");
+  snapshot = { ...snapshot, ...udpNotStarted, udpState: "failed", udpErrorCode: "connect_udp_setup_failed" };
+  await click("Atualizar estado");
+  assert.equal(container.querySelector("#connect-local-address").value, "127.0.0.1:42123");
+  assert.match(container.textContent, /Servidor respondeu/);
+  assert.match(container.textContent, /Ponte UDP indisponível/);
+  assert.match(container.textContent, /Simple Voice ChatDesativado nesta integraçãoPlasmo VoiceDesativado nesta integração/);
+  assert.equal(count("connect_stop"), 0);
+  assert.equal(count("connect_prepare_fragmented_guest"), 0);
+  await click("Encerrar Connect"); assert.match(container.textContent, /Ponte UDP encerrada/);
+});
+
+test("schema3 admission expiry hides the invitation while admitted TCP and UDP remain observed", async () => {
+  sessionFragmentedFixtures(); snapshot = activeSessionFragmented("host"); await render(); await click("Copiar convite");
+  const admissionExpiresAtMs = Date.now() - 1;
+  snapshot = { ...snapshot, generation: 2, transportState: "admitted", expiresAtMs: admissionExpiresAtMs + 3000000,
+    sessionTiming: { ...sessionFragmentedTiming, admissionExpiresAtMs, sessionExpiresAtMs: admissionExpiresAtMs + 3000000 } };
+  await click("Atualizar estado");
+  assert.match(container.textContent, /Convite utilizado · conexão ativa/);
+  assert.doesNotMatch(container.textContent, /schema3 opaque invitation/);
+  assert.equal([...container.querySelectorAll("button")].some(b => b.textContent === "Copiar convite"), false);
+  assert.equal(count("connect_stop"), 0);
+  assert.equal(button("Encerrar Connect").disabled, false);
+});
+
+test("schema3 remount and changed revision clear consent and stopping defeats a late confirmation", async () => {
+  sessionFragmentedFixtures(); snapshot = reviewedSessionFragmented("guest"); await render(); await checkConsent();
+  await act(async () => root.unmount()); root = createRoot(container); await render();
+  assert.equal(button("Autorizar conexão").disabled, true);
+  await checkConsent(); snapshot = { ...snapshot, review: { ...snapshot.review, digest: "f".repeat(64) } };
+  await click("Atualizar estado"); assert.equal(button("Autorizar conexão").disabled, true);
+  let complete;
+  handlers.set("connect_confirm", () => new Promise(resolve => { complete = resolve; }));
+  await checkConsent(); await click("Autorizar conexão"); await click("Encerrar Connect");
+  await act(async () => complete(activeSessionFragmented("guest", udpAvailable)));
+  assert.match(container.textContent, /Recursos liberados/);
+  assert.doesNotMatch(container.textContent, /Ponte UDP disponível/);
+  assert.equal(container.querySelector("#connect-local-address"), null);
+  assert.equal(count("connect_prepare_session_fragmented_guest"), 0);
+});
+
+test("schema3 mismatched preparation stays cancellable and review from a short UDP profile is refused", async () => {
+  sessionFragmentedFixtures(); await render(); await chooseProfile(sessionFragmentedProfile);
+  await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002");
+  handlers.set("connect_prepare_session_fragmented_host", () => fragmentedPreparation); await submit();
+  assert.equal(button("Encerrar Connect").disabled, false);
+  assert.equal(count("connect_confirm"), 0); await click("Encerrar Connect");
+  snapshot = preparedSessionFragmented(); await click("Atualizar estado");
+  handlers.set("connect_review_host", () => fragmentedReview); await submit();
+  assert.match(container.textContent, /Não foi possível concluir/);
+  assert.equal(container.querySelector(".connect-consent"), null);
+  assert.equal(count("connect_confirm"), 0);
+});
+
+test("schema3 refuses cross-profile and changed-deadline exports before copying", async () => {
+  sessionFragmentedFixtures(); snapshot = activeSessionFragmented("host"); await render();
+  for (const invalid of [fragmentedExport, sessionExport, { ...sessionFragmentedExport,
+    expiresAtMs: sessionFragmentedExport.expiresAtMs + 1000,
+    sessionTiming: { ...sessionFragmentedTiming, admissionExpiresAtMs: sessionFragmentedTiming.admissionExpiresAtMs + 1000,
+      sessionExpiresAtMs: sessionFragmentedTiming.sessionExpiresAtMs + 1000 } }]) {
+    handlers.set("connect_export_invitation", () => invalid); await click("Copiar convite");
+    assert.deepEqual(copied, []);
+  }
+});
+
+test("closed profile metadata cannot describe the next differently selected attempt", async () => {
+  sessionFixtures(); fragmentedFixtures(); sessionFragmentedFixtures();
+  snapshot = { ...activeSession("host"), phase: "closed", transportState: "closed", cleanupState: "complete" };
+  await render(); await chooseProfile("fragmentedGameUdp");
+  assert.match(container.textContent, /Convite e conexão expiram juntos em até 120 segundos/);
+  assert.doesNotMatch(container.textContent, /prazo para entrar e o encerramento da sessão são separados/);
+  snapshot = { ...activeFragmented("host"), phase: "closed", transportState: "closed", cleanupState: "complete" };
+  await click("Atualizar estado"); await chooseProfile("sessionGameTcp");
+  assert.match(container.textContent, /prazo para entrar e o encerramento da sessão são separados/);
+  assert.doesNotMatch(container.textContent, /Transporte TCP e UDP experimental\./);
+  await chooseProfile(sessionFragmentedProfile);
+  assert.match(container.textContent, /Transporte TCP e UDP experimental\. O prazo para entrar/);
+});
+
+test("schema3 parser rejects crossed schema, partial deadlines, unsigned destinations and altered UDP policies", () => {
+  for (const value of [preparedSessionFragmented(), preparedSessionFragmented("guest"), reviewedSessionFragmented(),
+    reviewedSessionFragmented("guest"), activeSessionFragmented("host"), activeSessionFragmented("guest", udpAvailable)]) {
+    assert.deepEqual(types.snapshotFrom(value), value);
+  }
+  assert.deepEqual(types.exportFrom(sessionFragmentedExport), sessionFragmentedExport);
+  assert.deepEqual(types.reviewFrom(reviewedSessionFragmented().review), reviewedSessionFragmented().review);
+  for (const invalid of [
+    { ...activeSessionFragmented(), sessionTiming }, { ...activeSessionFragmented(), fragmentedUdp: fragmentedContract },
+    { ...activeSessionFragmented(), sessionTiming: undefined }, { ...activeSessionFragmented(), fragmentedUdp: undefined },
+    { ...activeSessionFragmented(), invitationProfile: "fragmentedGameUdp" },
+    { ...activeSessionFragmented(), expiresAtMs: sessionFragmentedTiming.admissionExpiresAtMs },
+    { ...preparedSessionFragmented(), sessionTiming: sessionFragmentedTiming },
+    { ...reviewedSessionFragmented(), preparation: fragmentedPreparation },
+    { ...reviewedSessionFragmented(), review: fragmentedReview },
+    { ...reviewedSessionFragmented(), review: { ...reviewedSessionFragmented().review, sessionTiming: { ...sessionFragmentedTiming, schemaVersion: 2 } } },
+    { ...activeSessionFragmented(), fragmentedUdp: { ...sessionFragmentedContract, invitationSchemaVersion: 2 } },
+    { ...activeSessionFragmented(), fragmentedUdp: { ...sessionFragmentedContract, maxLifetimeSeconds: 120 } },
+    { ...activeSessionFragmented(), fragmentedUdp: { ...sessionFragmentedContract, udpReturnPolicy: { type: "replyBudget" } } },
+    { ...activeSessionFragmented(), udpTarget: "127.0.0.1:43002" },
+    { ...activeSessionFragmented(), udpOriginalCapacity: 4096 },
+  ]) assert.throws(() => types.snapshotFrom(invalid));
+  for (const invalid of [
+    { ...reviewedSessionFragmented().review, sessionTiming: undefined },
+    { ...reviewedSessionFragmented().review, fragmentedUdp: undefined },
+    { ...reviewedSessionFragmented().review, targetSource: "ownedInstance", instanceId: "instance", runId: "run" },
+    { ...reviewedSessionFragmented().review, invitationExpiresAtMs: sessionFragmentedTiming.sessionExpiresAtMs },
+    { ...reviewedSessionFragmented().review, lifetimeSeconds: 120 },
+  ]) assert.throws(() => types.reviewFrom(invalid));
+  for (const invalid of [{ ...sessionFragmentedExport, sessionTiming: undefined }, { ...sessionFragmentedExport, fragmentedUdp: undefined },
+    { ...sessionFragmentedExport, fragmentedUdp: fragmentedContract }, { ...sessionFragmentedExport, sessionTiming },
+    { ...sessionFragmentedExport, expiresAtMs: sessionFragmentedTiming.sessionExpiresAtMs }]) assert.throws(() => types.exportFrom(invalid));
+  for (const invalid of [{ ...sessionFragmentedTiming, schemaVersion: 2 }, { ...sessionTiming, schemaVersion: 3 },
+    { ...sessionFragmentedTiming, admissionSeconds: 0.5 }, { ...sessionFragmentedTiming, sessionSeconds: 3601 },
+    { ...sessionFragmentedTiming, sessionExpiresAtMs: sessionFragmentedTiming.sessionExpiresAtMs + 1 },
+    { ...sessionFragmentedTiming, unknown: true }]) assert.throws(() => types.sessionTimingFrom(invalid));
+});
+
+test("schema3 capability is exact, omitted by default and never creates operations while disabled", async () => {
+  assert.deepEqual(types.capabilitiesFrom({ ...caps, sessionFragmentedUdpInvitations: sessionFragmentedCapability }).sessionFragmentedUdpInvitations, sessionFragmentedCapability);
+  for (const invalid of [fragmentedCapability, { ...sessionFragmentedCapability, maxLifetimeSeconds: 120 },
+    { ...sessionFragmentedCapability, maxAdmissionSeconds: 601 }, { ...sessionFragmentedCapability, maxSessionSeconds: 3601 },
+    { ...sessionFragmentedCapability, invitationSchemaVersion: 1 }, { ...sessionFragmentedCapability, localUdpBind: "127.0.0.1:35555" },
+    { ...sessionFragmentedCapability, udpReturnPolicy: { ...fragmentedContract.udpReturnPolicy, datagramsPerSecond: 21 } }]) {
+    assert.throws(() => types.capabilitiesFrom({ ...caps, sessionFragmentedUdpInvitations: invalid }));
+  }
+  assert.throws(() => types.capabilitiesFrom({ ...caps, available: false, sessionFragmentedUdpInvitations: sessionFragmentedCapability }));
+  await render(); assert.equal(container.querySelector(`option[value="${sessionFragmentedProfile}"]`), null);
+  await act(async () => root.unmount()); root = createRoot(container);
+  capabilities.available = false; calls = []; await render();
+  assert.deepEqual(calls.map(c => c.command), ["connect_capabilities"]);
+  assert.equal(container.querySelector("form"), null);
+});
