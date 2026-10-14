@@ -307,6 +307,12 @@ Os dois deadlines monotônicos originais e tempos civis assinados permanecem em 
 
 [Contrato, resultados reais, falhas preparatórias e rollback52](../aurora-connect-session-lifetime.md). Os ensaios curtos locais comprovam separação dos prazos, novas conexões depois do ingresso, recusa tardia pelo Host, revogação, expiração, salto civil injetado sem alterar Windows, ACK atrasado e replay0-RTT aceito recusado antes do destino. Não homologam uma hora de estabilidade, rede externa, jogo ou voz.
 
+#### 8.1.4 Sessão TCP e UDP fragmentado — incremento61
+
+Perfil explícito `sessionFragmentedGameUdp`, convite schema3/domínio `aurora/connect-lab/session-invitation/v3\0`, ingresso≤600s e sessão≤3600s desde emissão. UDP mantém seu envelopeV2 independente. Autoriza exatamente game/TCP/revisão1/reliableStream e aux/UDP/revisão1/fragmentedDatagram4096 com retorno autorizado16384B/s/20frames/s, incluindo headers. Mantém pins, representação canônica≤4096B, geração1, uso único e destinos privados loopback fora do convite. Métodos anteriores de schema1/2 recusam este perfil; seleção de IPv6 continua explícita e independente.
+
+Host/Guest retêm os relógios originais e consumo, permitindo novas conexões e associações depois do ingresso até o prazo da sessão. Gates nas fronteiras UDP conferem autoridade antes de remontagem, envio, enfileiramento e entrega local, além de watchers e tokens de revogação. Não há renovação, fallback, mod identificado ou configuração autorizada por este convite. [Contrato, provas e rollback61](../aurora-connect-fragmented-session.md). Integrações desktop/CLI/Node anteriores mantêm seus perfis; duração máxima não é estabilidade homologada nem áudio.
+
 ### 8.2 Supervisor dos clientes de laboratório
 
 `apps/connect-client-lab/tunnel-session.mjs` usa convites para os perfis próprios game/SVC/Plasmo. O novo `invitation-gate.mjs` guarda snapshot do plano compilado, confere toda a prévia local e exige correspondência de pins, sessão, endereço, grants, digest e prazo do envelope. Não implementa Ed25519 em JavaScript: o agente Rust verifica a assinatura antes de emitir a revisão que o supervisor compara integralmente. A aprovação é consumível, com prazo máximo120s nesse caller e relógio monotônico; estado/erro/dispose não permitem reaprová-la. Fixtures Node puras comprovam somente esses gates de escrita. Testes com processos reais comprovam a composição com a CLI e o transporte.

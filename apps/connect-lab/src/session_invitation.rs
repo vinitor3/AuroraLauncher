@@ -1,4 +1,4 @@
-//! Explicit schema-2 game/TCP invitations.
+//! Explicit schema-2 game/TCP and schema-3 game/fragmented-UDP invitations.
 //! Admission and the admitted session have independent absolute deadlines.
 //! Host owns admission, consumption and revocation; this value never renews.
 use crate::{
@@ -19,6 +19,38 @@ pub const MAX_SESSION_INVITATION_BYTES: usize = 4096;
 pub const MAX_ADMISSION_LIFETIME: Duration = Duration::from_secs(600);
 pub const MAX_SESSION_LIFETIME: Duration = Duration::from_secs(3600);
 const DOMAIN: &[u8] = b"aurora/connect-lab/session-invitation/v2\0";
+const FRAGMENTED_DOMAIN: &[u8] = b"aurora/connect-lab/session-invitation/v3\0";
+
+/// Transport selection is separate from the independently approved address mode.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionInvitationProfile {
+    GameTcp,
+    FragmentedGameUdp,
+}
+impl SessionInvitationProfile {
+    fn schema(self) -> u8 {
+        match self {
+            Self::GameTcp => 2,
+            Self::FragmentedGameUdp => 3,
+        }
+    }
+    fn grants(self) -> Vec<Grant> {
+        match self {
+            Self::GameTcp => vec![Grant::game()],
+            Self::FragmentedGameUdp => vec![Grant::game(), Grant::fragmented_aux()],
+        }
+    }
+    fn validate_grants(self, grants: &[Grant]) -> Result<()> {
+        if grants.len() != self.grants().len() {
+            return Err(Error::Configuration);
+        }
+        grants[0].validate()?;
+        if self == Self::FragmentedGameUdp && !grants[1].matches(&Grant::fragmented_aux()) {
+            return Err(Error::Configuration);
+        }
+        Ok(())
+    }
+}
 
 /// Both timestamps are absolute. Neither is measured from connection time.
 #[derive(Clone, Copy)]
@@ -55,6 +87,36 @@ struct Grant {
     protocol: Protocol,
     revision: u32,
     required_capability: Capability,
+    // Omitted in schema 2 and the TCP grant, preserving its original signed bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_datagram_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    udp_return_policy: Option<ReturnPolicy>,
+}
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+enum ReturnPolicy {
+    ReplyBudget,
+    AuthorizedDownstream {
+        #[serde(rename = "bytesPerSecond")]
+        bytes_per_second: u32,
+        #[serde(rename = "datagramsPerSecond")]
+        datagrams_per_second: u32,
+    },
+}
+impl From<UdpReturnPolicy> for ReturnPolicy {
+    fn from(policy: UdpReturnPolicy) -> Self {
+        match policy {
+            UdpReturnPolicy::ReplyBudget => Self::ReplyBudget,
+            UdpReturnPolicy::AuthorizedDownstream {
+                bytes_per_second,
+                datagrams_per_second,
+            } => Self::AuthorizedDownstream {
+                bytes_per_second,
+                datagrams_per_second,
+            },
+        }
+    }
 }
 impl Grant {
     fn game() -> Self {
@@ -63,13 +125,38 @@ impl Grant {
             protocol: Protocol::Tcp,
             revision: 1,
             required_capability: Capability::ReliableStream,
+            max_datagram_bytes: None,
+            udp_return_policy: None,
         }
+    }
+    fn fragmented_aux() -> Self {
+        Self {
+            service_id: "aux".into(),
+            protocol: Protocol::Udp,
+            revision: 1,
+            required_capability: Capability::FragmentedDatagram,
+            max_datagram_bytes: Some(4096),
+            udp_return_policy: Some(ReturnPolicy::AuthorizedDownstream {
+                bytes_per_second: 16384,
+                datagrams_per_second: 20,
+            }),
+        }
+    }
+    fn matches(&self, other: &Self) -> bool {
+        self.service_id == other.service_id
+            && self.protocol == other.protocol
+            && self.revision == other.revision
+            && self.required_capability == other.required_capability
+            && self.max_datagram_bytes == other.max_datagram_bytes
+            && self.udp_return_policy == other.udp_return_policy
     }
     fn validate(&self) -> Result<()> {
         if self.service_id != "game"
             || self.protocol != Protocol::Tcp
             || self.revision != 1
             || self.required_capability != Capability::ReliableStream
+            || self.max_datagram_bytes.is_some()
+            || self.udp_return_policy.is_some()
         {
             return Err(Error::Configuration);
         }
@@ -87,6 +174,8 @@ fn validate_local_services(services: &[Service]) -> Result<()> {
         protocol: service.protocol,
         revision: service.revision,
         required_capability: service.required_capability,
+        max_datagram_bytes: None,
+        udp_return_policy: None,
     }
     .validate()?;
     AddressMode::Loopback.validate(service.endpoint)?;
@@ -96,6 +185,35 @@ fn validate_local_services(services: &[Service]) -> Result<()> {
         return Err(Error::Configuration);
     }
     Ok(())
+}
+
+fn validate_profile_services(
+    services: &[Service],
+    profile: SessionInvitationProfile,
+) -> Result<()> {
+    match profile {
+        SessionInvitationProfile::GameTcp => validate_local_services(services),
+        SessionInvitationProfile::FragmentedGameUdp => {
+            if services.len() != 2 || services[0].max_datagram_bytes != 1400 {
+                return Err(Error::Configuration);
+            }
+            validate_local_services(&services[..1])?;
+            let aux = &services[1];
+            AddressMode::Loopback.validate(aux.endpoint)?;
+            let grant = Grant {
+                service_id: aux.service_id.clone(),
+                protocol: aux.protocol,
+                revision: aux.revision,
+                required_capability: aux.required_capability,
+                max_datagram_bytes: Some(aux.max_datagram_bytes),
+                udp_return_policy: Some(aux.udp_return_policy.into()),
+            };
+            if !grant.matches(&Grant::fragmented_aux()) {
+                return Err(Error::Configuration);
+            }
+            Ok(())
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -120,6 +238,7 @@ impl Clock {
 /// also check TLS identity, one-use admission, generation and revocation.
 #[derive(Clone)]
 pub struct SessionInvitation {
+    profile: SessionInvitationProfile,
     envelope: Envelope,
     encoded: String,
     digest: String,
@@ -136,6 +255,17 @@ enum IssueTiming {
         admission: Duration,
         session: Duration,
     },
+}
+struct IssueOptions {
+    timing: IssueTiming,
+    mode: AddressMode,
+    profile: SessionInvitationProfile,
+}
+#[derive(Clone, Copy)]
+struct VerificationOptions {
+    clock: Clock,
+    mode: AddressMode,
+    profile: SessionInvitationProfile,
 }
 impl SessionInvitation {
     pub fn issue_loopback(
@@ -218,6 +348,55 @@ impl SessionInvitation {
         )
     }
 
+    /// Explicit schema-3 TCP/fragmented-UDP profile. Both signed lifetimes are
+    /// measured from one original clock sample, never from connection activity.
+    pub fn issue_fragmented_loopback_for_lifetimes(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        admission: Duration,
+        session: Duration,
+    ) -> Result<Self> {
+        Self::issue_in_profile(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            IssueOptions {
+                timing: IssueTiming::Lifetimes { admission, session },
+                mode: AddressMode::Loopback,
+                profile: SessionInvitationProfile::FragmentedGameUdp,
+            },
+        )
+    }
+
+    /// The explicit UDP profile does not implicitly approve an external address.
+    pub fn issue_fragmented_external_ipv6_for_lifetimes(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        admission: Duration,
+        session: Duration,
+    ) -> Result<Self> {
+        Self::issue_in_profile(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            IssueOptions {
+                timing: IssueTiming::Lifetimes { admission, session },
+                mode: AddressMode::ExternalIpv6,
+                profile: SessionInvitationProfile::FragmentedGameUdp,
+            },
+        )
+    }
+
     fn issue_in_mode(
         host: &SecretKey,
         guest: EndpointId,
@@ -227,8 +406,30 @@ impl SessionInvitation {
         timing: IssueTiming,
         mode: AddressMode,
     ) -> Result<Self> {
+        Self::issue_in_profile(
+            host,
+            guest,
+            session_id,
+            direct,
+            services,
+            IssueOptions {
+                timing,
+                mode,
+                profile: SessionInvitationProfile::GameTcp,
+            },
+        )
+    }
+
+    fn issue_in_profile(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        options: IssueOptions,
+    ) -> Result<Self> {
         let clock = Clock::now();
-        let deadlines = match timing {
+        let deadlines = match options.timing {
             IssueTiming::Absolute(value) => value,
             IssueTiming::Lifetimes { admission, session } => {
                 if admission.is_zero()
@@ -252,9 +453,9 @@ impl SessionInvitation {
                 }
             }
         };
-        validate_local_services(services)?;
+        validate_profile_services(services, options.profile)?;
         let body = Body {
-            schema_version: 2,
+            schema_version: options.profile.schema(),
             host_key: host.public().to_string(),
             guest_key: guest.to_string(),
             session_id: session_id.into(),
@@ -264,16 +465,20 @@ impl SessionInvitation {
             session_expires_at_unix_ms: deadlines.session_expires_at_unix_ms,
             generation: 1,
             direct_address: direct,
-            services: vec![Grant::game()],
+            services: options.profile.grants(),
         };
-        validate_body(&body, host.public(), guest, clock.unix_ms, mode)?;
+        let verification = VerificationOptions {
+            clock,
+            mode: options.mode,
+            profile: options.profile,
+        };
+        validate_body(&body, host.public(), guest, verification)?;
         let signature = hex(&host.sign(&signed_bytes(&body)?).to_bytes());
         let value = Self::from_envelope(
             Envelope { body, signature },
             host.public(),
             guest,
-            clock,
-            mode,
+            verification,
         )?;
         value.check_admission_current()?;
         Ok(value)
@@ -314,12 +519,67 @@ impl SessionInvitation {
         Ok(value)
     }
 
+    pub fn verify_fragmented_loopback(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+    ) -> Result<Self> {
+        let value = Self::verify_in_profile(
+            encoded,
+            expected_host,
+            guest,
+            VerificationOptions {
+                clock: Clock::now(),
+                mode: AddressMode::Loopback,
+                profile: SessionInvitationProfile::FragmentedGameUdp,
+            },
+        )?;
+        value.check_admission_current()?;
+        Ok(value)
+    }
+
+    pub fn verify_fragmented_external_ipv6(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+    ) -> Result<Self> {
+        let value = Self::verify_in_profile(
+            encoded,
+            expected_host,
+            guest,
+            VerificationOptions {
+                clock: Clock::now(),
+                mode: AddressMode::ExternalIpv6,
+                profile: SessionInvitationProfile::FragmentedGameUdp,
+            },
+        )?;
+        value.check_admission_current()?;
+        Ok(value)
+    }
+
     fn verify_in_mode(
         encoded: &str,
         expected_host: EndpointId,
         guest: EndpointId,
         clock: Clock,
         mode: AddressMode,
+    ) -> Result<Self> {
+        Self::verify_in_profile(
+            encoded,
+            expected_host,
+            guest,
+            VerificationOptions {
+                clock,
+                mode,
+                profile: SessionInvitationProfile::GameTcp,
+            },
+        )
+    }
+    fn verify_in_profile(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+        options: VerificationOptions,
     ) -> Result<Self> {
         if encoded.is_empty() || encoded.len() > MAX_SESSION_INVITATION_BYTES {
             return Err(Error::Limit);
@@ -328,17 +588,17 @@ impl SessionInvitation {
         if encode(&envelope)? != encoded {
             return Err(Error::Protocol);
         }
-        Self::from_envelope(envelope, expected_host, guest, clock, mode)
+        Self::from_envelope(envelope, expected_host, guest, options)
     }
 
     fn from_envelope(
         envelope: Envelope,
         expected_host: EndpointId,
         guest: EndpointId,
-        clock: Clock,
-        mode: AddressMode,
+        options: VerificationOptions,
     ) -> Result<Self> {
-        validate_body(&envelope.body, expected_host, guest, clock.unix_ms, mode)?;
+        validate_body(&envelope.body, expected_host, guest, options)?;
+        let clock = options.clock;
         let signature = Signature::from_bytes(&decode_hex::<64>(&envelope.signature)?);
         expected_host
             .verify(&signed_bytes(&envelope.body)?, &signature)
@@ -352,6 +612,7 @@ impl SessionInvitation {
                 .ok_or(Error::Expired)
         };
         Ok(Self {
+            profile: options.profile,
             admission_deadline: deadline(envelope.body.admission_expires_at_unix_ms)?,
             session_deadline: deadline(envelope.body.session_expires_at_unix_ms)?,
             envelope,
@@ -478,11 +739,22 @@ impl SessionInvitation {
             lease_id: self.invitation_id().into(),
             peer: self.guest,
             expires_at_unix_ms: self.session_expires_at_unix_ms(),
-            services: ["game".to_owned()].into_iter().collect(),
+            services: self
+                .envelope
+                .body
+                .services
+                .iter()
+                .map(|grant| grant.service_id.clone())
+                .collect(),
         }
     }
     pub(crate) fn capabilities(&self) -> Vec<Capability> {
-        vec![Capability::ReliableStream]
+        match self.profile {
+            SessionInvitationProfile::GameTcp => vec![Capability::ReliableStream],
+            SessionInvitationProfile::FragmentedGameUdp => {
+                vec![Capability::ReliableStream, Capability::FragmentedDatagram]
+            }
+        }
     }
     pub(crate) fn proof(&self) -> InvitationProof {
         InvitationProof {
@@ -493,16 +765,57 @@ impl SessionInvitation {
     pub(crate) fn check_address_mode(&self, mode: AddressMode) -> Result<()> {
         mode.validate(self.direct_addr())
     }
+    pub(crate) fn check_profile(&self, profile: SessionInvitationProfile) -> Result<()> {
+        if self.profile != profile || self.envelope.body.schema_version != profile.schema() {
+            return Err(Error::Configuration);
+        }
+        profile.validate_grants(&self.envelope.body.services)
+    }
     pub(crate) fn check_host(&self, config: &HostConfig) -> Result<()> {
         self.check_host_at(config, AddressMode::Loopback, Clock::now())
     }
     pub(crate) fn check_host_external_ipv6(&self, config: &HostConfig) -> Result<()> {
         self.check_host_at(config, AddressMode::ExternalIpv6, Clock::now())
     }
+    pub(crate) fn check_host_fragmented(&self, config: &HostConfig) -> Result<()> {
+        self.check_host_profile_at(
+            config,
+            VerificationOptions {
+                clock: Clock::now(),
+                mode: AddressMode::Loopback,
+                profile: SessionInvitationProfile::FragmentedGameUdp,
+            },
+        )
+    }
+    pub(crate) fn check_host_fragmented_external_ipv6(&self, config: &HostConfig) -> Result<()> {
+        self.check_host_profile_at(
+            config,
+            VerificationOptions {
+                clock: Clock::now(),
+                mode: AddressMode::ExternalIpv6,
+                profile: SessionInvitationProfile::FragmentedGameUdp,
+            },
+        )
+    }
     fn check_host_at(&self, config: &HostConfig, mode: AddressMode, clock: Clock) -> Result<()> {
-        self.check_admission_at(clock)?;
-        self.check_address_mode(mode)?;
-        validate_local_services(&config.services)?;
+        self.check_host_profile_at(
+            config,
+            VerificationOptions {
+                clock,
+                mode,
+                profile: SessionInvitationProfile::GameTcp,
+            },
+        )
+    }
+    fn check_host_profile_at(
+        &self,
+        config: &HostConfig,
+        options: VerificationOptions,
+    ) -> Result<()> {
+        self.check_profile(options.profile)?;
+        self.check_admission_at(options.clock)?;
+        self.check_address_mode(options.mode)?;
+        validate_profile_services(&config.services, options.profile)?;
         let expected = self.lease();
         if config.secret_key.public() != self.host
             || config.bind_addr != self.direct_addr()
@@ -523,14 +836,23 @@ impl SessionInvitation {
     }
     /// Explicit approval material, not a redacted telemetry event.
     pub fn preview(&self) -> Value {
-        json!({"schemaVersion":2,"experimental":true,"profile":"sessionGameTcp",
+        let profile = match self.profile {
+            SessionInvitationProfile::GameTcp => "sessionGameTcp",
+            SessionInvitationProfile::FragmentedGameUdp => "sessionFragmentedGameUdp",
+        };
+        let mut preview = json!({"schemaVersion":self.profile.schema(),"experimental":true,"profile":profile,
             "invitationSha256":self.digest,"hostKey":self.host.to_string(),"guestKey":self.guest.to_string(),
             "sessionId":self.session_id(),"invitationId":self.invitation_id(),"generation":self.generation(),
             "issuedAtUnixMs":self.envelope.body.issued_at_unix_ms,
             "admissionExpiresAtUnixMs":self.admission_expires_at_unix_ms(),
             "sessionExpiresAtUnixMs":self.session_expires_at_unix_ms(),
             "directAddress":self.direct_addr().to_string(),"services":self.envelope.body.services,
-            "admissionSingleUse":true,"renewal":false,"relay":false,"accountIdentityVerified":false})
+            "admissionSingleUse":true,"renewal":false,"relay":false,"accountIdentityVerified":false});
+        if self.profile == SessionInvitationProfile::FragmentedGameUdp {
+            preview["udpEnvelopeVersion"] = json!(2);
+            preview["maxFragmentFrameBytes"] = json!(1264);
+        }
+        preview
     }
 }
 
@@ -544,9 +866,9 @@ fn validate_body(
     body: &Body,
     expected_host: EndpointId,
     guest: EndpointId,
-    now: u64,
-    mode: AddressMode,
+    options: VerificationOptions,
 ) -> Result<()> {
+    let now = options.clock.unix_ms;
     let host_key =
         EndpointId::from_bytes(&decode_hex::<32>(&body.host_key)?).map_err(|_| Error::Protocol)?;
     let guest_key =
@@ -555,16 +877,15 @@ fn validate_body(
     if host_key != expected_host || guest_key != guest || host_key == guest_key {
         return Err(Error::Unauthorized);
     }
-    if body.schema_version != 2
+    if body.schema_version != options.profile.schema()
         || body.generation != 1
         || !valid_id(&body.session_id)
         || nonce == [0; 32]
-        || body.services.len() != 1
     {
         return Err(Error::Configuration);
     }
-    mode.validate(body.direct_address)?;
-    body.services[0].validate()?;
+    options.mode.validate(body.direct_address)?;
+    options.profile.validate_grants(&body.services)?;
     let admission_ttl = body
         .admission_expires_at_unix_ms
         .checked_sub(body.issued_at_unix_ms)
@@ -588,8 +909,14 @@ fn validate_body(
 }
 fn signed_bytes(body: &Body) -> Result<Vec<u8>> {
     let encoded = serde_json::to_vec(body).map_err(|_| Error::Protocol)?;
-    let mut bytes = Vec::with_capacity(DOMAIN.len() + encoded.len());
-    bytes.extend_from_slice(DOMAIN);
+    // Every public issue/verify path first checks its explicitly selected schema.
+    let domain = if body.schema_version == 3 {
+        FRAGMENTED_DOMAIN
+    } else {
+        DOMAIN
+    };
+    let mut bytes = Vec::with_capacity(domain.len() + encoded.len());
+    bytes.extend_from_slice(domain);
     bytes.extend_from_slice(&encoded);
     Ok(bytes)
 }
@@ -688,6 +1015,38 @@ mod tests {
                 monotonic: self.clock.monotonic + Duration::from_millis(monotonic_offset),
             }
         }
+        fn fragmented() -> Self {
+            let mut fixture = Self::new();
+            fixture.envelope.body.schema_version = 3;
+            fixture.envelope.body.services = vec![Grant::game(), Grant::fragmented_aux()];
+            fixture.envelope.signature = hex(&fixture
+                .host
+                .sign(&signed_bytes(&fixture.envelope.body).unwrap())
+                .to_bytes());
+            fixture
+        }
+        fn verify_fragmented(&self, encoded: &str) -> Result<SessionInvitation> {
+            SessionInvitation::verify_in_profile(
+                encoded,
+                self.host.public(),
+                self.guest.public(),
+                VerificationOptions {
+                    clock: self.clock,
+                    mode: AddressMode::Loopback,
+                    profile: SessionInvitationProfile::FragmentedGameUdp,
+                },
+            )
+        }
+        fn fragmented_value(&self) -> SessionInvitation {
+            self.verify_fragmented(&encode(&self.envelope).unwrap())
+                .unwrap()
+        }
+        fn resigned_fragmented(&self, mutate: impl FnOnce(&mut Body)) -> Result<SessionInvitation> {
+            let mut envelope = self.envelope.clone();
+            mutate(&mut envelope.body);
+            envelope.signature = hex(&self.host.sign(&signed_bytes(&envelope.body)?).to_bytes());
+            self.verify_fragmented(&encode(&envelope)?)
+        }
     }
     fn service() -> Service {
         Service {
@@ -698,6 +1057,488 @@ mod tests {
             max_datagram_bytes: 1400,
             required_capability: Capability::ReliableStream,
             udp_return_policy: UdpReturnPolicy::ReplyBudget,
+        }
+    }
+    fn fragmented_services() -> Vec<Service> {
+        vec![
+            service(),
+            Service {
+                service_id: "aux".into(),
+                protocol: Protocol::Udp,
+                endpoint: "127.0.0.1:32003".parse().unwrap(),
+                revision: 1,
+                max_datagram_bytes: 4096,
+                required_capability: Capability::FragmentedDatagram,
+                udp_return_policy: UdpReturnPolicy::AuthorizedDownstream {
+                    bytes_per_second: 16384,
+                    datagrams_per_second: 20,
+                },
+            },
+        ]
+    }
+
+    #[test]
+    fn schema_two_signed_bytes_and_preview_keep_the_original_shape() {
+        let f = Fixture::new();
+        let body = &f.envelope.body;
+        let expected_body = format!(
+            "{{\"schemaVersion\":2,\"hostKey\":\"{}\",\"guestKey\":\"{}\",\"sessionId\":\"session_test\",\"invitationId\":\"{}\",\"issuedAtUnixMs\":1000000,\"admissionExpiresAtUnixMs\":1002000,\"sessionExpiresAtUnixMs\":1012000,\"generation\":1,\"directAddress\":\"127.0.0.1:32000\",\"services\":[{{\"serviceId\":\"game\",\"protocol\":\"tcp\",\"revision\":1,\"requiredCapability\":\"reliableStream\"}}]}}",
+            body.host_key, body.guest_key, body.invitation_id,
+        );
+        let mut expected_signed = b"aurora/connect-lab/session-invitation/v2\0".to_vec();
+        expected_signed.extend_from_slice(expected_body.as_bytes());
+        assert_eq!(signed_bytes(body).unwrap(), expected_signed);
+        let expected_signature = hex(&f.host.sign(&expected_signed).to_bytes());
+        assert_eq!(
+            f.valid().encode(),
+            format!("{{\"body\":{expected_body},\"signature\":\"{expected_signature}\"}}")
+        );
+        let preview = f.valid().preview();
+        assert_eq!(preview["profile"], "sessionGameTcp");
+        assert!(preview.get("udpEnvelopeVersion").is_none());
+        assert!(preview.get("maxFragmentFrameBytes").is_none());
+        assert!(preview["services"][0].get("maxDatagramBytes").is_none());
+        assert!(preview["services"][0].get("udpReturnPolicy").is_none());
+    }
+
+    #[test]
+    fn fragmented_session_roundtrip_binds_grants_deadlines_and_profile() {
+        let f = Fixture::fragmented();
+        let value = f.fragmented_value();
+        let preview = value.preview();
+        assert_eq!(preview["schemaVersion"], 3);
+        assert_eq!(preview["profile"], "sessionFragmentedGameUdp");
+        assert_eq!(preview["udpEnvelopeVersion"], 2);
+        assert_eq!(preview["maxFragmentFrameBytes"], 1264);
+        assert_eq!(preview["services"][1]["maxDatagramBytes"], 4096);
+        assert_eq!(
+            preview["services"][1]["udpReturnPolicy"],
+            json!({"type":"authorizedDownstream","bytesPerSecond":16384,"datagramsPerSecond":20})
+        );
+        assert_eq!(value.encode(), encode(&f.envelope).unwrap());
+        assert_eq!(
+            value.digest(),
+            hex(&Sha256::digest(value.encode().as_bytes()))
+        );
+        assert_eq!(
+            value.capabilities(),
+            vec![Capability::ReliableStream, Capability::FragmentedDatagram]
+        );
+        assert_eq!(
+            value.lease().services,
+            ["aux".to_owned(), "game".to_owned()].into_iter().collect()
+        );
+        assert_eq!(value.lease().expires_at_unix_ms, 1_012_000);
+        assert_eq!(value.proof().digest, value.digest());
+        assert_eq!(
+            value.check_profile(SessionInvitationProfile::FragmentedGameUdp),
+            Ok(())
+        );
+        assert_eq!(
+            value.check_profile(SessionInvitationProfile::GameTcp),
+            Err(Error::Configuration)
+        );
+        assert!(value.encode().len() <= MAX_SESSION_INVITATION_BYTES);
+        assert!(!value.encode().contains("32003"));
+        assert!(!value.encode().contains(&hex(&f.host.to_bytes())));
+        assert!(!value.encode().contains(&hex(&f.guest.to_bytes())));
+    }
+
+    #[test]
+    fn fragmented_session_requires_explicit_schema_domain_and_address_policy() {
+        let old = Fixture::new();
+        let f = Fixture::fragmented();
+        assert!(matches!(
+            old.verify_fragmented(&encode(&old.envelope).unwrap()),
+            Err(Error::Configuration)
+        ));
+        assert!(matches!(
+            f.verify(&encode(&f.envelope).unwrap()),
+            Err(Error::Configuration)
+        ));
+        assert_eq!(
+            old.valid()
+                .check_profile(SessionInvitationProfile::FragmentedGameUdp),
+            Err(Error::Configuration)
+        );
+        for domain in [DOMAIN, b"aurora/connect-lab/invitation/v1\0"] {
+            let mut envelope = f.envelope.clone();
+            let mut signed = domain.to_vec();
+            signed.extend_from_slice(&serde_json::to_vec(&envelope.body).unwrap());
+            envelope.signature = hex(&f.host.sign(&signed).to_bytes());
+            assert!(matches!(
+                f.verify_fragmented(&encode(&envelope).unwrap()),
+                Err(Error::Unauthorized)
+            ));
+        }
+        let mut old_envelope = old.envelope.clone();
+        let mut signed = FRAGMENTED_DOMAIN.to_vec();
+        signed.extend_from_slice(&serde_json::to_vec(&old_envelope.body).unwrap());
+        old_envelope.signature = hex(&old.host.sign(&signed).to_bytes());
+        assert!(matches!(
+            old.verify(&encode(&old_envelope).unwrap()),
+            Err(Error::Unauthorized)
+        ));
+        for profile in [
+            SessionInvitationProfile::GameTcp,
+            SessionInvitationProfile::FragmentedGameUdp,
+        ] {
+            let fixture = if profile == SessionInvitationProfile::GameTcp {
+                &old
+            } else {
+                &f
+            };
+            assert!(matches!(
+                SessionInvitation::verify_in_profile(
+                    &encode(&fixture.envelope).unwrap(),
+                    fixture.host.public(),
+                    fixture.guest.public(),
+                    VerificationOptions {
+                        clock: fixture.clock,
+                        mode: AddressMode::ExternalIpv6,
+                        profile,
+                    }
+                ),
+                Err(Error::Configuration)
+            ));
+        }
+    }
+
+    #[test]
+    fn fragmented_session_factories_keep_exact_lifetimes_and_explicit_modes() {
+        let host = generate_key();
+        let guest = generate_key().public();
+        let services = fragmented_services();
+        for (admission, session) in [(1500, 4500), (600_000, 3_600_000)] {
+            for external in [false, true] {
+                let direct = if external {
+                    "[2001:4860::1]:32000"
+                } else {
+                    "127.0.0.1:32000"
+                }
+                .parse()
+                .unwrap();
+                let issue = if external {
+                    SessionInvitation::issue_fragmented_external_ipv6_for_lifetimes
+                } else {
+                    SessionInvitation::issue_fragmented_loopback_for_lifetimes
+                };
+                let value = issue(
+                    &host,
+                    guest,
+                    "fragmented_session",
+                    direct,
+                    &services,
+                    Duration::from_millis(admission),
+                    Duration::from_millis(session),
+                )
+                .unwrap();
+                assert_eq!(
+                    value.admission_expires_at_unix_ms() - value.envelope.body.issued_at_unix_ms,
+                    admission
+                );
+                assert_eq!(
+                    value.session_expires_at_unix_ms() - value.envelope.body.issued_at_unix_ms,
+                    session
+                );
+                let verify = if external {
+                    SessionInvitation::verify_fragmented_external_ipv6
+                } else {
+                    SessionInvitation::verify_fragmented_loopback
+                };
+                assert_eq!(
+                    verify(&value.encode(), host.public(), guest)
+                        .unwrap()
+                        .encode(),
+                    value.encode()
+                );
+                let opposite = if external {
+                    SessionInvitation::verify_fragmented_loopback
+                } else {
+                    SessionInvitation::verify_fragmented_external_ipv6
+                };
+                assert!(opposite(&value.encode(), host.public(), guest).is_err());
+                assert!(
+                    SessionInvitation::verify_loopback(&value.encode(), host.public(), guest)
+                        .is_err()
+                );
+                assert!(
+                    SessionInvitation::verify_external_ipv6(&value.encode(), host.public(), guest)
+                        .is_err()
+                );
+                assert!(
+                    SessionInvitation::verify_fragmented_loopback(
+                        &value.encode(),
+                        generate_key().public(),
+                        guest
+                    )
+                    .is_err()
+                );
+                assert!(
+                    SessionInvitation::verify_fragmented_loopback(
+                        &value.encode(),
+                        host.public(),
+                        generate_key().public()
+                    )
+                    .is_err()
+                );
+            }
+        }
+        for (admission, session) in [
+            (Duration::ZERO, Duration::from_secs(1)),
+            (Duration::from_secs(601), Duration::from_secs(601)),
+            (Duration::from_secs(1), Duration::from_secs(3601)),
+            (Duration::from_secs(2), Duration::from_secs(1)),
+            (Duration::from_secs(u64::MAX), Duration::from_secs(u64::MAX)),
+            (Duration::from_nanos(1_000_001), Duration::from_secs(1)),
+            (Duration::from_secs(1), Duration::from_nanos(1_000_000_001)),
+        ] {
+            assert!(matches!(
+                SessionInvitation::issue_fragmented_loopback_for_lifetimes(
+                    &host,
+                    guest,
+                    "fragmented_session",
+                    "127.0.0.1:32000".parse().unwrap(),
+                    &services,
+                    admission,
+                    session
+                ),
+                Err(Error::Configuration)
+            ));
+        }
+    }
+
+    #[test]
+    fn fragmented_session_rejects_changed_or_extra_grants_even_when_signed() {
+        let f = Fixture::fragmented();
+        let changes: [fn(&mut Body); 18] = [
+            |b| b.schema_version = 2,
+            |b| b.generation = 2,
+            |b| b.services.clear(),
+            |b| {
+                b.services.pop();
+            },
+            |b| b.services.swap(0, 1),
+            |b| b.services.push(Grant::game()),
+            |b| b.services[0].max_datagram_bytes = Some(4096),
+            |b| b.services[0].udp_return_policy = Some(ReturnPolicy::ReplyBudget),
+            |b| b.services[1].service_id = "voice".into(),
+            |b| b.services[1].protocol = Protocol::Tcp,
+            |b| b.services[1].revision = 2,
+            |b| b.services[1].required_capability = Capability::Datagram,
+            |b| b.services[1].max_datagram_bytes = None,
+            |b| b.services[1].max_datagram_bytes = Some(4095),
+            |b| b.services[1].max_datagram_bytes = Some(4097),
+            |b| b.services[1].udp_return_policy = None,
+            |b| b.services[1].udp_return_policy = Some(ReturnPolicy::ReplyBudget),
+            |b| {
+                b.services[1].udp_return_policy = Some(ReturnPolicy::AuthorizedDownstream {
+                    bytes_per_second: 16385,
+                    datagrams_per_second: 20,
+                })
+            },
+        ];
+        for mutate in changes {
+            assert!(matches!(
+                f.resigned_fragmented(mutate),
+                Err(Error::Configuration)
+            ));
+        }
+        assert!(
+            f.resigned_fragmented(|b| b.services[1].udp_return_policy =
+                Some(ReturnPolicy::AuthorizedDownstream {
+                    bytes_per_second: 16384,
+                    datagrams_per_second: 21
+                }))
+            .is_err()
+        );
+        for mutate in [
+            (|b: &mut Body| b.admission_expires_at_unix_ms += 1) as fn(&mut Body),
+            |b| b.session_expires_at_unix_ms += 1,
+            |b| b.direct_address = "127.0.0.1:32005".parse().unwrap(),
+        ] {
+            let mut envelope = f.envelope.clone();
+            mutate(&mut envelope.body);
+            assert!(matches!(
+                f.verify_fragmented(&encode(&envelope).unwrap()),
+                Err(Error::Unauthorized)
+            ));
+        }
+    }
+
+    #[test]
+    fn fragmented_session_rejects_noncanonical_unknown_duplicate_and_null_fields() {
+        let f = Fixture::fragmented();
+        let encoded = encode(&f.envelope).unwrap();
+        for changed in [
+            encoded.clone() + "\n",
+            " ".to_string() + &encoded,
+            encoded.replace(
+                "\"schemaVersion\":3",
+                "\"schemaVersion\":3,\"schemaVersion\":3",
+            ),
+            encoded.replace(
+                "\"maxDatagramBytes\":4096",
+                "\"maxDatagramBytes\":4096,\"maxDatagramBytes\":4096",
+            ),
+            encoded.replace(
+                "\"maxDatagramBytes\":4096",
+                "\"maxDatagramBytes\":4096,\"unknown\":0",
+            ),
+            encoded.replace(
+                "\"datagramsPerSecond\":20",
+                "\"datagramsPerSecond\":20,\"unknown\":0",
+            ),
+            encoded.replace(
+                "\"reliableStream\"",
+                "\"reliableStream\",\"maxDatagramBytes\":null",
+            ),
+            encoded.replace("\"aux\"", "\"a\\u0075x\""),
+        ] {
+            assert!(matches!(
+                f.verify_fragmented(&changed),
+                Err(Error::Protocol)
+            ));
+        }
+        assert!(matches!(
+            f.verify_fragmented(&"x".repeat(4097)),
+            Err(Error::Limit)
+        ));
+    }
+
+    #[test]
+    fn fragmented_session_original_clocks_survive_admission_expiry_without_renewal() {
+        let f = Fixture::fragmented();
+        let value = f.fragmented_value();
+        let copied = value.clone();
+        assert_eq!(value.admission_deadline, copied.admission_deadline);
+        assert_eq!(value.session_deadline, copied.session_deadline);
+        for clock in [f.at(2000, 0), f.at(0, 2000)] {
+            assert_eq!(copied.check_admission_at(clock), Err(Error::Expired));
+            assert_eq!(copied.check_session_at(clock), Ok(()));
+        }
+        assert_eq!(
+            copied.session_remaining_at(f.at(2000, 2000)),
+            Ok(Duration::from_millis(10000))
+        );
+        assert_eq!(
+            copied.session_remaining_at(f.at(1000, 11000)),
+            Ok(Duration::from_millis(1000))
+        );
+        for clock in [
+            f.at(12000, 0),
+            f.at(0, 12000),
+            Clock {
+                unix_ms: f.clock.unix_ms - 1,
+                ..f.clock
+            },
+        ] {
+            assert_eq!(copied.check_session_at(clock), Err(Error::Expired));
+        }
+        let options = VerificationOptions {
+            clock: f.at(2000, 2000),
+            mode: AddressMode::Loopback,
+            profile: SessionInvitationProfile::FragmentedGameUdp,
+        };
+        assert!(matches!(
+            SessionInvitation::verify_in_profile(
+                &value.encode(),
+                f.host.public(),
+                f.guest.public(),
+                options
+            ),
+            Err(Error::Expired)
+        ));
+    }
+
+    #[test]
+    fn fragmented_session_host_registry_lease_and_profile_are_exact_before_io() {
+        let f = Fixture::fragmented();
+        let value = f.fragmented_value();
+        let options = VerificationOptions {
+            clock: f.clock,
+            mode: AddressMode::Loopback,
+            profile: SessionInvitationProfile::FragmentedGameUdp,
+        };
+        let config = || HostConfig {
+            secret_key: f.host.clone(),
+            bind_addr: value.direct_addr(),
+            session_id: value.session_id().into(),
+            services: fragmented_services(),
+            leases: vec![value.lease()],
+            limits: crate::Limits::default(),
+        };
+        assert_eq!(value.check_host_profile_at(&config(), options), Ok(()));
+        assert_eq!(
+            value.check_host_at(&config(), AddressMode::Loopback, f.clock),
+            Err(Error::Configuration)
+        );
+        let changes: [fn(&mut HostConfig); 18] = [
+            |c| c.secret_key = generate_key(),
+            |c| c.bind_addr = "127.0.0.1:32005".parse().unwrap(),
+            |c| c.session_id = "other_session".into(),
+            |c| c.leases.clear(),
+            |c| c.leases.push(c.leases[0].clone()),
+            |c| c.leases[0].expires_at_unix_ms = 1_002_000,
+            |c| {
+                c.leases[0].services.remove("aux");
+            },
+            |c| {
+                c.leases[0].services.insert("voice".into());
+            },
+            |c| c.services.swap(0, 1),
+            |c| c.services[0].max_datagram_bytes = 1401,
+            |c| c.services[1].endpoint = "192.0.2.1:32003".parse().unwrap(),
+            |c| c.services[1].service_id = "voice".into(),
+            |c| c.services[1].protocol = Protocol::Tcp,
+            |c| c.services[1].revision = 2,
+            |c| c.services[1].required_capability = Capability::Datagram,
+            |c| c.services[1].max_datagram_bytes = 4095,
+            |c| c.services[1].udp_return_policy = UdpReturnPolicy::ReplyBudget,
+            |c| {
+                c.services[1].udp_return_policy = UdpReturnPolicy::AuthorizedDownstream {
+                    bytes_per_second: 16384,
+                    datagrams_per_second: 21,
+                }
+            },
+        ];
+        for change in changes {
+            let mut changed = config();
+            change(&mut changed);
+            assert_eq!(
+                value.check_host_profile_at(&changed, options),
+                Err(Error::Configuration)
+            );
+        }
+        assert!(
+            validate_profile_services(&fragmented_services(), SessionInvitationProfile::GameTcp)
+                .is_err()
+        );
+        assert!(
+            validate_profile_services(&[service()], SessionInvitationProfile::FragmentedGameUdp)
+                .is_err()
+        );
+        let mut changed = fragmented_services();
+        changed[1].max_datagram_bytes = 4097;
+        assert!(
+            validate_profile_services(&changed, SessionInvitationProfile::FragmentedGameUdp)
+                .is_err()
+        );
+        // The new profile fixes this otherwise inert generic TCP field, while
+        // existing schema-2 callers keep their original accepted range.
+        for maximum in [1, 1399, 1401, 65507] {
+            let mut game = service();
+            game.max_datagram_bytes = maximum;
+            assert!(
+                validate_profile_services(&[game.clone()], SessionInvitationProfile::GameTcp)
+                    .is_ok()
+            );
+            let mut services = fragmented_services();
+            services[0] = game;
+            assert!(
+                validate_profile_services(&services, SessionInvitationProfile::FragmentedGameUdp)
+                    .is_err()
+            );
         }
     }
 

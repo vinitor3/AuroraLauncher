@@ -122,6 +122,12 @@ A análise estática dos artefatos de voz mostrou envelopes maiores que o teto V
 
 Os validadores de plano/convite antigos continuam recusando V2 até uma extensão explicitamente revisada. Provas reais de biblioteca em loopback não autorizam áudio/interface/relay ou anúncio de endereço do mod. Envelopes, política de retorno, oráculos e rollback em [spec5.2](../AURORA_CONNECT_SPEC.md#52-envelope-udp-v2-explicitamente-autorizado--incremento49) e [domínio49](../../aurora-connect-fragmented-udp.md). Nenhuma dependência/lock foi alterada.
 
+### Incremento61 — sessão fragmentada sem ampliar o perfil TCP anterior
+
+Em14/10/2026, manter schema2/gameTCP estrito e acrescentar um perfil explícito schema3, com domínio próprio, para gameTCP+auxUDP4096 e retorno autorizado fixo16384B/s/20frames/s. Reutilizar a autoridade temporal original e o fluxo único de admissão/consumo/revogação, preservando APIs e bytes canônicos anteriores. Um objeto do perfil novo não pode ser entregue à API antiga para obter capacidades adicionais implicitamente.
+
+Prazos de ingresso≤600s e sessão≤3600s resolvem o limite de120s do caller UDP57 somente quando um caller adotar o novo perfil. Não basta aumentar o timer da interface: associações guardam a autoridade original e a conferem nas fronteiras de remontagem/envio/fila/entrega. A decisão não autoriza configuração de voz, compatibilidade de mod, sessão indefinida ou serviço externo. [Contrato e provas61](../../aurora-connect-fragmented-session.md). Integrações posteriores são incrementos próprios, mantidos desligados por padrão; rollback preserva os perfis antigos e encerra recursos próprios.
+
 ## Decisões pendentes e condições de aceitação
 
 Decisão do incremento27: convites manuais assinados usam Ed25519 já fornecido por Iroh1.3.0 e SHA256 já fixado, sem dependência nova. Formato canônico estrito, host pin obtido por canal autorizado, destinatário preso à chave TLS, prazo≤600s/generation1 e admissão consumida antes do ACK. Caminho separado preserva reconexão/quota das leases manuais existentes. Endereço permanece somente loopback; renovar/reentrar exige novas chaves/sessão/convite, pois replay state é de memória. Isso resolve a troca fragmentada de metadados na CLI e testa autorização, sem instituir schema Firestore, conta social ou distribuição. [Contrato §8.1](../AURORA_CONNECT_SPEC.md#81-convite-manual-assinado--laboratório). A aplicação aguarda TLS completo; não alegar desativação global de early data upstream. Testes e limitações registrados no task antes de concluir o incremento.

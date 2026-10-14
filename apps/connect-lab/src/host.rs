@@ -192,6 +192,10 @@ struct LeaseState {
     fragment_ingress: Arc<Mutex<UdpLimiter>>,
     fragment_memory: fragment::PeerBudget,
 }
+
+#[cfg(test)]
+#[path = "host_session_udp_tests.rs"]
+mod session_udp_tests;
 struct State {
     session_id: String,
     services: HashMap<String, (u32, Service)>,
@@ -302,6 +306,33 @@ impl Host {
         invitation: &SessionInvitation,
     ) -> Result<Self> {
         invitation.check_host_external_ipv6(&config)?;
+        Self::start_inner(
+            config,
+            Some(InvitationAuthority::Session(invitation.clone())),
+            transport::EndpointMode::Direct,
+        )
+        .await
+    }
+    /// Explicit schema-3 session: signed game/TCP and fragmented aux/UDP,
+    /// with independent, immutable admission and session deadlines.
+    pub async fn start_invited_fragmented_session(
+        config: HostConfig,
+        invitation: &SessionInvitation,
+    ) -> Result<Self> {
+        invitation.check_host_fragmented(&config)?;
+        Self::start_inner(
+            config,
+            Some(InvitationAuthority::Session(invitation.clone())),
+            transport::EndpointMode::Direct,
+        )
+        .await
+    }
+    /// The external IPv6 initial address remains an explicit caller choice.
+    pub async fn start_invited_fragmented_session_external_ipv6(
+        config: HostConfig,
+        invitation: &SessionInvitation,
+    ) -> Result<Self> {
+        invitation.check_host_fragmented_external_ipv6(&config)?;
         Self::start_inner(
             config,
             Some(InvitationAuthority::Session(invitation.clone())),
@@ -625,6 +656,7 @@ struct Association {
     lease_cancel: CancellationToken,
     lease_unix_deadline: u64,
     lease_deadline: Instant,
+    session_authority: Option<SessionInvitation>,
 }
 impl Association {
     fn fragment_authorized(&self) -> bool {
@@ -633,7 +665,10 @@ impl Association {
             &self.lease_cancel,
             self.lease_unix_deadline,
             self.lease_deadline,
-        )
+        ) && self
+            .session_authority
+            .as_ref()
+            .is_none_or(|authority| authority.check_session_current().is_ok())
     }
 }
 fn fragment_authority_valid(
@@ -811,7 +846,9 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
                         let Some(max_payload) = maximum else { let _ = reject(&mut send, Error::CapabilityUnavailable, &state).await; continue; };
                         let bind = if service.endpoint.is_ipv4() { "127.0.0.1:0" } else { "[::1]:0" };
                         let socket = match UdpSocket::bind(bind).await { Ok(s) => s, Err(_) => { let _ = reject(&mut send, Error::Destination, &state).await; continue; } };
+                        if authorize_session(&state, &hello.lease_id, connection.remote_id()).is_err() { let _ = reject(&mut send, Error::Expired, &state).await; continue; }
                         if socket.connect(service.endpoint).await.is_err() { let _ = reject(&mut send, Error::Destination, &state).await; continue; }
+                        if authorize_session(&state, &hello.lease_id, connection.remote_id()).is_err() { let _ = reject(&mut send, Error::Expired, &state).await; continue; }
                         let association = Arc::new(Association { socket: Arc::new(socket), service_handle: handle,
                             generation: service.revision, max_payload, cancel: cancel.child_token(), activity: Mutex::new(Instant::now()),
                             sequence: Mutex::new(SequenceWindow::default()), credit: AtomicU64::new(0),
@@ -820,10 +857,12 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
                             return_policy: service.udp_return_policy, first_forwarded: AtomicBool::new(false), first_forwarded_notify: Notify::new(),
                             fragmented: fragmented.then(|| Mutex::new(fragment::Reassembler::new(fragment::Scope { service_handle: handle, association_id: request.request_id, generation: service.revision }, lease.fragment_memory.clone()))),
                             lease_cancel: lease.cancel.clone(), lease_unix_deadline: lease.value.expires_at_unix_ms, lease_deadline,
+                            session_authority: match &lease.invitation { Some(InvitationAuthority::Session(value)) => Some(value.clone()), _ => None },
                         });
                         associations.lock().unwrap().insert(request.request_id, association.clone());
                         let response = Reply { service_handle: handle, association_id: request.request_id, generation: service.revision, max_payload: Some(max_payload), fragment_version: fragmented.then_some(2), ..Default::default() };
                         if reply(&mut send, &response, &state).await.is_err() { associations.lock().unwrap().remove(&request.request_id); continue; }
+                        if !association.fragment_authorized() { association.cancel.cancel(); associations.lock().unwrap().remove(&request.request_id); continue; }
                         let _ = send.finish();
                         state.metrics.udp_associations_opened.fetch_add(1, Ordering::Relaxed);
                         tasks.spawn(udp_return(connection.clone(), state.clone(), associations.clone(), request.request_id, association, permit));
@@ -1060,7 +1099,14 @@ async fn receive_fragment(
         _ = a.cancel.cancelled() => return,
         _ = a.lease_cancel.cancelled() => return,
         _ = tokio::time::sleep_until(tokio::time::Instant::from_std(a.lease_deadline)) => return,
-        result = tokio::time::timeout(Duration::from_millis(40), a.socket.send(payload.as_ref())) => result,
+        result = tokio::time::timeout(Duration::from_millis(40), async {
+            a.socket.writable().await?;
+            // No await between the final authority check and the local send.
+            if !a.fragment_authorized() || cancel.is_cancelled() {
+                return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+            }
+            a.socket.try_send(payload.as_ref())
+        }) => result,
     };
     if matches!(delivered, Ok(Ok(n)) if n == payload.as_ref().len()) {
         *a.activity.lock().unwrap() = Instant::now();

@@ -4,6 +4,7 @@ use crate::{
     fragment,
     invitation::{InvitationAddressMode, InvitationProfile},
     model::{Metrics, valid_id},
+    session_invitation::SessionInvitationProfile,
     transport::{self, Bucket, Budget},
     wire::{self, Hello, InvitationProof, OpenRequest, Operation, Reply, SequenceWindow},
     *,
@@ -237,6 +238,7 @@ impl Guest {
         invitation: &SessionInvitation,
         limits: Limits,
     ) -> Result<Self> {
+        invitation.check_profile(SessionInvitationProfile::GameTcp)?;
         Self::connect_session_in_mode(
             secret_key,
             invitation,
@@ -251,6 +253,38 @@ impl Guest {
         invitation: &SessionInvitation,
         limits: Limits,
     ) -> Result<Self> {
+        invitation.check_profile(SessionInvitationProfile::GameTcp)?;
+        Self::connect_session_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            InvitationAddressMode::ExternalIpv6,
+        )
+        .await
+    }
+    /// Explicit schema-3 game/TCP plus fragmented aux/UDP session. The
+    /// already verified authority keeps its original clocks through all I/O.
+    pub async fn connect_invited_fragmented_session(
+        secret_key: SecretKey,
+        invitation: &SessionInvitation,
+        limits: Limits,
+    ) -> Result<Self> {
+        invitation.check_profile(SessionInvitationProfile::FragmentedGameUdp)?;
+        Self::connect_session_in_mode(
+            secret_key,
+            invitation,
+            limits,
+            InvitationAddressMode::Loopback,
+        )
+        .await
+    }
+    /// Explicit opt-in to an external IPv6 initial address; no relay fallback.
+    pub async fn connect_invited_fragmented_session_external_ipv6(
+        secret_key: SecretKey,
+        invitation: &SessionInvitation,
+        limits: Limits,
+    ) -> Result<Self> {
+        invitation.check_profile(SessionInvitationProfile::FragmentedGameUdp)?;
         Self::connect_session_in_mode(
             secret_key,
             invitation,
@@ -563,6 +597,7 @@ impl Guest {
             return Err(Error::Protocol);
         }
         let state = Arc::new(AssociationState {
+            session_authority: self.inner.session_authority.clone(),
             service_handle: response.service_handle,
             generation: response.generation,
             max_payload,
@@ -589,6 +624,7 @@ impl Guest {
             }),
             message_ids: Mutex::new(fragment::MessageIds::default()),
         });
+        state.check_session()?;
         self.inner
             .associations
             .lock()
@@ -681,7 +717,13 @@ impl Guest {
         if !bind.ip().is_loopback() {
             return Err(Error::Configuration);
         }
+        if let Some(authority) = &self.inner.session_authority {
+            authority.check_session_current()?;
+        }
         let socket = Arc::new(UdpSocket::bind(bind).await.map_err(|_| Error::Io)?);
+        if let Some(authority) = &self.inner.session_authority {
+            authority.check_session_current()?;
+        }
         let address = socket.local_addr().map_err(|_| Error::Io)?;
         // Validate permission/capability now; reserve first association for the first local source.
         let first = self.open_udp_mode(service, revision, fragmented).await?;
@@ -713,7 +755,17 @@ impl Guest {
                             tasks.spawn(async move {
                                 loop { tokio::select! {
                                     _ = token.cancelled() => break,
-                                    data = returns.recv_payload() => match data { Ok(data) => { let _ = socket.send_to(data.as_ref(), source).await; }, Err(_) => break },
+                                    data = returns.recv_payload() => match data { Ok(data) => {
+                                        // A queued datagram cannot outlive the original authority,
+                                        // including while the local socket waits to become writable.
+                                        let delivery = async {
+                                            socket.writable().await.map_err(|_| Error::Io)?;
+                                            returns.inner.state.check_session()?;
+                                            if token.is_cancelled() || returns.is_closed() { return Err(Error::Closed); }
+                                            socket.try_send_to(data.as_ref(), source).map_err(|_| Error::Io)
+                                        };
+                                        let _ = tokio::time::timeout(Duration::from_millis(40), delivery).await;
+                                    }, Err(_) => break },
                                 } }
                                 returns.shutdown().await;
                             });
@@ -750,6 +802,7 @@ impl Guest {
 }
 
 struct AssociationState {
+    session_authority: Option<SessionInvitation>,
     service_handle: u32,
     generation: u32,
     max_payload: usize,
@@ -763,6 +816,17 @@ struct AssociationState {
     byte_budget: Mutex<Bucket>,
     fragmented: Option<Mutex<fragment::Reassembler>>,
     message_ids: Mutex<fragment::MessageIds>,
+}
+impl AssociationState {
+    fn check_session(&self) -> Result<()> {
+        if self.cancel.is_cancelled() {
+            return Err(Error::Closed);
+        }
+        if let Some(authority) = &self.session_authority {
+            authority.check_session_current()?;
+        }
+        Ok(())
+    }
 }
 enum ReceivedPayload {
     V1(Bytes),
@@ -848,6 +912,7 @@ impl UdpAssociation {
         self.inner.state.generation
     }
     pub fn max_payload(&self) -> Option<usize> {
+        self.inner.state.check_session().ok()?;
         if self.inner.state.fragmented.is_some() {
             return bridge::payload_capacity(
                 &self.inner.guest.inner.connection,
@@ -859,7 +924,7 @@ impl UdpAssociation {
             .max_datagram_payload(self.inner.state.max_payload)
     }
     pub fn is_closed(&self) -> bool {
-        self.inner.state.cancel.is_cancelled()
+        self.inner.state.check_session().is_err()
             || self.inner.guest.inner.connection.close_reason().is_some()
             || self.inner.state.activity.lock().unwrap().elapsed()
                 >= self.inner.guest.inner.limits.udp_idle_timeout
@@ -867,6 +932,7 @@ impl UdpAssociation {
     pub async fn send(&self, payload: &[u8]) -> Result<()> {
         let a = &self.inner.state;
         let g = &self.inner.guest.inner;
+        a.check_session()?;
         if a.cancel.is_cancelled()
             || a.activity.lock().unwrap().elapsed() >= g.limits.udp_idle_timeout
         {
@@ -901,6 +967,7 @@ impl UdpAssociation {
                 if !packet || !byte || !aggregate || a.cancel.is_cancelled() {
                     return Err(Error::Limit);
                 }
+                a.check_session()?;
                 bridge::send_fragment(&g.connection, frame, capacity)?;
             }
             *a.activity.lock().unwrap() = Instant::now();
@@ -934,6 +1001,7 @@ impl UdpAssociation {
             payload: Bytes::copy_from_slice(payload),
         };
         let encoded = frame.encode()?;
+        a.check_session()?;
         // Non-blocking enqueue prioritizes newer datagrams over stale queued data in noq 1.3.
         g.connection
             .send_datagram(encoded)
@@ -951,14 +1019,13 @@ impl UdpAssociation {
     async fn recv_payload(&self) -> Result<ReceivedPayload> {
         let a = &self.inner.state;
         loop {
-            if a.cancel.is_cancelled() {
-                return Err(Error::Closed);
-            }
+            a.check_session()?;
             let notified = a.notify.notified();
             {
                 let mut queue = a.inbox.lock().unwrap();
                 while let Some((at, data)) = queue.pop_front() {
                     if at.elapsed() <= Duration::from_millis(40) {
+                        a.check_session()?;
                         return Ok(data);
                     }
                     self.inner
@@ -1065,7 +1132,7 @@ async fn receive(
                     .unwrap()
                     .get(&frame.scope.association_id)
                     .cloned()?;
-                if a.cancel.is_cancelled()
+                if a.check_session().is_err()
                     || a.activity.lock().unwrap().elapsed() >= limits.udp_idle_timeout
                     || a.service_handle != frame.scope.service_handle
                     || a.generation != frame.scope.generation
@@ -1075,7 +1142,7 @@ async fn receive(
                 }
                 let output = {
                     let mut reassembler = a.fragmented.as_ref()?.lock().unwrap();
-                    if a.cancel.is_cancelled() {
+                    if a.check_session().is_err() {
                         return None;
                     }
                     reassembler.push(frame, Instant::now()).ok()?
@@ -1109,7 +1176,7 @@ async fn receive(
             metrics.udp_dropped.fetch_add(1, Ordering::Relaxed);
             continue;
         };
-        if a.cancel.is_cancelled()
+        if a.check_session().is_err()
             || a.fragmented.is_some()
             || a.service_handle != frame.service_handle
             || a.generation != frame.generation
@@ -1134,7 +1201,7 @@ async fn receive(
 }
 fn enqueue(a: &AssociationState, payload: ReceivedPayload, metrics: &Metrics) {
     let mut queue = a.inbox.lock().unwrap();
-    if a.cancel.is_cancelled() {
+    if a.check_session().is_err() {
         return;
     }
     while queue.len() >= 8
@@ -1170,6 +1237,12 @@ impl UdpBridge {
     pub fn is_closed(&self) -> bool {
         self.cancel.is_cancelled()
             || self
+                .guest
+                .inner
+                .session_authority
+                .as_ref()
+                .is_some_and(|authority| authority.check_session_current().is_err())
+            || self
                 .task
                 .lock()
                 .unwrap()
@@ -1180,12 +1253,19 @@ impl UdpBridge {
     /// The initial bidirectional ceiling, reduced immediately if our current path shrinks.
     /// A larger ceiling requires reopening the association; no implicit renegotiation.
     pub fn max_payload(&self) -> Option<usize> {
+        if let Some(authority) = &self.guest.inner.session_authority {
+            authority.check_session_current().ok()?;
+        }
         if self.fragmented {
             return bridge::payload_capacity(&self.guest.inner.connection, self.negotiated_max);
         }
         self.guest.max_datagram_payload(self.negotiated_max)
     }
 }
+
+#[cfg(test)]
+#[path = "guest_session_udp_tests.rs"]
+mod session_udp_tests;
 macro_rules! bridge_handle {
     ($kind:ty) => {
         impl $kind {
