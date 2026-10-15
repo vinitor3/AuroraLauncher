@@ -14,8 +14,9 @@ pub use fragmented_profile::{
     SessionFragmentedUdpCapabilities, UdpRecoveryCapabilities, UdpRecoveryState,
 };
 pub use group_profile::{
-    GroupHostRequest, GroupInvitationExport, GroupParticipant, GroupParticipantRequest,
-    GroupPreparation, GroupReview, HostGroupSnapshot, SessionFragmentedHostGroupsCapabilities,
+    GroupDiscoveredHostRequest, GroupHostRequest, GroupInvitationExport, GroupParticipant,
+    GroupParticipantRequest, GroupPreparation, GroupReview, HostGroupSnapshot, PendingGroupSource,
+    SessionFragmentedHostGroupsCapabilities,
 };
 #[cfg(feature = "connect-lab")]
 pub use live::ready_game::ReadyGameSpawnGate;
@@ -207,6 +208,8 @@ pub struct ConnectSnapshot {
     pub udp_recovery: Option<UdpRecoveryState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_group: Option<HostGroupSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_group_source: Option<PendingGroupSource>,
 }
 impl ConnectSnapshot {
     fn idle() -> Self {
@@ -236,6 +239,7 @@ impl ConnectSnapshot {
             udp: None,
             udp_recovery: None,
             host_group: None,
+            pending_group_source: None,
         }
     }
 }
@@ -390,6 +394,24 @@ impl ConnectManager {
         #[cfg(not(feature = "connect-lab"))]
         {
             let _ = (owner, request);
+            Err(ConnectError::Disabled)
+        }
+    }
+    pub fn prepare_session_group_host_discovered(
+        &self,
+        owner: &str,
+        request: GroupDiscoveredHostRequest,
+        selection_id: String,
+        discovery: super::connect_discovery::DiscoveryManager,
+    ) -> Result<ConnectSnapshot, ConnectError> {
+        #[cfg(all(windows, feature = "connect-lab"))]
+        {
+            self.live
+                .prepare_session_group_host_discovered(owner, request, selection_id, discovery)
+        }
+        #[cfg(not(all(windows, feature = "connect-lab")))]
+        {
+            let _ = (owner, request, selection_id, discovery);
             Err(ConnectError::Disabled)
         }
     }

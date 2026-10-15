@@ -10,6 +10,7 @@ struct GroupDraft {
     key: lab::SecretKey,
     bind: SocketAddr,
     services: Vec<lab::Service>,
+    source: TargetGuard,
 }
 #[derive(Clone)]
 struct Member {
@@ -23,6 +24,56 @@ pub(super) struct GroupOperation {
     members: Vec<Member>,
     review_deadline: Option<Instant>,
     host: Option<Arc<lab::Host>>,
+}
+#[cfg(test)]
+pub(super) fn metrics(a: &Attempt) -> Option<lab::MetricsSnapshot> {
+    a.group.as_ref()?.host.as_ref().map(|host| host.metrics())
+}
+#[cfg(windows)]
+pub(super) fn publish_discovered(
+    a: &mut Attempt,
+    source: TargetGuard,
+    request: GroupHostRequest,
+    bind: SocketAddr,
+    services: Vec<lab::Service>,
+) {
+    let key = lab::generate_key();
+    let public_id = key.public().to_string();
+    a.snapshot.generation = a.snapshot.generation.saturating_add(1);
+    let preparation = GroupPreparation {
+        operation_id: a.snapshot.operation_id.clone().expect("reserved operation"),
+        generation: a.snapshot.generation,
+        public_id: public_id.clone(),
+        expires_at_ms: a
+            .snapshot
+            .expires_at_ms
+            .expect("original preparation deadline"),
+        kind: GROUP_KIND,
+    };
+    a.snapshot.host_group = Some(HostGroupSnapshot {
+        kind: GROUP_KIND,
+        profile: fragmented_profile::SESSION_PROFILE,
+        invitation_schema_version: 3,
+        mode: request.mode,
+        host_public_id: public_id,
+        preparation: Some(preparation),
+        review: None,
+        participants: Vec::new(),
+    });
+    a.snapshot.phase = "hostPrepared";
+    a.snapshot.pending_group_source = None;
+    a.group = Some(GroupOperation {
+        draft: Some(GroupDraft {
+            request,
+            key,
+            bind,
+            services,
+            source,
+        }),
+        members: Vec::new(),
+        review_deadline: None,
+        host: None,
+    });
 }
 #[cfg(test)]
 #[derive(Default)]
@@ -82,6 +133,9 @@ pub(super) fn refresh(a: &mut Attempt) -> bool {
 }
 
 pub(super) fn closing(a: &mut Attempt) {
+    if a.snapshot.pending_group_source.take().is_some() {
+        a.snapshot.expires_at_ms = None;
+    }
     if let Some(group) = a.group.as_mut() {
         group.draft = None;
         group.review_deadline = None;
@@ -133,7 +187,12 @@ pub(super) fn expire_pending(a: &mut Attempt, now: u64) {
         finished(a);
         a.snapshot.phase = "closed";
         a.snapshot.transport_state = "closed";
-        a.snapshot.cleanup_state = "complete";
+        a.cancel.cancel();
+        a.snapshot.cleanup_state = if group_source::finished(a) {
+            "complete"
+        } else {
+            "pending"
+        };
         a.snapshot.error_code = Some(ConnectError::PlanExpired.code());
         a.snapshot.generation = a.snapshot.generation.saturating_add(1);
     }
@@ -212,12 +271,14 @@ impl Manager {
             recovery: None,
             guest_source: None,
             ready_game: None,
+            group_source: None,
             group: Some(GroupOperation {
                 draft: Some(GroupDraft {
                     request,
                     key,
                     bind,
                     services,
+                    source: TargetGuard::Manual,
                 }),
                 members: Vec::new(),
                 review_deadline: None,
@@ -240,11 +301,63 @@ impl Manager {
         if !(2..=8).contains(&participants.len()) {
             return Err(ConnectError::InvalidRequest);
         }
+        // Source IO must outlive a lost caller, yet must not hold Connect's
+        // mutex. This synchronous guard lives on the actual query's thread.
+        #[cfg(test)]
+        let query_gate;
+        let (source, observed_generation, _query_guard) = {
+            let mut state = lock(&self.state)?;
+            let shutting_down = state.shutting_down;
+            let a = selected(&mut state, owner, id)?;
+            if shutting_down || a.cancel.is_cancelled() {
+                return Err(ConnectError::Cancelled);
+            }
+            super::expire_pending(a);
+            if a.snapshot.phase != "hostPrepared" {
+                return Err(ConnectError::PlanExpired);
+            }
+            let source = a
+                .group
+                .as_ref()
+                .and_then(|group| group.draft.as_ref())
+                .ok_or(ConnectError::StaleOperation)?
+                .source
+                .clone();
+            let guard = group_source::begin_review(a)?;
+            #[cfg(test)]
+            {
+                query_gate = a
+                    .group_source
+                    .as_ref()
+                    .and_then(|work| work.hooks.review.clone());
+            }
+            (source, a.snapshot.generation, guard)
+        };
+        #[cfg(test)]
+        if let Some(gate) = query_gate {
+            gate.wait();
+        }
+        if source.recheck().is_err() {
+            let mut state = lock(&self.state)?;
+            let a = selected(&mut state, owner, id)?;
+            if a.snapshot.phase == "hostPrepared" && !a.cancel.is_cancelled() {
+                finished(a);
+                a.snapshot.phase = "failed";
+                a.snapshot.transport_state = "closed";
+                a.snapshot.cleanup_state = "pending";
+                a.snapshot.error_code = Some(ConnectError::SourceChanged.code());
+                a.snapshot.generation = a.snapshot.generation.saturating_add(1);
+            }
+            return Err(ConnectError::SourceChanged);
+        }
         let mut state = lock(&self.state)?;
         let shutting_down = state.shutting_down;
         let a = selected(&mut state, owner, id)?;
         if shutting_down || a.cancel.is_cancelled() {
             return Err(ConnectError::Cancelled);
+        }
+        if a.snapshot.generation != observed_generation {
+            return Err(ConnectError::StaleOperation);
         }
         super::expire_pending(a);
         if a.snapshot.phase != "hostPrepared" {
@@ -326,6 +439,7 @@ impl Manager {
             return Err(ConnectError::PlanExpired);
         }
         let generation = a.snapshot.generation.saturating_add(1);
+        let origin = draft.source.projection();
         let mut review = GroupReview {
             operation_id: id.into(),
             generation,
@@ -335,7 +449,9 @@ impl Manager {
             host_public_id: draft.key.public().to_string(),
             direct_address: draft.bind.to_string(),
             game_target: draft.request.game_target.clone(),
-            target_source: "manual",
+            target_source: origin.kind,
+            instance_id: origin.instance_id,
+            run_id: origin.run_id,
             fragmented_udp: FragmentedUdpReview {
                 contract: FragmentedUdpContract::session(),
                 udp_target: Some(draft.request.udp_target.clone()),
@@ -346,13 +462,18 @@ impl Manager {
                 .collect(),
             expires_at_ms: expires,
         };
-        review.digest = format!(
-            "{:x}",
-            Sha256::digest(
-                serde_json::to_vec(&("aurora.connect.desktop.static-group/v1", owner, &review))
-                    .map_err(|_| ConnectError::Internal)?
-            )
-        );
+        let bytes = if origin.kind == "manual" {
+            serde_json::to_vec(&("aurora.connect.desktop.static-group/v1", owner, &review))
+        } else {
+            serde_json::to_vec(&(
+                "aurora.connect.desktop.owned-static-group/v1",
+                owner,
+                &origin.fingerprint,
+                &review,
+            ))
+        }
+        .map_err(|_| ConnectError::Internal)?;
+        review.digest = format!("{:x}", Sha256::digest(bytes));
         let group = a.group.as_mut().ok_or(ConnectError::Internal)?;
         group.members = members;
         group.review_deadline = Some(review_deadline);
@@ -531,6 +652,32 @@ async fn run_group(
         close_operation(&state, &id, &cancel, None).await;
         return;
     }
+    let source = draft.source.clone();
+    if group_source::recheck(
+        source.clone(),
+        #[cfg(test)]
+        None,
+    )
+    .await
+    .is_err()
+    {
+        close_operation(
+            &state,
+            &id,
+            &cancel,
+            (!cancel.is_cancelled()).then_some(ConnectError::SourceChanged),
+        )
+        .await;
+        return;
+    }
+    if cancel.is_cancelled()
+        || invitations
+            .iter()
+            .any(|invitation| invitation.check_admission_current().is_err())
+    {
+        close_operation(&state, &id, &cancel, None).await;
+        return;
+    }
     let config = lab::HostConfig {
         secret_key: draft.key,
         bind_addr: draft.bind,
@@ -573,6 +720,7 @@ async fn run_group(
         gate.entered.notify_one();
         gate.release.notified().await;
     }
+    let mut final_error = None;
     if !cancel.is_cancelled()
         && invitations
             .iter()
@@ -588,9 +736,19 @@ async fn run_group(
             }
         });
         let mut tick = tokio::time::interval(Duration::from_millis(100));
+        let mut source_tick = tokio::time::interval(Duration::from_secs(1));
         loop {
             tokio::select! {
                 _=cancel.cancelled()=>break,
+                _=source_tick.tick()=> {
+                    #[cfg(test)] let gate = lock(&state).ok().and_then(|state| state.attempt.as_ref().and_then(|a| a.group_source.as_ref()).and_then(|work| work.hooks.monitor.clone()));
+                    // Await the real query even if stop arrives during it. The
+                    // Host actor remains owned until this query has returned.
+                    if group_source::recheck(source.clone(), #[cfg(test)] gate).await.is_err() {
+                        if !cancel.is_cancelled() { final_error = Some(ConnectError::SourceChanged); }
+                        break;
+                    }
+                }
                 _=tick.tick()=> {
                     let done=lock(&state).map(|mut state|state.attempt.as_mut().is_none_or(|a|a.snapshot.operation_id.as_deref()!=Some(&id)||a.snapshot.phase!="hostListening"||refresh(a))).unwrap_or(true);
                     if done {break;}
@@ -609,7 +767,7 @@ async fn run_group(
     }
     host.shutdown().await;
     drop(host);
-    close_operation(&state, &id, &cancel, None).await;
+    close_operation(&state, &id, &cancel, final_error).await;
 }
 
 #[cfg(test)]

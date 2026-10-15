@@ -29,7 +29,7 @@ impl Default for SessionFragmentedHostGroupsCapabilities {
             max_review_seconds: 60,
             max_admission_seconds: 600,
             max_session_seconds: 3600,
-            owned_game_tcp_discovery: false,
+            owned_game_tcp_discovery: cfg!(all(windows, feature = "connect-lab")),
         }
     }
 }
@@ -41,6 +41,19 @@ pub struct GroupHostRequest {
     pub bind_address: String,
     pub game_target: String,
     pub udp_target: String,
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupDiscoveredHostRequest {
+    pub mode: ConnectMode,
+    pub bind_address: String,
+    pub udp_target: String,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingGroupSource {
+    pub kind: &'static str,
+    pub mode: ConnectMode,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -83,6 +96,10 @@ pub struct GroupReview {
     pub direct_address: String,
     pub game_target: String,
     pub target_source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
     pub fragmented_udp: FragmentedUdpReview,
     pub participants: Vec<GroupParticipant>,
     pub expires_at_ms: u64,
@@ -139,6 +156,19 @@ mod disabled_tests {
             Err(ConnectError::Disabled)
         ));
         assert!(matches!(
+            manager.prepare_session_group_host_discovered(
+                "main",
+                GroupDiscoveredHostRequest {
+                    mode: ConnectMode::Loopback,
+                    bind_address: "127.0.0.1:43000".into(),
+                    udp_target: "127.0.0.1:43002".into()
+                },
+                uuid::Uuid::new_v4().to_string(),
+                crate::engine::connect_discovery::DiscoveryManager::default(),
+            ),
+            Err(ConnectError::Disabled)
+        ));
+        assert!(matches!(
             manager.review_session_group_host("main", "none", Vec::new()),
             Err(ConnectError::Disabled)
         ));
@@ -163,5 +193,44 @@ mod disabled_tests {
             .unwrap()
             .get("hostGroup")
             .is_none());
+    }
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    #[test]
+    fn discovered_group_request_never_accepts_caller_game_or_process_authority() {
+        let request = serde_json::json!({"mode":"loopback","bindAddress":"127.0.0.1:43000","udpTarget":"127.0.0.1:43002"});
+        assert!(serde_json::from_value::<GroupDiscoveredHostRequest>(request.clone()).is_ok());
+        for field in [
+            "gameTarget",
+            "pid",
+            "instanceId",
+            "runId",
+            "fingerprint",
+            "source",
+            "selectionId",
+        ] {
+            let mut body = request.clone();
+            body[field] = serde_json::json!("untrusted");
+            assert!(
+                serde_json::from_value::<GroupDiscoveredHostRequest>(body).is_err(),
+                "unexpected source field {field}"
+            );
+        }
+        let cap = SessionFragmentedHostGroupsCapabilities::default();
+        assert_eq!(
+            cap.owned_game_tcp_discovery,
+            cfg!(all(windows, feature = "connect-lab"))
+        );
+        assert_eq!(
+            serde_json::to_value(cap)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .len(),
+            9
+        );
     }
 }

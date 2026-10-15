@@ -51,6 +51,7 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   const [acknowledged, setAcknowledged] = useState(false);
   const [knownOperationId, setKnownOperationId] = useState<string>();
   const [udpRecoveryAwaitingSnapshot, setUdpRecoveryAwaitingSnapshot] = useState(false);
+  const [groupPreparationUncertain, setGroupPreparationUncertain] = useState(false);
   const epoch = useRef(0);
   const mounted = useRef(false);
   const pendingRef = useRef<Action | undefined>(undefined);
@@ -58,10 +59,21 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   const observedReview = useRef<string | undefined>(undefined);
   const exportedFor = useRef<string | undefined>(undefined);
   const udpRetryContext = useRef<{ operationId: string; generation: number } | undefined>(undefined);
+  const groupPreparationAwaiting = useRef<{ generation: number; previousOperationId: string | null; mode: ConnectMode } | undefined>(undefined);
 
   function acceptSnapshot(value: unknown) {
     const next = snapshotFrom(value);
     if (snapshotRef.current && next.generation < snapshotRef.current.generation) return;
+    const awaitingGroup = groupPreparationAwaiting.current;
+    if (awaitingGroup) {
+      // An old idle/closed observation cannot prove that a lost preparation
+      // request failed before reserving its owned native worker.
+      if (next.generation <= awaitingGroup.generation || !next.operationId || next.operationId === awaitingGroup.previousOperationId) return;
+      if (next.role !== "host" || (next.pendingGroupSource?.mode ?? next.hostGroup?.mode ?? awaitingGroup.mode) !== awaitingGroup.mode
+        || (!next.pendingGroupSource && !next.hostGroup && !["closing", "closed", "failed"].includes(next.phase))) throw new Error("Wrong group preparation observation");
+      groupPreparationAwaiting.current = undefined;
+      setGroupPreparationUncertain(false);
+    }
     const recovering = udpRetryContext.current;
     if (recovering && (next.operationId !== recovering.operationId || next.generation >= recovering.generation)) {
       udpRetryContext.current = undefined;
@@ -125,7 +137,7 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   }, []);
 
   async function perform(action: Action, operation: (current: () => boolean) => Promise<void>) {
-    if (pendingRef.current && action !== "stop") return;
+    if (pendingRef.current && action !== "stop" && !(action === "refresh" && groupPreparationAwaiting.current)) return;
     if (pendingRef.current === "stop") return;
     const request = ++epoch.current;
     const current = () => mounted.current && request === epoch.current;
@@ -161,8 +173,39 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
       return;
     }
     if (invitationProfile === "sessionGroup") {
-      if (selectedRole !== "host" || !capabilities.sessionFragmentedHostGroups || !isLoopbackUdpTarget(gameTarget.trim()) || !isLoopbackUdpTarget(udpTarget.trim())) {
+      const discovery = capabilities.sessionFragmentedHostGroups?.ownedGameTcpDiscovery === true && targetMode === "ownedInstance";
+      if (selectedRole !== "host" || !capabilities.sessionFragmentedHostGroups || (!discovery && !isLoopbackUdpTarget(gameTarget.trim())) || !isLoopbackUdpTarget(udpTarget.trim())) {
         setError(connectError("connect_invalid_request")); return;
+      }
+      if (discovery) {
+        if (!discoveredTarget) return;
+        if (Date.now() >= discoveredTarget.expiresAtMs) {
+          setDiscoveredTarget(undefined); setDiscoveryEpoch(value => value + 1);
+          setError(connectError("discovery_stale_review")); return;
+        }
+        const selectionId = discoveredTarget.selectionId;
+        void perform("prepareHost", async current => {
+          groupPreparationAwaiting.current = { generation: snapshotRef.current?.generation ?? 0, previousOperationId: snapshotRef.current?.operationId ?? null, mode };
+          setGroupPreparationUncertain(true);
+          setDiscoveredTarget(undefined); setDiscoveryEpoch(value => value + 1);
+          try {
+            const value = snapshotFrom(await invoke<unknown>("connect_prepare_session_group_host_discovered", {
+              selectionId, request: { mode, bindAddress: bindAddress.trim(), udpTarget: udpTarget.trim() },
+            }));
+            if (!current()) return;
+            if (value.phase !== "hostPreparing" || value.pendingGroupSource?.mode !== mode) throw new Error("Wrong initial group preparation");
+            acceptSnapshot(value);
+          } catch (cause) {
+            // These controlled failures happen before the native reservation.
+            // An absent/malformed IPC result remains uncertain until a newer
+            // operation snapshot is observed; it never triggers a resend.
+            if (current() && typeof cause === "string" && ["connect_disabled", "connect_owner_mismatch", "connect_invalid_request", "connect_busy", "connect_cancelled", "connect_internal"].includes(cause)) {
+              groupPreparationAwaiting.current = undefined; setGroupPreparationUncertain(false);
+            }
+            throw cause;
+          }
+        });
+        return;
       }
       void perform("prepareHost", async current => {
         const value = groupPreparationFrom(await invoke<unknown>("connect_prepare_session_group_host", {
@@ -287,7 +330,8 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
     });
   }
   const operationId = knownOperationId ?? snapshot?.operationId;
-  const active = Boolean(operationId && (!snapshot || !finalPhase(snapshot) || snapshot.cleanupState === "pending" || snapshot.cleanupState === "failed"));
+  const activeOperation = Boolean(operationId && (!snapshot || !finalPhase(snapshot) || snapshot.cleanupState === "pending" || snapshot.cleanupState === "failed"));
+  const active = groupPreparationUncertain || activeOperation;
   const busy = Boolean(pending);
   const prepared = snapshot?.preparation;
   const reviewed = snapshot?.review;
@@ -299,9 +343,9 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   const sessionSelected = sessionUdpSelected || invitationProfile === "sessionGameTcp" && Boolean(capabilities?.sessionInvitations);
   const fragmentedSelected = sessionUdpSelected || invitationProfile === FRAGMENTED_PROFILE && Boolean(capabilities?.fragmentedUdpInvitations);
   const groupSelected = invitationProfile === "sessionGroup" && selectedRole === "host" && Boolean(capabilities?.sessionFragmentedHostGroups);
-  const discoveryAvailable = groupSelected ? false : sessionUdpSelected ? capabilities?.sessionFragmentedUdpInvitations?.ownedGameTcpDiscovery === true
+  const discoveryAvailable = groupSelected ? capabilities?.sessionFragmentedHostGroups?.ownedGameTcpDiscovery === true : sessionUdpSelected ? capabilities?.sessionFragmentedUdpInvitations?.ownedGameTcpDiscovery === true
     : !fragmentedSelected && capabilities?.ownedInstanceDiscovery === true;
-  const displayedProfile = active ? snapshot?.hostGroup ? "sessionGroup" : snapshot?.invitationProfile : groupSelected || sessionSelected || fragmentedSelected ? invitationProfile : undefined;
+  const displayedProfile = active ? snapshot?.hostGroup || snapshot?.pendingGroupSource || groupPreparationUncertain ? "sessionGroup" : snapshot?.invitationProfile : groupSelected || sessionSelected || fragmentedSelected ? invitationProfile : undefined;
   const sessionDisplayed = displayedProfile === "sessionGameTcp" || displayedProfile === SESSION_FRAGMENTED_PROFILE;
   const fragmentedDisplayed = displayedProfile === FRAGMENTED_PROFILE || displayedProfile === SESSION_FRAGMENTED_PROFILE;
 
@@ -314,7 +358,7 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
     {!loading && capabilities && !capabilities.available && <p className="connect-warning">Este recurso está desligado nesta versão do launcher.</p>}
     {(capabilities?.available || snapshot) && <>
       <p>{displayedProfile === "sessionGroup"
-        ? "Um grupo fixo de dois a oito participantes, com convites e prazos individuais. Os destinos TCP e UDP são manuais e o servidor deve permanecer aberto."
+        ? "Um grupo fixo de dois a oito participantes, com convites e prazos individuais. O servidor deve permanecer aberto; o destino UDP é informado e autorizado separadamente."
         : fragmentedDisplayed && sessionDisplayed
         ? "Transporte TCP e UDP experimental. O prazo para entrar e o encerramento da sessão são separados, sem renovação automática. O servidor deve permanecer aberto."
         : fragmentedDisplayed
@@ -324,10 +368,12 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
         : "Uma tentativa por janela. A conexão expira em até 10 minutos e não é renovada automaticamente. O servidor deve permanecer aberto."}</p>
       <section className="connect-status" aria-label="Estado observado da conexão">
         <header><h3>{snapshot ? snapshot.hostGroup && snapshot.phase === "hostListening" ? "Anfitrião do grupo disponível" : snapshot.phase === "hostListening" && snapshot.transportState === "admitted" ? "Convite utilizado · conexão ativa" : phaseText[snapshot.phase] : "Estado ainda não disponível"}</h3><div className="connect-actions">
-          <button className="secondary" type="button" disabled={busy} onClick={() => { void perform("refresh", refresh); }}>Atualizar estado</button>
-          {active && <button className="danger" type="button" disabled={pending === "stop" || snapshot?.phase === "closing"} onClick={stop}>Encerrar Connect</button>}
+          <button className="secondary" type="button" disabled={busy && !groupPreparationUncertain} onClick={() => { void perform("refresh", refresh); }}>Atualizar estado</button>
+          {activeOperation && <button className="danger" type="button" disabled={pending === "stop" || snapshot?.phase === "closing"} onClick={stop}>Encerrar Connect</button>}
         </div></header>
         {pending && <p role="status">{actionText[pending]}</p>}
+        {groupPreparationUncertain && <p role="status">O resultado do preparo ainda não foi confirmado. Atualize o estado; a seleção não será enviada novamente.</p>}
+        {snapshot?.pendingGroupSource && <p role="status">Conferindo o jogo selecionado. O código público e os convites só ficarão disponíveis depois dessa etapa; você pode encerrar Connect enquanto aguarda.</p>}
         {snapshot && <>
           <dl><dt>Transporte</dt><dd>{transportText[snapshot.transportState]}</dd><dt>Servidor Minecraft</dt><dd>{statusText[snapshot.statusState]}</dd>
             <dt>Caminho da conexão</dt><dd>Não confirmado · relay desligado</dd><dt>Entrada no mundo</dt><dd>Não verificada</dd>
@@ -338,7 +384,7 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
               : snapshot.expiresAtMs !== null && <><dt>Limite desta etapa</dt><dd>{connectDate(snapshot.expiresAtMs)} · horário local</dd></>}
             {snapshot.cleanupState !== "notStarted" && <><dt>Encerramento</dt><dd>{{ pending: "Aguardando liberação dos recursos", complete: "Recursos liberados", failed: "Liberação não confirmada" }[snapshot.cleanupState]}</dd></>}
           </dl>
-          {snapshot.hostGroup && snapshot.cleanupState === "failed" && <p className="connect-warning" role="status">O encerramento não foi confirmado. O transporte exibido é a última observação; não confirma recursos liberados nem participantes ativos.</p>}
+          {(snapshot.hostGroup || snapshot.role === "host") && snapshot.cleanupState === "failed" && <p className="connect-warning" role="status">O encerramento não foi confirmado. O transporte exibido é a última observação; não confirma recursos liberados nem participantes ativos.</p>}
           {snapshot.errorCode && <p className="connect-error" role="alert">{connectError(snapshot.errorCode)}</p>}
           {snapshot.udpRecovery && <div className="connect-hint">
             <p>Novas tentativas UDP utilizadas: {snapshot.udpRecovery.attemptsUsed} de {snapshot.udpRecovery.maxAttempts}.</p>
@@ -378,7 +424,7 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
             {discoveryAvailable && <label>Selecionar servidor<select disabled={busy} value={targetMode} onChange={event => { setTargetMode(event.target.value as "manual" | "ownedInstance"); setDiscoveredTarget(undefined); }}><option value="manual">Endereço manual · servidor dedicado ou local</option><option value="ownedInstance">Jogo aberto pelo Aurora · mundo LAN</option></select></label>}
             {discoveryAvailable && targetMode === "ownedInstance"
               ? <><DiscoveryPicker key={`${invitationProfile}:${discoveryEpoch}`} disabled={busy} onSelect={setDiscoveredTarget} />
-                {sessionUdpSelected && <p>Esta seleção confere somente a porta TCP do jogo. O destino UDP abaixo continua manual e exige sua autorização separada; não foi conferido como parte desse processo.</p>}</>
+                {(sessionUdpSelected || groupSelected) && <p>Esta seleção confere somente a porta TCP do jogo. O destino UDP abaixo continua manual e exige sua autorização separada; não foi conferido como parte desse processo.</p>}</>
               : <label>Servidor neste computador<input required maxLength={128} value={gameTarget} disabled={busy} onChange={event => setGameTarget(event.target.value)} autoComplete="off" spellCheck={false} /><small>Somente endereço loopback e porta do jogo que você autoriza compartilhar. A seleção manual não comprova qual processo possui essa porta.</small></label>}
             {(fragmentedSelected || groupSelected) && <FragmentedFields role="host" disabled={busy} udpTarget={udpTarget} lifetimeSeconds={fragmentedLifetime} separateSession={sessionSelected || groupSelected}
               onUdpTargetChange={setUdpTarget} onLifetimeChange={setFragmentedLifetime} />}
@@ -393,7 +439,8 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
           <div><button type="submit" disabled={busy || (discoveryAvailable && selectedRole === "host" && targetMode === "ownedInstance" && !discoveredTarget)}>{selectedRole === "host" ? "Preparar anfitrião" : "Preparar convidado"}</button></div>
         </form>
       </section>}
-      {snapshot?.hostGroup && <GroupHostPanel key={snapshot.operationId} snapshot={snapshot} supported={Boolean(capabilities?.available && capabilities.sessionFragmentedHostGroups && capabilities.modes.includes(snapshot.hostGroup.mode))} busy={busy} stale={Boolean(warning)}
+      {snapshot?.hostGroup && <GroupHostPanel key={snapshot.operationId} snapshot={snapshot} supported={Boolean(capabilities?.available && capabilities.sessionFragmentedHostGroups && capabilities.modes.includes(snapshot.hostGroup.mode)
+        && (snapshot.hostGroup.review?.targetSource !== "ownedInstance" || capabilities.sessionFragmentedHostGroups.ownedGameTcpDiscovery))} busy={busy} stale={Boolean(warning)}
         perform={perform} refresh={refresh} acceptSnapshot={acceptSnapshot} copy={copy} />}
       {capabilities?.available && prepared && <section className="connect-card"><h3>Troque os códigos públicos</h3><p>{snapshot?.role === "host" ? "Envie seu código ao convidado e receba o código gerado por ele nesta tentativa." : "Envie seu código ao anfitrião e aguarde o convite destinado a esta tentativa."}</p>
         <div className="connect-output"><label htmlFor="connect-public-code">Seu código público</label><textarea id="connect-public-code" readOnly value={prepared.publicId} /><div><button className="secondary" type="button" onClick={() => { void copy(prepared.publicId); }}>Copiar meu código</button></div></div>

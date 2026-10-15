@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 #[cfg(all(windows, feature = "connect-lab"))]
 use std::{
     collections::BTreeMap,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -142,10 +142,10 @@ struct Stored {
     in_flight: bool,
     verified: Option<(TargetStatus, SocketAddr)>,
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct DiscoveryManager {
     #[cfg(all(windows, feature = "connect-lab"))]
-    state: Mutex<Option<Stored>>,
+    state: Arc<Mutex<Option<Stored>>>,
 }
 #[cfg(all(windows, feature = "connect-lab"))]
 impl DiscoveryManager {

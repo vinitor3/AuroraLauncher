@@ -5,8 +5,9 @@ export const GROUP_KIND = "staticSessionFragmentedHost" as const;
 export type GroupCapability = {
   profile: typeof SESSION_FRAGMENTED_PROFILE; invitationSchemaVersion: 3;
   minParticipants: 2; maxParticipants: 8; maxPreparationSeconds: 600; maxReviewSeconds: 60;
-  maxAdmissionSeconds: 600; maxSessionSeconds: 3600; ownedGameTcpDiscovery: false;
+  maxAdmissionSeconds: 600; maxSessionSeconds: 3600; ownedGameTcpDiscovery: boolean;
 };
+export type PendingGroupSource = { kind: typeof GROUP_KIND; mode: ConnectMode };
 export type GroupPreparation = { operationId: string; generation: number; publicId: string; expiresAtMs: number; kind: typeof GROUP_KIND };
 export type GroupParticipant = {
   participantId: string; guestPublicId: string; invitationDigest: string; sessionTiming: ConnectSessionTiming;
@@ -14,9 +15,9 @@ export type GroupParticipant = {
 };
 export type GroupReview = {
   operationId: string; generation: number; digest: string; kind: typeof GROUP_KIND; mode: ConnectMode;
-  hostPublicId: string; directAddress: string; gameTarget: string; targetSource: "manual";
+  hostPublicId: string; directAddress: string; gameTarget: string;
   fragmentedUdp: FragmentedUdpReview; participants: GroupParticipant[]; expiresAtMs: number;
-};
+} & ({ targetSource: "manual" } | { targetSource: "ownedInstance"; instanceId: string; runId: string });
 export type HostGroup = {
   kind: typeof GROUP_KIND; profile: typeof SESSION_FRAGMENTED_PROFILE; invitationSchemaVersion: 3;
   mode: ConnectMode; hostPublicId: string; preparation: GroupPreparation | null;
@@ -34,6 +35,7 @@ const exact = (value: unknown, keys: readonly string[]): value is RecordValue =>
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 const hash = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const id = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+const text = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f\u007f]/u.test(value);
 const mode = (value: unknown): value is ConnectMode => ["loopback", "externalIpv6", "directIpv4"].includes(value as string);
 // Parse only a literal projection; URL parsing performs no network request.
 // Mirror the native conservative initial-address policy, not reachability.
@@ -75,8 +77,19 @@ export function groupCapabilityFrom(value: unknown): GroupCapability {
   if (!exact(value, ["profile", "invitationSchemaVersion", "minParticipants", "maxParticipants", "maxPreparationSeconds", "maxReviewSeconds", "maxAdmissionSeconds", "maxSessionSeconds", "ownedGameTcpDiscovery"])
     || value.profile !== SESSION_FRAGMENTED_PROFILE || value.invitationSchemaVersion !== 3 || value.minParticipants !== 2
     || value.maxParticipants !== 8 || value.maxPreparationSeconds !== 600 || value.maxReviewSeconds !== 60
-    || value.maxAdmissionSeconds !== 600 || value.maxSessionSeconds !== 3600 || value.ownedGameTcpDiscovery !== false) return bad();
+    || value.maxAdmissionSeconds !== 600 || value.maxSessionSeconds !== 3600 || typeof value.ownedGameTcpDiscovery !== "boolean") return bad();
   return value as GroupCapability;
+}
+export function pendingGroupSourceFieldsFrom(value: RecordValue): PendingGroupSource {
+  const pending = value.pendingGroupSource;
+  if (!exact(value, ["available", "operationId", "generation", "role", "phase", "transportState", "statusState", "tcpAddress", "expiresAtMs",
+    "statusSummary", "errorCode", "worldState", "simpleVoiceChatState", "plasmoVoiceState", "relayEnabled", "pathState", "preparation", "review", "cleanupState", "pendingGroupSource"])
+    || !exact(pending, ["kind", "mode"]) || pending.kind !== GROUP_KIND || !mode(pending.mode)
+    || value.available !== true || !id(value.operationId) || !integer(value.generation) || value.generation === 0
+    || value.role !== "host" || value.phase !== "hostPreparing" || value.transportState !== "notStarted" || value.statusState !== "notChecked"
+    || value.tcpAddress !== null || value.statusSummary !== null || value.errorCode !== null || value.preparation !== null || value.review !== null
+    || value.cleanupState !== "pending" || !integer(value.expiresAtMs) || value.expiresAtMs === 0) return bad();
+  return pending as PendingGroupSource;
 }
 export function groupPreparationFrom(value: unknown): GroupPreparation {
   if (!exact(value, ["operationId", "generation", "publicId", "expiresAtMs", "kind"]) || value.kind !== GROUP_KIND
@@ -98,13 +111,17 @@ function participantsFrom(value: unknown, hostId: string, allowEmpty = false): G
   return value as GroupParticipant[];
 }
 export function groupReviewFrom(value: unknown): GroupReview {
-  if (!exact(value, ["operationId", "generation", "digest", "kind", "mode", "hostPublicId", "directAddress", "gameTarget", "targetSource", "fragmentedUdp", "participants", "expiresAtMs"])
+  if (!record(value)) return bad();
+  const sourceKeys = value.targetSource === "ownedInstance" ? ["instanceId", "runId"] : [];
+  if (!exact(value, ["operationId", "generation", "digest", "kind", "mode", "hostPublicId", "directAddress", "gameTarget", "targetSource", "fragmentedUdp", "participants", "expiresAtMs", ...sourceKeys])
     || !id(value.operationId) || !integer(value.generation) || !hash(value.digest) || value.kind !== GROUP_KIND || !mode(value.mode)
     || !hash(value.hostPublicId) || typeof value.directAddress !== "string" || value.directAddress.length > 128
     || (value.mode === "loopback" && !isLoopbackUdpTarget(value.directAddress))
     || (value.mode === "directIpv4" && !isDirectIpv4Address(value.directAddress))
     || (value.mode === "externalIpv6" && !externalIpv6Address(value.directAddress))
-    || !isLoopbackUdpTarget(value.gameTarget) || value.targetSource !== "manual" || !integer(value.expiresAtMs) || value.expiresAtMs === 0
+    || !isLoopbackUdpTarget(value.gameTarget) || !["manual", "ownedInstance"].includes(value.targetSource as string)
+    || (value.targetSource === "ownedInstance" && (!text(value.instanceId) || !text(value.runId)))
+    || !integer(value.expiresAtMs) || value.expiresAtMs === 0
     || !record(value.fragmentedUdp) || !isLoopbackUdpTarget(value.fragmentedUdp.udpTarget)) return bad();
   const { udpTarget: _target, ...contract } = value.fragmentedUdp;
   fragmentedContractFrom(contract, SESSION_FRAGMENTED_PROFILE);
@@ -117,7 +134,7 @@ export function groupSnapshotFieldsFrom(value: RecordValue): HostGroup {
   const group = value.hostGroup;
   if (!exact(group, ["kind", "profile", "invitationSchemaVersion", "mode", "hostPublicId", "preparation", "review", "participants"])
     || group.kind !== GROUP_KIND || group.profile !== SESSION_FRAGMENTED_PROFILE || group.invitationSchemaVersion !== 3
-    || !mode(group.mode) || !hash(group.hostPublicId) || value.available !== true || value.role !== "host" || !id(value.operationId)
+    || !mode(group.mode) || !hash(group.hostPublicId) || value.available !== true || value.role !== "host" || !id(value.operationId) || value.pendingGroupSource !== undefined
     || !["hostPrepared", "reviewed", "starting", "hostListening", "closing", "closed", "failed"].includes(value.phase as string)
     || value.preparation !== null || value.review !== null || value.tcpAddress !== null || value.statusSummary !== null || value.statusState !== "notChecked"
     || ["invitationProfile", "sessionTiming", "fragmentedUdp", "udpState", "udpAddress", "udpErrorCode", "udpOriginalCapacity", "udpCapacityScope", "udpRecovery", "udpTarget"]
@@ -144,7 +161,7 @@ export function groupSnapshotFieldsFrom(value: RecordValue): HostGroup {
   if (value.phase === "closed" && value.transportState !== "closed") return bad();
   if (value.phase === "failed" && (value.cleanupState === "failed"
     ? !["notStarted", "listening", "closed"].includes(value.transportState as string)
-    : value.cleanupState !== "complete" || value.transportState !== "closed")) return bad();
+    : !["pending", "complete"].includes(value.cleanupState as string) || value.transportState !== "closed")) return bad();
   return group as HostGroup;
 }
 export function groupExportFrom(value: unknown): GroupInvitationExport {

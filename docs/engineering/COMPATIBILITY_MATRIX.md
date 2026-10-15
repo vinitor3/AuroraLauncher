@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 15/10/2026
 
+Incremento74: descoberta TCP para grupos com UDP manual e preparo cancelável. [Contrato74](../aurora-connect-discovered-group.md). **PROTÓTIPO**, com processo/listener de fixture próprio, três agentes locais e interface testada por DOM. Sem promoção de qualquer célula da matriz; fases, nove pares, GUI, Minecraft LAN, áudio e redes conservam seus gates próprios. O teste concorrente controlado não comprova entrega UDP sem perdas sob saturação.
+
 Incremento73: abertura explicitamente revisada de cópia pronta com QuickPlay pela ponte Guest original. [Contrato73](../aurora-connect-ready-game-launch.md). **PROTÓTIPO**, limitado ao par existente Fabric1.21.1/0.16.14/Java21 e Core1.1.5/Skins0.3.1. Fixtures, processos filhos de teste, argumentos e DOM não promovem homologação gráfica, jogo ou áudio. A matriz de nove pares e os resultados externos anteriores permanecem inalterados.
 
 Incrementos71/72: grupo estático schema3 com convites e revogação individuais, integração no slot/painel experimental e observação de transporte por participante. [Biblioteca71](../aurora-connect-multiparticipant-session.md) e [caller72](../aurora-connect-multiparticipant-desktop.md). **PROTÓTIPO**: Host e dois Guests de laboratório, testes nativos e DOM não comprovam dois jogadores, GUI, áudio ou rede externa. A correção71a de encerramento tem [prova causal própria](../aurora-connect-stop-completion.md). Matriz de nove pares permanece inalterada.

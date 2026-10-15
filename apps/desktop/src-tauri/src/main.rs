@@ -143,6 +143,7 @@ fn main() {
             connect_commands::connect_prepare_session_fragmented_host_discovered,
             connect_commands::connect_prepare_session_fragmented_guest,
             connect_commands::connect_prepare_session_group_host,
+            connect_commands::connect_prepare_session_group_host_discovered,
             connect_commands::connect_review_session_group_host,
             connect_commands::connect_confirm_session_group_host,
             connect_commands::connect_export_session_group_invitation,

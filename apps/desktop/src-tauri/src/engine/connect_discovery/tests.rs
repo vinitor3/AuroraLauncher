@@ -173,6 +173,11 @@ pub(crate) fn expired_target(mut target: ApprovedTarget) -> ApprovedTarget {
     target.deadline = Instant::now() - Duration::from_secs(1);
     target
 }
+/// Private selection-clock seam; does not renew authority or alter OS time.
+pub(crate) fn expire_selection(manager: &DiscoveryManager) {
+    manager.state.lock().unwrap().as_mut().unwrap().deadline =
+        Instant::now() - Duration::from_secs(1);
+}
 impl Fixture {
     pub(crate) fn new() -> Self {
         let mut command = Command::new(std::env::current_exe().unwrap());

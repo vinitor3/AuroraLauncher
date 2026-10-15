@@ -3,7 +3,7 @@ import {
   fragmentedReviewFieldsFrom, fragmentedSnapshotFieldsFrom, type FragmentedGuestUdp, type FragmentedUdpCapability,
   type FragmentedUdpContract, type FragmentedUdpReview, type SessionFragmentedUdpCapability, type SessionUdpRecovery, isDirectIpv4Address,
 } from "./fragmented-types";
-import { groupCapabilityFrom, groupSnapshotFieldsFrom, type GroupCapability, type HostGroup } from "./group-types";
+import { groupCapabilityFrom, groupSnapshotFieldsFrom, pendingGroupSourceFieldsFrom, type GroupCapability, type HostGroup, type PendingGroupSource } from "./group-types";
 import { readyGameCapabilityFrom, type ReadyGameLaunchCapability } from "../connect-game-launch/types";
 
 export type ConnectMode = "loopback" | "externalIpv6" | "directIpv4";
@@ -14,7 +14,7 @@ export type ConnectSessionTiming = {
   admissionSeconds: number; sessionSeconds: number;
   admissionExpiresAtMs: number; sessionExpiresAtMs: number;
 } & ({ profile: "sessionGameTcp"; schemaVersion: 2 } | { profile: typeof SESSION_FRAGMENTED_PROFILE; schemaVersion: 3 });
-export type ConnectPhase = "idle" | "hostPrepared" | "guestPrepared" | "reviewed" | "starting" | "hostListening" | "guestConnected" | "closing" | "closed" | "failed";
+export type ConnectPhase = "idle" | "hostPreparing" | "hostPrepared" | "guestPrepared" | "reviewed" | "starting" | "hostListening" | "guestConnected" | "closing" | "closed" | "failed";
 export type ConnectCapabilities = {
   available: boolean; experimental: true; maxLifetimeSeconds: number;
   modes: ConnectMode[]; services: string[]; voiceEnabled: false; relayEnabled: false;
@@ -44,6 +44,7 @@ export type ConnectSnapshot = {
   fragmentedUdp?: FragmentedUdpContract;
   udpRecovery?: SessionUdpRecovery;
   hostGroup?: HostGroup;
+  pendingGroupSource?: PendingGroupSource;
 } & Partial<FragmentedGuestUdp>;
 export type ConnectPreparation = { operationId: string; generation: number; publicId: string; expiresAtMs: number; invitationProfile?: ConnectInvitationProfile };
 export type ConnectReview = {
@@ -93,7 +94,7 @@ export function connectError(cause: unknown): string {
     ? ERROR_TEXT[cause] : "Não foi possível concluir a operação. Consulte o estado e tente novamente.";
 }
 
-const PHASES: ConnectPhase[] = ["idle", "hostPrepared", "guestPrepared", "reviewed", "starting", "hostListening", "guestConnected", "closing", "closed", "failed"];
+const PHASES: ConnectPhase[] = ["idle", "hostPreparing", "hostPrepared", "guestPrepared", "reviewed", "starting", "hostListening", "guestConnected", "closing", "closed", "failed"];
 const TRANSPORTS: ConnectSnapshot["transportState"][] = ["notStarted", "listening", "admitted", "authenticated", "closed"];
 const STATUSES: ConnectSnapshot["statusState"][] = ["notChecked", "checking", "responded", "failed"];
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -155,7 +156,8 @@ export function capabilitiesFrom(value: unknown): ConnectCapabilities {
   }
   if (value.sessionFragmentedHostGroups !== undefined) {
     if (!value.available || value.sessionFragmentedUdpInvitations === undefined) return invalid();
-    groupCapabilityFrom(value.sessionFragmentedHostGroups);
+    const group = groupCapabilityFrom(value.sessionFragmentedHostGroups);
+    if (group.ownedGameTcpDiscovery && value.ownedInstanceDiscovery !== true) return invalid();
   }
   if (value.readyGameLaunch !== undefined) {
     if (!value.available) return invalid();
@@ -174,6 +176,11 @@ export function snapshotFrom(value: unknown): ConnectSnapshot {
     || value.relayEnabled !== false || value.pathState !== "notVerified"
     || !invitationProfile(value.invitationProfile)
     || !["notStarted", "pending", "complete", "failed"].includes(value.cleanupState as string)) return invalid();
+  if (value.pendingGroupSource !== undefined) {
+    pendingGroupSourceFieldsFrom(value);
+    return value as ConnectSnapshot;
+  }
+  if (value.phase === "hostPreparing") return invalid();
   if (value.hostGroup !== undefined) {
     groupSnapshotFieldsFrom(value);
     return value as ConnectSnapshot;
@@ -210,13 +217,13 @@ export function snapshotFrom(value: unknown): ConnectSnapshot {
 }
 export function preparationFrom(value: unknown): ConnectPreparation {
   if (!record(value) || !text(value.operationId) || !integer(value.generation) || !hash(value.publicId) || !integer(value.expiresAtMs)
-    || value.kind !== undefined || value.hostGroup !== undefined || !invitationProfile(value.invitationProfile) || value.sessionTiming !== undefined) return invalid();
+    || value.kind !== undefined || value.hostGroup !== undefined || value.pendingGroupSource !== undefined || !invitationProfile(value.invitationProfile) || value.sessionTiming !== undefined) return invalid();
   if (fragmentedProfile(value.invitationProfile)) fragmentedPreparationFieldsFrom(value, value.invitationProfile);
   else noFragmentedFields(value);
   return value as ConnectPreparation;
 }
 export function reviewFrom(value: unknown): ConnectReview {
-  if (!record(value) || value.kind !== undefined || value.hostGroup !== undefined || value.participants !== undefined || !text(value.operationId) || !integer(value.generation) || !hash(value.digest)
+  if (!record(value) || value.kind !== undefined || value.hostGroup !== undefined || value.pendingGroupSource !== undefined || value.participants !== undefined || !text(value.operationId) || !integer(value.generation) || !hash(value.digest)
     || !hash(value.invitationDigest) || !hash(value.hostPublicId) || !hash(value.guestPublicId)
     || !role(value.role) || !mode(value.mode) || !text(value.directAddress)
     || (value.mode === "directIpv4" && !isDirectIpv4Address(value.directAddress))
@@ -246,7 +253,7 @@ export function reviewFrom(value: unknown): ConnectReview {
   return value as ConnectReview;
 }
 export function exportFrom(value: unknown): ConnectExport {
-  if (!record(value) || value.participantId !== undefined || value.hostGroup !== undefined || typeof value.invitation !== "string" || !value.invitation.length
+  if (!record(value) || value.participantId !== undefined || value.hostGroup !== undefined || value.pendingGroupSource !== undefined || typeof value.invitation !== "string" || !value.invitation.length
     || new TextEncoder().encode(value.invitation).length > 4096 || !hash(value.hostPublicId) || !integer(value.expiresAtMs)) return invalid();
   if (value.invitationProfile !== undefined) return invalid();
   const timing = value.sessionTiming === undefined ? undefined : sessionTimingFrom(value.sessionTiming);
@@ -260,7 +267,7 @@ export function exportFrom(value: unknown): ConnectExport {
 }
 
 export const phaseText: Record<ConnectPhase, string> = {
-  idle: "Sem tentativa ativa", hostPrepared: "Anfitrião preparado para revisão", guestPrepared: "Convidado preparado para revisão",
+  idle: "Sem tentativa ativa", hostPreparing: "Conferindo a origem do grupo…", hostPrepared: "Anfitrião preparado para revisão", guestPrepared: "Convidado preparado para revisão",
   reviewed: "Aguardando sua autorização", starting: "Estabelecendo conexão…", hostListening: "Aguardando convidado",
   guestConnected: "Conexão do convidado disponível", closing: "Encerrando recursos…", closed: "Conexão encerrada", failed: "Falha observada",
 };

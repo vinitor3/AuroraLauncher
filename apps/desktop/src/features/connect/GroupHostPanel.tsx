@@ -30,14 +30,14 @@ export function GroupHostPanel({ snapshot, supported, busy, stale, perform, refr
   const live = useRef({ snapshot, selectedId });
   live.current = { snapshot, selectedId };
   const exportContext = useRef<{ operationId: string; generation: number; participantId: string } | undefined>(undefined);
-  const reviewDigest = group.review?.digest;
+  const reviewProjection = JSON.stringify(group.review);
   const reviewDeadline = group.review?.expiresAtMs;
   const blocked = busy || stale || awaiting || !supported;
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 250);
     return () => window.clearInterval(timer);
   }, []);
-  useEffect(() => { setAcknowledged(false); }, [reviewDigest, operationId, snapshot.generation]);
+  useEffect(() => { setAcknowledged(false); }, [reviewProjection, operationId, snapshot.generation]);
   useEffect(() => { if (reviewDeadline !== undefined && now >= reviewDeadline) setAcknowledged(false); }, [now, reviewDeadline]);
   useEffect(() => { setAwaiting(false); }, [snapshot]);
   useEffect(() => {
@@ -147,7 +147,10 @@ export function GroupHostPanel({ snapshot, supported, busy, stale, perform, refr
     {group.review && <div className="connect-review">
       <h4>Revise todos os participantes antes de autorizar</h4>
       <dl><dt>Modo</dt><dd>{group.mode === "loopback" ? "Neste computador" : group.mode === "directIpv4" ? "IPv4 direto autorizado" : "IPv6 externo autorizado"}</dd>
-        <dt>Endereço inicial</dt><dd><code>{group.review.directAddress}</code></dd><dt>Jogo TCP · destino manual autorizado</dt><dd><code>{group.review.gameTarget}</code></dd>
+        <dt>Endereço inicial</dt><dd><code>{group.review.directAddress}</code></dd>
+        <dt>{group.review.targetSource === "ownedInstance" ? "Jogo TCP · origem conferida" : "Jogo TCP · destino manual autorizado"}</dt><dd><code>{group.review.gameTarget}</code></dd>
+        {group.review.targetSource === "ownedInstance" && <><dt>Jogo selecionado</dt><dd>Instância {group.review.instanceId}, execução {group.review.runId}. O grupo inteiro encerra se esse processo ou sua porta mudar; o jogo não será encerrado pelo Connect.</dd>
+          <dt>Origem UDP</dt><dd>Destino manual, autorizado separadamente. Não foi descoberto nem identificado como mod de voz.</dd></>}
         <FragmentedReviewFields review={group.review.fragmentedUdp} />
         <dt>Autorize o grupo até</dt><dd>{connectDate(group.review.expiresAtMs)}</dd></dl>
       <p>Somente esses destinos e participantes serão autorizados. Depois de confirmar, a lista não pode ser ampliada e os prazos não serão renovados.</p>

@@ -4,7 +4,7 @@ use super::*;
 use serde_json::{json, Value};
 use std::{
     collections::BTreeSet,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -97,6 +97,18 @@ struct Observed {
     tcp: AtomicUsize,
     udp: AtomicUsize,
     sources: Mutex<BTreeSet<SocketAddr>>,
+    tags: Mutex<BTreeSet<u8>>,
+}
+#[derive(Default)]
+struct ConcurrentTraffic {
+    enabled: AtomicBool,
+    first_udp: tokio::sync::Notify,
+    allow_tcp: CancellationToken,
+    allow_return: CancellationToken,
+    first_chunks: AtomicUsize,
+    progress: tokio::sync::Notify,
+    tcp_bytes: [AtomicUsize; 2],
+    tcp_bytes_while_udp_pending: AtomicUsize,
 }
 struct Fixture {
     manager: Arc<ConnectManager>,
@@ -111,6 +123,7 @@ struct Fixture {
     cancel: CancellationToken,
     tasks: Vec<JoinHandle<()>>,
     observed: Arc<Observed>,
+    traffic: Arc<ConcurrentTraffic>,
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -166,6 +179,8 @@ impl Fixture {
         });
         let token = cancel.clone();
         let seen = observed.clone();
+        let traffic = Arc::new(ConcurrentTraffic::default());
+        let udp_traffic = traffic.clone();
         let udp_task = tokio::spawn(async move {
             let mut bytes = [0; 4098];
             loop {
@@ -176,6 +191,16 @@ impl Fixture {
                 assert!(size <= 4096, "oversize_native_group_endpoint");
                 seen.udp.fetch_add(1, Ordering::SeqCst);
                 seen.sources.lock().unwrap().insert(source);
+                if size > 0 {
+                    seen.tags.lock().unwrap().insert(bytes[0]);
+                }
+                if udp_traffic.enabled.load(Ordering::Acquire) {
+                    udp_traffic.first_udp.notify_one();
+                    tokio::select! {
+                        _=token.cancelled()=>break,
+                        _=udp_traffic.allow_return.cancelled()=>{},
+                    }
+                }
                 assert_eq!(udp.send_to(&bytes[..size], source).await.unwrap(), size);
             }
         });
@@ -192,6 +217,7 @@ impl Fixture {
             cancel,
             tasks: vec![tcp_task, udp_task],
             observed,
+            traffic,
         }
     }
     fn id(&self) -> &str {
@@ -293,20 +319,93 @@ async fn transfer(stream: &mut TcpStream, tag: u8) {
     })
     .await;
 }
-async fn datagram(origin: &UdpSocket, target: SocketAddr, tag: u8, size: usize) {
+async fn paced_transfer(
+    stream: &mut TcpStream,
+    tag: u8,
+    index: usize,
+    traffic: &ConcurrentTraffic,
+) {
     bounded(async {
-        let bytes: Vec<_> = (0..size)
-            .map(|i| tag.wrapping_add((i % 251) as u8))
-            .collect();
-        origin.send_to(&bytes, target).await.unwrap();
-        let mut reply = [0; 4098];
-        let (n, source) = origin.recv_from(&mut reply).await.unwrap();
-        assert!(
-            source == target && n == size && reply[..n] == bytes,
-            "native_group_cross_return"
-        );
+        traffic.allow_tcp.cancelled().await;
+        let bytes = [tag; 1024];
+        for chunk in 0..32 {
+            stream.write_all(&bytes).await.unwrap();
+            let mut reply = [0; 1024];
+            stream.read_exact(&mut reply).await.unwrap();
+            assert_eq!(reply, bytes);
+            traffic.tcp_bytes[index].fetch_add(bytes.len(), Ordering::AcqRel);
+            if !traffic.allow_return.is_cancelled() {
+                traffic
+                    .tcp_bytes_while_udp_pending
+                    .fetch_add(bytes.len(), Ordering::AcqRel);
+            }
+            if chunk == 0 {
+                traffic.first_chunks.fetch_add(1, Ordering::AcqRel);
+                traffic.progress.notify_one();
+            }
+            if chunk < 31 {
+                sleep(Duration::from_millis(5)).await;
+            }
+        }
     })
     .await;
+}
+async fn coordinate_traffic(traffic: &ConcurrentTraffic) {
+    bounded(async {
+        traffic.first_udp.notified().await;
+        traffic.allow_tcp.cancel();
+        while traffic.first_chunks.load(Ordering::Acquire) < 2 {
+            let next = traffic.progress.notified();
+            if traffic.first_chunks.load(Ordering::Acquire) >= 2 {
+                break;
+            }
+            next.await;
+        }
+        traffic.allow_return.cancel();
+    })
+    .await;
+}
+async fn datagram(origin: &UdpSocket, target: SocketAddr, tag: u8, size: usize) {
+    bounded(datagram_exchange(origin, target, tag, size)).await;
+}
+async fn datagram_exchange(origin: &UdpSocket, target: SocketAddr, tag: u8, size: usize) {
+    let bytes: Vec<_> = (0..size)
+        .map(|i| tag.wrapping_add((i % 251) as u8))
+        .collect();
+    origin.send_to(&bytes, target).await.unwrap();
+    let mut reply = [0; 4098];
+    let (n, source) = origin.recv_from(&mut reply).await.unwrap();
+    assert!(
+        source == target && n == size && reply[..n] == bytes,
+        "native_group_cross_return"
+    );
+}
+async fn diagnosed_datagram(
+    f: &Fixture,
+    origin: &UdpSocket,
+    target: SocketAddr,
+    tag: u8,
+    size: usize,
+) {
+    if timeout(WAIT, datagram_exchange(origin, target, tag, size))
+        .await
+        .is_err()
+    {
+        let host = lock(&f.manager.live.state)
+            .unwrap()
+            .attempt
+            .as_ref()
+            .and_then(session_group::metrics);
+        let guests: Vec<_> = f.guests.iter().map(lab::Guest::metrics).collect();
+        eprintln!(
+            "native_group_udp_diagnostic {}",
+            serde_json::json!({
+                "tag":tag,"payloadBytes":size,"endpointPackets":f.observed.udp.load(Ordering::SeqCst),
+                "endpointTags":*f.observed.tags.lock().unwrap(),"host":host,"guests":guests,
+            })
+        );
+        panic!("native_group_fixture_deadline UDP tag {tag}");
+    }
 }
 async fn eof(stream: &mut TcpStream) {
     assert!(matches!(
@@ -631,14 +730,32 @@ async fn native_group_exports_exact_individual_invitations_and_revokes_only_one_
     ];
     let mut sa = bounded(TcpStream::connect(ta.local_addr())).await.unwrap();
     let mut sb = bounded(TcpStream::connect(tb.local_addr())).await.unwrap();
+    // This tests isolation with concurrent traffic inside the existing budget,
+    // not guaranteed UDP delivery while bulk TCP exhausts the shared bucket.
+    // The endpoint holds a UDP return until both TCP streams acknowledge bytes.
+    f.traffic.enabled.store(true, Ordering::Release);
     tokio::join!(
-        transfer(&mut sa, 1),
-        transfer(&mut sb, 2),
-        datagram(&origins[0], ua.local_addr(), 3, 4096),
-        datagram(&origins[1], ua.local_addr(), 4, 4096),
-        datagram(&origins[2], ub.local_addr(), 5, 4096),
-        datagram(&origins[3], ub.local_addr(), 6, 4096)
+        paced_transfer(&mut sa, 1, 0, &f.traffic),
+        paced_transfer(&mut sb, 2, 1, &f.traffic),
+        diagnosed_datagram(&f, &origins[0], ua.local_addr(), 3, 4096),
+        diagnosed_datagram(&f, &origins[1], ua.local_addr(), 4, 4096),
+        diagnosed_datagram(&f, &origins[2], ub.local_addr(), 5, 4096),
+        diagnosed_datagram(&f, &origins[3], ub.local_addr(), 6, 4096),
+        coordinate_traffic(&f.traffic)
     );
+    assert_eq!(f.traffic.first_chunks.load(Ordering::Acquire), 2);
+    assert!(
+        f.traffic
+            .tcp_bytes_while_udp_pending
+            .load(Ordering::Acquire)
+            >= 2048
+    );
+    assert!(f
+        .traffic
+        .tcp_bytes
+        .iter()
+        .all(|bytes| bytes.load(Ordering::Acquire) == 32768));
+    assert_eq!(f.observed.udp.load(Ordering::Acquire), 4);
     assert_eq!(f.observed.sources.lock().unwrap().len(), 4);
     let current = f.manager.snapshot("main").unwrap();
     assert!(matches!(

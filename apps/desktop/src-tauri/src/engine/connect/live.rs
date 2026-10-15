@@ -25,6 +25,11 @@ mod udp_recovery_tests;
 #[cfg(test)]
 #[path = "fragmented_desktop.rs"]
 mod fragmented_desktop;
+#[path = "group_source.rs"]
+mod group_source;
+#[cfg(all(test, windows))]
+#[path = "owned_group_tests.rs"]
+mod owned_group_tests;
 #[path = "ready_game.rs"]
 pub(super) mod ready_game;
 #[cfg(test)]
@@ -45,6 +50,7 @@ mod session_tests;
 #[path = "stop_completion_tests.rs"]
 mod stop_completion_tests;
 
+#[derive(Clone)]
 enum TargetGuard {
     Manual,
     #[cfg(windows)]
@@ -126,6 +132,7 @@ struct Attempt {
     authority: Option<Authority>,
     recovery: Option<udp_recovery::RecoveryControl>,
     group: Option<session_group::GroupOperation>,
+    group_source: Option<group_source::SourceWork>,
     guest_source: Option<Arc<ready_game::GuestSource>>,
     ready_game: Option<ready_game::ReadyWork>,
     #[cfg(test)]
@@ -206,6 +213,7 @@ fn peer(text: &str) -> Result<lab::EndpointId, ConnectError> {
 }
 fn terminal(a: &Attempt) -> bool {
     ready_game::finished(a)
+        && group_source::finished(a)
         && !a.probe_active
         && matches!(a.snapshot.phase, "closed" | "failed")
         && a.snapshot.cleanup_state == "complete"
@@ -225,6 +233,10 @@ fn expire_pending(a: &mut Attempt) {
     expire_pending_at(a, lab::unix_millis());
 }
 fn expire_pending_at(a: &mut Attempt, now_unix: u64) {
+    if a.snapshot.phase == "hostPreparing" {
+        group_source::expire_pending(a, now_unix);
+        return;
+    }
     if a.group.is_some() {
         session_group::expire_pending(a, now_unix);
         return;
@@ -287,11 +299,12 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
         udp_recovery::clear(a);
         a.snapshot.phase = if error.is_some() { "failed" } else { "closed" };
         a.snapshot.transport_state = "closed";
-        a.snapshot.cleanup_state = if ready_game::finished(a) {
-            "complete"
-        } else {
-            "pending"
-        };
+        a.snapshot.cleanup_state =
+            if ready_game::finished(a) && group_source::finished(a) && !a.probe_active {
+                "complete"
+            } else {
+                "pending"
+            };
         a.snapshot.tcp_address = None;
         if let Some(udp) = &mut a.snapshot.udp {
             udp.close();
@@ -302,6 +315,7 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
         a.authority = None;
         a.snapshot.preparation = None;
         a.snapshot.review = None;
+        a.snapshot.pending_group_source = None;
     });
 }
 struct ProbeGuard {
@@ -458,6 +472,7 @@ impl Manager {
             group: None,
             guest_source: None,
             ready_game: None,
+            group_source: None,
             #[cfg(test)]
             recovery_gate: None,
             #[cfg(test)]
@@ -1192,6 +1207,7 @@ impl Manager {
                 } else {
                     if a.worker.is_none()
                         && ready_game::finished(a)
+                        && group_source::finished(a)
                         && !a.probe_active
                         && matches!(a.snapshot.phase, "closed" | "failed")
                         && matches!(a.snapshot.cleanup_state, "complete" | "failed")

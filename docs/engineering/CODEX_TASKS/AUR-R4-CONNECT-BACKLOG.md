@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 15/10/2026
 
+Incremento74/002/003/005/008 integra descoberta de game/TCP no Host de grupo, mantendo UDP manual e prazos/convites individuais. [Contrato74](../../aurora-connect-discovered-group.md). **PROTÓTIPO**: preparo observável/cancelável antes de consultar a seleção, perda da origem encerrando o grupo e evidências locais próprias de transporte/DOM. A regressão de concorrência usa carga controlada após registrar perda UDP em rajada; não aprova saturação/fairness/perda zero. Todos os gates de jogo, áudio, redes e R3 permanecem.
+
 Incremento73/003/005/008 integra abertura explícita de cópia diagnóstica pronta pelo Guest TCP, com QuickPlay, revisão própria e rastreamento normal do processo. [Contrato73](../../aurora-connect-ready-game-launch.md). **PROTÓTIPO**: verificações nativas de arquivos/transporte e testes de interface não substituem launch gráfico, mundo, Core/Skins ou voz. Instalação automática/modpack sync, autenticação Microsoft/mista e homologação externa continuam pendentes; R3/manifest/updater seguro não foram antecipados.
 
 Incremento72/002/003/005/008 integra grupo estático ao mesmo slot desktop, com roster revisado, exportação/revogação individual e distinção entre ingresso consumido e transporte observado. [Contrato72](../../aurora-connect-multiparticipant-desktop.md). **PROTÓTIPO**, com testes nativos locais e DOM; os gates externos, GUI, jogo e áudio permanecem. A correção71a resolve regressão real de encerramento e conserva a tarefa após perda da chamada IPC; [prova71a](../../aurora-connect-stop-completion.md).

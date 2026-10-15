@@ -1,14 +1,15 @@
 //! Narrow local-window caller. Private transport keys never cross this boundary.
 use aurora_launcher_core::engine::connect::{
     ConnectCapabilities, ConnectManager, ConnectPreparation, ConnectReview, ConnectSnapshot,
-    FragmentedHostRequest, GroupHostRequest, GroupInvitationExport, GroupParticipantRequest,
-    GroupPreparation, GroupReview, GuestRequest, HostRequest, InvitationExport,
-    SessionFragmentedDiscoveredHostRequest, SessionFragmentedHostRequest, SessionHostRequest,
+    FragmentedHostRequest, GroupDiscoveredHostRequest, GroupHostRequest, GroupInvitationExport,
+    GroupParticipantRequest, GroupPreparation, GroupReview, GuestRequest, HostRequest,
+    InvitationExport, SessionFragmentedDiscoveredHostRequest, SessionFragmentedHostRequest,
+    SessionHostRequest,
 };
 use aurora_launcher_core::engine::connect_discovery::{
     DiscoveryManager, Inventory, TargetReview, TargetStatus,
 };
-use tauri::{State, WebviewWindow};
+use tauri::{Manager as _, State, WebviewWindow};
 
 fn owner(window: &WebviewWindow) -> Result<&str, &'static str> {
     if window.label() != "main" {
@@ -89,15 +90,37 @@ pub fn connect_prepare_session_group_host(
         .map_err(|error| error.code())
 }
 #[tauri::command]
-pub fn connect_review_session_group_host(
+pub async fn connect_prepare_session_group_host_discovered(
     window: WebviewWindow,
     manager: State<'_, ConnectManager>,
+    discovery: State<'_, DiscoveryManager>,
+    selection_id: String,
+    request: GroupDiscoveredHostRequest,
+) -> Result<ConnectSnapshot, &'static str> {
+    manager
+        .prepare_session_group_host_discovered(
+            owner(&window)?,
+            request,
+            selection_id,
+            discovery.inner().clone(),
+        )
+        .map_err(|error| error.code())
+}
+#[tauri::command]
+pub async fn connect_review_session_group_host(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
     operation_id: String,
     participants: Vec<GroupParticipantRequest>,
 ) -> Result<GroupReview, &'static str> {
-    manager
-        .review_session_group_host(owner(&window)?, &operation_id, participants)
-        .map_err(|error| error.code())
+    let owner = owner(&window)?.to_owned();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<ConnectManager>()
+            .review_session_group_host(&owner, &operation_id, participants)
+            .map_err(|error| error.code())
+    })
+    .await
+    .map_err(|_| "connect_internal")?
 }
 #[tauri::command]
 pub async fn connect_confirm_session_group_host(

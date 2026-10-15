@@ -1592,6 +1592,40 @@ const groupOperation = "aaaaaaaa-1111-4111-8111-111111111111";
 const groupKind = "staticSessionFragmentedHost";
 const groupCapability = { profile: sessionFragmentedProfile, invitationSchemaVersion: 3, minParticipants: 2, maxParticipants: 8,
   maxPreparationSeconds: 600, maxReviewSeconds: 60, maxAdmissionSeconds: 600, maxSessionSeconds: 3600, ownedGameTcpDiscovery: false };
+const pendingDiscoveredGroup = () => ({ ...idle(), operationId: groupOperation, generation: 1, role: "host", phase: "hostPreparing",
+  expiresAtMs: 1800000600000, cleanupState: "pending", pendingGroupSource: { kind: groupKind, mode: "loopback" } });
+function preparedDiscoveredGroup() {
+  const value = preparedGroup();
+  return { ...value, generation: 2, cleanupState: "pending", hostGroup: { ...value.hostGroup, preparation: { ...value.hostGroup.preparation, generation: 2 } } };
+}
+function reviewedDiscoveredGroup() {
+  const value = reviewedGroup();
+  return { ...value, generation: 3, cleanupState: "pending", hostGroup: { ...value.hostGroup, review: { ...value.hostGroup.review, generation: 3,
+    targetSource: "ownedInstance", instanceId: discoverySelected.instanceId, runId: discoverySelected.runId, gameTarget: discoverySelected.target } } };
+}
+function discoveredGroupFixtures() {
+  groupFixtures(); discoveryFixtures();
+  capabilities.sessionFragmentedHostGroups = { ...groupCapability, ownedGameTcpDiscovery: true };
+  handlers.set("connect_prepare_session_group_host_discovered", () => { snapshot = pendingDiscoveredGroup(); return structuredClone(snapshot); });
+  handlers.set("connect_review_session_group_host", () => { snapshot = reviewedDiscoveredGroup(); return snapshot.hostGroup.review; });
+  handlers.set("connect_confirm_session_group_host", () => {
+    snapshot = { ...reviewedDiscoveredGroup(), generation: 4, phase: "hostListening", transportState: "listening", expiresAtMs: null,
+      hostGroup: { ...reviewedDiscoveredGroup().hostGroup, review: null } };
+    return structuredClone(snapshot);
+  });
+  const stopGroup = handlers.get("connect_stop");
+  handlers.set("connect_stop", () => {
+    if (snapshot.hostGroup) return stopGroup();
+    const { pendingGroupSource: _pending, ...previous } = snapshot;
+    snapshot = { ...previous, generation: previous.generation + 1, phase: "closed", transportState: "closed", expiresAtMs: null, cleanupState: "complete" };
+    return structuredClone(snapshot);
+  });
+}
+async function selectDiscoveredGroup() {
+  await render(); await chooseProfile("sessionGroup"); await discoveryToReview();
+  await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002");
+  await click("Autorizar consulta e selecionar porta");
+}
 const groupParticipants = () => ["b", "e"].map((letter, index) => ({ participantId: `${letter.repeat(8)}-2222-4222-8222-222222222222`,
   guestPublicId: letter.repeat(64), invitationDigest: (index === 0 ? "d" : "f").repeat(64),
   sessionTiming: { profile: sessionFragmentedProfile, schemaVersion: 3, admissionSeconds: 600 - index * 100, sessionSeconds: 3600 - index * 500,
@@ -1652,6 +1686,200 @@ test("group capability is explicit, optional and never changes older host/guest 
   for (const changed of [{ maxParticipants: 9 }, { minParticipants: 1 }, { ownedGameTcpDiscovery: true }, { maxReviewSeconds: 600 }, { profile: "sessionGameTcp" }, { surprise: true }]) {
     assert.throws(() => types.capabilitiesFrom({ ...caps, sessionFragmentedUdpInvitations: sessionFragmentedCapability, sessionFragmentedHostGroups: { ...groupCapability, ...changed } }));
   }
+});
+
+test("discovered group capability requires native discovery and keeps the manual capability shape", () => {
+  for (const ownedGameTcpDiscovery of [false, true]) {
+    const value = { ...caps, ownedInstanceDiscovery: true, sessionFragmentedUdpInvitations: sessionFragmentedCapability,
+      sessionFragmentedHostGroups: { ...groupCapability, ownedGameTcpDiscovery } };
+    assert.equal(types.capabilitiesFrom(value).sessionFragmentedHostGroups.ownedGameTcpDiscovery, ownedGameTcpDiscovery);
+  }
+  for (const ownedInstanceDiscovery of [undefined, false]) assert.throws(() => types.capabilitiesFrom({ ...caps, ownedInstanceDiscovery,
+    sessionFragmentedUdpInvitations: sessionFragmentedCapability, sessionFragmentedHostGroups: { ...groupCapability, ownedGameTcpDiscovery: true } }));
+  for (const ownedGameTcpDiscovery of [undefined, null, "true", 1]) assert.throws(() => groupTypes.groupCapabilityFrom({ ...groupCapability, ownedGameTcpDiscovery }));
+});
+
+test("discovered group reserves an owned pending operation before showing any peer or roster", async () => {
+  discoveredGroupFixtures(); await selectDiscoveredGroup();
+  assert.match(container.textContent, /destino UDP abaixo continua manual/);
+  await submit();
+  assert.deepEqual(calls.find(call => call.command === "connect_prepare_session_group_host_discovered").args,
+    { selectionId: discoverySelected.selectionId, request: { mode: "loopback", bindAddress: "127.0.0.1:42000", udpTarget: "127.0.0.1:43002" } });
+  assert.equal(count("connect_prepare_session_group_host"), 0);
+  assert.equal(count("connect_prepare_session_fragmented_host_discovered"), 0);
+  assert.match(container.textContent, /Conferindo a origem do grupo/);
+  assert.equal(container.querySelector("textarea"), null);
+  assert.equal(container.querySelector("form"), null);
+  assert.equal(button("Encerrar Connect").disabled, false);
+  snapshot = preparedDiscoveredGroup(); await click("Atualizar estado");
+  assert.equal(container.querySelectorAll("fieldset").length, 2);
+  await fillGroup(); await submit();
+  assert.match(container.textContent, /Jogo TCP · origem conferida/);
+  assert.match(container.textContent, /Destino manual, autorizado separadamente/);
+  assert.match(container.textContent, /grupo inteiro encerra/);
+  assert.equal(button("Autorizar grupo").disabled, true);
+  await checkConsent(); await click("Autorizar grupo");
+  assert.deepEqual(calls.find(call => call.command === "connect_confirm_session_group_host").args, { operationId: groupOperation, digest });
+  assert.equal(count("connect_probe_status"), 0);
+});
+
+test("discovered group omits an obsolete manual TCP target and still validates UDP separately", async () => {
+  discoveredGroupFixtures(); await render(); await chooseProfile("sessionGroup");
+  await editInput(labeledInput("Servidor neste"), "192.168.1.10:43001");
+  await discoveryToReview(); await click("Autorizar consulta e selecionar porta");
+  await editInput(labeledInput("Serviço UDP"), "192.168.1.10:43002"); await submit();
+  assert.equal(count("connect_prepare_session_group_host_discovered"), 0);
+  await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002"); await submit();
+  const args = calls.find(call => call.command === "connect_prepare_session_group_host_discovered").args;
+  assert.equal(Object.hasOwn(args.request, "gameTarget"), false);
+  assert.equal(Object.hasOwn(args, "instanceId"), false);
+  assert.equal(Object.hasOwn(args, "runId"), false);
+  assert.equal(count("connect_prepare_session_group_host"), 0);
+});
+
+test("discovered group refuses a locally expired selection at the click without consuming another token", async () => {
+  discoveredGroupFixtures(); await selectDiscoveredGroup();
+  const now = Date.now;
+  try { Date.now = () => discoverySelected.expiresAtMs; await submit(); }
+  finally { Date.now = now; }
+  assert.equal(count("connect_prepare_session_group_host_discovered"), 0);
+  assert.match(container.textContent, /seleção de porta expirou/);
+  assert.equal(button("Preparar anfitrião").disabled, true);
+});
+
+test("lost discovered group preparation recovers its owned reservation by snapshot without resending", async () => {
+  discoveredGroupFixtures(); await selectDiscoveredGroup();
+  handlers.set("connect_prepare_session_group_host_discovered", () => { snapshot = pendingDiscoveredGroup(); throw new Error("lost response"); });
+  await submit();
+  assert.match(container.textContent, /resultado do preparo ainda não foi confirmado/);
+  assert.equal(container.querySelector("form"), null);
+  await click("Atualizar estado");
+  assert.match(container.textContent, /Conferindo a origem do grupo/);
+  await click("Encerrar Connect");
+  assert.match(container.textContent, /Recursos liberados/);
+  assert.equal(count("connect_prepare_session_group_host_discovered"), 1);
+  assert.equal(count("connect_prepare_session_group_host"), 0);
+  assert.equal(button("Preparar anfitrião").disabled, true);
+});
+
+test("a pending initial IPC can be observed and stopped, and its late reply cannot restore preparation", async () => {
+  discoveredGroupFixtures(); await selectDiscoveredGroup();
+  let complete;
+  handlers.set("connect_prepare_session_group_host_discovered", () => { snapshot = pendingDiscoveredGroup(); return new Promise(resolve => { complete = resolve; }); });
+  await submit();
+  assert.equal(button("Atualizar estado").disabled, false);
+  await click("Atualizar estado"); await click("Encerrar Connect");
+  await act(async () => complete(pendingDiscoveredGroup()));
+  assert.match(container.textContent, /Conexão encerrada/);
+  assert.doesNotMatch(container.textContent, /Conferindo a origem do grupo/);
+  assert.equal(count("connect_prepare_session_group_host_discovered"), 1);
+  assert.equal(container.querySelector("fieldset"), null);
+});
+
+test("old idle snapshots do not clear uncertainty after an unstructured discovered preparation failure", async () => {
+  discoveredGroupFixtures(); await selectDiscoveredGroup();
+  handlers.set("connect_prepare_session_group_host_discovered", () => { throw new Error("unknown delivery"); });
+  await submit(); await click("Atualizar estado"); await click("Atualizar estado");
+  assert.match(container.textContent, /resultado do preparo ainda não foi confirmado/);
+  assert.equal(container.querySelector("form"), null);
+  assert.equal(count("connect_prepare_session_group_host_discovered"), 1);
+  snapshot = pendingDiscoveredGroup(); await click("Atualizar estado");
+  assert.equal(button("Encerrar Connect").disabled, false);
+});
+
+test("controlled pre-reservation rejection requires a new discovery selection without trapping an uncreated operation", async () => {
+  discoveredGroupFixtures(); await selectDiscoveredGroup();
+  handlers.set("connect_prepare_session_group_host_discovered", () => { throw "connect_invalid_request"; });
+  await submit();
+  assert.doesNotMatch(container.textContent, /resultado do preparo ainda não foi confirmado/);
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  await submit(); assert.equal(count("connect_prepare_session_group_host_discovered"), 1);
+});
+
+test("failed source preparation keeps cleanup pending without a fabricated host identity", async () => {
+  discoveredGroupFixtures(); await selectDiscoveredGroup(); await submit();
+  const { pendingGroupSource: _pending, ...reserved } = pendingDiscoveredGroup();
+  snapshot = { ...reserved, generation: 2, phase: "failed", transportState: "closed", expiresAtMs: null, errorCode: "connect_source_changed" };
+  await click("Atualizar estado");
+  assert.match(container.textContent, /Aguardando liberação dos recursos/);
+  assert.equal(container.querySelector("form"), null);
+  assert.equal(container.querySelector("textarea"), null);
+  await click("Encerrar Connect");
+  assert.match(container.textContent, /Recursos liberados/);
+  assert.equal(button("Preparar anfitrião").disabled, true);
+});
+
+test("pending discovered preparation remains observable and stoppable when capabilities cannot be read", async () => {
+  discoveredGroupFixtures(); snapshot = pendingDiscoveredGroup();
+  handlers.set("connect_capabilities", () => { throw new Error("fixture unavailable"); });
+  await render();
+  assert.match(container.textContent, /Conferindo a origem do grupo/);
+  assert.equal(container.querySelector("form"), null);
+  await click("Encerrar Connect");
+  assert.match(container.textContent, /Recursos liberados/);
+  assert.equal(count("connect_prepare_session_group_host_discovered"), 0);
+});
+
+test("pending group and source review parsers reject invented identities and contradictory phases", () => {
+  const pending = pendingDiscoveredGroup();
+  assert.equal(types.snapshotFrom(pending).phase, "hostPreparing");
+  const { pendingGroupSource: _pending, ...without } = pending;
+  assert.throws(() => types.snapshotFrom(without));
+  for (const patch of [
+    { generation: 0 }, { operationId: "not-uuid" }, { role: "guest" }, { available: false }, { phase: "hostPrepared" }, { phase: "closing" },
+    { cleanupState: "complete" }, { errorCode: "connect_internal" }, { expiresAtMs: null }, { transportState: "listening" },
+    { hostGroup: preparedGroup().hostGroup }, { preparation }, { review }, { publicId: hostId }, { hostPublicId: hostId },
+    { invitationProfile: sessionFragmentedProfile }, { fragmentedUdp: sessionFragmentedContract }, { udpTarget: "127.0.0.1:43002" },
+    { pendingGroupSource: { kind: groupKind, mode: "invalid" } }, { pendingGroupSource: { kind: groupKind, mode: "loopback", peer: hostId } },
+  ]) assert.throws(() => types.snapshotFrom({ ...pending, ...patch }));
+  const owned = reviewedDiscoveredGroup().hostGroup.review;
+  assert.equal(groupTypes.groupReviewFrom(owned).runId, discoverySelected.runId);
+  for (const patch of [
+    { instanceId: undefined }, { runId: null }, { instanceId: "" }, { runId: "bad\nrun" }, { targetSource: "manual" },
+    { targetSource: "unknown" }, { processId: 123 }, { fingerprint: "private" },
+  ]) assert.throws(() => groupTypes.groupReviewFrom({ ...owned, ...patch }));
+  assert.throws(() => groupTypes.groupReviewFrom({ ...reviewedGroup().hostGroup.review, instanceId: null, runId: null }));
+  assert.throws(() => types.snapshotFrom({ ...reviewedGroup(), pendingGroupSource: pending.pendingGroupSource }));
+  assert.throws(() => types.preparationFrom({ ...preparation, pendingGroupSource: pending.pendingGroupSource }));
+});
+
+test("a changed discovered instance or run clears group consent even if digest and generation were not changed", async () => {
+  discoveredGroupFixtures(); snapshot = reviewedDiscoveredGroup(); await render();
+  await checkConsent(); assert.equal(button("Autorizar grupo").disabled, false);
+  snapshot = { ...snapshot, hostGroup: { ...snapshot.hostGroup, review: { ...snapshot.hostGroup.review, runId: "another-fixture-run" } } };
+  await click("Atualizar estado");
+  assert.equal(button("Autorizar grupo").disabled, true);
+  await checkConsent();
+  snapshot = { ...snapshot, hostGroup: { ...snapshot.hostGroup, review: { ...snapshot.hostGroup.review, instanceId: "another-fixture-instance" } } };
+  await click("Atualizar estado");
+  assert.equal(button("Autorizar grupo").disabled, true);
+  assert.equal(count("connect_confirm_session_group_host"), 0);
+});
+
+test("changing profile while discovered STATUS is pending cannot populate a later group selection", async () => {
+  discoveredGroupFixtures(); await render(); await chooseProfile("sessionGroup"); await discoveryToReview();
+  let complete;
+  handlers.set("connect_confirm_discovered_status", () => new Promise(resolve => { complete = resolve; }));
+  await click("Autorizar consulta e selecionar porta");
+  await chooseProfile("legacy"); await chooseProfile("sessionGroup"); await chooseManaged();
+  await act(async () => complete(discoverySelected));
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  assert.doesNotMatch(container.textContent, /Servidor respondeu em/);
+  assert.equal(count("connect_prepare_session_group_host_discovered"), 0);
+});
+
+test("discovered group uses only explicitly selected IPv4 and preserves manual group preparation", async () => {
+  discoveredGroupFixtures(); capabilities.modes = [...caps.modes, "directIpv4"];
+  await selectDiscoveredGroup(); await chooseMode("directIpv4");
+  await submit(); assert.equal(count("connect_prepare_session_group_host_discovered"), 0);
+  await editInput(labeledInput("Endereço inicial"), "192.168.1.2:42000");
+  handlers.set("connect_prepare_session_group_host_discovered", () => {
+    snapshot = { ...pendingDiscoveredGroup(), pendingGroupSource: { kind: groupKind, mode: "directIpv4" } }; return structuredClone(snapshot);
+  });
+  await submit();
+  assert.deepEqual(calls.find(call => call.command === "connect_prepare_session_group_host_discovered").args,
+    { selectionId: discoverySelected.selectionId, request: { mode: "directIpv4", bindAddress: "192.168.1.2:42000", udpTarget: "127.0.0.1:43002" } });
+  assert.equal(count("connect_prepare_session_group_host"), 0);
 });
 
 test("group host performs separate prepare, two-person review, consent and individual invitation export", async () => {
@@ -1792,6 +2020,25 @@ test("group failed cleanup preserves uncertain transport and stop without claimi
   assert.doesNotMatch(container.textContent, /Recursos liberados|Conexão autenticada observada/);
   assert.equal(container.querySelector("form"), null); await click("Encerrar Connect");
   assert.match(container.textContent, /Recursos liberados/); assert.equal(count("connect_stop"), 1);
+});
+
+test("failed discovered group remains cancellable while its source worker cleanup is pending", async () => {
+  discoveredGroupFixtures(); const value = preparedDiscoveredGroup();
+  snapshot = { ...value, phase: "failed", transportState: "closed", expiresAtMs: null, cleanupState: "pending", errorCode: "connect_source_changed",
+    hostGroup: { ...value.hostGroup, preparation: null } };
+  assert.deepEqual(types.snapshotFrom(snapshot), snapshot);
+  for (const transportState of ["notStarted", "listening", "admitted"]) {
+    assert.throws(() => types.snapshotFrom({ ...snapshot, transportState }));
+  }
+  await render();
+  assert.match(container.textContent, /Aguardando liberação dos recursos/);
+  assert.doesNotMatch(container.textContent, /Recursos liberados/);
+  assert.equal(container.querySelector("form"), null);
+  assert.equal(container.querySelector("textarea"), null);
+  await click("Encerrar Connect");
+  assert.match(container.textContent, /Recursos liberados/);
+  assert.equal(count("connect_stop"), 1);
+  assert.equal(count("connect_prepare_session_group_host_discovered"), 0);
 });
 
 test("group revocation affects selected participant only and never calls whole-group stop", async () => {

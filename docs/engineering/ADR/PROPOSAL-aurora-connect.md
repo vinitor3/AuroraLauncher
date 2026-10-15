@@ -6,6 +6,10 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento74 — preparação descoberta pertencente ao grupo
+
+Integrar a origem TCP já verificada48 ao grupo72 por um comando separado. A preparação reserva `Attempt`, UUID, cancelamento e worker antes de consumir a seleção, e retorna snapshot `hostPreparing` sem chave/socket. Isso impede a publicação tardia de um grupo depois de logout observar um slot aparentemente ocioso. O trabalho de origem e a consulta de revisão ficam separados do ator Host, mas participam da mesma barreira de encerramento; publicar prontidão não autoriza destacar uma cauda ainda em execução. Consulta Windows acontece fora do mutex, com rechecagem de identidade/geração/fase/prazos antes de publicar. O guard original continua até o monitor do Host; sua perda encerra todo o grupo. UDP permanece manual e o formato/digest do grupo manual é preservado. [Contrato74](../../aurora-connect-discovered-group.md). Implementação experimental com provas próprias registradas no contrato e task; não homologa LAN, GUI, jogo, contas ou áudio.
+
 ### Incremento52 — separar ingresso de duração da partida
 
 A validade única de600s do convite antigo impedia uma sessão admitida continuar além dessa janela. A decisão experimental cria autoridade tipada `SessionInvitation`, schema2/domínio próprios, exclusivamente para game/TCP: ingresso até600s e sessão absoluta até3600s desde emissão. Não aumentar silenciosamente o TTL legado nem renovar a lease a cada pacote. Envelope UDPV2 e convite schema1 dos51/51b são outro contrato e permanecem intactos.
