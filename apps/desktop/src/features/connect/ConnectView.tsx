@@ -13,6 +13,7 @@ import { GroupHostPanel, type GroupAction } from "./GroupHostPanel";
 import { groupPreparationFrom } from "./group-types";
 import { ConnectGameLaunchPanel } from "../connect-game-launch/ConnectGameLaunchPanel";
 import type { ReadyGameLaunchContext } from "../connect-game-launch/types";
+import { isControlledSourceRejection, provesNoSourceReservation, type HostSourceProfile } from "./host-source-types";
 
 type Action = "prepareHost" | "prepareGuest" | "reviewHost" | "reviewGuest" | "confirm" | "export" | "probe" | "retryUdp" | "stop" | "refresh" | GroupAction;
 const actionText: Record<Action, string> = {
@@ -22,6 +23,10 @@ const actionText: Record<Action, string> = {
   reviewGroup: "Preparando revisão do grupo…", confirmGroup: "Estabelecendo o grupo…", exportGroup: "Obtendo convite do participante…", revokeGroup: "Revogando participante…",
 };
 const finalPhase = (snapshot: ConnectSnapshot) => ["idle", "closed", "failed"].includes(snapshot.phase);
+type SourcePreparationAwaiting = {
+  kind: "group" | "single"; generation: number; previousOperationId: string | null; mode: ConnectMode;
+  profile?: HostSourceProfile; baseline?: ConnectSnapshot; controlledRejectionSettled?: symbol;
+};
 
 export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunchContext }) {
   const [capabilities, setCapabilities] = useState<ConnectCapabilities>();
@@ -51,7 +56,7 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   const [acknowledged, setAcknowledged] = useState(false);
   const [knownOperationId, setKnownOperationId] = useState<string>();
   const [udpRecoveryAwaitingSnapshot, setUdpRecoveryAwaitingSnapshot] = useState(false);
-  const [groupPreparationUncertain, setGroupPreparationUncertain] = useState(false);
+  const [sourcePreparationUncertain, setSourcePreparationUncertain] = useState(false);
   const epoch = useRef(0);
   const mounted = useRef(false);
   const pendingRef = useRef<Action | undefined>(undefined);
@@ -59,20 +64,36 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   const observedReview = useRef<string | undefined>(undefined);
   const exportedFor = useRef<string | undefined>(undefined);
   const udpRetryContext = useRef<{ operationId: string; generation: number } | undefined>(undefined);
-  const groupPreparationAwaiting = useRef<{ generation: number; previousOperationId: string | null; mode: ConnectMode } | undefined>(undefined);
+  const sourcePreparationAwaiting = useRef<SourcePreparationAwaiting | undefined>(undefined);
 
-  function acceptSnapshot(value: unknown) {
+  function acceptSnapshot(value: unknown, rejectionProof?: symbol) {
     const next = snapshotFrom(value);
     if (snapshotRef.current && next.generation < snapshotRef.current.generation) return;
-    const awaitingGroup = groupPreparationAwaiting.current;
-    if (awaitingGroup) {
+    const awaitingSource = sourcePreparationAwaiting.current;
+    if (awaitingSource) {
       // An old idle/closed observation cannot prove that a lost preparation
       // request failed before reserving its owned native worker.
-      if (next.generation <= awaitingGroup.generation || !next.operationId || next.operationId === awaitingGroup.previousOperationId) return;
-      if (next.role !== "host" || (next.pendingGroupSource?.mode ?? next.hostGroup?.mode ?? awaitingGroup.mode) !== awaitingGroup.mode
-        || (!next.pendingGroupSource && !next.hostGroup && !["closing", "closed", "failed"].includes(next.phase))) throw new Error("Wrong group preparation observation");
-      groupPreparationAwaiting.current = undefined;
-      setGroupPreparationUncertain(false);
+      const definitiveObservation = awaitingSource.kind === "single" && rejectionProof !== undefined
+        && rejectionProof === awaitingSource.controlledRejectionSettled;
+      const rejectedBeforeReservation = definitiveObservation && provesNoSourceReservation(next, awaitingSource.baseline);
+      if (!rejectedBeforeReservation) {
+        if (next.generation <= awaitingSource.generation || !next.operationId || next.operationId === awaitingSource.previousOperationId) return;
+        // A definitive rejection followed by a fresh observation may expose
+        // another owned operation. Observe/stop it without attributing it to
+        // the rejected request or transferring any consent to it.
+        if (definitiveObservation) {
+          if (next.role === null || next.phase === "idle") throw new Error("Invalid owned operation observation");
+        } else if (next.role !== "host") throw new Error("Wrong source preparation owner");
+        else if (awaitingSource.kind === "group") {
+          if ((next.pendingGroupSource?.mode ?? next.hostGroup?.mode ?? awaitingSource.mode) !== awaitingSource.mode
+            || (!next.pendingGroupSource && !next.hostGroup && !["closing", "closed", "failed"].includes(next.phase))) throw new Error("Wrong group preparation observation");
+        } else if (next.hostGroup || next.pendingGroupSource || (next.invitationProfile ?? "legacy") !== awaitingSource.profile
+          || (next.pendingHostSource && (next.pendingHostSource.mode !== awaitingSource.mode || next.pendingHostSource.profile !== awaitingSource.profile))
+          || !["hostPreparing", "hostPrepared", "closing", "closed", "failed"].includes(next.phase)) throw new Error("Wrong host preparation observation");
+      }
+      sourcePreparationAwaiting.current = undefined;
+      setSourcePreparationUncertain(false);
+      setAcknowledged(false); setExportedInvitation(""); exportedFor.current = undefined;
     }
     const recovering = udpRetryContext.current;
     if (recovering && (next.operationId !== recovering.operationId || next.generation >= recovering.generation)) {
@@ -103,9 +124,10 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
       if (disposed) return;
       if (!pendingRef.current) {
         const request = epoch.current;
+        const rejectionProof = sourcePreparationAwaiting.current?.controlledRejectionSettled;
         try {
           const value = await invoke<unknown>("connect_snapshot");
-          if (!disposed && request === epoch.current) acceptSnapshot(value);
+          if (!disposed && request === epoch.current) acceptSnapshot(value, rejectionProof);
         } catch {
           if (!disposed && request === epoch.current) setWarning("O estado não pôde ser atualizado. A última observação pode estar desatualizada.");
         }
@@ -137,7 +159,7 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   }, []);
 
   async function perform(action: Action, operation: (current: () => boolean) => Promise<void>) {
-    if (pendingRef.current && action !== "stop" && !(action === "refresh" && groupPreparationAwaiting.current)) return;
+    if (pendingRef.current && action !== "stop" && !(action === "refresh" && sourcePreparationAwaiting.current)) return;
     if (pendingRef.current === "stop") return;
     const request = ++epoch.current;
     const current = () => mounted.current && request === epoch.current;
@@ -148,9 +170,10 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
     finally { if (current()) { pendingRef.current = undefined; setPending(undefined); } }
   }
   async function refresh(current: () => boolean) {
+    const rejectionProof = sourcePreparationAwaiting.current?.controlledRejectionSettled;
     try {
       const value = await invoke<unknown>("connect_snapshot");
-      if (current()) acceptSnapshot(value);
+      if (current()) acceptSnapshot(value, rejectionProof);
     } catch (cause) {
       if (current()) setWarning("O estado não pôde ser atualizado. A última observação pode estar desatualizada.");
       throw cause;
@@ -185,8 +208,8 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
         }
         const selectionId = discoveredTarget.selectionId;
         void perform("prepareHost", async current => {
-          groupPreparationAwaiting.current = { generation: snapshotRef.current?.generation ?? 0, previousOperationId: snapshotRef.current?.operationId ?? null, mode };
-          setGroupPreparationUncertain(true);
+          sourcePreparationAwaiting.current = { kind: "group", generation: snapshotRef.current?.generation ?? 0, previousOperationId: snapshotRef.current?.operationId ?? null, mode };
+          setSourcePreparationUncertain(true);
           setDiscoveredTarget(undefined); setDiscoveryEpoch(value => value + 1);
           try {
             const value = snapshotFrom(await invoke<unknown>("connect_prepare_session_group_host_discovered", {
@@ -200,7 +223,7 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
             // An absent/malformed IPC result remains uncertain until a newer
             // operation snapshot is observed; it never triggers a resend.
             if (current() && typeof cause === "string" && ["connect_disabled", "connect_owner_mismatch", "connect_invalid_request", "connect_busy", "connect_cancelled", "connect_internal"].includes(cause)) {
-              groupPreparationAwaiting.current = undefined; setGroupPreparationUncertain(false);
+              sourcePreparationAwaiting.current = undefined; setSourcePreparationUncertain(false);
             }
             throw cause;
           }
@@ -223,6 +246,10 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
       : !fragmented && capabilities.ownedInstanceDiscovery === true;
     const discovery = discoveryAvailable && selectedRole === "host" && targetMode === "ownedInstance";
     if (discovery && !discoveredTarget) return;
+    if (discovery && Date.now() >= discoveredTarget!.expiresAtMs) {
+      setDiscoveredTarget(undefined); setDiscoveryEpoch(value => value + 1);
+      setError(connectError("discovery_stale_review")); return;
+    }
     const session = sessionUdp || invitationProfile === "sessionGameTcp" && Boolean(capabilities.sessionInvitations);
     const admission = Number(admissionSeconds), duration = Number(sessionSeconds);
     if (fragmented && selectedRole === "host" && ((!sessionUdp && !isFragmentedLifetime(Number(fragmentedLifetime)))
@@ -248,10 +275,26 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
       : { mode, expectedHostPublicId: hostPublicId.trim() };
     const selectionId = discovery ? discoveredTarget!.selectionId : undefined;
     void perform(selectedRole === "host" ? "prepareHost" : "prepareGuest", async current => {
-      // A schema3 selection is single-use even when the IPC result is unknown.
-      // Rebuild the picker so a failed attempt cannot retain a selected source.
-      if (sessionUdp && discovery) { setDiscoveredTarget(undefined); setDiscoveryEpoch(value => value + 1); }
-      const value = preparationFrom(await invoke<unknown>(command, { request, ...(discovery ? { selectionId } : {}) }));
+      const awaiting: SourcePreparationAwaiting | undefined = discovery ? {
+        kind: "single", generation: snapshotRef.current?.generation ?? 0, previousOperationId: snapshotRef.current?.operationId ?? null,
+        mode, profile: sessionUdp ? SESSION_FRAGMENTED_PROFILE : session ? "sessionGameTcp" : "legacy", baseline: snapshotRef.current,
+      } : undefined;
+      if (awaiting) {
+        sourcePreparationAwaiting.current = awaiting; setSourcePreparationUncertain(true);
+        setDiscoveredTarget(undefined); setDiscoveryEpoch(value => value + 1);
+      }
+      let value;
+      try {
+        value = preparationFrom(await invoke<unknown>(command, { request, ...(discovery ? { selectionId } : {}) }));
+      } catch (cause) {
+        if (awaiting && mounted.current && sourcePreparationAwaiting.current === awaiting && isControlledSourceRejection(cause)) {
+          awaiting.controlledRejectionSettled = Symbol("definitive native preparation rejection");
+          // This invoke begins strictly after the definitive reply. A poll
+          // already in flight holds its earlier token and cannot prove it.
+          if (current()) { try { await refresh(current); } catch { /* Keep the same definitive context for explicit observation. */ } }
+        }
+        throw cause;
+      }
       if (!current()) return;
       setDiscoveredTarget(undefined);
       setKnownOperationId(value.operationId);
@@ -331,7 +374,7 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   }
   const operationId = knownOperationId ?? snapshot?.operationId;
   const activeOperation = Boolean(operationId && (!snapshot || !finalPhase(snapshot) || snapshot.cleanupState === "pending" || snapshot.cleanupState === "failed"));
-  const active = groupPreparationUncertain || activeOperation;
+  const active = sourcePreparationUncertain || activeOperation;
   const busy = Boolean(pending);
   const prepared = snapshot?.preparation;
   const reviewed = snapshot?.review;
@@ -345,7 +388,8 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   const groupSelected = invitationProfile === "sessionGroup" && selectedRole === "host" && Boolean(capabilities?.sessionFragmentedHostGroups);
   const discoveryAvailable = groupSelected ? capabilities?.sessionFragmentedHostGroups?.ownedGameTcpDiscovery === true : sessionUdpSelected ? capabilities?.sessionFragmentedUdpInvitations?.ownedGameTcpDiscovery === true
     : !fragmentedSelected && capabilities?.ownedInstanceDiscovery === true;
-  const displayedProfile = active ? snapshot?.hostGroup || snapshot?.pendingGroupSource || groupPreparationUncertain ? "sessionGroup" : snapshot?.invitationProfile : groupSelected || sessionSelected || fragmentedSelected ? invitationProfile : undefined;
+  const displayedProfile = active ? snapshot?.hostGroup || snapshot?.pendingGroupSource || sourcePreparationAwaiting.current?.kind === "group" ? "sessionGroup"
+    : snapshot?.invitationProfile ?? sourcePreparationAwaiting.current?.profile : groupSelected || sessionSelected || fragmentedSelected ? invitationProfile : undefined;
   const sessionDisplayed = displayedProfile === "sessionGameTcp" || displayedProfile === SESSION_FRAGMENTED_PROFILE;
   const fragmentedDisplayed = displayedProfile === FRAGMENTED_PROFILE || displayedProfile === SESSION_FRAGMENTED_PROFILE;
 
@@ -367,13 +411,14 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
         ? "Uma tentativa por janela. O prazo para entrar e o encerramento da sessão são separados, sem renovação automática. O servidor deve permanecer aberto."
         : "Uma tentativa por janela. A conexão expira em até 10 minutos e não é renovada automaticamente. O servidor deve permanecer aberto."}</p>
       <section className="connect-status" aria-label="Estado observado da conexão">
-        <header><h3>{snapshot ? snapshot.hostGroup && snapshot.phase === "hostListening" ? "Anfitrião do grupo disponível" : snapshot.phase === "hostListening" && snapshot.transportState === "admitted" ? "Convite utilizado · conexão ativa" : phaseText[snapshot.phase] : "Estado ainda não disponível"}</h3><div className="connect-actions">
-          <button className="secondary" type="button" disabled={busy && !groupPreparationUncertain} onClick={() => { void perform("refresh", refresh); }}>Atualizar estado</button>
+        <header><h3>{snapshot ? snapshot.pendingHostSource ? "Conferindo a origem do jogo…" : snapshot.hostGroup && snapshot.phase === "hostListening" ? "Anfitrião do grupo disponível" : snapshot.phase === "hostListening" && snapshot.transportState === "admitted" ? "Convite utilizado · conexão ativa" : phaseText[snapshot.phase] : "Estado ainda não disponível"}</h3><div className="connect-actions">
+          <button className="secondary" type="button" disabled={busy && !sourcePreparationUncertain} onClick={() => { void perform("refresh", refresh); }}>Atualizar estado</button>
           {activeOperation && <button className="danger" type="button" disabled={pending === "stop" || snapshot?.phase === "closing"} onClick={stop}>Encerrar Connect</button>}
         </div></header>
         {pending && <p role="status">{actionText[pending]}</p>}
-        {groupPreparationUncertain && <p role="status">O resultado do preparo ainda não foi confirmado. Atualize o estado; a seleção não será enviada novamente.</p>}
+        {sourcePreparationUncertain && <p role="status">O resultado do preparo ainda não foi confirmado. Atualize o estado; a seleção não será enviada novamente.</p>}
         {snapshot?.pendingGroupSource && <p role="status">Conferindo o jogo selecionado. O código público e os convites só ficarão disponíveis depois dessa etapa; você pode encerrar Connect enquanto aguarda.</p>}
+        {snapshot?.pendingHostSource && <p role="status">Conferindo o jogo selecionado. Você pode encerrar Connect enquanto aguarda. O código público só ficará disponível após a conferência, dentro do prazo original de 60 segundos.</p>}
         {snapshot && <>
           <dl><dt>Transporte</dt><dd>{transportText[snapshot.transportState]}</dd><dt>Servidor Minecraft</dt><dd>{statusText[snapshot.statusState]}</dd>
             <dt>Caminho da conexão</dt><dd>Não confirmado · relay desligado</dd><dt>Entrada no mundo</dt><dd>Não verificada</dd>

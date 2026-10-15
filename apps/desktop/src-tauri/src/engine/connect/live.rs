@@ -27,6 +27,11 @@ mod udp_recovery_tests;
 mod fragmented_desktop;
 #[path = "group_source.rs"]
 mod group_source;
+#[path = "host_source.rs"]
+mod host_source;
+#[cfg(all(test, windows))]
+#[path = "host_source_tests.rs"]
+mod host_source_tests;
 #[cfg(all(test, windows))]
 #[path = "owned_group_tests.rs"]
 mod owned_group_tests;
@@ -133,6 +138,7 @@ struct Attempt {
     recovery: Option<udp_recovery::RecoveryControl>,
     group: Option<session_group::GroupOperation>,
     group_source: Option<group_source::SourceWork>,
+    host_source: Option<host_source::SourceWork>,
     guest_source: Option<Arc<ready_game::GuestSource>>,
     ready_game: Option<ready_game::ReadyWork>,
     #[cfg(test)]
@@ -214,6 +220,7 @@ fn peer(text: &str) -> Result<lab::EndpointId, ConnectError> {
 fn terminal(a: &Attempt) -> bool {
     ready_game::finished(a)
         && group_source::finished(a)
+        && host_source::finished(a)
         && !a.probe_active
         && matches!(a.snapshot.phase, "closed" | "failed")
         && a.snapshot.cleanup_state == "complete"
@@ -234,7 +241,11 @@ fn expire_pending(a: &mut Attempt) {
 }
 fn expire_pending_at(a: &mut Attempt, now_unix: u64) {
     if a.snapshot.phase == "hostPreparing" {
-        group_source::expire_pending(a, now_unix);
+        if a.host_source.is_some() {
+            host_source::expire_pending(a, now_unix);
+        } else {
+            group_source::expire_pending(a, now_unix);
+        }
         return;
     }
     if a.group.is_some() {
@@ -263,7 +274,16 @@ fn expire_pending_at(a: &mut Attempt, now_unix: u64) {
             a.snapshot.preparation = None;
             a.snapshot.review = None;
             a.snapshot.phase = "closed";
-            a.snapshot.cleanup_state = "complete";
+            a.snapshot.cleanup_state = if host_source::finished(a) {
+                "complete"
+            } else {
+                "pending"
+            };
+            if a.host_source.is_some() {
+                a.cancel.cancel();
+                a.snapshot.transport_state = "closed";
+                a.snapshot.expires_at_ms = None;
+            }
             a.snapshot.error_code = Some(ConnectError::PlanExpired.code());
             if let Some(udp) = &mut a.snapshot.udp {
                 udp.close();
@@ -299,12 +319,15 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
         udp_recovery::clear(a);
         a.snapshot.phase = if error.is_some() { "failed" } else { "closed" };
         a.snapshot.transport_state = "closed";
-        a.snapshot.cleanup_state =
-            if ready_game::finished(a) && group_source::finished(a) && !a.probe_active {
-                "complete"
-            } else {
-                "pending"
-            };
+        a.snapshot.cleanup_state = if ready_game::finished(a)
+            && group_source::finished(a)
+            && host_source::finished(a)
+            && !a.probe_active
+        {
+            "complete"
+        } else {
+            "pending"
+        };
         a.snapshot.tcp_address = None;
         if let Some(udp) = &mut a.snapshot.udp {
             udp.close();
@@ -316,6 +339,7 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
         a.snapshot.preparation = None;
         a.snapshot.review = None;
         a.snapshot.pending_group_source = None;
+        host_source::closing(a);
     });
 }
 struct ProbeGuard {
@@ -473,6 +497,7 @@ impl Manager {
             guest_source: None,
             ready_game: None,
             group_source: None,
+            host_source: None,
             #[cfg(test)]
             recovery_gate: None,
             #[cfg(test)]
@@ -486,22 +511,6 @@ impl Manager {
         request: HostRequest,
     ) -> Result<ConnectPreparation, ConnectError> {
         self.prepare_host_internal(owner, request.into(), TargetGuard::Manual)
-    }
-    #[cfg(windows)]
-    pub(super) fn prepare_host_discovered(
-        &self,
-        owner: &str,
-        request: HostRequest,
-        target: super::super::connect_discovery::ApprovedTarget,
-    ) -> Result<ConnectPreparation, ConnectError> {
-        let target = target.activate().map_err(|error| {
-            if error == super::super::connect_discovery::DiscoveryError::Stale {
-                ConnectError::PlanExpired
-            } else {
-                ConnectError::SourceChanged
-            }
-        })?;
-        self.prepare_host_internal(owner, request.into(), TargetGuard::Owned(Arc::new(target)))
     }
     pub(super) fn prepare_fragmented_host(
         &self,
@@ -523,50 +532,6 @@ impl Manager {
         request: SessionFragmentedHostRequest,
     ) -> Result<ConnectPreparation, ConnectError> {
         self.prepare_host_internal(owner, request.into(), TargetGuard::Manual)
-    }
-    #[cfg(windows)]
-    pub(super) fn prepare_session_fragmented_host_discovered(
-        &self,
-        owner: &str,
-        request: SessionFragmentedDiscoveredHostRequest,
-        target: super::super::connect_discovery::ApprovedTarget,
-    ) -> Result<ConnectPreparation, ConnectError> {
-        let target = target.activate().map_err(|error| {
-            if error == super::super::connect_discovery::DiscoveryError::Stale {
-                ConnectError::PlanExpired
-            } else {
-                ConnectError::SourceChanged
-            }
-        })?;
-        let game_target = target
-            .recheck_owned()
-            .map_err(|_| ConnectError::SourceChanged)?
-            .to_string();
-        let request = SessionFragmentedHostRequest {
-            mode: request.mode,
-            bind_address: request.bind_address,
-            game_target,
-            udp_target: request.udp_target,
-            admission_seconds: request.admission_seconds,
-            session_seconds: request.session_seconds,
-        };
-        self.prepare_host_internal(owner, request.into(), TargetGuard::Owned(Arc::new(target)))
-    }
-    #[cfg(windows)]
-    pub(super) fn prepare_session_host_discovered(
-        &self,
-        owner: &str,
-        request: SessionHostRequest,
-        target: super::super::connect_discovery::ApprovedTarget,
-    ) -> Result<ConnectPreparation, ConnectError> {
-        let target = target.activate().map_err(|error| {
-            if error == super::super::connect_discovery::DiscoveryError::Stale {
-                ConnectError::PlanExpired
-            } else {
-                ConnectError::SourceChanged
-            }
-        })?;
-        self.prepare_host_internal(owner, request.into(), TargetGuard::Owned(Arc::new(target)))
     }
     fn prepare_host_internal(
         &self,
@@ -1171,6 +1136,7 @@ impl Manager {
             udp_recovery::clear(a);
             ready_game::cancel(a);
             session_group::closing(a);
+            host_source::closing(a);
             a.draft = None;
             a.reviewed = None;
             a.export = None;
@@ -1208,6 +1174,7 @@ impl Manager {
                     if a.worker.is_none()
                         && ready_game::finished(a)
                         && group_source::finished(a)
+                        && host_source::finished(a)
                         && !a.probe_active
                         && matches!(a.snapshot.phase, "closed" | "failed")
                         && matches!(a.snapshot.cleanup_state, "complete" | "failed")

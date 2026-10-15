@@ -6,6 +6,12 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento75 — reserva antes da consulta individual
+
+Aplicar a propriedade de trabalho também aos preparos descobertos48/56/64, preservando os três comandos e o retorno `ConnectPreparation`. Reservar UUID, geração, prazo60s e worker sob o mutex antes de consumir a seleção ou despachar consulta bloqueante; somente então aguardar o receptor interno. O worker permanece pertencente ao manager se o IPC desaparecer, inclusive depois da publicação. A seleção mantém seu prazo30s e consumo único. `pendingHostSource` torna o preparo observável sem identidade ou socket. Nenhuma falha depois da reserva devolve o manager ao UUID/geração anteriores.
+
+Uma rejeição nativa definitiva seguida de snapshot solicitado depois do reply pode comprovar que não houve reserva somente se mantiver o mesmo baseline ocioso/terminal já limpo. Poll anterior, cache, IPC desconhecido ou resposta malformada não permitem repetir seleção ou liberar por inferência. Outra operação válida observada por consulta posterior ao erro pode ser encerrada sem receber consentimento do pedido recusado. [Contrato75](../../aurora-connect-discovery-lifecycle.md). Implementação, testes locais e revisão independente registrados no task; sem homologação gráfica ou externa. A revisão síncrona posterior é um limite separado, não resolvido por deslocar o preparo.
+
 ### Incremento74 — preparação descoberta pertencente ao grupo
 
 Integrar a origem TCP já verificada48 ao grupo72 por um comando separado. A preparação reserva `Attempt`, UUID, cancelamento e worker antes de consumir a seleção, e retorna snapshot `hostPreparing` sem chave/socket. Isso impede a publicação tardia de um grupo depois de logout observar um slot aparentemente ocioso. O trabalho de origem e a consulta de revisão ficam separados do ator Host, mas participam da mesma barreira de encerramento; publicar prontidão não autoriza destacar uma cauda ainda em execução. Consulta Windows acontece fora do mutex, com rechecagem de identidade/geração/fase/prazos antes de publicar. O guard original continua até o monitor do Host; sua perda encerra todo o grupo. UDP permanece manual e o formato/digest do grupo manual é preservado. [Contrato74](../../aurora-connect-discovered-group.md). Implementação experimental com provas próprias registradas no contrato e task; não homologa LAN, GUI, jogo, contas ou áudio.

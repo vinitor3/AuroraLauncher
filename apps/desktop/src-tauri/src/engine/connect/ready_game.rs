@@ -72,6 +72,7 @@ pub(super) fn expire_preparation_for_test(a: &mut Attempt) {
 pub(super) fn refresh_cleanup(a: &mut Attempt) {
     if finished(a)
         && group_source::finished(a)
+        && host_source::finished(a)
         && !a.probe_active
         && a.worker.as_ref().is_none_or(JoinHandle::is_finished)
         && matches!(a.snapshot.phase, "closed" | "failed")

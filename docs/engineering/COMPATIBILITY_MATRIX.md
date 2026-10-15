@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 15/10/2026
 
+Incremento75: preparo individual descoberto cancelável desde a reserva, preservando TCP48/56 e TCP+UDP64. [Contrato75](../aurora-connect-discovery-lifecycle.md). **PROTÓTIPO**, com provas locais de ownership e interface; nenhuma célula de runtime, par Core/Skins ou gate externo é promovido. Revisão posterior e validações gráficas permanecem separadas.
+
 Incremento74: descoberta TCP para grupos com UDP manual e preparo cancelável. [Contrato74](../aurora-connect-discovered-group.md). **PROTÓTIPO**, com processo/listener de fixture próprio, três agentes locais e interface testada por DOM. Sem promoção de qualquer célula da matriz; fases, nove pares, GUI, Minecraft LAN, áudio e redes conservam seus gates próprios. O teste concorrente controlado não comprova entrega UDP sem perdas sob saturação.
 
 Incremento73: abertura explicitamente revisada de cópia pronta com QuickPlay pela ponte Guest original. [Contrato73](../aurora-connect-ready-game-launch.md). **PROTÓTIPO**, limitado ao par existente Fabric1.21.1/0.16.14/Java21 e Core1.1.5/Skins0.3.1. Fixtures, processos filhos de teste, argumentos e DOM não promovem homologação gráfica, jogo ou áudio. A matriz de nove pares e os resultados externos anteriores permanecem inalterados.

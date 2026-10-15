@@ -4,7 +4,7 @@ use super::fragmented_profile::{UdpState, LOCAL_UDP_BIND, SESSION_PROFILE};
 use super::session_fragmented_tests::{datagram, until};
 use super::*;
 use crate::engine::connect_discovery::{
-    tests::{approved, expired_target, Fixture},
+    tests::{approved, expire_selection, Fixture},
     DiscoveryError, DiscoveryManager, TargetStatus,
 };
 use tokio::{
@@ -73,13 +73,6 @@ async fn owned_game_and_manual_udp_continue_after_ingress_then_source_loss_close
         discovery.take_target("other", &selected.selection_id),
         Err(DiscoveryError::Owner)
     ));
-    let target = discovery
-        .take_target("main", &selected.selection_id)
-        .unwrap();
-    assert!(matches!(
-        discovery.take_target("main", &selected.selection_id),
-        Err(DiscoveryError::Stale)
-    ));
     let game: SocketAddr = selected.target.parse().unwrap();
     let endpoint = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let held = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -87,12 +80,20 @@ async fn owned_game_and_manual_udp_continue_after_ingress_then_source_loss_close
     let host = ConnectManager::default();
     let guest = ConnectManager::default();
     let hp = host
-        .prepare_session_fragmented_host_discovered(
+        .reserve_session_fragmented_host_discovered(
             "main",
             request(bind, endpoint.local_addr().unwrap(), 2, 20),
-            target,
+            selected.selection_id.clone(),
+            discovery.clone(),
         )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
+    assert!(matches!(
+        discovery.take_target("main", &selected.selection_id),
+        Err(DiscoveryError::Stale)
+    ));
     let gp = guest
         .prepare_session_fragmented_guest(
             "main",
@@ -212,16 +213,26 @@ async fn expired_selection_and_invalid_manual_udp_refuse_before_transport_or_dat
     let held = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let bind = held.local_addr().unwrap();
     let host = ConnectManager::default();
-    let target = expired_target(approved(&discovery, &mut fixture).await);
+    let target = selection(&discovery, &mut fixture).await;
+    expire_selection(&discovery);
     assert!(matches!(
-        host.prepare_session_fragmented_host_discovered(
+        host.reserve_session_fragmented_host_discovered(
             "main",
             request(bind, endpoint.local_addr().unwrap(), 2, 20),
-            target
-        ),
-        Err(ConnectError::PlanExpired)
+            target.selection_id,
+            discovery.clone(),
+        )
+        .unwrap()
+        .wait()
+        .await,
+        Err(DiscoveredPreparationError::Discovery(DiscoveryError::Stale))
     ));
-    assert_eq!(host.snapshot("main").unwrap().phase, "idle");
+    let failed = host.snapshot("main").unwrap();
+    assert_eq!(failed.phase, "failed");
+    host.stop("main", failed.operation_id.as_deref().unwrap())
+        .await
+        .unwrap();
+    let baseline = host.snapshot("main").unwrap();
     for (udp, admission, session) in [
         ("127.0.0.1:0", 2, 20),
         ("192.0.2.1:43002", 2, 20),
@@ -231,14 +242,21 @@ async fn expired_selection_and_invalid_manual_udp_refuse_before_transport_or_dat
         ("127.0.0.1:43002", 2, 1),
         ("127.0.0.1:43002", 2, 3601),
     ] {
-        let target = approved(&discovery, &mut fixture).await;
+        let target = selection(&discovery, &mut fixture).await;
         let mut changed = request(bind, endpoint.local_addr().unwrap(), admission, session);
         changed.udp_target = udp.into();
         assert!(matches!(
-            host.prepare_session_fragmented_host_discovered("main", changed, target),
+            host.reserve_session_fragmented_host_discovered(
+                "main",
+                changed,
+                target.selection_id,
+                discovery.clone()
+            ),
             Err(ConnectError::InvalidRequest)
         ));
-        assert_eq!(host.snapshot("main").unwrap().phase, "idle");
+        let observed = host.snapshot("main").unwrap();
+        assert_eq!(observed.operation_id, baseline.operation_id);
+        assert_eq!(observed.generation, baseline.generation);
     }
     no_udp(&held).await;
     no_udp(&endpoint).await;
@@ -249,13 +267,13 @@ async fn expired_selection_and_invalid_manual_udp_refuse_before_transport_or_dat
 async fn source_loss_between_review_and_confirm_cannot_start_either_service() {
     let mut fixture = Fixture::new();
     let discovery = DiscoveryManager::default();
-    let target = approved(&discovery, &mut fixture).await;
-    let game = target.recheck().unwrap();
+    let target = selection(&discovery, &mut fixture).await;
+    let game: SocketAddr = target.target.parse().unwrap();
     let endpoint = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let held = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let host = ConnectManager::default();
     let hp = host
-        .prepare_session_fragmented_host_discovered(
+        .reserve_session_fragmented_host_discovered(
             "main",
             request(
                 held.local_addr().unwrap(),
@@ -263,8 +281,12 @@ async fn source_loss_between_review_and_confirm_cannot_start_either_service() {
                 2,
                 20,
             ),
-            target,
+            target.selection_id,
+            discovery.clone(),
         )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     let review = host
         .review_host(
@@ -292,18 +314,22 @@ async fn manual_udp_failure_keeps_discovered_game_status_until_explicit_stop() {
     let occupied = UdpSocket::bind(LOCAL_UDP_BIND).await.unwrap();
     let mut fixture = Fixture::new();
     let discovery = DiscoveryManager::default();
-    let target = approved(&discovery, &mut fixture).await;
+    let target = selection(&discovery, &mut fixture).await;
     let endpoint = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let held = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let bind = held.local_addr().unwrap();
     let host = ConnectManager::default();
     let guest = ConnectManager::default();
     let hp = host
-        .prepare_session_fragmented_host_discovered(
+        .reserve_session_fragmented_host_discovered(
             "main",
             request(bind, endpoint.local_addr().unwrap(), 1, 20),
-            target,
+            target.selection_id,
+            discovery.clone(),
         )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     let gp = guest
         .prepare_session_fragmented_guest(

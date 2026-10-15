@@ -176,7 +176,7 @@ pub fn connect_retry_session_udp(
 }
 
 #[tauri::command]
-pub fn connect_prepare_session_fragmented_host_discovered(
+pub async fn connect_prepare_session_fragmented_host_discovered(
     window: WebviewWindow,
     manager: State<'_, ConnectManager>,
     discovery: State<'_, DiscoveryManager>,
@@ -186,12 +186,15 @@ pub fn connect_prepare_session_fragmented_host_discovered(
     let owner = owner(&window)?;
     #[cfg(all(windows, feature = "connect-lab"))]
     {
-        let target = discovery
-            .take_target(owner, &selection_id)
+        let pending = manager
+            .reserve_session_fragmented_host_discovered(
+                owner,
+                request,
+                selection_id,
+                discovery.inner().clone(),
+            )
             .map_err(|error| error.code())?;
-        manager
-            .prepare_session_fragmented_host_discovered(owner, request, target)
-            .map_err(|error| error.code())
+        pending.wait().await.map_err(|error| error.code())
     }
     #[cfg(not(all(windows, feature = "connect-lab")))]
     {
@@ -265,7 +268,7 @@ pub fn connect_prepare_session_guest(
 }
 
 #[tauri::command]
-pub fn connect_prepare_session_host_discovered(
+pub async fn connect_prepare_session_host_discovered(
     window: WebviewWindow,
     manager: State<'_, ConnectManager>,
     discovery: State<'_, DiscoveryManager>,
@@ -275,12 +278,15 @@ pub fn connect_prepare_session_host_discovered(
     let owner = owner(&window)?;
     #[cfg(all(windows, feature = "connect-lab"))]
     {
-        let target = discovery
-            .take_target(owner, &selection_id)
+        let pending = manager
+            .reserve_session_host_discovered(
+                owner,
+                request,
+                selection_id,
+                discovery.inner().clone(),
+            )
             .map_err(|error| error.code())?;
-        manager
-            .prepare_session_host_discovered(owner, request, target)
-            .map_err(|error| error.code())
+        pending.wait().await.map_err(|error| error.code())
     }
     #[cfg(not(all(windows, feature = "connect-lab")))]
     {
@@ -357,7 +363,7 @@ pub async fn connect_confirm_discovered_status(
 }
 
 #[tauri::command]
-pub fn connect_prepare_discovered_host(
+pub async fn connect_prepare_discovered_host(
     window: WebviewWindow,
     manager: State<'_, ConnectManager>,
     discovery: State<'_, DiscoveryManager>,
@@ -367,12 +373,10 @@ pub fn connect_prepare_discovered_host(
     let owner = owner(&window)?;
     #[cfg(all(windows, feature = "connect-lab"))]
     {
-        let target = discovery
-            .take_target(owner, &selection_id)
+        let pending = manager
+            .reserve_host_discovered(owner, request, selection_id, discovery.inner().clone())
             .map_err(|error| error.code())?;
-        manager
-            .prepare_host_discovered(owner, request, target)
-            .map_err(|error| error.code())
+        pending.wait().await.map_err(|error| error.code())
     }
     #[cfg(not(all(windows, feature = "connect-lab")))]
     {

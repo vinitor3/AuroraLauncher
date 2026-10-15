@@ -730,19 +730,27 @@ async fn legacy_review_bytes_and_digest_keep_their_original_shape() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn discovered_session_retains_owned_process_guard_after_ingress() {
     use crate::engine::connect_discovery::{
-        tests::{approved, Fixture},
+        tests::{selection, Fixture},
         DiscoveryManager,
     };
     let mut fixture = Fixture::new();
     let discovery = DiscoveryManager::default();
-    let target = approved(&discovery, &mut fixture).await;
-    let endpoint = target.recheck().unwrap();
+    let target = selection(&discovery, &mut fixture).await;
+    let endpoint = target.target.parse().unwrap();
     let held = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let bind = held.local_addr().unwrap();
     let host = ConnectManager::default();
     let guest = ConnectManager::default();
     let hp = host
-        .prepare_session_host_discovered("main", request(bind, endpoint, 2, 20), target)
+        .reserve_session_host_discovered(
+            "main",
+            request(bind, endpoint, 2, 20),
+            target.selection_id,
+            discovery.clone(),
+        )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     let gp = guest
         .prepare_session_guest(

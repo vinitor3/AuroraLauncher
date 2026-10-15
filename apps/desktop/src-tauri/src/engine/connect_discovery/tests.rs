@@ -169,10 +169,6 @@ pub(crate) struct Fixture {
     reader: Option<thread::JoinHandle<()>>,
 }
 /// Private test clock seam: does not alter a production constructor or OS time.
-pub(crate) fn expired_target(mut target: ApprovedTarget) -> ApprovedTarget {
-    target.deadline = Instant::now() - Duration::from_secs(1);
-    target
-}
 /// Private selection-clock seam; does not renew authority or alter OS time.
 pub(crate) fn expire_selection(manager: &DiscoveryManager) {
     manager.state.lock().unwrap().as_mut().unwrap().deadline =
@@ -400,7 +396,7 @@ async fn status_requires_review_and_exact_digest_then_returns_single_use_owned_t
     ));
 }
 
-pub(crate) async fn approved(manager: &DiscoveryManager, fixture: &mut Fixture) -> ApprovedTarget {
+pub(crate) async fn selection(manager: &DiscoveryManager, fixture: &mut Fixture) -> TargetStatus {
     let inventory = manager.inventory("main", fixture.proof()).unwrap();
     let candidate = inventory
         .candidates
@@ -412,10 +408,13 @@ pub(crate) async fn approved(manager: &DiscoveryManager, fixture: &mut Fixture) 
     let review = manager
         .review("main", &inventory.inventory_id, &candidate.candidate_id)
         .unwrap();
-    let status = manager
+    manager
         .confirm_status("main", &review.review_id, &review.digest)
         .await
-        .unwrap();
+        .unwrap()
+}
+pub(crate) async fn approved(manager: &DiscoveryManager, fixture: &mut Fixture) -> ApprovedTarget {
+    let status = selection(manager, fixture).await;
     manager.take_target("main", &status.selection_id).unwrap()
 }
 async fn actor_phase(
@@ -436,37 +435,72 @@ async fn actor_phase(
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn actor_owned_target_activation_match_digest_and_lost_source_are_enforced() {
-    use super::super::connect::{ConnectError, ConnectManager, ConnectMode, HostRequest};
+    use super::super::connect::{
+        ConnectError, ConnectManager, ConnectMode, DiscoveredPreparationError, HostRequest,
+    };
     let mut fixture = Fixture::new();
     let discovery = DiscoveryManager::default();
     let actor = ConnectManager::default();
     let reservation = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let bind = reservation.local_addr().unwrap();
-    let target = approved(&discovery, &mut fixture).await;
+    let target = selection(&discovery, &mut fixture).await;
     let request = HostRequest {
         mode: ConnectMode::Loopback,
         bind_address: bind.to_string(),
-        game_target: target.recheck().unwrap().to_string(),
+        game_target: target.target.clone(),
         lifetime_seconds: 60,
     };
     let mut mismatch = request.clone();
     mismatch.game_target = "127.0.0.1:1".into();
     assert!(matches!(
-        actor.prepare_host_discovered("main", mismatch, target),
-        Err(ConnectError::InvalidRequest)
+        actor
+            .reserve_host_discovered("main", mismatch, target.selection_id, discovery.clone())
+            .unwrap()
+            .wait()
+            .await,
+        Err(DiscoveredPreparationError::Connect(
+            ConnectError::InvalidRequest
+        ))
     ));
-    let mut expired = approved(&discovery, &mut fixture).await;
-    expired.deadline = Instant::now() - Duration::from_secs(1);
-    assert!(matches!(
-        actor.prepare_host_discovered("main", request.clone(), expired),
-        Err(ConnectError::PlanExpired)
-    ));
-    let mut target = approved(&discovery, &mut fixture).await;
-    target.deadline = Instant::now() + Duration::from_millis(20);
-    let prepared = actor
-        .prepare_host_discovered("main", request.clone(), target)
+    let failed = actor.snapshot("main").unwrap();
+    actor
+        .stop("main", failed.operation_id.as_deref().unwrap())
+        .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    let expired = selection(&discovery, &mut fixture).await;
+    expire_selection(&discovery);
+    assert!(matches!(
+        actor
+            .reserve_host_discovered(
+                "main",
+                request.clone(),
+                expired.selection_id,
+                discovery.clone()
+            )
+            .unwrap()
+            .wait()
+            .await,
+        Err(DiscoveredPreparationError::Discovery(DiscoveryError::Stale))
+    ));
+    let failed = actor.snapshot("main").unwrap();
+    actor
+        .stop("main", failed.operation_id.as_deref().unwrap())
+        .await
+        .unwrap();
+    let target = selection(&discovery, &mut fixture).await;
+    let prepared = actor
+        .reserve_host_discovered(
+            "main",
+            request.clone(),
+            target.selection_id,
+            discovery.clone(),
+        )
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    // The consumed selection expires independently of the already activated guard.
+    expire_selection(&discovery);
     let review = actor
         .review_host(
             "main",
@@ -494,14 +528,17 @@ async fn actor_owned_target_activation_match_digest_and_lost_source_are_enforced
     );
     drop(reservation);
     let mut fixture = Fixture::new();
-    let target = approved(&discovery, &mut fixture).await;
+    let target = selection(&discovery, &mut fixture).await;
     let reservation = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let bind = reservation.local_addr().unwrap();
     let mut request = request;
     request.bind_address = bind.to_string();
-    request.game_target = target.recheck().unwrap().to_string();
+    request.game_target = target.target;
     let prepared = actor
-        .prepare_host_discovered("main", request, target)
+        .reserve_host_discovered("main", request, target.selection_id, discovery.clone())
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     let review = actor
         .review_host(
@@ -529,22 +566,26 @@ async fn discovered_owned_server_two_managers_status_and_source_loss_cleanup() {
     use super::super::connect::{ConnectManager, ConnectMode, GuestRequest, HostRequest};
     let mut fixture = Fixture::new();
     let discovery = DiscoveryManager::default();
-    let target = approved(&discovery, &mut fixture).await;
+    let target = selection(&discovery, &mut fixture).await;
     let reservation = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let bind = reservation.local_addr().unwrap();
     let host = ConnectManager::default();
     let guest = ConnectManager::default();
     let prepared_host = host
-        .prepare_host_discovered(
+        .reserve_host_discovered(
             "main",
             HostRequest {
                 mode: ConnectMode::Loopback,
                 bind_address: bind.to_string(),
-                game_target: target.recheck().unwrap().to_string(),
+                game_target: target.target,
                 lifetime_seconds: 30,
             },
-            target,
+            target.selection_id,
+            discovery.clone(),
         )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     let prepared_guest = guest
         .prepare_guest(

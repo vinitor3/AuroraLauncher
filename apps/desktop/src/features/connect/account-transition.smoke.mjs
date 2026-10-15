@@ -259,3 +259,32 @@ test("lost stop response keeps account blocked until an explicit retry observes 
   assert.deepEqual(f.published.at(-1), ready("B"));
   assert.equal(snapshots, 2); assert.equal(stops, 2);
 });
+
+for (const profile of ["legacy", "sessionGameTcp", "sessionFragmentedGameUdp"]) {
+  test(`account transition waits for single source ${profile} reserved before its preparation reply`, async () => {
+    const pending = { ...idle(), available: true, operationId: "11111111-2222-4333-8444-555555555555", generation: 1,
+      role: "host", phase: "hostPreparing", cleanupState: "pending", expiresAtMs: 1800000060000,
+      pendingHostSource: { kind: "ownedGameTcp", mode: "loopback", profile },
+      ...(profile === "legacy" ? {} : { invitationProfile: profile }) };
+    const { pendingHostSource: _marker, ...base } = pending;
+    const cleanup = deferred(), calls = [];
+    const f = await establishedFixture(() => stopConnectForAccountTransition(async (command, args) => {
+      calls.push([command, args]);
+      if (command === "connect_snapshot") return pending;
+      assert.equal(command, "connect_stop");
+      return cleanup.promise;
+    }));
+    f.controller.accept(ready("B")); const waiting = f.controller.retry(); await tick();
+    assert.deepEqual(f.published.at(-1), { phase: "loading" });
+    assert.deepEqual(calls, [["connect_snapshot", undefined], ["connect_stop", { operationId: pending.operationId }]]);
+    cleanup.resolve({ ...base, generation: 2, phase: "closed", transportState: "closed", expiresAtMs: null, cleanupState: "complete" });
+    await waiting;
+    assert.deepEqual(f.published.at(-1), ready("B"));
+    assert.equal(calls.length, 2);
+  });
+}
+
+test("account cleanup refuses a terminal single source while its blocking worker is still pending", async () => {
+  const value = { ...stopped(), operationId: "11111111-2222-4333-8444-555555555555", role: "host", phase: "failed", cleanupState: "pending" };
+  await assert.rejects(stopConnectForAccountTransition(async () => value), /connect_account_cleanup_incomplete/);
+});

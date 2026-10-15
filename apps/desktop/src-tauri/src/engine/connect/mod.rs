@@ -113,6 +113,46 @@ pub struct ConnectPreparation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invitation_profile: Option<&'static str>,
 }
+/// Observation while an owned game source is checked, before an identity exists.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingHostSource {
+    pub kind: &'static str,
+    pub mode: ConnectMode,
+    pub profile: &'static str,
+}
+#[cfg(all(windows, feature = "connect-lab"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiscoveredPreparationError {
+    Connect(ConnectError),
+    Discovery(super::connect_discovery::DiscoveryError),
+}
+#[cfg(all(windows, feature = "connect-lab"))]
+impl DiscoveredPreparationError {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Connect(error) => error.code(),
+            Self::Discovery(error) => error.code(),
+        }
+    }
+}
+/// Only the result receiver leaves the manager. Dropping it cannot cancel or
+/// detach the source work retained in the reserved Attempt.
+#[cfg(all(windows, feature = "connect-lab"))]
+#[derive(Debug)]
+pub struct PendingHostPreparation {
+    result: tokio::sync::oneshot::Receiver<Result<ConnectPreparation, DiscoveredPreparationError>>,
+}
+#[cfg(all(windows, feature = "connect-lab"))]
+impl PendingHostPreparation {
+    pub async fn wait(self) -> Result<ConnectPreparation, DiscoveredPreparationError> {
+        self.result
+            .await
+            .unwrap_or(Err(DiscoveredPreparationError::Connect(
+                ConnectError::Internal,
+            )))
+    }
+}
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceReview {
@@ -210,6 +250,8 @@ pub struct ConnectSnapshot {
     pub host_group: Option<HostGroupSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_group_source: Option<PendingGroupSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_host_source: Option<PendingHostSource>,
 }
 impl ConnectSnapshot {
     fn idle() -> Self {
@@ -240,6 +282,7 @@ impl ConnectSnapshot {
             udp_recovery: None,
             host_group: None,
             pending_group_source: None,
+            pending_host_source: None,
         }
     }
 }
@@ -580,33 +623,41 @@ impl ConnectManager {
         }
     }
     #[cfg(all(windows, feature = "connect-lab"))]
-    pub fn prepare_session_fragmented_host_discovered(
+    pub fn reserve_session_fragmented_host_discovered(
         &self,
         owner: &str,
         request: SessionFragmentedDiscoveredHostRequest,
-        target: super::connect_discovery::ApprovedTarget,
-    ) -> Result<ConnectPreparation, ConnectError> {
-        self.live
-            .prepare_session_fragmented_host_discovered(owner, request, target)
+        selection_id: String,
+        discovery: super::connect_discovery::DiscoveryManager,
+    ) -> Result<PendingHostPreparation, ConnectError> {
+        self.live.reserve_session_fragmented_host_discovered(
+            owner,
+            request,
+            selection_id,
+            discovery,
+        )
     }
     #[cfg(all(windows, feature = "connect-lab"))]
-    pub fn prepare_session_host_discovered(
+    pub fn reserve_session_host_discovered(
         &self,
         owner: &str,
         request: SessionHostRequest,
-        target: super::connect_discovery::ApprovedTarget,
-    ) -> Result<ConnectPreparation, ConnectError> {
+        selection_id: String,
+        discovery: super::connect_discovery::DiscoveryManager,
+    ) -> Result<PendingHostPreparation, ConnectError> {
         self.live
-            .prepare_session_host_discovered(owner, request, target)
+            .reserve_session_host_discovered(owner, request, selection_id, discovery)
     }
     #[cfg(all(windows, feature = "connect-lab"))]
-    pub fn prepare_host_discovered(
+    pub fn reserve_host_discovered(
         &self,
         owner: &str,
         request: HostRequest,
-        target: super::connect_discovery::ApprovedTarget,
-    ) -> Result<ConnectPreparation, ConnectError> {
-        self.live.prepare_host_discovered(owner, request, target)
+        selection_id: String,
+        discovery: super::connect_discovery::DiscoveryManager,
+    ) -> Result<PendingHostPreparation, ConnectError> {
+        self.live
+            .reserve_host_discovered(owner, request, selection_id, discovery)
     }
     pub fn review_host(
         &self,
@@ -747,10 +798,10 @@ mod disabled_tests {
         assert!(caps.get("sessionInvitations").is_none());
         assert!(caps.get("fragmentedUdpInvitations").is_none());
         assert!(caps.get("sessionFragmentedUdpInvitations").is_none());
-        assert!(serde_json::to_value(manager.snapshot("main").unwrap())
-            .unwrap()
-            .get("udpRecovery")
-            .is_none());
+        let idle = serde_json::to_value(manager.snapshot("main").unwrap()).unwrap();
+        assert!(idle.get("udpRecovery").is_none());
+        assert!(idle.get("pendingHostSource").is_none());
+        assert!(idle.get("pendingGroupSource").is_none());
         assert!(matches!(
             manager.retry_session_udp("main", "none", 0),
             Err(ConnectError::Disabled)

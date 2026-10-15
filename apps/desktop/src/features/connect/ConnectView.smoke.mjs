@@ -95,6 +95,7 @@ const { act, createElement } = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { ConnectView } = await import(await sourceModule(new URL("./ConnectView.tsx", import.meta.url)));
 const types = await import(await sourceModule(new URL("./types.ts", import.meta.url)));
+const hostSourceTypes = await import(await sourceModule(new URL("./host-source-types.ts", import.meta.url)));
 const container = document.getElementById("root");
 const button = label => { const found = [...container.querySelectorAll("button")].find(element => element.textContent === label); assert.ok(found, `Button ${label}`); return found; };
 const click = async label => { assert.equal(button(label).disabled, false); await act(async () => button(label).dispatchEvent(new window.Event("click", { bubbles: true }))); };
@@ -1405,7 +1406,8 @@ test("schema3 discovered preparation consumes its selection before a lost IPC re
   handlers.set("connect_prepare_session_fragmented_host_discovered", () => {
     snapshot = preparedSessionFragmented(); return Promise.reject(new Error("lost response"));
   });
-  await submit(); assert.equal(button("Preparar anfitrião").disabled, true);
+  await submit(); assert.equal(container.querySelector("form"), null);
+  assert.match(container.textContent, /resultado do preparo ainda não foi confirmado/);
   await click("Atualizar estado");
   assert.equal(button("Encerrar Connect").disabled, false);
   assert.equal(count("connect_prepare_session_fragmented_host_discovered"), 1);
@@ -2177,4 +2179,253 @@ test("ConnectView forwards ready launch context and exposes missing context inst
   await click("Listar cópias prontas"); assert.deepEqual(calls.find(call => call.command === "diagnostic_lab_list").args, { id: "test-source" });
   assert.equal(count("connect_prepare_ready_game_launch"), 0); assert.equal(count("connect_confirm_ready_game_launch"), 0);
   await click("Encerrar Connect"); assert.equal(count("connect_stop"), 1); assert.equal(count("launch_instance"), 0);
+});
+
+const sourceOperationId = "11111111-2222-4333-8444-555555555555";
+const sourceProfiles = ["legacy", "sessionGameTcp", "sessionFragmentedGameUdp"];
+const sourceCommands = { legacy: "connect_prepare_discovered_host", sessionGameTcp: "connect_prepare_session_host_discovered",
+  sessionFragmentedGameUdp: "connect_prepare_session_fragmented_host_discovered" };
+function pendingSingleSource(profile) {
+  return { ...idle(), operationId: sourceOperationId, generation: 1, role: "host", phase: "hostPreparing", cleanupState: "pending",
+    expiresAtMs: preparation.expiresAtMs, pendingHostSource: { kind: "ownedGameTcp", mode: "loopback", profile },
+    ...(profile === "legacy" ? {} : { invitationProfile: profile }) };
+}
+function preparedSingleSource(profile) {
+  const { pendingHostSource: _pending, ...base } = pendingSingleSource(profile);
+  return { ...base, phase: "hostPrepared", generation: 2, expiresAtMs: null,
+    preparation: { ...preparation, operationId: sourceOperationId, generation: 2, ...(profile === "legacy" ? {} : { invitationProfile: profile }) } };
+}
+function terminalSingleSource(profile, cleanupState = "pending") {
+  const { pendingHostSource: _pending, ...base } = pendingSingleSource(profile);
+  return { ...base, phase: "failed", generation: 2, transportState: "closed", expiresAtMs: null, cleanupState, errorCode: "connect_source_changed" };
+}
+function singleSourceFixtures(profile) {
+  discoveryFixtures(); sessionFixtures(); sessionFragmentedFixtures();
+  capabilities.sessionFragmentedUdpInvitations = { ...sessionFragmentedCapability, ownedGameTcpDiscovery: true };
+  handlers.set(sourceCommands[profile], () => { snapshot = preparedSingleSource(profile); return snapshot.preparation; });
+  handlers.set("connect_stop", () => {
+    const { pendingHostSource: _pending, ...base } = snapshot;
+    snapshot = { ...base, generation: snapshot.generation + 1, phase: "closed", transportState: "closed", expiresAtMs: null,
+      cleanupState: "complete", preparation: null, review: null };
+    return structuredClone(snapshot);
+  });
+}
+async function selectSingleSource(profile) {
+  await render();
+  if (profile !== "legacy") await chooseProfile(profile);
+  await discoveryToReview(); await click("Autorizar consulta e selecionar porta");
+  if (profile === sessionFragmentedProfile) await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002");
+}
+
+for (const profile of sourceProfiles) {
+  test(`single source ${profile} exposes reservation while original command waits and preserves preparation wire shape`, async () => {
+    singleSourceFixtures(profile); await selectSingleSource(profile);
+    let complete;
+    handlers.set(sourceCommands[profile], () => { snapshot = pendingSingleSource(profile); return new Promise(resolve => { complete = resolve; }); });
+    await submit(); assert.equal(button("Atualizar estado").disabled, false);
+    assert.equal(container.querySelector("form"), null);
+    await click("Atualizar estado");
+    assert.match(container.textContent, /Conferindo a origem do jogo/);
+    assert.match(container.textContent, /prazo original de 60 segundos/);
+    assert.equal(container.querySelector("textarea"), null);
+    assert.equal(button("Encerrar Connect").disabled, false);
+    const request = calls.find(item => item.command === sourceCommands[profile]).args;
+    assert.deepEqual(request, { selectionId: discoverySelected.selectionId, request: { mode: "loopback", bindAddress: "127.0.0.1:42000",
+      ...(profile === sessionFragmentedProfile ? { udpTarget: "127.0.0.1:43002" } : { gameTarget: discoverySelected.target }),
+      ...(profile === "legacy" ? { lifetimeSeconds: 600 } : { admissionSeconds: 600, sessionSeconds: 3600 }) } });
+    snapshot = preparedSingleSource(profile); await click("Atualizar estado");
+    assert.equal(container.querySelector('#connect-public-code').value, hostId);
+    assert.equal(snapshot.expiresAtMs, null);
+    assert.equal(snapshot.preparation.expiresAtMs, pendingSingleSource(profile).expiresAtMs);
+    await act(async () => complete(snapshot.preparation));
+    assert.equal(count(sourceCommands[profile]), 1); assert.equal(count("connect_confirm"), 0);
+  });
+
+  test(`single source ${profile} stops a pending reservation and ignores late preparation`, async () => {
+    singleSourceFixtures(profile); await selectSingleSource(profile);
+    let complete;
+    handlers.set(sourceCommands[profile], () => { snapshot = pendingSingleSource(profile); return new Promise(resolve => { complete = resolve; }); });
+    await submit(); await click("Atualizar estado"); await click("Encerrar Connect");
+    await act(async () => complete(preparedSingleSource(profile).preparation));
+    assert.match(container.textContent, /Recursos liberados/);
+    assert.equal(container.querySelector('#connect-public-code'), null);
+    assert.equal(button("Preparar anfitrião").disabled, true);
+    assert.equal(count(sourceCommands[profile]), 1);
+  });
+
+  test(`single source ${profile} reconciles definitive rejection with a new snapshot and requires a fresh selection`, async () => {
+    singleSourceFixtures(profile); await selectSingleSource(profile);
+    handlers.set(sourceCommands[profile], () => { throw "connect_invalid_request"; });
+    const start = calls.length;
+    await submit();
+    assert.deepEqual(calls.slice(start).map(item => item.command), [sourceCommands[profile], "connect_snapshot"]);
+    assert.doesNotMatch(container.textContent, /resultado do preparo ainda não foi confirmado/);
+    assert.equal(button("Preparar anfitrião").disabled, true);
+    await submit(); assert.equal(count(sourceCommands[profile]), 1);
+  });
+
+  test(`single source ${profile} observes post-reservation native failure and waits for cleanup`, async () => {
+    singleSourceFixtures(profile); await selectSingleSource(profile);
+    handlers.set(sourceCommands[profile], () => { snapshot = terminalSingleSource(profile); throw "connect_source_changed"; });
+    await submit();
+    assert.match(container.textContent, /Aguardando liberação dos recursos/);
+    assert.equal(container.querySelector("form"), null);
+    await click("Encerrar Connect"); assert.match(container.textContent, /Recursos liberados/);
+    assert.equal(count(sourceCommands[profile]), 1);
+  });
+
+  for (const failure of ["unknown", "malformed"]) {
+    test(`single source ${profile} does not use old idle as proof after ${failure} reply`, async () => {
+      singleSourceFixtures(profile); await selectSingleSource(profile);
+      handlers.set(sourceCommands[profile], () => {
+        if (failure === "unknown") throw new Error("connect_invalid_request");
+        return { code: "connect_invalid_request" };
+      });
+      await submit(); await click("Atualizar estado"); await click("Atualizar estado");
+      assert.match(container.textContent, /resultado do preparo ainda não foi confirmado/);
+      assert.equal(container.querySelector("form"), null);
+      snapshot = pendingSingleSource(profile); await click("Atualizar estado");
+      await click("Encerrar Connect"); assert.equal(count(sourceCommands[profile]), 1);
+    });
+  }
+
+  test(`single source ${profile} rechecks selection expiration before invoking preparation`, async () => {
+    singleSourceFixtures(profile); await selectSingleSource(profile);
+    const now = Date.now;
+    try { Date.now = () => discoverySelected.expiresAtMs; await submit(); }
+    finally { Date.now = now; }
+    assert.equal(count(sourceCommands[profile]), 0);
+    assert.match(container.textContent, /seleção de porta expirou/);
+    assert.equal(button("Preparar anfitrião").disabled, true);
+  });
+}
+
+test("single source definitive error cannot reuse a snapshot invoke started before its reply", async () => {
+  singleSourceFixtures("legacy"); await selectSingleSource("legacy");
+  let rejectPrepare, completeOldSnapshot;
+  handlers.set(sourceCommands.legacy, () => new Promise((_, reject) => { rejectPrepare = reject; }));
+  await submit();
+  handlers.set("connect_snapshot", () => new Promise(resolve => { completeOldSnapshot = resolve; }));
+  await click("Atualizar estado");
+  await act(async () => rejectPrepare("connect_invalid_request"));
+  await act(async () => completeOldSnapshot(idle()));
+  assert.match(container.textContent, /resultado do preparo ainda não foi confirmado/);
+  assert.equal(container.querySelector("form"), null);
+  handlers.delete("connect_snapshot");
+  await click("Atualizar estado");
+  assert.doesNotMatch(container.textContent, /resultado do preparo ainda não foi confirmado/);
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  assert.equal(count(sourceCommands.legacy), 1);
+});
+
+test("single source failed proof query retains definitive context for later explicit observation", async () => {
+  singleSourceFixtures("sessionGameTcp"); await selectSingleSource("sessionGameTcp");
+  handlers.set(sourceCommands.sessionGameTcp, () => { throw "connect_busy"; });
+  handlers.set("connect_snapshot", () => { throw new Error("snapshot delivery failed"); });
+  await submit(); assert.equal(container.querySelector("form"), null);
+  assert.match(container.textContent, /resultado do preparo ainda não foi confirmado/);
+  handlers.delete("connect_snapshot"); await click("Atualizar estado");
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  assert.doesNotMatch(container.textContent, /resultado do preparo ainda não foi confirmado/);
+});
+
+for (const other of ["hostProfile", "guest", "group"]) {
+  test(`single source definitive busy observes another ${other} operation for cleanup without transferring consent`, async () => {
+    groupFixtures(); const stopGroup = handlers.get("connect_stop");
+    singleSourceFixtures("legacy"); await selectSingleSource("legacy");
+    handlers.set(sourceCommands.legacy, () => {
+      snapshot = other === "group" ? reviewedGroup() : other === "guest" ? activeSession("guest") : reviewedSession("host");
+      throw "connect_busy";
+    });
+    if (other === "group") handlers.set("connect_stop", stopGroup);
+    await submit();
+    assert.doesNotMatch(container.textContent, /resultado do preparo ainda não foi confirmado/);
+    assert.equal(container.querySelector('option[value="ownedInstance"]'), null);
+    assert.equal(button("Encerrar Connect").disabled, false);
+    if (other === "group") assert.equal(button("Autorizar grupo").disabled, true);
+    if (other === "hostProfile") assert.equal(button("Autorizar conexão").disabled, true);
+    assert.equal(count("connect_confirm"), 0); assert.equal(count("connect_confirm_session_group_host"), 0);
+    assert.deepEqual(copied, []);
+    await click("Encerrar Connect"); assert.match(container.textContent, /Recursos liberados/);
+    assert.equal(count(sourceCommands.legacy), 1);
+    assert.equal(button("Preparar anfitrião").disabled, true);
+  });
+}
+
+test("single source unknown failure does not attribute an unrelated profile snapshot to its preparation", async () => {
+  singleSourceFixtures("legacy"); await selectSingleSource("legacy");
+  handlers.set(sourceCommands.legacy, () => { snapshot = reviewedSession("host"); throw new Error("unknown IPC outcome"); });
+  await submit(); await click("Atualizar estado");
+  assert.match(container.textContent, /resultado do preparo ainda não foi confirmado/);
+  assert.equal(container.querySelector('.connect-consent input'), null);
+  assert.equal(container.querySelector("form"), null);
+  snapshot = pendingSingleSource("legacy"); await click("Atualizar estado"); await click("Encerrar Connect");
+  assert.equal(count("connect_confirm"), 0); assert.equal(count(sourceCommands.legacy), 1);
+});
+
+test("single source proof accepts an unchanged completed baseline but never an active or regressing one", async () => {
+  singleSourceFixtures("legacy"); snapshot = terminalSingleSource("legacy", "complete");
+  await selectSingleSource("legacy");
+  handlers.set(sourceCommands.legacy, () => { throw "connect_internal"; });
+  await submit();
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  assert.doesNotMatch(container.textContent, /resultado do preparo ainda não foi confirmado/);
+  const baseline = terminalSingleSource("legacy", "complete");
+  assert.equal(hostSourceTypes.provesNoSourceReservation(baseline, baseline), true);
+  for (const patch of [{ generation: 1 }, { operationId: "another" }, { cleanupState: "pending" }, { transportState: "listening" }, { phase: "hostPreparing" }]) {
+    assert.equal(hostSourceTypes.provesNoSourceReservation({ ...baseline, ...patch }, baseline), false);
+  }
+  const active = pendingSingleSource("legacy");
+  assert.equal(hostSourceTypes.provesNoSourceReservation(active, active), false);
+  assert.equal(hostSourceTypes.provesNoSourceReservation({ ...terminalSingleSource("legacy", "complete"), generation: active.generation }, active), false);
+  assert.equal(hostSourceTypes.provesNoSourceReservation(idle(), undefined), false);
+});
+
+test("single source remount and failed capability query still recover cancellation for every profile", async () => {
+  singleSourceFixtures(sessionFragmentedProfile); snapshot = pendingSingleSource(sessionFragmentedProfile);
+  handlers.set("connect_capabilities", () => { throw new Error("capability unavailable"); });
+  await render(); assert.match(container.textContent, /Conferindo a origem do jogo/);
+  await act(async () => root.unmount()); root = createRoot(container); await render();
+  await click("Encerrar Connect"); assert.match(container.textContent, /Recursos liberados/);
+  assert.equal(count(sourceCommands[sessionFragmentedProfile]), 0);
+  assert.equal(count("connect_confirm"), 0);
+});
+
+test("single source preparation is unavailable until an initial native snapshot establishes a baseline", async () => {
+  singleSourceFixtures("legacy");
+  handlers.set("connect_snapshot", () => { throw new Error("initial observation unavailable"); });
+  await render();
+  assert.equal(container.querySelector("form"), null);
+  assert.equal(container.querySelector('option[value="ownedInstance"]'), null);
+  assert.match(container.textContent, /não pôde ser atualizado/);
+  handlers.delete("connect_snapshot"); await click("Atualizar estado");
+  await discoveryToReview(); await click("Autorizar consulta e selecionar porta");
+  handlers.set(sourceCommands.legacy, () => { throw "connect_invalid_request"; });
+  await submit();
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  assert.doesNotMatch(container.textContent, /resultado do preparo ainda não foi confirmado/);
+});
+
+test("single source reservation parser rejects cross-profile metadata and fabricated preparation authority", () => {
+  for (const profile of sourceProfiles) {
+    const value = pendingSingleSource(profile);
+    assert.deepEqual(types.snapshotFrom(value), value);
+    for (const patch of [{ available: false }, { operationId: "not-uuid" }, { generation: 0 }, { role: "guest" }, { phase: "hostPrepared" },
+      { cleanupState: "complete" }, { transportState: "listening" }, { expiresAtMs: null }, { errorCode: "connect_internal" },
+      { preparation }, { review }, { publicId: hostId }, { hostGroup: preparedGroup().hostGroup }, { pendingGroupSource: pendingDiscoveredGroup().pendingGroupSource },
+      { sessionTiming }, { fragmentedUdp: sessionFragmentedContract }, { udpState: "notStarted" }, { udpTarget: "127.0.0.1:43002" },
+      { pendingHostSource: { ...value.pendingHostSource, mode: "dns" } }, { pendingHostSource: { ...value.pendingHostSource, profile: "fragmentedGameUdp" } },
+      { pendingHostSource: { ...value.pendingHostSource, peer: hostId } },
+      { invitationProfile: profile === "legacy" ? "sessionGameTcp" : "fragmentedGameUdp" },
+    ]) assert.throws(() => types.snapshotFrom({ ...value, ...patch }));
+    const { pendingHostSource: marker, ...without } = value;
+    assert.throws(() => types.snapshotFrom(without));
+    assert.throws(() => types.preparationFrom({ ...preparation, pendingHostSource: marker }));
+    assert.throws(() => types.reviewFrom({ ...review, pendingHostSource: marker }));
+    assert.throws(() => types.exportFrom({ ...sessionExport, pendingHostSource: marker }));
+  }
+  assert.equal(hostSourceTypes.isControlledSourceRejection("connect_internal"), true);
+  for (const value of [new Error("connect_internal"), { code: "connect_internal" }, "private internal", "connect_transport_failed", null]) {
+    assert.equal(hostSourceTypes.isControlledSourceRejection(value), false);
+  }
 });
