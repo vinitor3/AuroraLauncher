@@ -3,6 +3,11 @@
 use serde::{Deserialize, Serialize};
 mod fragmented_profile;
 mod group_profile;
+mod ready_game_caller;
+mod ready_game_profile;
+pub use ready_game_profile::*;
+#[cfg(feature = "connect-lab")]
+mod ready_game_backend;
 pub use fragmented_profile::{
     FragmentedGuestState, FragmentedHostRequest, FragmentedUdpCapabilities, FragmentedUdpContract,
     FragmentedUdpReview, SessionFragmentedDiscoveredHostRequest, SessionFragmentedHostRequest,
@@ -12,6 +17,10 @@ pub use group_profile::{
     GroupHostRequest, GroupInvitationExport, GroupParticipant, GroupParticipantRequest,
     GroupPreparation, GroupReview, HostGroupSnapshot, SessionFragmentedHostGroupsCapabilities,
 };
+#[cfg(feature = "connect-lab")]
+pub use live::ready_game::ReadyGameSpawnGate;
+#[cfg(feature = "connect-lab")]
+pub use ready_game_backend::{PreparedReadyGame, ReadyGameBackend};
 
 #[cfg(feature = "connect-lab")]
 mod live;
@@ -90,6 +99,8 @@ pub struct ConnectCapabilities {
     pub session_fragmented_udp_invitations: Option<SessionFragmentedUdpCapabilities>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_fragmented_host_groups: Option<SessionFragmentedHostGroupsCapabilities>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ready_game_launch: Option<ReadyGameLaunchCapabilities>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -337,6 +348,8 @@ impl ConnectManager {
                 .then(SessionFragmentedUdpCapabilities::default),
             session_fragmented_host_groups: cfg!(feature = "connect-lab")
                 .then(SessionFragmentedHostGroupsCapabilities::default),
+            ready_game_launch: cfg!(all(windows, feature = "connect-lab"))
+                .then(ReadyGameLaunchCapabilities::default),
         }
     }
     pub fn snapshot(&self, owner: &str) -> Result<ConnectSnapshot, ConnectError> {

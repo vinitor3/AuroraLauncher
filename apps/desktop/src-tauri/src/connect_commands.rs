@@ -18,6 +18,67 @@ fn owner(window: &WebviewWindow) -> Result<&str, &'static str> {
 }
 
 #[tauri::command]
+pub async fn connect_prepare_ready_game_launch(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    manager: State<'_, ConnectManager>,
+    request: aurora_launcher_core::engine::connect::ReadyGameLaunchRequest,
+) -> Result<aurora_launcher_core::engine::connect::ReadyGameLaunchSnapshot, &'static str> {
+    let owner = owner(&window)?;
+    #[cfg(all(windows, feature = "connect-lab"))]
+    {
+        manager
+            .prepare_ready_game_launch(
+                owner,
+                request,
+                std::sync::Arc::new(crate::commands::ready_game::DesktopReadyGameBackend::new(
+                    app,
+                )),
+            )
+            .map_err(|e| e.code())
+    }
+    #[cfg(not(all(windows, feature = "connect-lab")))]
+    {
+        let _ = (owner, app, manager, request);
+        Err("connect_ready_game_disabled")
+    }
+}
+#[tauri::command]
+pub fn connect_ready_game_launch_snapshot(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    operation_id: String,
+) -> Result<aurora_launcher_core::engine::connect::ReadyGameLaunchSnapshot, &'static str> {
+    manager
+        .ready_game_launch_snapshot(owner(&window)?, &operation_id)
+        .map_err(|e| e.code())
+}
+#[tauri::command]
+pub fn connect_confirm_ready_game_launch(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    operation_id: String,
+    plan_id: String,
+    digest: String,
+) -> Result<aurora_launcher_core::engine::connect::ReadyGameLaunchSnapshot, &'static str> {
+    manager
+        .confirm_ready_game_launch(owner(&window)?, &operation_id, &plan_id, &digest)
+        .map_err(|e| e.code())
+}
+#[tauri::command]
+pub async fn connect_cancel_ready_game_launch(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    operation_id: String,
+    plan_id: String,
+) -> Result<aurora_launcher_core::engine::connect::ReadyGameLaunchSnapshot, &'static str> {
+    manager
+        .cancel_ready_game_launch(owner(&window)?, &operation_id, &plan_id)
+        .await
+        .map_err(|e| e.code())
+}
+
+#[tauri::command]
 pub fn connect_prepare_session_group_host(
     window: WebviewWindow,
     manager: State<'_, ConnectManager>,

@@ -25,6 +25,11 @@ mod udp_recovery_tests;
 #[cfg(test)]
 #[path = "fragmented_desktop.rs"]
 mod fragmented_desktop;
+#[path = "ready_game.rs"]
+pub(super) mod ready_game;
+#[cfg(test)]
+#[path = "ready_game_tests.rs"]
+mod ready_game_tests;
 #[cfg(test)]
 #[path = "session_fragmented_tests.rs"]
 mod session_fragmented_tests;
@@ -121,6 +126,8 @@ struct Attempt {
     authority: Option<Authority>,
     recovery: Option<udp_recovery::RecoveryControl>,
     group: Option<session_group::GroupOperation>,
+    guest_source: Option<Arc<ready_game::GuestSource>>,
+    ready_game: Option<ready_game::ReadyWork>,
     #[cfg(test)]
     recovery_gate: Option<Arc<udp_recovery::TestGate>>,
     #[cfg(test)]
@@ -198,7 +205,8 @@ fn peer(text: &str) -> Result<lab::EndpointId, ConnectError> {
     text.parse().map_err(|_| ConnectError::InvalidRequest)
 }
 fn terminal(a: &Attempt) -> bool {
-    !a.probe_active
+    ready_game::finished(a)
+        && !a.probe_active
         && matches!(a.snapshot.phase, "closed" | "failed")
         && a.snapshot.cleanup_state == "complete"
         && a.worker.as_ref().is_none_or(|worker| worker.is_finished())
@@ -279,7 +287,11 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
         udp_recovery::clear(a);
         a.snapshot.phase = if error.is_some() { "failed" } else { "closed" };
         a.snapshot.transport_state = "closed";
-        a.snapshot.cleanup_state = "complete";
+        a.snapshot.cleanup_state = if ready_game::finished(a) {
+            "complete"
+        } else {
+            "pending"
+        };
         a.snapshot.tcp_address = None;
         if let Some(udp) = &mut a.snapshot.udp {
             udp.close();
@@ -372,6 +384,7 @@ impl Manager {
             }
             expire_pending(a);
             session_group::refresh(a);
+            ready_game::refresh_cleanup(a);
             return Ok(a.snapshot.clone());
         }
         Ok(ConnectSnapshot::idle())
@@ -443,6 +456,8 @@ impl Manager {
             authority: None,
             recovery: None,
             group: None,
+            guest_source: None,
+            ready_game: None,
             #[cfg(test)]
             recovery_gate: None,
             #[cfg(test)]
@@ -1139,14 +1154,18 @@ impl Manager {
             let a = selected(&mut state, owner, id)?;
             a.cancel.cancel();
             udp_recovery::clear(a);
+            ready_game::cancel(a);
             session_group::closing(a);
             a.draft = None;
             a.reviewed = None;
             a.export = None;
             a.snapshot.preparation = None;
             a.snapshot.review = None;
-            let completion_published = matches!(a.snapshot.phase, "closed" | "failed")
-                && matches!(a.snapshot.cleanup_state, "complete" | "failed");
+            // A terminal transport publication may still await the owned
+            // ready-game worker. Preserve it while cleanup is pending: moving
+            // it back to closing would leave no transport actor to publish the
+            // terminal state again after its task has already returned.
+            let completion_published = matches!(a.snapshot.phase, "closed" | "failed");
             let already_closing = a.snapshot.phase == "closing";
             // The actor publishes cleanup before its task returns. Preserve that
             // publication while retaining the task as the actual lifetime gate.
@@ -1165,12 +1184,14 @@ impl Manager {
                 let mut state = lock(&self.state)?;
                 let a = selected(&mut state, owner, id)?;
                 // Never transfer an unfinished task to an IPC waiter: another
+                ready_game::refresh_cleanup(a);
                 // stop, shutdown or preparation must still see its ownership if
                 // that waiter is dropped before the actor finishes.
                 if a.worker.as_ref().is_some_and(|worker| worker.is_finished()) {
                     a.worker.take()
                 } else {
                     if a.worker.is_none()
+                        && ready_game::finished(a)
                         && !a.probe_active
                         && matches!(a.snapshot.phase, "closed" | "failed")
                         && matches!(a.snapshot.cleanup_state, "complete" | "failed")
@@ -1367,6 +1388,7 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                 return;
             };
             let mut udp_bridge = None;
+            let bridge = Arc::new(bridge);
             let recoverable = matches!(invitation, Authority::SessionFragmented(_));
             let (recovery_sender, mut recovery_receiver) = tokio::sync::mpsc::channel(1);
             if !cancel.is_cancelled()
@@ -1378,6 +1400,13 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                         a.snapshot.phase = "guestConnected";
                         a.snapshot.transport_state = "authenticated";
                         a.snapshot.tcp_address = Some(bridge.local_addr().to_string());
+                        a.guest_source = Some(ready_game::GuestSource::new(
+                            &guest,
+                            &bridge,
+                            &invitation,
+                            deadline,
+                            &cancel,
+                        ));
                         if invitation.is_fragmented() {
                             a.snapshot.udp = Some(FragmentedGuestState::starting());
                         }

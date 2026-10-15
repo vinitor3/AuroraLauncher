@@ -1,7 +1,7 @@
 use super::*;
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -12,6 +12,100 @@ use std::{
 };
 
 const MARKER: &str = "AURORA_OWNED_DISCOVERY_FIXTURE_CHILD";
+struct CancelStream {
+    socket: TcpStream,
+    stop: Arc<AtomicBool>,
+    deadline: Instant,
+}
+impl CancelStream {
+    fn check(&self) -> std::io::Result<()> {
+        if self.stop.load(Ordering::Acquire) {
+            return Err(std::io::ErrorKind::ConnectionAborted.into());
+        }
+        if Instant::now() >= self.deadline {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        Ok(())
+    }
+
+    fn poll<T>(
+        &mut self,
+        mut operation: impl FnMut(&mut TcpStream) -> std::io::Result<T>,
+    ) -> std::io::Result<T> {
+        loop {
+            self.check()?;
+            match operation(&mut self.socket) {
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                other => return other,
+            }
+        }
+    }
+}
+impl Read for CancelStream {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.poll(|socket| socket.read(buffer))
+    }
+}
+impl Write for CancelStream {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.poll(|socket| socket.write(buffer))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.check()
+    }
+}
+fn fixture_status(socket: &mut CancelStream) -> std::io::Result<()> {
+    fn length(socket: &mut impl Read) -> std::io::Result<usize> {
+        let mut value = 0;
+        for shift in [0, 7, 14, 21, 28] {
+            let mut byte = [0];
+            socket.read_exact(&mut byte)?;
+            value |= usize::from(byte[0] & 127) << shift;
+            if byte[0] & 128 == 0 {
+                return Ok(value);
+            }
+        }
+        Err(std::io::ErrorKind::InvalidData.into())
+    }
+    fn varint(mut value: usize) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        loop {
+            let mut byte = (value & 127) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 128;
+            }
+            bytes.push(byte);
+            if value == 0 {
+                return bytes;
+            }
+        }
+    }
+    let size = length(socket)?;
+    if size > 1024 {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+    let mut handshake = vec![0; size];
+    socket.read_exact(&mut handshake)?;
+    let mut request = [0; 2];
+    socket.read_exact(&mut request)?;
+    if request != [1, 0] {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+    let json = br#"{"version":{"protocol":767,"name":"fixture"},"players":{"max":2,"online":0},"description":{"text":"fixture"}}"#;
+    let mut payload = vec![0];
+    payload.extend(varint(json.len()));
+    payload.extend(json);
+    let mut frame = varint(payload.len());
+    frame.extend(payload);
+    socket.write_all(&frame)?;
+    let mut ping = [0; 10];
+    socket.read_exact(&mut ping)?;
+    socket.write_all(&ping)
+}
 #[test]
 #[ignore = "internal child fixture, invoked by the parent test only"]
 fn owned_listener_fixture() {
@@ -30,24 +124,40 @@ fn owned_listener_fixture() {
         .collect();
     let stop = Arc::new(AtomicBool::new(false));
     let mut threads = Vec::new();
-    for listener in listeners {
+    for (index, listener) in listeners.into_iter().enumerate() {
         listener.set_nonblocking(true).unwrap();
         let stop = stop.clone();
-        threads.push(thread::spawn(move||{while !stop.load(Ordering::Acquire){match listener.accept(){Ok((mut socket,_))=>{
-            let _=socket.set_nonblocking(false);let _=socket.set_read_timeout(Some(Duration::from_secs(5)));let _=socket.set_write_timeout(Some(Duration::from_secs(5)));
-            let mut result=||->std::io::Result<()> {
-                fn length(socket:&mut std::net::TcpStream)->std::io::Result<usize>{let mut value=0;for shift in [0,7,14,21,28]{let mut byte=[0];socket.read_exact(&mut byte)?;value|=usize::from(byte[0]&127)<<shift;if byte[0]&128==0{return Ok(value);}}Err(std::io::ErrorKind::InvalidData.into())}
-                fn varint(mut value:usize)->Vec<u8>{let mut bytes=Vec::new();loop{let mut byte=(value&127)as u8;value>>=7;if value!=0{byte|=128;}bytes.push(byte);if value==0{return bytes;}}}
-                let size=length(&mut socket)?;if size>1024{return Err(std::io::ErrorKind::InvalidData.into());}let mut handshake=vec![0;size];socket.read_exact(&mut handshake)?;let mut request=[0;2];socket.read_exact(&mut request)?;if request!=[1,0]{return Err(std::io::ErrorKind::InvalidData.into());}
-                let json=b"{\"version\":{\"protocol\":767,\"name\":\"fixture\"},\"players\":{\"max\":2,\"online\":0},\"description\":{\"text\":\"fixture\"}}";
-                let mut payload=vec![0];payload.extend(varint(json.len()));payload.extend(json);let mut frame=varint(payload.len());frame.extend(payload);socket.write_all(&frame)?;let mut ping=[0;10];socket.read_exact(&mut ping)?;socket.write_all(&ping)?;Ok(())
-            };let _=result();},Err(error)if error.kind()==std::io::ErrorKind::WouldBlock=>thread::sleep(Duration::from_millis(5)),Err(_)=>break,}}}));
+        threads.push(thread::spawn(move || {
+            while !stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((socket, _)) => {
+                        socket.set_nonblocking(true).unwrap();
+                        let mut socket = CancelStream {
+                            socket,
+                            stop: stop.clone(),
+                            deadline: Instant::now() + Duration::from_secs(5),
+                        };
+                        // Test-only acknowledgement: the parent may now
+                        // exercise stop with this exact accepted socket.
+                        println!("DISCOVERY_ACCEPTED {index}");
+                        std::io::stdout().flush().unwrap();
+                        let _ = fixture_status(&mut socket);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        }));
     }
     println!("DISCOVERY_READY {}", serde_json::to_string(&ports).unwrap());
     std::io::stdout().flush().unwrap();
     let mut command = String::new();
     let _ = std::io::stdin().read_line(&mut command);
     stop.store(true, Ordering::Release);
+    // Accepted reads/writes also observe cancellation. They never rely on a
+    // different thread interrupting a blocking Winsock operation.
     for thread in threads {
         let _ = thread.join();
     }
@@ -55,6 +165,7 @@ fn owned_listener_fixture() {
 pub(crate) struct Fixture {
     child: Child,
     ports: Vec<u16>,
+    accepted: mpsc::Receiver<usize>,
     reader: Option<thread::JoinHandle<()>>,
 }
 /// Private test clock seam: does not alter a production constructor or OS time.
@@ -83,26 +194,31 @@ impl Fixture {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let mut reader = BufReader::new(child.stdout.take().unwrap());
+        let reader = BufReader::new(child.stdout.take().unwrap());
         let (send, receive) = mpsc::sync_channel(1);
+        let (accepted_send, accepted) = mpsc::sync_channel(32);
         let read_task = thread::spawn(move || {
-            for _ in 0..8 {
+            let mut reader = reader.take(8193);
+            loop {
                 let mut line = String::new();
-                if reader.by_ref().take(4097).read_line(&mut line).unwrap_or(0) == 0 {
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
                     break;
                 }
                 if let Some(json) = line.strip_prefix("DISCOVERY_READY ") {
                     if let Ok(ports) = serde_json::from_str::<Vec<u16>>(json.trim()) {
                         let _ = send.try_send(ports);
                     }
-                    break;
+                } else if let Some(index) = line.strip_prefix("DISCOVERY_ACCEPTED ") {
+                    if let Ok(index) = index.trim().parse() {
+                        let _ = accepted_send.try_send(index);
+                    }
                 }
             }
-            let _ = std::io::copy(&mut reader.take(8193), &mut std::io::sink());
         });
         let mut fixture = Self {
             child,
             ports: Vec::new(),
+            accepted,
             reader: Some(read_task),
         };
         fixture.ports = receive
@@ -114,10 +230,13 @@ impl Fixture {
         OwnedChildProof::from_child(&mut self.child, "fixture-instance", "fixture-run").unwrap()
     }
     pub(crate) fn stop(&mut self) {
+        self.stop_with_deadline(Duration::from_secs(7));
+    }
+    fn stop_with_deadline(&mut self, maximum: Duration) {
         if let Some(mut input) = self.child.stdin.take() {
             let _ = input.write_all(b"stop\n");
         }
-        let deadline = Instant::now() + Duration::from_secs(7);
+        let deadline = Instant::now() + maximum;
         while self.child.try_wait().unwrap().is_none() {
             assert!(Instant::now() < deadline, "owned fixture stop deadline");
             thread::sleep(Duration::from_millis(10));
@@ -132,6 +251,46 @@ impl Drop for Fixture {
         }
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
+        }
+    }
+}
+#[test]
+fn owned_fixture_stop_interrupts_idle_and_partial_accepted_status_sockets() {
+    let mut fixture = Fixture::new();
+    let mut idle = TcpStream::connect(("127.0.0.1", fixture.ports[0])).unwrap();
+    assert_eq!(
+        fixture
+            .accepted
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap(),
+        0
+    );
+    let mut partial = TcpStream::connect(("127.0.0.1", fixture.ports[1])).unwrap();
+    // The first VarInt byte explicitly announces that another byte is needed.
+    partial.write_all(&[0x80]).unwrap();
+    assert_eq!(
+        fixture
+            .accepted
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap(),
+        1
+    );
+    // Less than the fixture's unchanged five-second socket timeout: success
+    // requires cancellation of accepted sockets, not eventual read timeout.
+    fixture.stop_with_deadline(Duration::from_secs(2));
+    for socket in [&mut idle, &mut partial] {
+        socket
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        match socket.read(&mut [0]) {
+            Ok(0) => {}
+            Err(error) => assert!(matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::NotConnected
+            )),
+            other => panic!("owned fixture socket remained open: {other:?}"),
         }
     }
 }

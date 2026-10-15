@@ -1303,6 +1303,15 @@ pub struct UdpBridge {
     negotiated_max: usize,
     fragmented: bool,
 }
+impl TcpBridge {
+    /// Local listener/task lifetime, independent of remote Minecraft readiness.
+    pub fn is_closed(&self) -> bool {
+        self.cancel.is_cancelled()
+            || self.task.lock().map_or(true, |task| {
+                task.as_ref().is_none_or(JoinHandle::is_finished)
+            })
+    }
+}
 impl UdpBridge {
     /// Whether cancellation was requested or the local forwarding task ended.
     /// This is a local lifecycle observation, not a remote delivery guarantee.

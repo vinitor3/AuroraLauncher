@@ -1,4 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+#[cfg(all(windows, feature = "connect-lab"))]
+#[path = "commands_ready_game.rs"]
+pub(crate) mod ready_game;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};

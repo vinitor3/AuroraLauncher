@@ -11,6 +11,8 @@ import { FragmentedFields, FragmentedReviewFields, FragmentedStatusFields } from
 import { FRAGMENTED_PROFILE, SESSION_FRAGMENTED_PROFILE, fragmentedGuestUdpFrom, isDirectIpv4Address, isFragmentedLifetime, isLoopbackUdpTarget } from "./fragmented-types";
 import { GroupHostPanel, type GroupAction } from "./GroupHostPanel";
 import { groupPreparationFrom } from "./group-types";
+import { ConnectGameLaunchPanel } from "../connect-game-launch/ConnectGameLaunchPanel";
+import type { ReadyGameLaunchContext } from "../connect-game-launch/types";
 
 type Action = "prepareHost" | "prepareGuest" | "reviewHost" | "reviewGuest" | "confirm" | "export" | "probe" | "retryUdp" | "stop" | "refresh" | GroupAction;
 const actionText: Record<Action, string> = {
@@ -21,7 +23,7 @@ const actionText: Record<Action, string> = {
 };
 const finalPhase = (snapshot: ConnectSnapshot) => ["idle", "closed", "failed"].includes(snapshot.phase);
 
-export function ConnectView() {
+export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunchContext }) {
   const [capabilities, setCapabilities] = useState<ConnectCapabilities>();
   const [snapshot, setSnapshot] = useState<ConnectSnapshot>();
   const [loading, setLoading] = useState(true);
@@ -350,10 +352,12 @@ export function ConnectView() {
           {snapshot.statusSummary && <div className="connect-status-summary"><p>Última resposta: protocolo {snapshot.statusSummary.reportedProtocol}, {snapshot.statusSummary.protocolMatchesRequested ? "correspondente ao solicitado" : "diferente do solicitado"}.</p>
             <p>Jogadores informados pelo servidor: {snapshot.statusSummary.reportedPlayersOnline ?? "não informado"} / {snapshot.statusSummary.reportedPlayersMax ?? "não informado"}. Essa contagem não confirma quem entrou no mundo.</p></div>}
           {capabilities?.available && snapshot.tcpAddress && snapshot.phase === "guestConnected" && <div className="connect-output"><label htmlFor="connect-local-address">Endereço para Conexão direta no Minecraft</label><input id="connect-local-address" readOnly value={snapshot.tcpAddress} />
-            <div><button className="secondary" type="button" onClick={() => { void copy(snapshot.tcpAddress!); }}>Copiar endereço do jogo</button></div><small>Abra o Minecraft compatível e use Multiplayer → Conexão direta. Este painel não inicia nem fecha o jogo.</small></div>}
+            <div><button className="secondary" type="button" onClick={() => { void copy(snapshot.tcpAddress!); }}>Copiar endereço do jogo</button></div><small>Abra o Minecraft compatível e use Multiplayer → Conexão direta. Copiar o endereço não inicia nem fecha o jogo.</small></div>}
           {capabilities?.available && canProbe && <div><button type="button" disabled={busy || snapshot.statusState === "checking"} onClick={() => { void perform("probe", async current => { const value = await invoke<unknown>("connect_probe_status", { operationId }); if (current()) acceptSnapshot(value); }); }}>Consultar servidor</button><p className="connect-hint">Consulta de Minecraft 1.21.1 (protocolo {capabilities.statusProtocol}), com endereço lógico {capabilities.statusHandshakeHost}:{capabilities.statusHandshakePort}. Não comprova compatibilidade com outras versões.</p></div>}
         </>}
       </section>
+      <ConnectGameLaunchPanel capability={capabilities?.readyGameLaunch} session={snapshot} launchContext={launchContext}
+        observeExisting={!capabilities && !loading} sessionStale={Boolean(warning) || loading || pending === "stop"} />
       {capabilities?.available && !active && snapshot && <section className="connect-card">
         <div className="connect-tabs" aria-label="Papel nesta tentativa"><button type="button" aria-pressed={selectedRole === "host"} disabled={busy} onClick={() => { setSelectedRole("host"); setDiscoveredTarget(undefined); }}>Anfitrião</button><button type="button" aria-pressed={selectedRole === "guest"} disabled={busy} onClick={() => { setSelectedRole("guest"); if (invitationProfile === "sessionGroup") setInvitationProfile("legacy"); setDiscoveredTarget(undefined); }}>Convidado</button></div>
         <form className="connect-form" onSubmit={prepare}>

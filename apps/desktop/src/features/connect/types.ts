@@ -4,6 +4,7 @@ import {
   type FragmentedUdpContract, type FragmentedUdpReview, type SessionFragmentedUdpCapability, type SessionUdpRecovery, isDirectIpv4Address,
 } from "./fragmented-types";
 import { groupCapabilityFrom, groupSnapshotFieldsFrom, type GroupCapability, type HostGroup } from "./group-types";
+import { readyGameCapabilityFrom, type ReadyGameLaunchCapability } from "../connect-game-launch/types";
 
 export type ConnectMode = "loopback" | "externalIpv6" | "directIpv4";
 export type ConnectRole = "host" | "guest";
@@ -23,6 +24,7 @@ export type ConnectCapabilities = {
   fragmentedUdpInvitations?: FragmentedUdpCapability;
   sessionFragmentedUdpInvitations?: SessionFragmentedUdpCapability;
   sessionFragmentedHostGroups?: GroupCapability;
+  readyGameLaunch?: ReadyGameLaunchCapability;
 };
 export type ConnectStatusSummary = {
   requestedProtocol: number; reportedProtocol: number; protocolMatchesRequested: boolean;
@@ -154,6 +156,10 @@ export function capabilitiesFrom(value: unknown): ConnectCapabilities {
   if (value.sessionFragmentedHostGroups !== undefined) {
     if (!value.available || value.sessionFragmentedUdpInvitations === undefined) return invalid();
     groupCapabilityFrom(value.sessionFragmentedHostGroups);
+  }
+  if (value.readyGameLaunch !== undefined) {
+    if (!value.available) return invalid();
+    readyGameCapabilityFrom(value.readyGameLaunch);
   }
   return value as ConnectCapabilities;
 }

@@ -22,6 +22,20 @@ pub fn install_embedded_skins(
     minecraft_version: &str,
     loader: &str,
 ) -> Result<PathBuf, SkinsError> {
+    let contents = embedded_skins_artifact(minecraft_version, loader)?;
+    instance
+        .install_aurora_artifact_bytes(
+            &format!("aurora-skins-{loader}-{minecraft_version}.jar"),
+            contents,
+        )
+        .map_err(SkinsError::from)
+}
+
+/// Read-only selection of the same immutable bytes used by normal installation.
+pub(super) fn embedded_skins_artifact(
+    minecraft_version: &str,
+    loader: &str,
+) -> Result<&'static [u8], SkinsError> {
     let contents = match (minecraft_version, loader) {
         ("1.12.2", "forge") => include_bytes!("../../../../../releases/skins/0.3.1/1.12.2/forge/aurora-skins-forge-1.12.2-0.3.1.jar").as_slice(),
         ("1.16.5", "fabric") => include_bytes!("../../../../../releases/skins/0.3.1/1.16.5/fabric/aurora-skins-fabric-1.16.5-0.3.1.jar").as_slice(),
@@ -39,12 +53,7 @@ pub fn install_embedded_skins(
             });
         }
     };
-    instance
-        .install_aurora_artifact_bytes(
-            &format!("aurora-skins-{loader}-{minecraft_version}.jar"),
-            contents,
-        )
-        .map_err(SkinsError::from)
+    Ok(contents)
 }
 
 #[cfg(test)]

@@ -68,7 +68,7 @@ pub(super) fn identity_lookup(instance: &Instance) -> Result<Option<String>> {
     with_existing_identity(instance, false, |id, _| Ok(id.uuid.clone()))
 }
 
-#[cfg(feature = "connect-voice-lab")]
+#[cfg(any(feature = "connect-lab", feature = "connect-voice-lab"))]
 pub(crate) fn with_existing_observation<T>(
     instance: &Instance,
     guard: &InstanceMutationGuard,

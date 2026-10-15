@@ -109,6 +109,28 @@ pub struct PreparedLaunch {
 }
 
 impl PreparedLaunch {
+    /// Explicit ready-copy policy: remove inherited JVM option injection. File
+    /// preparation happens before the Connect spawn gate; only Command::spawn
+    /// belongs inside that short gate. The normal launch path is unchanged.
+    #[cfg(feature = "connect-lab")]
+    pub fn into_connect_command(self) -> Result<std::process::Command, LaunchError> {
+        let mut command = background_command(&self.command.executable);
+        command
+            .args(&self.command.args)
+            .current_dir(&self.command.working_dir)
+            .envs(&self.command.environment);
+        for name in [
+            "JAVA_TOOL_OPTIONS",
+            "JDK_JAVA_OPTIONS",
+            "_JAVA_OPTIONS",
+            "CLASSPATH",
+        ] {
+            command.env_remove(name);
+        }
+        #[cfg(target_os = "windows")]
+        configure_windows_game_output(&mut command, &self.command.working_dir)?;
+        Ok(command)
+    }
     pub fn spawn(self) -> Result<Child, LaunchError> {
         let mut command = background_command(&self.command.executable);
         command
@@ -156,9 +178,18 @@ fn configure_windows_game_output(
         .create(true)
         .truncate(false)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(1)
         .open(logs.join("aurora-java.log"))?;
     let metadata = log.metadata()?;
-    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+    if !metadata.is_file()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || !super::recovery::single_link(&log).map_err(|_| {
+            Error::new(
+                ErrorKind::InvalidInput,
+                "identidade do arquivo de log inválida",
+            )
+        })?
+    {
         return Err(Error::new(
             ErrorKind::InvalidInput,
             "arquivo de log inválido",
@@ -273,6 +304,48 @@ fn build_classpath(libraries: &[PathBuf], client_jar: &Path) -> Result<String, L
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_game_log_refuses_hardlinks_without_truncating_either_name() {
+        let root = std::env::temp_dir().join(format!("aurora-log-hardlink-{}", Uuid::new_v4()));
+        let working = root.join("copy");
+        std::fs::create_dir_all(working.join("logs")).unwrap();
+        let outside = root.join("outside-copy.txt");
+        let original = b"preserve this unrelated file and both hardlink names";
+        std::fs::write(&outside, original).unwrap();
+        let log = working.join("logs/aurora-java.log");
+        std::fs::hard_link(&outside, &log).unwrap();
+        let mut command = std::process::Command::new("never-executed.exe");
+        let error = configure_windows_game_output(&mut command, &working).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(std::fs::read(&outside).unwrap(), original);
+        assert_eq!(std::fs::read(&log).unwrap(), original);
+        assert!(!super::super::recovery::single_link(&std::fs::File::open(&log).unwrap()).unwrap());
+        drop(command);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_game_log_keeps_regular_file_behavior_and_releases_owned_handles() {
+        let root = std::env::temp_dir().join(format!("aurora-log-regular-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("logs")).unwrap();
+        let log = root.join("logs/aurora-java.log");
+        std::fs::write(&log, b"previous disposable log").unwrap();
+        let mut command = std::process::Command::new("never-executed.exe");
+        configure_windows_game_output(&mut command, &root).unwrap();
+        assert!(std::fs::read(&log).unwrap().is_empty());
+        // A second writer cannot replace or truncate the live output handle.
+        assert!(std::fs::OpenOptions::new().write(true).open(&log).is_err());
+        drop(command);
+        std::fs::write(&log, b"the command released its handles").unwrap();
+        assert_eq!(
+            std::fs::read(&log).unwrap(),
+            b"the command released its handles"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     fn launch_spec() -> VersionLaunchSpec {
         VersionLaunchSpec {
             version_name: "test".into(),
@@ -363,6 +436,9 @@ mod tests {
             .env(CHILD_MARKER, "1");
         configure_windows_game_output(&mut command, &root).unwrap();
         let status = command.spawn().unwrap().wait().unwrap();
+        // Command retains its configured Stdio handles even after the child
+        // exits. Release this fixture's handles before removing its private log.
+        drop(command);
         let output = std::fs::read_to_string(root.join("logs/aurora-java.log")).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
 

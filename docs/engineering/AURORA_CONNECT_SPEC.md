@@ -4,6 +4,8 @@ Reconciliação: 29/09/2026, base cumulativa alpha.14 em `5ac2f7e288e77fbb0d5c0d
 
 ## 1. Escopo e autoridade
 
+Incremento73 adiciona ação própria para abrir cópia diagnóstica já pronta pela ponte TCP do Guest, sob revisão e consentimento novos. O permit é derivado da conexão/ponte/autoridade originais, revalidado no spawn, sem renovar prazos ou aceitar endereço/argv pela UI. Pré-requisitos ausentes recusam a ação; nenhuma instalação/reparação ou preferência é alterada pelo caller. Somente Fabric1.21.1/0.16.14/Java21, Core1.1.5 e Skins0.3.1 existentes nesta etapa. [Contrato73](../aurora-connect-ready-game-launch.md). Estado de processo iniciado não comprova entrada no mundo, áudio ou GUI; todos os gates e nove pares continuam preservados.
+
 Lifecycle42: fechamento do transporte termina a CLI manual depois de aguardar recursosTCP/UDP, com código estático`closed`/exit1. Stop/prazo locais e contrato dos convites são preservados. Essa distinção informa disponibilidade, sem atribuir causaNAT/inatividade ou imprimir motivo remoto bruto. [Evidências42](../task-aur-r4-connect.md#quadragésimo-segundo-incremento--encerramento-observável-da-cli-manual).
 
 O incremento41 prepara um perfil GUI descartável, separado dos clientes sintéticos: nomes públicos revisados entram na whitelist e nos hashes; plano900s explícito e reuso recusado. Consulte o [contrato runtime](../aurora-connect-runtime.md#cliente-gráfico-externo--preparação41). A prontidão do executor permanece STATUS/bind; mundo renderizado exige relato gráfico correlacionado à presença no servidor, sem promover automaticamente Core/Skins, voz ou contas mistas.

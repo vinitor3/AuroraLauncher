@@ -1,7 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { register } from "@tauri-apps/plugin-global-shortcut";
-import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
+import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ProjectDescription } from "./features/catalog/ProjectDescription";
 import { drawSkinFace } from "./lib/skinFace";
 import { SkinPreviewCanvas } from "./features/skins/SkinPreviewCanvas";
@@ -49,8 +49,9 @@ import { DoctorView } from "./features/doctor/DoctorView";
 import { RecoveryView } from "./features/recovery/RecoveryView";
 import { DiagnosticLabView } from "./features/diagnostic-lab/DiagnosticLabView";
 import { ConnectView } from "./features/connect/ConnectView";
+import { createAccountTransition, stopConnectForAccountTransition } from "./features/connect/account-transition";
 import { VoiceAnnouncementProvider, useVoiceAnnouncement, withVoiceAnnouncementLogout } from "./features/voice-announcement/VoiceAnnouncementProvider";
-import { capabilitiesFrom, snapshotFrom } from "./features/connect/types";
+import { capabilitiesFrom } from "./features/connect/types";
 import type { DoctorReport, DoctorRun } from "./features/doctor/types";
 import { publicAiError } from "../../../shared/aiErrors";
 import type { AiToolAdvice, AiToolContext } from "../../../shared/aiTools";
@@ -972,6 +973,15 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [sessionStartup, setSessionStartup] = useState<SessionStartupState<AuroraUserProfile>>({ phase: "loading" });
   const [sessionRetry, setSessionRetry] = useState(0);
   const sessionController = useRef<ReturnType<typeof startSessionStartup> | undefined>(undefined);
+  const [connectAccountBarrier, setConnectAccountBarrier] = useState<"idle" | "closing" | "blocked">("idle");
+  const accountTransition = useRef<ReturnType<typeof createAccountTransition<AuroraUserProfile>> | undefined>(undefined);
+  if (!accountTransition.current) {
+    accountTransition.current = createAccountTransition<AuroraUserProfile>({
+      publish: (state) => { setSessionStartup(state); setProfile(state.profile); },
+      closeConnect: async () => { if (isTauri()) await stopConnectForAccountTransition(invoke); },
+      onBarrier: setConnectAccountBarrier,
+    });
+  }
   const [status, setStatus] = useState<EngineStatus>();
   const [instances, setInstances] = useState<Instance[]>([]);
   const [instanceName, setInstanceName] = useState("");
@@ -1057,6 +1067,8 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const libraryLoadGeneration = useRef(0);
   const [instanceFilter, setInstanceFilter] = useState("");
   const [activeSection, setActiveSection] = useState<LauncherSection>("instances");
+  const [connectVisited, setConnectVisited] = useState(false);
+  useEffect(() => { if (activeSection === "connect") setConnectVisited(true); }, [activeSection]);
   const [connectAvailable, setConnectAvailable] = useState(false);
   const voice = useVoiceAnnouncement();
   const [signingOut, setSigningOut] = useState(false);
@@ -1075,16 +1087,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     setSigningOut(true);
     try {
       await withVoiceAnnouncementLogout(voice, async () => {
-        if (isTauri()) {
-          const capabilities = capabilitiesFrom(await invoke("connect_capabilities"));
-          if (capabilities.available) {
-            const current = snapshotFrom(await invoke("connect_snapshot"));
-            if (current.operationId) {
-              const stopped = snapshotFrom(await invoke("connect_stop", { operationId: current.operationId }));
-              if (stopped.cleanupState !== "complete") throw new Error("Connect cleanup incomplete");
-            }
-          }
-        }
+        if (isTauri()) await stopConnectForAccountTransition(invoke);
         await logoutAuroraUser(services);
         setProfile(undefined);
         setSessionStartup({ phase: "signed-out" });
@@ -1400,8 +1403,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       currentUser: () => services.auth.currentUser,
       loadProfile: (user) => loadAuroraProfile(services, user),
       onState: (state) => {
-        setSessionStartup(state);
-        setProfile(state.profile);
+        accountTransition.current?.accept(state);
       },
     });
     sessionController.current = controller;
@@ -3496,7 +3498,29 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       setBusy(false);
     }
   }
-  if (sessionStartup.phase === "loading") return <StartupScreen />;
+  const connectAppearanceReady = !!profile && !wardrobeLoading
+    && wardrobeReadyOwner === profile.uid && isCurrentSkinOwner(profile.uid) && !signingOut
+    && connectAccountBarrier === "idle";
+  const connectLaunchContext = useMemo(() => {
+    if (!connectAppearanceReady || !profile || !targetInstance || !javaPath.trim()) return undefined;
+    return {
+      sourceInstanceId: targetInstance,
+      javaExecutable: javaPath.trim(),
+      nickname: profile.username,
+      appearance: {
+        skinUrl: profile.skinUrl ?? null,
+        skinFile: localSkinPath || null,
+        capeUrl: profile.capeUrl ?? null,
+        skinModel: localSkinPath ? equippedSkin?.skinModel ?? profile.skinModel ?? null : profile.skinModel ?? null,
+      },
+      contextKey: crypto.randomUUID(),
+    };
+  }, [connectAppearanceReady, profile?.uid, profile?.username, profile?.skinUrl, profile?.capeUrl,
+    profile?.skinModel, targetInstance, javaPath, localSkinPath, equippedSkin?.skinModel]);
+  if (connectAccountBarrier === "blocked") return <StartupScreen
+    error="A sessão mudou, mas o encerramento do Connect ainda não foi confirmado. Tente concluir o encerramento antes de continuar."
+    onRetry={() => { void accountTransition.current?.retry(); }} />;
+  if (connectAccountBarrier === "closing" || sessionStartup.phase === "loading") return <StartupScreen />;
   if (sessionStartup.phase === "error") return <StartupScreen error={sessionStartup.error}
     onRetry={() => { setSessionStartup({ phase: "loading" }); setSessionRetry((value) => value + 1); }}
     onSignOut={() => { void signOutWithConnectCleanup(); }}
@@ -3618,7 +3642,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         </aside>}
         <section className="workspace-grid">
           <div className="workspace-main">
-        {activeSection === "connect" && connectAvailable && <div className="section-connect" inert={signingOut}><ConnectView /></div>}
+        {connectAvailable && (connectVisited || activeSection === "connect") && <div className="section-connect" hidden={activeSection !== "connect"} inert={signingOut || activeSection !== "connect"}><ConnectView launchContext={connectLaunchContext} /></div>}
         <article className="panel instances section-instances">
           <div className="panel-heading">
             <div>

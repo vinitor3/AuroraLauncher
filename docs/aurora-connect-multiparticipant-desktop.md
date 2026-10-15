@@ -1,6 +1,6 @@
 # Grupo de participantes no painel — incremento72
 
-Estado: **PROTÓTIPO / PRECISA DE TESTE**. Integra a [biblioteca71](aurora-connect-multiparticipant-session.md) ao slot experimental Connect. Interface e parsers possuem provas locais abaixo; validação nativa e integração final ainda estão em andamento. Não há homologação de GUI, rede externa, jogo ou áudio por esta entrega.
+Estado: **PROTÓTIPO / PRECISA DE TESTE**. Integra a [biblioteca71](aurora-connect-multiparticipant-session.md) ao slot experimental Connect. Interface, parsers e caller nativo foram implementados e testados localmente; a regressão integrada e a revisão final estão registradas no [incremento72](task-aur-r4-connect.md#incremento72--grupo-estático-no-launcher-com-observações-individuais). Não há homologação de GUI, rede externa, jogo ou áudio por esta entrega.
 
 ## Escopo
 

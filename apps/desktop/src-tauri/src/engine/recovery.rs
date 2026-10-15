@@ -21,7 +21,7 @@ use zip::ZipArchive;
 mod readonly;
 #[path = "recovery_voice_receipts.rs"]
 mod voice_receipts;
-#[cfg(feature = "connect-voice-lab")]
+#[cfg(any(feature = "connect-lab", feature = "connect-voice-lab"))]
 pub(crate) use readonly::with_existing_observation;
 #[cfg(feature = "connect-voice-lab")]
 pub(crate) use readonly::{list_voice_receipts, load_voice_receipt};
@@ -392,7 +392,7 @@ pub(crate) fn pin_tree(root: &Path, handles: &mut Vec<File>, depth: usize) -> Re
     Ok(())
 }
 
-fn single_link(file: &File) -> Result<bool> {
+pub(crate) fn single_link(file: &File) -> Result<bool> {
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawHandle;
@@ -424,7 +424,7 @@ fn single_link(file: &File) -> Result<bool> {
     }
 }
 
-struct SecureFile {
+pub(crate) struct SecureFile {
     file: File,
     _directories: Vec<File>,
 }
@@ -444,7 +444,7 @@ impl Seek for SecureFile {
         self.file.seek(position)
     }
 }
-fn secure_open(p: &Path) -> Result<SecureFile> {
+pub(crate) fn secure_open(p: &Path) -> Result<SecureFile> {
     let directories = pin_directory(p.parent().ok_or(RecoveryError::UnsafePath)?)?;
     let metadata = fs::symlink_metadata(p)?;
     if !metadata.is_file() || metadata_is_link(&metadata) {

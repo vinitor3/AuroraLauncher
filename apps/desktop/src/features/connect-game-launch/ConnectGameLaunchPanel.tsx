@@ -1,0 +1,228 @@
+import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useRef, useState } from "react";
+import type { ConnectSnapshot } from "../connect/types";
+import { ReadyCopyPicker } from "./ReadyCopyPicker";
+import {
+  isReadyGameError, readyGameContextFingerprint, readyGameError, readyGameSnapshotFrom,
+  sameReadyGameContext, validReadyGameContext, type ReadyGameLaunchCapability, type ReadyGameLaunchContext,
+  type ReadyGameLaunchSnapshot,
+} from "./types";
+
+type Props = { capability?: ReadyGameLaunchCapability; session?: ConnectSnapshot; launchContext?: ReadyGameLaunchContext; observeExisting?: boolean; sessionStale?: boolean };
+type Action = "prepare" | "confirm" | "cancel";
+const active = (snapshot?: ReadyGameLaunchSnapshot) => !!snapshot && ["preparing", "reviewed", "starting"].includes(snapshot.phase);
+const connected = (session?: ConnectSnapshot) => session?.role === "guest" && session.phase === "guestConnected"
+  && session.transportState === "authenticated" && !["complete", "failed"].includes(session.cleanupState) && !!session.tcpAddress;
+const date = (value: number) => new Date(value).toLocaleTimeString("pt-BR");
+
+export function ConnectGameLaunchPanel({ capability, session, launchContext, observeExisting = false, sessionStale = false }: Props) {
+  const operationId = session?.operationId ?? undefined;
+  const fingerprint = readyGameContextFingerprint(launchContext);
+  const [snapshot, setSnapshot] = useState<ReadyGameLaunchSnapshot>();
+  const [selectedId, setSelectedId] = useState("");
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [pending, setPending] = useState<Action>();
+  const [uncertain, setUncertain] = useState(false);
+  const [error, setError] = useState("");
+  const [warning, setWarning] = useState("");
+  const [contextChanged, setContextChanged] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const observed = useRef<ReadyGameLaunchSnapshot | undefined>(undefined);
+  const watchedOperation = useRef<string | undefined>(undefined);
+  if (operationId && session?.role === "guest" && (capability || observeExisting)) watchedOperation.current = operationId;
+  const watch = !!operationId && watchedOperation.current === operationId;
+  const previousContext = useRef(fingerprint);
+  const current = useRef({ operationId, capability, session, launchContext, fingerprint, sessionStale });
+  current.current = { operationId, capability, session, launchContext, fingerprint, sessionStale };
+  const mounted = useRef(false);
+  const epoch = useRef(0);
+  const mutation = useRef<{ id: number; action: Action } | undefined>(undefined);
+  const mutationId = useRef(0);
+  const uncertainAfter = useRef<number | undefined>(undefined);
+  const invalidated = useRef(false);
+  const cancelling = useRef<string | undefined>(undefined);
+  const automaticCancellation = useRef(new Set<string>());
+  const requestedInstance = useRef<string | undefined>(undefined);
+
+  function accept(value: unknown, expectedOperation: string) {
+    const next = readyGameSnapshotFrom(value);
+    if (next.operationId !== expectedOperation || current.current.operationId !== expectedOperation) throw new Error("Wrong ready launch operation");
+    const previous = observed.current;
+    if (previous && next.generation < previous.generation) return;
+    if (previous && next.generation === previous.generation && JSON.stringify(next) !== JSON.stringify(previous)) throw new Error("Changed ready launch generation");
+    if (requestedInstance.current && (next.review && next.review.instanceId !== requestedInstance.current
+      || next.result && next.result.instanceId !== requestedInstance.current)) throw new Error("Changed ready launch instance");
+    observed.current = next; setSnapshot(next); setWarning("");
+    if (previous?.review?.digest !== next.review?.digest || previous?.planId !== next.planId) setAcknowledged(false);
+    if (uncertainAfter.current !== undefined && (next.generation > uncertainAfter.current || !active(next) && next.phase !== "idle")) {
+      uncertainAfter.current = undefined; setUncertain(false);
+    }
+    if (next.review && sameReadyGameContext(next.review, current.current.launchContext) && !invalidated.current) setSelectedId(next.review.instanceId);
+    if (next.review && !sameReadyGameContext(next.review, current.current.launchContext)) {
+      invalidated.current = true; setContextChanged(true); setAcknowledged(false);
+    }
+    if (!active(next)) cancelling.current = undefined;
+    if (invalidated.current && active(next) && next.planId && !automaticCancellation.current.has(next.planId)) {
+      automaticCancellation.current.add(next.planId); void cancel(next);
+    }
+  }
+
+  async function read(expectedEpoch = epoch.current) {
+    const op = current.current.operationId;
+    if (!op) return;
+    try {
+      const value = await invoke<unknown>("connect_ready_game_launch_snapshot", { operationId: op });
+      if (mounted.current && epoch.current === expectedEpoch) accept(value, op);
+    } catch {
+      if (mounted.current && epoch.current === expectedEpoch) {
+        setWarning("O preparo do jogo não pôde ser atualizado. A última observação pode estar desatualizada.");
+        setAcknowledged(false);
+      }
+    }
+  }
+
+  async function perform(action: Action, command: string, args: Record<string, unknown>) {
+    if (mutation.current && action !== "cancel" || mutation.current?.action === "cancel") return;
+    const op = current.current.operationId;
+    if (!op) return;
+    const requestEpoch = epoch.current;
+    const id = ++mutationId.current;
+    const baseline = observed.current?.generation ?? 0;
+    mutation.current = { id, action }; setPending(action); setError(""); setAcknowledged(false);
+    const live = () => mounted.current && requestEpoch === epoch.current && current.current.operationId === op;
+    try {
+      const value = await invoke<unknown>(command, args);
+      if (live()) accept(value, op);
+    } catch (cause) {
+      if (live()) {
+        setError(readyGameError(cause));
+        if (!isReadyGameError(cause)) {
+          uncertainAfter.current = baseline; setUncertain(true);
+        }
+        // A lost response may follow a consumed confirmation. Observe only;
+        // never issue a second prepare/confirm from this recovery path.
+        await read(requestEpoch);
+      }
+    } finally {
+      if (live() && mutation.current?.id === id) {
+        mutation.current = undefined; setPending(undefined);
+      }
+    }
+  }
+
+  async function cancel(target = observed.current) {
+    if (!target?.planId || !active(target) || target.operationId !== current.current.operationId) return;
+    cancelling.current = target.planId;
+    await perform("cancel", "connect_cancel_ready_game_launch", { operationId: target.operationId, planId: target.planId });
+    if (cancelling.current === target.planId && active(observed.current)) cancelling.current = undefined;
+  }
+
+  useEffect(() => {
+    mounted.current = true;
+    const localEpoch = ++epoch.current;
+    observed.current = undefined; mutation.current = undefined; uncertainAfter.current = undefined;
+    invalidated.current = false; cancelling.current = undefined;
+    automaticCancellation.current.clear();
+    requestedInstance.current = undefined;
+    setSnapshot(undefined); setSelectedId(""); setAcknowledged(false); setPending(undefined); setUncertain(false);
+    setError(""); setWarning(""); setContextChanged(false);
+    let timer: number | undefined;
+    let disposed = false;
+    async function poll() {
+      if (disposed) return;
+      if (operationId) await read(localEpoch);
+      if (!disposed) timer = window.setTimeout(() => { setNow(Date.now()); void poll(); }, 1_000);
+    }
+    // Capability gates new work. Observation/cancellation remain available
+    // when recovering a native operation after navigation or a failed query.
+    if (watch) void poll();
+    return () => { disposed = true; mounted.current = false; epoch.current++; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [operationId, watch]);
+
+  useEffect(() => {
+    if (previousContext.current === fingerprint) return;
+    previousContext.current = fingerprint;
+    setSelectedId(""); setAcknowledged(false);
+    invalidated.current = true;
+    if (active(observed.current) || mutation.current) setContextChanged(true);
+    if (active(observed.current) && observed.current?.planId) {
+      automaticCancellation.current.add(observed.current.planId); void cancel();
+    }
+  }, [fingerprint]);
+
+  useEffect(() => {
+    if (sessionStale || !capability || !connected(session)) setAcknowledged(false);
+  }, [sessionStale, capability, session?.phase, session?.transportState, session?.cleanupState, session?.tcpAddress]);
+
+  const canStartNew = !!capability && connected(session) && !sessionStale && validReadyGameContext(launchContext)
+    && !!snapshot && !active(snapshot) && !pending && !uncertain && !warning;
+  const review = snapshot?.review && sameReadyGameContext(snapshot.review, launchContext) && !contextChanged ? snapshot.review : null;
+  const currentReview = review && review.instanceId === selectedId && review.expiresAtMs > now && review.sessionExpiresAtMs > now;
+  const canConfirm = !!capability && connected(session) && !sessionStale && !!currentReview && acknowledged && !pending && !uncertain && !warning;
+
+  function prepare() {
+    if (!canStartNew || !selectedId || !operationId || !validReadyGameContext(launchContext)) return;
+    invalidated.current = false; setContextChanged(false);
+    requestedInstance.current = selectedId;
+    void perform("prepare", "connect_prepare_ready_game_launch", { request: {
+      operationId, instanceId: selectedId, sourceInstanceId: launchContext.sourceInstanceId,
+      contextKey: launchContext.contextKey, javaExecutable: launchContext.javaExecutable,
+      nickname: launchContext.nickname, appearance: launchContext.appearance,
+    } });
+  }
+  function confirm() {
+    const latest = observed.current?.review;
+    if (!canConfirm || !latest || latest.digest !== review?.digest || latest.instanceId !== selectedId
+      || !sameReadyGameContext(latest, current.current.launchContext) || Date.now() >= latest.expiresAtMs
+      || Date.now() >= latest.sessionExpiresAtMs || !connected(current.current.session) || current.current.sessionStale || !current.current.capability) {
+      setAcknowledged(false); return;
+    }
+    void perform("confirm", "connect_confirm_ready_game_launch", { operationId: latest.operationId, planId: latest.planId, digest: latest.digest });
+  }
+
+  if (!capability && !snapshot && !pending && !warning) return null;
+  if (session?.role !== "guest" && !snapshot && !pending && !warning) return null;
+  return <section className="connect-card" aria-label="Abrir cópia pelo Connect">
+    <h3>Abrir o Minecraft nesta conexão</h3>
+    <p>Experimental: abre uma cópia de teste já preparada e tenta entrar pelo Connect. Exige Minecraft 1.21.1, Fabric 0.16.14, Java 21, Core 1.1.5 e Skins 0.3.1. Este botão não baixa nem instala arquivos.</p>
+    {!capability && <p role="status">Novos lançamentos estão indisponíveis. O preparo existente ainda pode ser consultado ou cancelado.</p>}
+    {!connected(session) && <p>Conecte como convidado antes de preparar a entrada. Uma consulta ao servidor ou conexão TCP não confirma entrada no mundo.</p>}
+    {sessionStale && <p role="status">Aguarde uma observação atual do Connect antes de autorizar a entrada.</p>}
+    {!validReadyGameContext(launchContext) && <p>Selecione uma instância, um Java disponível e aguarde o perfil e a aparência ficarem prontos no launcher.</p>}
+    {contextChanged && <p role="status">O perfil ou a seleção mudou. O preparo anterior foi invalidado; aguarde a confirmação de cancelamento antes de revisar novamente.</p>}
+    {error && <p role="alert">{error}</p>}
+    {warning && <p role="alert">{warning}</p>}
+    {uncertain && <p role="status">Aguardando uma observação que confirme o resultado. Nenhum lançamento será repetido automaticamente.</p>}
+    {pending && <p role="status">{pending === "prepare" ? "Conferindo a cópia…" : pending === "confirm" ? "Iniciando a cópia…" : "Cancelando o preparo…"}</p>}
+    {launchContext && <ReadyCopyPicker sourceInstanceId={launchContext.sourceInstanceId} disabled={!canStartNew} selectedId={selectedId}
+      onSelect={id => { setSelectedId(id); setAcknowledged(false); }} />}
+    <button className="secondary" type="button" disabled={!canStartNew || !selectedId} onClick={prepare}>Revisar entrada no servidor</button>
+    {operationId && <button className="secondary" type="button" onClick={() => { void read(); }}>Atualizar preparo do jogo</button>}
+    {snapshot?.phase === "preparing" && <p role="status">Verificando cópia, versões, arquivos e Java. Nenhum Minecraft foi iniciado por esta preparação.</p>}
+    {review && <section className="connect-review" aria-label="Revisão para abrir a cópia">
+      <h4>Confira antes de iniciar</h4>
+      <dl>
+        <dt>Cópia de teste</dt><dd>{review.instanceId}</dd>
+        <dt>Destino desta conexão</dt><dd>{review.gameAddress}</dd>
+        <dt>Jogo e loader</dt><dd>Minecraft {review.minecraftVersion} / Fabric {review.loaderVersion}</dd>
+        <dt>Java verificado</dt><dd>{review.javaExecutable} (Java {review.javaMajor})</dd>
+        <dt>Apelido</dt><dd>{review.nickname}</dd>
+        <dt>Aparência</dt><dd>{review.appearance.skinFile ? "Skin local selecionada" : review.appearance.skinUrl ? "Skin do perfil selecionada" : "Skin padrão"}; {review.appearance.capeUrl ? "capa do perfil" : "sem capa"}; modelo {review.appearance.skinModel ?? "padrão"}.</dd>
+        <dt>Módulos verificados</dt><dd>Core {review.coreVersion}; Skins {review.skinsVersion}</dd>
+        <dt>Autorizar até</dt><dd>{date(review.expiresAtMs)}</dd>
+        <dt>Conexão termina até</dt><dd>{date(review.sessionExpiresAtMs)}</dd>
+      </dl>
+      <p>O jogo pode gravar dados nesta cópia, no cache de aparência do launcher e nos registros do Doctor e logs. Iniciar o processo não confirma entrada no mundo, áudio ou compatibilidade de contas.</p>
+      {!currentReview && <p role="status">Esta revisão venceu ou mudou. Prepare uma nova revisão.</p>}
+      <label className="connect-consent"><input type="checkbox" checked={acknowledged} disabled={!currentReview || !!pending || uncertain || !capability || !connected(session) || sessionStale || !!warning}
+        onChange={event => setAcknowledged(event.target.checked)} />Autorizo abrir esta cópia com os dados acima e tentar entrar nesta conexão.</label>
+      <button className="primary" type="button" disabled={!canConfirm} onClick={confirm}>Iniciar cópia e tentar entrar</button>
+    </section>}
+    {snapshot?.phase === "starting" && <p role="status">A criação do processo está em andamento. Consulte o resultado antes de tentar outro lançamento.</p>}
+    {snapshot?.phase === "started" && snapshot.result && <p role="status">A cópia foi iniciada e registrada no Doctor. Confira a entrada no mundo no Minecraft. Encerrar o Connect não fecha o jogo; saia pelo menu quando terminar.</p>}
+    {snapshot?.phase === "cancelled" && <p role="status">Preparo cancelado. Nenhum convite foi renovado.</p>}
+    {snapshot?.phase === "expired" && <p role="status">A revisão venceu. Nenhuma autorização foi renovada.</p>}
+    {snapshot?.phase === "failed" && <p role="alert">{readyGameError(snapshot.errorCode)}</p>}
+    {active(snapshot) && <button className="secondary" type="button" disabled={pending === "cancel"} onClick={() => { void cancel(); }}>Cancelar preparo do jogo</button>}
+  </section>;
+}

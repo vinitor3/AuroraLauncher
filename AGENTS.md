@@ -29,6 +29,8 @@ O laboratório descartável `apps/connect-runtime-tools` já executou Minecraft 
 
 ## Mapa do repositório
 
+Connect73 acrescenta abertura explicitamente revisada de cópia diagnóstica já pronta, somente no par Fabric1.21.1/0.16.14/Java21 existente. A ponte Guest original concede o destino; frontend não fornece argv/porta. Preparo e confirmação verificam proveniência, arquivos, Core/Skins e Java sem instalar/reparar. O worker pertence à barreira Connect; stop não mata um jogo já registrado. Consulte `docs/aurora-connect-ready-game-launch.md` antes de ampliar. Resultado started não significa mundo, autenticação Microsoft ou áudio. Feature permanece desligada por padrão; as provas de transporte, arquivos, processo fixture e DOM não homologam o launcher gráfico.
+
 Connect72 integra o grupo estático no mesmo slot desktop, com preparo600s próprio, revisão60s e convites/prazos/revogação individuais. APIs Guests anteriores permanecem60s no preparo. Transporte ativo é observação da conexão, separado de consumo e presença Minecraft; falha de capability não deve esconder cleanup. Consulte `docs/aurora-connect-multiparticipant-desktop.md`. A correção71a conserva worker até retorno mesmo após publicação final e perda do primeiro waiter; não sobrescrever cleanup completo com pending.
 
 Connect71 acrescenta Host de grupo estático schema3, com2–8 convites individuais e APIs explícitas loopback/IPv6/IPv4. Exige bijeção convite/lease, conserva a autoridade e os relógios originais por participante; revogar/expirar A não fecha B. As APIs antigas continuam de uma admissão, sem ampliação silenciosa. Consulte `docs/aurora-connect-multiparticipant-session.md`; três agentes sintéticos não comprovam dois jogadores ou voz.

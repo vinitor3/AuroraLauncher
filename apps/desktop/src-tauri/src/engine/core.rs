@@ -84,6 +84,20 @@ pub fn install_embedded_core(
     minecraft_version: &str,
     loader: &str,
 ) -> Result<PathBuf, AuroraCoreError> {
+    let contents = verified_embedded_core(minecraft_version, loader)?;
+    instance
+        .install_aurora_artifact_bytes(
+            &format!("aurora-core-{loader}-{minecraft_version}.jar"),
+            contents,
+        )
+        .map_err(AuroraCoreError::from)
+}
+
+/// Existing trusted selection and signature validation without installation.
+pub(super) fn verified_embedded_core(
+    minecraft_version: &str,
+    loader: &str,
+) -> Result<&'static [u8], AuroraCoreError> {
     let manifest = aurora_core_manifest()?;
     let build = manifest
         .builds
@@ -100,12 +114,7 @@ pub fn install_embedded_core(
         }
     })?;
     verify_artifact(&manifest, build, contents)?;
-    instance
-        .install_aurora_artifact_bytes(
-            &format!("aurora-core-{loader}-{minecraft_version}.jar"),
-            contents,
-        )
-        .map_err(AuroraCoreError::from)
+    Ok(contents)
 }
 
 fn verify_artifact(

@@ -210,6 +210,8 @@ impl Manager {
             admission_deadline: None,
             authority: None,
             recovery: None,
+            guest_source: None,
+            ready_game: None,
             group: Some(GroupOperation {
                 draft: Some(GroupDraft {
                     request,

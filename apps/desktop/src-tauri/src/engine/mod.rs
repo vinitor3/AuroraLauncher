@@ -4,6 +4,14 @@ pub mod ai_history;
 pub mod ai_tools;
 pub mod connect;
 pub mod connect_discovery;
+#[cfg(all(windows, feature = "connect-lab"))]
+pub mod connect_java_probe;
+#[cfg(feature = "connect-lab")]
+pub mod connect_quick_play;
+#[cfg(feature = "connect-lab")]
+pub mod connect_ready_files;
+#[cfg(all(windows, feature = "connect-lab"))]
+pub mod connect_ready_runtime;
 #[cfg(feature = "connect-voice-lab")]
 pub mod connect_voice;
 pub mod connect_voice_desktop;

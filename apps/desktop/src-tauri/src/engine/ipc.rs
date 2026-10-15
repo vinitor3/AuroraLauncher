@@ -5,7 +5,7 @@
 //! de conta e nunca deve ser persistido ou registrado em logs.
 
 use std::collections::BTreeMap;
-use std::io;
+use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -15,7 +15,9 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tungstenite::{accept, Message};
+use tungstenite::{
+    accept_with_config, handshake::HandshakeError, protocol::WebSocketConfig, Message, WebSocket,
+};
 use uuid::Uuid;
 
 #[derive(Debug, Error)]
@@ -196,16 +198,9 @@ fn handle_connection(
     shutdown: &AtomicBool,
     connected: &AtomicBool,
 ) {
-    let mut socket = match accept(stream) {
-        Ok(socket) => socket,
-        Err(error) => {
-            eprintln!("[Aurora IPC] handshake WebSocket recusado: {error}");
-            return;
-        }
+    let Some(mut socket) = upgrade_connection(stream, shutdown, Duration::from_secs(5)) else {
+        return;
     };
-    let _ = socket
-        .get_mut()
-        .set_read_timeout(Some(Duration::from_millis(75)));
     let mut authenticated = false;
     let handshake_started = Instant::now();
 
@@ -236,6 +231,11 @@ fn handle_connection(
                 break;
             }
         };
+        // The last blocking read or already-buffered frame may have crossed the
+        // deadline/cancellation after the wrapper's pre-IO observation.
+        if socket.get_ref().check().is_err() {
+            break;
+        }
         let text = match message.to_text() {
             Ok(text) => text,
             Err(_) => continue,
@@ -259,6 +259,7 @@ fn handle_connection(
                 return;
             }
             authenticated = true;
+            socket.get_mut().deadline = None;
             connected.store(true, Ordering::Release);
             let _ = socket.send(Message::Text(r#"{"kind":"accepted"}"#.into()));
             if let Some(session) = session {
@@ -296,6 +297,122 @@ fn handle_connection(
     if authenticated {
         connected.store(false, Ordering::Release);
         let _ = sender.try_send(IpcEvent::Disconnected);
+    }
+}
+
+/// Upgrade is cancellable before authentication: a silent loopback client must
+/// not hold the owned server's Drop/join forever. Tungstenite 0.24 also bounds
+/// the HTTP upgrade to 64 KiB/512 successful reads; the elapsed deadline below
+/// is never reset by a partial request. The Core's existing 1 MiB message bound
+/// is enforced here as well, without changing hello/nonce/protocol semantics.
+struct GuardedStream<'a> {
+    inner: TcpStream,
+    shutdown: &'a AtomicBool,
+    deadline: Option<Instant>,
+}
+
+impl GuardedStream<'_> {
+    fn check(&self) -> io::Result<()> {
+        if self.shutdown.load(Ordering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "IPC stopped",
+            ));
+        }
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "IPC handshake deadline",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Read for GuardedStream<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.check()?;
+        self.inner.read(buffer)
+    }
+}
+
+impl Write for GuardedStream<'_> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.check()?;
+        self.inner.write(buffer)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.check()?;
+        self.inner.flush()
+    }
+}
+
+fn upgrade_connection<'a>(
+    stream: TcpStream,
+    shutdown: &'a AtomicBool,
+    timeout: Duration,
+) -> Option<WebSocket<GuardedStream<'a>>> {
+    upgrade_connection_observed(stream, shutdown, timeout, || {})
+}
+
+fn upgrade_connection_observed<'a>(
+    stream: TcpStream,
+    shutdown: &'a AtomicBool,
+    timeout: Duration,
+    mut waiting: impl FnMut(),
+) -> Option<WebSocket<GuardedStream<'a>>> {
+    if shutdown.load(Ordering::Acquire) || stream.set_nonblocking(true).is_err() {
+        return None;
+    }
+    let started = Instant::now();
+    let config = WebSocketConfig {
+        max_message_size: Some(1024 * 1024),
+        max_frame_size: Some(1024 * 1024),
+        ..WebSocketConfig::default()
+    };
+    let stream = GuardedStream {
+        inner: stream,
+        shutdown,
+        deadline: Some(started + timeout),
+    };
+    let mut result = accept_with_config(stream, Some(config));
+    loop {
+        if shutdown.load(Ordering::Acquire) || started.elapsed() >= timeout {
+            return None;
+        }
+        match result {
+            Ok(mut socket) => {
+                let stream = &socket.get_ref().inner;
+                if stream.set_nonblocking(false).is_err()
+                    || stream
+                        .set_read_timeout(Some(Duration::from_millis(75)))
+                        .is_err()
+                    || stream
+                        .set_write_timeout(Some(Duration::from_millis(75)))
+                        .is_err()
+                {
+                    return None;
+                }
+                // TCP timeouts alone do not interrupt read() while a peer keeps
+                // sending unfinished WebSocket continuations. Check the absolute
+                // hello deadline and cancellation at every underlying IO instead.
+                socket.get_mut().deadline = Some(Instant::now() + Duration::from_secs(5));
+                return Some(socket);
+            }
+            Err(HandshakeError::Interrupted(mid)) => {
+                waiting();
+                thread::sleep(Duration::from_millis(5));
+                if shutdown.load(Ordering::Acquire) || started.elapsed() >= timeout {
+                    return None;
+                }
+                result = mid.handshake();
+            }
+            Err(HandshakeError::Failure(_)) => return None,
+        }
     }
 }
 
@@ -378,6 +495,209 @@ mod tests {
     use super::*;
     use std::time::Instant;
     use tungstenite::connect;
+
+    fn tcp_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        (client, server)
+    }
+
+    fn unfinished_fragments_end(cancel: bool) -> (io::ErrorKind, usize) {
+        let (client, stream) = tcp_pair();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_shutdown = shutdown.clone();
+        let (finished, result) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let mut socket =
+                upgrade_connection(stream, &worker_shutdown, Duration::from_secs(1)).unwrap();
+            // Use a short private deadline instead of waiting five seconds or
+            // altering the process/Windows clock. Cancellation also applies to
+            // authenticated streams, whose hello deadline has been removed.
+            socket.get_mut().deadline = if cancel {
+                None
+            } else {
+                Some(Instant::now() + Duration::from_millis(120))
+            };
+            let kind = match socket.read() {
+                Err(tungstenite::Error::Io(error)) => error.kind(),
+                _ => panic!("unfinished fragments must end through the IO guard"),
+            };
+            finished.send(kind).unwrap();
+        });
+        let (mut client, _) = tungstenite::client("ws://localhost/aurora", client).unwrap();
+        client
+            .get_mut()
+            .set_write_timeout(Some(Duration::from_millis(75)))
+            .unwrap();
+        // Masked empty TEXT without FIN, then masked empty continuations. No
+        // complete WebSocket message can return control to the caller loop.
+        client
+            .get_mut()
+            .write_all(&[0x01, 0x80, 1, 2, 3, 4])
+            .unwrap();
+        let stop_writer = Arc::new(AtomicBool::new(false));
+        let writer_stop = stop_writer.clone();
+        let (progress, observed_progress) = mpsc::sync_channel(1);
+        let writer = thread::spawn(move || {
+            let chunk = [0x00, 0x80, 1, 2, 3, 4].repeat(128);
+            let mut bytes = 6;
+            for index in 0..1024 {
+                if writer_stop.load(Ordering::Acquire)
+                    || client.get_mut().write_all(&chunk).is_err()
+                {
+                    break;
+                }
+                bytes += chunk.len();
+                if index == 31 {
+                    let _ = progress.send(());
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            // Retain the still-open peer in the returned value until the server
+            // result is observed; EOF must not be the reason for completion.
+            (client, bytes)
+        });
+        if cancel {
+            observed_progress
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap();
+            shutdown.store(true, Ordering::Release);
+        }
+        let outcome = result.recv_timeout(Duration::from_millis(500));
+        stop_writer.store(true, Ordering::Release);
+        let (client, bytes) = writer.join().unwrap();
+        worker.join().unwrap();
+        drop(client);
+        (
+            outcome.expect("continuous empty fragments must not bypass cancellation/deadline"),
+            bytes,
+        )
+    }
+
+    #[test]
+    fn ipc_empty_continuations_cannot_hold_hello_past_its_absolute_deadline() {
+        let (kind, bytes) = unfinished_fragments_end(false);
+        assert_eq!(kind, io::ErrorKind::TimedOut);
+        assert!(bytes <= 6 + 1024 * 128 * 6);
+    }
+
+    #[test]
+    fn ipc_empty_continuations_remain_cancellable_after_hello_deadline_is_removed() {
+        let (kind, bytes) = unfinished_fragments_end(true);
+        assert_eq!(kind, io::ErrorKind::ConnectionAborted);
+        assert!(bytes >= 6 + 32 * 128 * 6);
+        assert!(bytes <= 6 + 1024 * 128 * 6);
+    }
+
+    #[test]
+    fn ipc_guard_checks_cancel_and_deadline_even_with_readable_tcp_bytes() {
+        let (mut client, stream) = tcp_pair();
+        let shutdown = AtomicBool::new(false);
+        let mut guarded = GuardedStream {
+            inner: stream,
+            shutdown: &shutdown,
+            deadline: None,
+        };
+        client.write_all(b"pending").unwrap();
+        let mut byte = [0];
+        guarded.read_exact(&mut byte).unwrap();
+        assert_eq!(byte[0], b'p');
+        shutdown.store(true, Ordering::Release);
+        assert_eq!(
+            guarded.read(&mut byte).unwrap_err().kind(),
+            io::ErrorKind::ConnectionAborted
+        );
+        shutdown.store(false, Ordering::Release);
+        guarded.deadline = Some(Instant::now());
+        assert_eq!(
+            guarded.read(&mut byte).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+    }
+
+    #[test]
+    fn ipc_upgrade_silent_peer_cancels_without_waiting_for_peer_eof() {
+        let (mut client, stream) = tcp_pair();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_shutdown = shutdown.clone();
+        let (started, observed) = mpsc::sync_channel(1);
+        let (finished, result) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            finished
+                .send(
+                    upgrade_connection_observed(
+                        stream,
+                        &worker_shutdown,
+                        Duration::from_secs(5),
+                        || {
+                            let _ = started.try_send(());
+                        },
+                    )
+                    .is_none(),
+                )
+                .unwrap();
+        });
+        observed.recv_timeout(Duration::from_secs(1)).unwrap();
+        // The peer deliberately remains open while cancellation completes.
+        std::io::Write::write_all(&mut client, b"G").unwrap();
+        shutdown.store(true, Ordering::Release);
+        assert!(result.recv_timeout(Duration::from_secs(1)).unwrap());
+        worker.join().unwrap();
+        drop(client);
+    }
+
+    #[test]
+    fn ipc_upgrade_partial_progress_does_not_renew_deadline() {
+        let (mut client, stream) = tcp_pair();
+        let (finished, result) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let shutdown = AtomicBool::new(false);
+            finished
+                .send(upgrade_connection(stream, &shutdown, Duration::from_millis(120)).is_none())
+                .unwrap();
+        });
+        for byte in b"GET /aurora" {
+            if std::io::Write::write_all(&mut client, &[*byte]).is_err() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(15));
+        }
+        assert!(result.recv_timeout(Duration::from_secs(1)).unwrap());
+        worker.join().unwrap();
+        drop(client);
+    }
+
+    #[test]
+    fn ipc_upgrade_large_unfinished_header_is_bounded_and_authenticated_wire_still_works() {
+        let (mut client, stream) = tcp_pair();
+        client
+            .set_write_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let (finished, result) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let shutdown = AtomicBool::new(false);
+            finished
+                .send(upgrade_connection(stream, &shutdown, Duration::from_secs(2)).is_none())
+                .unwrap();
+        });
+        let mut header = b"GET /aurora HTTP/1.1\r\nX-Long: ".to_vec();
+        header.extend(vec![b'x'; 70 * 1024]);
+        let _ = std::io::Write::write_all(&mut client, &header);
+        assert!(result.recv_timeout(Duration::from_secs(3)).unwrap());
+        worker.join().unwrap();
+        drop(client);
+        let server = IpcServer::start().unwrap();
+        let (mut socket, _) =
+            connect(format!("ws://127.0.0.1:{}/aurora", server.endpoint().port)).unwrap();
+        socket.send(Message::Text(serde_json::json!({"kind":"hello", "nonce":server.endpoint().nonce, "loader":"fabric", "minecraftVersion":"1.21.1", "coreVersion":"1.1.5", "protocol":1}).to_string())).unwrap();
+        assert!(socket
+            .read()
+            .unwrap()
+            .to_text()
+            .unwrap()
+            .contains("accepted"));
+    }
 
     #[test]
     fn endpoint_is_loopback_port_with_fresh_nonce() {
