@@ -28,6 +28,11 @@ mod fragmented_desktop;
 #[cfg(test)]
 #[path = "session_fragmented_tests.rs"]
 mod session_fragmented_tests;
+#[path = "session_group.rs"]
+mod session_group;
+#[cfg(test)]
+#[path = "session_group_tests.rs"]
+mod session_group_tests;
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod session_tests;
@@ -115,8 +120,11 @@ struct Attempt {
     admission_deadline: Option<Instant>,
     authority: Option<Authority>,
     recovery: Option<udp_recovery::RecoveryControl>,
+    group: Option<session_group::GroupOperation>,
     #[cfg(test)]
     recovery_gate: Option<Arc<udp_recovery::TestGate>>,
+    #[cfg(test)]
+    group_start_gate: Option<Arc<session_group::GroupTestGate>>,
 }
 #[derive(Default)]
 struct State {
@@ -209,6 +217,10 @@ fn expire_pending(a: &mut Attempt) {
     expire_pending_at(a, lab::unix_millis());
 }
 fn expire_pending_at(a: &mut Attempt, now_unix: u64) {
+    if a.group.is_some() {
+        session_group::expire_pending(a, now_unix);
+        return;
+    }
     if matches!(
         a.snapshot.phase,
         "hostPrepared" | "guestPrepared" | "reviewed"
@@ -263,6 +275,7 @@ fn update(state: &Mutex<State>, id: &str, change: impl FnOnce(&mut Attempt)) {
 }
 fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
     update(state, id, |a| {
+        session_group::finished(a);
         udp_recovery::clear(a);
         a.snapshot.phase = if error.is_some() { "failed" } else { "closed" };
         a.snapshot.transport_state = "closed";
@@ -301,6 +314,7 @@ async fn close_operation(
     error: Option<ConnectError>,
 ) {
     update(state, id, |a| {
+        session_group::closing(a);
         a.snapshot.phase = "closing";
         udp_recovery::clear(a);
         a.snapshot.cleanup_state = "pending";
@@ -357,6 +371,7 @@ impl Manager {
                 return Err(ConnectError::OwnerMismatch);
             }
             expire_pending(a);
+            session_group::refresh(a);
             return Ok(a.snapshot.clone());
         }
         Ok(ConnectSnapshot::idle())
@@ -427,8 +442,11 @@ impl Manager {
             admission_deadline: None,
             authority: None,
             recovery: None,
+            group: None,
             #[cfg(test)]
             recovery_gate: None,
+            #[cfg(test)]
+            group_start_gate: None,
         });
         Ok(preparation)
     }
@@ -1121,6 +1139,7 @@ impl Manager {
             let a = selected(&mut state, owner, id)?;
             a.cancel.cancel();
             udp_recovery::clear(a);
+            session_group::closing(a);
             a.draft = None;
             a.reviewed = None;
             a.export = None;
@@ -1164,6 +1183,7 @@ impl Manager {
             if let Some(worker) = finished_worker {
                 if worker.await.is_err() {
                     update(&self.state, id, |a| {
+                        session_group::closing(a);
                         a.snapshot.phase = "failed";
                         a.snapshot.cleanup_state = "failed";
                         a.snapshot.error_code = Some(ConnectError::Internal.code());

@@ -76,6 +76,9 @@ enum HostAuthorities {
     Invited(HashMap<String, InvitationAuthority>),
 }
 
+#[cfg(test)]
+#[path = "host_active_observation_tests.rs"]
+mod active_observation_tests;
 #[path = "host_session_group.rs"]
 mod session_group;
 
@@ -220,7 +223,7 @@ struct State {
     metrics: Arc<Metrics>,
     tcp: Arc<Semaphore>,
     udp: Arc<Semaphore>,
-    active_leases: Mutex<HashSet<String>>,
+    active_leases: Mutex<HashMap<String, Connection>>,
     budget: Budget,
     cancel: CancellationToken,
     #[cfg(test)]
@@ -541,7 +544,7 @@ impl Host {
             ))),
             limits: config.limits,
             metrics: Arc::new(Metrics::default()),
-            active_leases: Mutex::new(HashSet::new()),
+            active_leases: Mutex::new(HashMap::new()),
             cancel: CancellationToken::new(),
             #[cfg(test)]
             control_reads_started: AtomicU64::new(0),
@@ -572,6 +575,12 @@ impl Host {
         self.state.leases.get(lease_id).is_some_and(|lease| {
             lease.invitation.is_some() && lease.consumed.load(Ordering::Acquire)
         })
+    }
+    /// Instantaneous authenticated transport observation, not player presence.
+    /// Unknown remote failures can become visible after this method returns.
+    pub fn invitation_active(&self, lease_id: &str) -> bool {
+        let active = self.state.active_leases.lock().unwrap();
+        active_invitation(&self.state, &active, lease_id)
     }
     pub fn revoke(&self, lease_id: &str) -> bool {
         // Linearize revocation with admission and its single-use decision.
@@ -658,6 +667,20 @@ fn authorize_session<'a>(
     Ok(lease)
 }
 
+fn active_invitation(state: &State, active: &HashMap<String, Connection>, lease_id: &str) -> bool {
+    if state.cancel.is_cancelled() {
+        return false;
+    }
+    let Some(connection) = active.get(lease_id) else {
+        return false;
+    };
+    authorize_session(state, lease_id, connection.remote_id()).is_ok_and(|lease| {
+        lease.invitation.is_some()
+            && lease.consumed.load(Ordering::Acquire)
+            && connection.close_reason().is_none()
+    })
+}
+
 fn authorize_admission<'a>(
     state: &'a State,
     lease_id: &str,
@@ -698,7 +721,7 @@ async fn handshake(connection: &Connection, state: &Arc<State>) -> Result<(Hello
         if lease.invitation.is_some() && lease.consumed.load(Ordering::Acquire) {
             return Err(Error::Replay);
         }
-        if active.len() >= state.limits.max_peers || active.contains(&hello.lease_id) {
+        if active.len() >= state.limits.max_peers || active.contains_key(&hello.lease_id) {
             return Err(Error::Limit);
         }
         // TLS is fully authenticated before this handler is entered. Consume
@@ -707,7 +730,7 @@ async fn handshake(connection: &Connection, state: &Arc<State>) -> Result<(Hello
         if lease.invitation.is_some() {
             lease.consumed.store(true, Ordering::Release);
         }
-        active.insert(hello.lease_id.clone());
+        active.insert(hello.lease_id.clone(), connection.clone());
         Ok(PeerGuard {
             state: state.clone(),
             lease_id: hello.lease_id.clone(),

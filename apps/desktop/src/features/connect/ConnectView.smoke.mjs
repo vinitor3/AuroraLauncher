@@ -1586,3 +1586,318 @@ test("direct IPv4 review parsers reject inconsistent initial addresses across al
   const opaque = { ...sessionFragmentedExport, invitation: '{"mode":"externalIpv6","directAddress":"arbitrary opaque input"}' };
   assert.equal(types.exportFrom(opaque).invitation, opaque.invitation, "Projection parsing never selects transport by inspecting encoded invitation data");
 });
+
+const groupTypes = await import(await sourceModule(new URL("./group-types.ts", import.meta.url)));
+const groupOperation = "aaaaaaaa-1111-4111-8111-111111111111";
+const groupKind = "staticSessionFragmentedHost";
+const groupCapability = { profile: sessionFragmentedProfile, invitationSchemaVersion: 3, minParticipants: 2, maxParticipants: 8,
+  maxPreparationSeconds: 600, maxReviewSeconds: 60, maxAdmissionSeconds: 600, maxSessionSeconds: 3600, ownedGameTcpDiscovery: false };
+const groupParticipants = () => ["b", "e"].map((letter, index) => ({ participantId: `${letter.repeat(8)}-2222-4222-8222-222222222222`,
+  guestPublicId: letter.repeat(64), invitationDigest: (index === 0 ? "d" : "f").repeat(64),
+  sessionTiming: { profile: sessionFragmentedProfile, schemaVersion: 3, admissionSeconds: 600 - index * 100, sessionSeconds: 3600 - index * 500,
+    admissionExpiresAtMs: 1800000000000 + (600 - index * 100) * 1000, sessionExpiresAtMs: 1800000000000 + (3600 - index * 500) * 1000 },
+  consumed: false, transportActive: false, revoked: false, admissionValid: true, sessionValid: true }));
+function preparedGroup() {
+  return { ...idle(), operationId: groupOperation, generation: 1, role: "host", phase: "hostPrepared", expiresAtMs: 1800000600000,
+    hostGroup: { kind: groupKind, profile: sessionFragmentedProfile, invitationSchemaVersion: 3, mode: "loopback", hostPublicId: hostId,
+      preparation: { operationId: groupOperation, generation: 1, publicId: hostId, expiresAtMs: 1800000600000, kind: groupKind }, review: null, participants: [] } };
+}
+function reviewedGroup() {
+  const value = preparedGroup(), participants = groupParticipants();
+  return { ...value, phase: "reviewed", expiresAtMs: 1800000060000, hostGroup: { ...value.hostGroup, preparation: null, participants,
+    review: { operationId: groupOperation, generation: 1, digest, kind: groupKind, mode: "loopback", hostPublicId: hostId,
+      directAddress: "127.0.0.1:42000", gameTarget: "127.0.0.1:43001", targetSource: "manual",
+      fragmentedUdp: { ...sessionFragmentedContract, udpTarget: "127.0.0.1:43002" }, participants: structuredClone(participants), expiresAtMs: 1800000060000 } } };
+}
+function activeGroup() {
+  const value = reviewedGroup();
+  return { ...value, phase: "hostListening", transportState: "listening", expiresAtMs: null, hostGroup: { ...value.hostGroup, review: null } };
+}
+function groupFixtures() {
+  capabilities = { ...caps, sessionFragmentedUdpInvitations: sessionFragmentedCapability, sessionFragmentedHostGroups: groupCapability };
+  handlers.set("connect_prepare_session_group_host", () => { snapshot = preparedGroup(); return snapshot.hostGroup.preparation; });
+  handlers.set("connect_review_session_group_host", () => { snapshot = reviewedGroup(); return snapshot.hostGroup.review; });
+  handlers.set("connect_confirm_session_group_host", () => { snapshot = activeGroup(); return structuredClone(snapshot); });
+  handlers.set("connect_export_session_group_invitation", ({ participantId }) => {
+    const row = snapshot.hostGroup.participants.find(item => item.participantId === participantId); assert.ok(row);
+    return { operationId: groupOperation, participantId, invitationDigest: row.invitationDigest, invitation: `opaque-${participantId}`,
+      hostPublicId: hostId, expiresAtMs: row.sessionTiming.admissionExpiresAtMs, sessionTiming: structuredClone(row.sessionTiming), fragmentedUdp: sessionFragmentedContract };
+  });
+  handlers.set("connect_revoke_session_group_participant", ({ operationId, participantId, expectedGeneration }) => {
+    assert.equal(operationId, groupOperation); assert.equal(expectedGeneration, snapshot.generation);
+    snapshot = { ...snapshot, generation: snapshot.generation + 1, hostGroup: { ...snapshot.hostGroup,
+      participants: snapshot.hostGroup.participants.map(row => row.participantId === participantId
+        ? { ...row, revoked: true, admissionValid: false, sessionValid: false, transportActive: false } : row) } };
+    return structuredClone(snapshot);
+  });
+  handlers.set("connect_stop", () => {
+    snapshot = { ...snapshot, phase: "closed", transportState: "closed", expiresAtMs: null, cleanupState: "complete",
+      hostGroup: { ...snapshot.hostGroup, preparation: null, review: null,
+        participants: snapshot.hostGroup.participants.map(row => ({ ...row, transportActive: false, admissionValid: false, sessionValid: false })) } };
+    return structuredClone(snapshot);
+  });
+}
+async function fillGroup() {
+  await editInput(labeledInput("Código público do participante 1"), "b".repeat(64));
+  await editInput(labeledInput("Código público do participante 2"), "e".repeat(64));
+  await editInput(labeledInput("Prazo para entrar do participante 2"), "500");
+  await editInput(labeledInput("Duração da sessão do participante 2"), "3100");
+}
+
+test("group capability is explicit, optional and never changes older host/guest choices", async () => {
+  sessionFragmentedFixtures(); await render(); assert.equal(container.querySelector('option[value="sessionGroup"]'), null);
+  await chooseProfile(sessionFragmentedProfile); await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002"); await submit();
+  assert.equal(count("connect_prepare_session_group_host"), 0); assert.equal(count("connect_prepare_session_fragmented_host"), 1);
+  assert.throws(() => types.capabilitiesFrom({ ...caps, sessionFragmentedHostGroups: groupCapability }));
+  for (const changed of [{ maxParticipants: 9 }, { minParticipants: 1 }, { ownedGameTcpDiscovery: true }, { maxReviewSeconds: 600 }, { profile: "sessionGameTcp" }, { surprise: true }]) {
+    assert.throws(() => types.capabilitiesFrom({ ...caps, sessionFragmentedUdpInvitations: sessionFragmentedCapability, sessionFragmentedHostGroups: { ...groupCapability, ...changed } }));
+  }
+});
+
+test("group host performs separate prepare, two-person review, consent and individual invitation export", async () => {
+  groupFixtures(); await render(); await chooseProfile("sessionGroup");
+  assert.equal([...container.querySelectorAll("label")].some(label => label.textContent.startsWith("Selecionar servidor")), false);
+  await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002"); await submit();
+  assert.deepEqual(calls.find(call => call.command === "connect_prepare_session_group_host").args,
+    { request: { mode: "loopback", bindAddress: "127.0.0.1:42000", gameTarget: "127.0.0.1:43001", udpTarget: "127.0.0.1:43002" } });
+  assert.equal(count("connect_review_host"), 0); assert.equal(container.querySelectorAll("fieldset").length, 2);
+  await fillGroup(); await submit();
+  assert.deepEqual(calls.find(call => call.command === "connect_review_session_group_host").args, { operationId: groupOperation, participants: [
+    { guestPublicId: "b".repeat(64), admissionSeconds: 600, sessionSeconds: 3600 },
+    { guestPublicId: "e".repeat(64), admissionSeconds: 500, sessionSeconds: 3100 } ] });
+  assert.equal(button("Autorizar grupo").disabled, true); assert.equal(count("connect_confirm"), 0);
+  await checkConsent(); await click("Autorizar grupo");
+  assert.deepEqual(calls.find(call => call.command === "connect_confirm_session_group_host").args, { operationId: groupOperation, digest });
+  assert.equal(button("Copiar convite selecionado").disabled, true);
+  await click("Selecionar convite 2"); await click("Copiar convite selecionado");
+  assert.deepEqual(calls.find(call => call.command === "connect_export_session_group_invitation").args, { operationId: groupOperation, participantId: groupParticipants()[1].participantId });
+  assert.deepEqual(copied, [`opaque-${groupParticipants()[1].participantId}`]);
+  assert.match(container.textContent, /Conexão autenticada não confirma entrada no Minecraft ou áudio/);
+  assert.equal(count("connect_export_invitation"), 0); assert.equal(count("connect_probe_status"), 0);
+});
+
+test("group choice remains host-only and requires manually entered reachable IPv4 and loopback targets", async () => {
+  groupFixtures(); capabilities.modes.push("directIpv4"); await render(); await chooseProfile("sessionGroup");
+  await chooseMode("directIpv4"); assert.equal(labeledInput("Endereço inicial").value, "");
+  await editInput(labeledInput("Serviço UDP"), "127.0.0.1:43002"); await submit(); assert.equal(count("connect_prepare_session_group_host"), 0);
+  await editInput(labeledInput("Endereço inicial"), "192.168.1.2:42000"); await editInput(labeledInput("Servidor neste"), "192.168.1.2:43001");
+  await submit(); assert.equal(count("connect_prepare_session_group_host"), 0);
+  await click("Convidado"); assert.equal(container.querySelector('option[value="sessionGroup"]'), null);
+  assert.equal(container.querySelector('option[value="legacy"]').selected, true);
+});
+
+test("group refuses duplicate peers and invalid individual durations before review IPC; list stays within eight", async () => {
+  groupFixtures(); snapshot = preparedGroup(); await render(); await fillGroup();
+  await editInput(labeledInput("Código público do participante 2"), "b".repeat(64)); await submit();
+  assert.equal(count("connect_review_session_group_host"), 0);
+  await editInput(labeledInput("Código público do participante 2"), "e".repeat(64));
+  for (const value of ["0", "601", "1.5"]) { await editInput(labeledInput("Prazo para entrar do participante 2"), value); await submit(); }
+  assert.equal(count("connect_review_session_group_host"), 0);
+  for (let i = 0; i < 6; i++) await click("Adicionar participante");
+  assert.equal(container.querySelectorAll("fieldset").length, 8); assert.equal(button("Adicionar participante").disabled, true);
+  await click("Remover participante 8"); assert.equal(container.querySelectorAll("fieldset").length, 7);
+});
+
+test("group snapshots preserve cleanup without capabilities and reject mixed or inconsistent single-peer projections", async () => {
+  const valid = activeGroup(); assert.deepEqual(types.snapshotFrom(valid), valid);
+  for (const mutation of [s => { s.role = "guest"; }, s => { s.phase = "guestConnected"; }, s => { s.invitationProfile = sessionFragmentedProfile; },
+    s => { s.sessionTiming = groupParticipants()[0].sessionTiming; }, s => { s.review = review; }, s => { s.preparation = preparation; },
+    s => { s.udpRecovery = { attemptsUsed: 0, maxAttempts: 3, pending: false }; }, s => { s.tcpAddress = "127.0.0.1:42010"; },
+    s => { s.expiresAtMs = groupParticipants()[0].sessionTiming.sessionExpiresAtMs; }, s => { s.hostGroup.participants[1].participantId = s.hostGroup.participants[0].participantId; },
+    s => { s.hostGroup.participants[1].guestPublicId = s.hostGroup.participants[0].guestPublicId; }, s => { s.hostGroup.participants[0].sessionTiming.schemaVersion = 2; },
+    s => { s.hostGroup.participants[0].transportActive = true; }, s => { s.hostGroup.participants[0].revoked = true; }]) {
+    const broken = structuredClone(valid); mutation(broken); assert.throws(() => types.snapshotFrom(broken));
+  }
+  groupFixtures(); delete capabilities.sessionFragmentedHostGroups; snapshot = valid; await render();
+  assert.match(container.textContent, /ações de grupo não estão disponíveis/);
+  assert.equal(button("Selecionar convite 1").disabled, true); await click("Encerrar Connect");
+  assert.equal(count("connect_stop"), 1); assert.match(container.textContent, /Recursos liberados/);
+});
+
+test("group review binds all immutable participant data and cannot enter older review/export/preparation parsers", () => {
+  const value = reviewedGroup(); assert.deepEqual(groupTypes.groupReviewFrom(value.hostGroup.review), value.hostGroup.review);
+  assert.throws(() => types.preparationFrom(preparedGroup().hostGroup.preparation));
+  assert.throws(() => types.reviewFrom(value.hostGroup.review));
+  for (const mutate of [s => { s.hostGroup.review.operationId = groupParticipants()[0].participantId; }, s => { s.hostGroup.review.participants.reverse(); },
+    s => { s.hostGroup.review.mode = "directIpv4"; }, s => { s.hostGroup.review.participants[0].transportActive = true; },
+    s => { s.hostGroup.review.fragmentedUdp.udpTarget = "192.168.0.2:1234"; }, s => { s.hostGroup.review.participants[0].sessionTiming.profile = "sessionGameTcp"; }]) {
+    const broken = structuredClone(value); mutate(broken); assert.throws(() => types.snapshotFrom(broken));
+  }
+});
+
+test("group reviewed snapshot cannot disagree with the pristine reviewed participant flags", () => {
+  for (const change of [{ consumed: true }, { revoked: true, admissionValid: false, sessionValid: false },
+    { admissionValid: false }, { admissionValid: false, sessionValid: false }, { consumed: true, transportActive: true }]) {
+    const value = reviewedGroup(); Object.assign(value.hostGroup.participants[0], change);
+    assert.throws(() => types.snapshotFrom(value), JSON.stringify(change));
+  }
+});
+
+test("group external IPv6 review requires a canonical literal, valid port and native address policy", () => {
+  for (const address of ["[2001:4860::1]:80", "[2001:4860::1]:65535", "[3000:1234:abcd::7]:42000"]) {
+    const value = reviewedGroup().hostGroup.review; value.mode = "externalIpv6"; value.directAddress = address;
+    assert.deepEqual(groupTypes.groupReviewFrom(value), value);
+  }
+  for (const address of ["[2]:99999", "[2001:4860::1]:65536", "[2001:4860::1]:0", "[2001:4860::1]:042000",
+    "[2001:4860:::1]:42000", "[2001:4860:1:2:3:4:5:6:7]:42000", "[2001:4860::1%3]:42000", "[::1]:42000",
+    "[2001:db8::1]:42000", "[2001:1::1]:42000", "[2002::1]:42000", "[2620:4f:8000::1]:42000", "[3fff::1]:42000",
+    "[2001:4860::5efe:1:2]:42000", "[2001:4860:1:2:200:5efe:1:2]:42000", "[fe80::1]:42000",
+    "[ff02::1]:42000", "[2001:4860:0:0:0:0:0:1]:42000", "[2001:4860::1]:42000/path", "host.example:42000"]) {
+    const value = reviewedGroup().hostGroup.review; value.mode = "externalIpv6"; value.directAddress = address;
+    assert.throws(() => groupTypes.groupReviewFrom(value), address);
+  }
+});
+
+test("group remount still observes and awaits stop when the capability IPC fails", async () => {
+  groupFixtures(); snapshot = activeGroup();
+  handlers.set("connect_capabilities", () => { throw new Error("capability unavailable"); });
+  const finishStop = handlers.get("connect_stop"); let completeStop;
+  handlers.set("connect_stop", () => new Promise(resolve => { completeStop = () => resolve(finishStop()); }));
+  await render();
+  assert.equal(count("connect_snapshot"), 1); assert.match(container.textContent, /ações de grupo não estão disponíveis/);
+  assert.equal(button("Selecionar convite 1").disabled, true); assert.equal(button("Revogar participante 1").disabled, true);
+  assert.equal(button("Copiar convite selecionado").disabled, true);
+  await click("Encerrar Connect"); assert.equal(button("Encerrar Connect").disabled, true);
+  assert.doesNotMatch(container.textContent, /Recursos liberados/);
+  await act(async () => completeStop()); assert.match(container.textContent, /Recursos liberados/);
+  assert.equal(container.querySelector("form"), null); assert.deepEqual(copied, []);
+  assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot", "connect_stop"]);
+});
+
+test("group failed capability keeps prepared and reviewed actions disabled while allowing cleanup", async () => {
+  groupFixtures(); snapshot = preparedGroup();
+  handlers.set("connect_capabilities", () => { throw new Error("capability unavailable"); });
+  await render(); assert.equal(button("Copiar código do grupo").disabled, true);
+  assert.equal(button("Revisar grupo completo").disabled, true);
+  snapshot = reviewedGroup(); await click("Atualizar estado");
+  assert.equal(button("Autorizar grupo").disabled, true); assert.equal(container.querySelector('.connect-consent input').disabled, true);
+  await click("Encerrar Connect"); assert.equal(count("connect_stop"), 1); assert.deepEqual(copied, []);
+  assert.equal(count("connect_confirm_session_group_host"), 0); assert.equal(count("connect_review_session_group_host"), 0);
+});
+
+test("group failed cleanup preserves uncertain transport and stop without claiming resources released", async () => {
+  groupFixtures(); const value = activeGroup();
+  snapshot = { ...value, phase: "failed", cleanupState: "failed", errorCode: "connect_internal",
+    hostGroup: { ...value.hostGroup, participants: value.hostGroup.participants.map(row => ({ ...row, admissionValid: false, sessionValid: false })) } };
+  for (const transportState of ["notStarted", "listening", "closed"]) {
+    const acceptable = { ...snapshot, transportState }; assert.deepEqual(types.snapshotFrom(acceptable), acceptable);
+  }
+  for (const changed of [{ transportState: "admitted" }, { transportState: "authenticated" }, { cleanupState: "notStarted" },
+    { cleanupState: "pending" }, { cleanupState: "complete" }, { phase: "closed" }]) {
+    assert.throws(() => types.snapshotFrom({ ...snapshot, ...changed }));
+  }
+  const invalidFlags = structuredClone(snapshot); invalidFlags.hostGroup.participants[0].sessionValid = true;
+  assert.throws(() => types.snapshotFrom(invalidFlags));
+  await render(); assert.match(container.textContent, /transporte exibido é a última observação/);
+  assert.doesNotMatch(container.textContent, /Recursos liberados|Conexão autenticada observada/);
+  assert.equal(container.querySelector("form"), null); await click("Encerrar Connect");
+  assert.match(container.textContent, /Recursos liberados/); assert.equal(count("connect_stop"), 1);
+});
+
+test("group revocation affects selected participant only and never calls whole-group stop", async () => {
+  groupFixtures(); snapshot = activeGroup(); snapshot.hostGroup.participants[0].consumed = true; snapshot.hostGroup.participants[0].transportActive = true;
+  await render(); assert.match(container.textContent, /Conexão autenticada observada/);
+  assert.equal(button("Selecionar convite 1").disabled, true); await click("Revogar participante 1");
+  assert.equal(snapshot.hostGroup.participants[0].revoked, true); assert.equal(snapshot.hostGroup.participants[1].revoked, false);
+  assert.equal(button("Selecionar convite 2").disabled, false); assert.equal(count("connect_stop"), 0);
+  assert.equal(count("connect_revoke_session_group_participant"), 1);
+  await click("Selecionar convite 2"); await click("Copiar convite selecionado"); assert.equal(copied.length, 1);
+});
+
+test("group individual expiry or consumption hides that invitation without stopping another participant", async () => {
+  groupFixtures(); snapshot = activeGroup(); await render(); await click("Selecionar convite 1"); await click("Copiar convite selecionado");
+  assert.equal([...container.querySelectorAll("textarea")].some(item => item.value.startsWith("opaque-")), true);
+  snapshot = structuredClone(snapshot); snapshot.hostGroup.participants[0].consumed = true;
+  await click("Atualizar estado"); assert.equal(button("Selecionar convite 1").disabled, true);
+  assert.equal([...container.querySelectorAll("textarea")].some(item => item.value.startsWith("opaque-")), false);
+  assert.equal(button("Selecionar convite 2").disabled, false); assert.equal(count("connect_stop"), 0);
+});
+
+test("group export refuses another participant or mismatched original timing before clipboard access", async () => {
+  groupFixtures(); snapshot = activeGroup(); await render(); await click("Selecionar convite 1");
+  const handler = handlers.get("connect_export_session_group_invitation");
+  handlers.set("connect_export_session_group_invitation", () => handler({ participantId: groupParticipants()[1].participantId }));
+  await click("Copiar convite selecionado"); assert.deepEqual(copied, []);
+  assert.equal([...container.querySelectorAll("textarea")].some(item => item.value.startsWith("opaque-")), false);
+  handlers.set("connect_export_session_group_invitation", args => ({ ...handler(args), expiresAtMs: 1 }));
+  await click("Copiar convite selecionado"); assert.deepEqual(copied, []);
+});
+
+test("group late export after stop cannot reach clipboard or recreate its invitation", async () => {
+  groupFixtures(); snapshot = activeGroup(); await render(); await click("Selecionar convite 1");
+  const value = handlers.get("connect_export_session_group_invitation")({ participantId: groupParticipants()[0].participantId });
+  let complete; handlers.set("connect_export_session_group_invitation", () => new Promise(resolve => { complete = resolve; }));
+  await click("Copiar convite selecionado"); await click("Encerrar Connect"); await act(async () => complete(value));
+  assert.deepEqual(copied, []); assert.equal(count("connect_stop"), 1); assert.match(container.textContent, /Recursos liberados/);
+});
+
+test("group lost confirmation blocks resubmission until valid observation and reconciles without a second confirm", async () => {
+  groupFixtures(); snapshot = reviewedGroup(); await render(); await checkConsent();
+  handlers.set("connect_confirm_session_group_host", () => { snapshot = activeGroup(); return Promise.reject(new Error("lost reply")); });
+  await click("Autorizar grupo"); assert.equal(count("connect_confirm_session_group_host"), 1);
+  assert.match(container.textContent, /Nenhuma solicitação será repetida automaticamente/);
+  assert.equal(button("Autorizar grupo").disabled, true);
+  handlers.set("connect_snapshot", () => ({ ...activeGroup(), role: "guest" })); await click("Atualizar estado");
+  assert.equal(button("Autorizar grupo").disabled, true); assert.equal(count("connect_confirm_session_group_host"), 1);
+  handlers.delete("connect_snapshot"); await click("Atualizar estado");
+  assert.equal(button("Selecionar convite 1").disabled, false); assert.equal(count("connect_confirm_session_group_host"), 1);
+});
+
+test("group lost revocation remains blocked until observation and never repeats against another participant", async () => {
+  groupFixtures(); snapshot = activeGroup(); await render(); const revoke = handlers.get("connect_revoke_session_group_participant");
+  handlers.set("connect_revoke_session_group_participant", args => { revoke(args); return Promise.reject(new Error("lost reply")); });
+  await click("Revogar participante 1"); assert.equal(button("Revogar participante 2").disabled, true);
+  assert.equal(count("connect_revoke_session_group_participant"), 1); await click("Atualizar estado");
+  assert.equal(button("Revogar participante 1").disabled, true); assert.equal(button("Revogar participante 2").disabled, false);
+  assert.equal(count("connect_revoke_session_group_participant"), 1);
+});
+
+test("group review expiry at click clears consent even before timer and rollback cannot restore approval", async () => {
+  groupFixtures(); snapshot = reviewedGroup(); await render(); await checkConsent();
+  const oldNow = Date.now;
+  try {
+    Date.now = () => snapshot.hostGroup.review.expiresAtMs;
+    await click("Autorizar grupo"); assert.equal(count("connect_confirm_session_group_host"), 0);
+    Date.now = oldNow; await act(async () => { await new Promise(resolve => setTimeout(resolve, 270)); });
+    assert.equal(button("Autorizar grupo").disabled, true);
+  } finally { Date.now = oldNow; }
+});
+
+test("group late confirmation after stop and remount never restores consent or active resources", async () => {
+  groupFixtures(); snapshot = reviewedGroup(); await render(); await checkConsent();
+  let complete; handlers.set("connect_confirm_session_group_host", () => new Promise(resolve => { complete = resolve; }));
+  await click("Autorizar grupo"); await click("Encerrar Connect"); await act(async () => complete(activeGroup()));
+  assert.match(container.textContent, /Recursos liberados/); assert.equal(count("connect_confirm_session_group_host"), 1);
+  snapshot = reviewedGroup(); await act(async () => root.unmount()); root = createRoot(container); await render();
+  assert.equal(button("Autorizar grupo").disabled, true); assert.equal(count("connect_confirm_session_group_host"), 1);
+});
+
+test("group identical observations preserve review consent and exported invitation; changed generation clears both", async () => {
+  groupFixtures(); snapshot = reviewedGroup(); await render(); await checkConsent();
+  snapshot = structuredClone(snapshot); await click("Atualizar estado"); assert.equal(button("Autorizar grupo").disabled, false);
+  snapshot = { ...snapshot, generation: 2, hostGroup: { ...snapshot.hostGroup, review: { ...snapshot.hostGroup.review, generation: 2 } } };
+  await click("Atualizar estado"); assert.equal(button("Autorizar grupo").disabled, true);
+  snapshot = activeGroup(); snapshot.generation = 3; await click("Atualizar estado");
+  await click("Selecionar convite 1"); await click("Copiar convite selecionado");
+  snapshot = structuredClone(snapshot); await click("Atualizar estado");
+  assert.equal([...container.querySelectorAll("textarea")].some(item => item.value.startsWith("opaque-")), true);
+  snapshot = { ...snapshot, generation: 4 }; await click("Atualizar estado");
+  assert.equal([...container.querySelectorAll("textarea")].some(item => item.value.startsWith("opaque-")), false);
+});
+
+test("group failed snapshot refresh clears invitation and disables actions until a valid observation", async () => {
+  groupFixtures(); snapshot = activeGroup(); await render(); await click("Selecionar convite 1"); await click("Copiar convite selecionado");
+  handlers.set("connect_snapshot", () => Promise.reject("unavailable")); await click("Atualizar estado");
+  assert.equal(button("Selecionar convite 1").disabled, true); assert.equal(button("Revogar participante 2").disabled, true);
+  assert.equal([...container.querySelectorAll("textarea")].some(item => item.value.startsWith("opaque-")), false);
+  handlers.delete("connect_snapshot"); await click("Atualizar estado"); assert.equal(button("Selecionar convite 1").disabled, false);
+  assert.equal(count("connect_export_session_group_invitation"), 1); assert.equal(count("connect_revoke_session_group_participant"), 0);
+});
+
+test("group confirmation refuses valid-shaped response that switches another participant authority", async () => {
+  groupFixtures(); snapshot = reviewedGroup(); await render(); await checkConsent();
+  handlers.set("connect_confirm_session_group_host", () => { const wrong = activeGroup(); wrong.hostGroup.participants[1].guestPublicId = "7".repeat(64); return wrong; });
+  await click("Autorizar grupo");
+  assert.match(container.textContent, /Aguardando uma observação válida/); assert.equal(button("Autorizar grupo").disabled, true);
+  assert.equal(count("connect_confirm_session_group_host"), 1); assert.equal(count("connect_export_session_group_invitation"), 0);
+});

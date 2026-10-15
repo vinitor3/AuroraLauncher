@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 14/10/2026
 
+Incremento72/002/003/005/008 integra grupo estático ao mesmo slot desktop, com roster revisado, exportação/revogação individual e distinção entre ingresso consumido e transporte observado. [Contrato72](../../aurora-connect-multiparticipant-desktop.md). **PROTÓTIPO**, com testes nativos locais e DOM; os gates externos, GUI, jogo e áudio permanecem. A correção71a resolve regressão real de encerramento e conserva a tarefa após perda da chamada IPC; [prova71a](../../aurora-connect-stop-completion.md).
+
 Incremento71/002/003/005/008 implementa Host de grupo estático schema3 com convites individuais, revogação/prazos por participante e orçamentos globais preservados. [Contrato71](../../aurora-connect-multiparticipant-session.md). **PROTÓTIPO**, com três agentes locais e quatro origens UDP reais; não homologa dois jogadores, interface, redes externas ou áudio. APIs antigas continuam estritas e compatíveis.
 
 Incremento70/005/006/007/008 integra a aposentadoria69 ao painel, com revisão e consentimento próprios, cancelamento sem consumo e histórico Retired distinto. [Contrato70](../../aurora-connect-desktop-receipt-retirement.md). **PROTÓTIPO**, validado por arquivos descartáveis e DOM; não conclui GUI, áudio ou redes externas.

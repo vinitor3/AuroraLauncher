@@ -2,6 +2,10 @@
 
 ## Aurora Connect V2 — evidências até 14/10/2026
 
+Incrementos71/72: grupo estático schema3 com convites e revogação individuais, integração no slot/painel experimental e observação de transporte por participante. [Biblioteca71](../aurora-connect-multiparticipant-session.md) e [caller72](../aurora-connect-multiparticipant-desktop.md). **PROTÓTIPO**: Host e dois Guests de laboratório, testes nativos e DOM não comprovam dois jogadores, GUI, áudio ou rede externa. A correção71a de encerramento tem [prova causal própria](../aurora-connect-stop-completion.md). Matriz de nove pares permanece inalterada.
+
+Incrementos69/70: aposentar explicitamente a autoridade de recuperação de voz agora exige revisão própria e preserva o histórico, sem alterar o arquivo ou afirmar restauração. [Núcleo69](../aurora-connect-voice-receipt-retirement.md) e [painel70](../aurora-connect-desktop-receipt-retirement.md). **PROTÓTIPO**; as provas separadas para SVC/Plasmo são de configuração/recuperação, sem JVM ou áudio.
+
 Incremento68: painel permite salvar e retomar recibos seletivos, com estados de persistência comprovada/incerta e nova aprovação. [Contrato68](../aurora-connect-desktop-durable-voice.md). **PROTÓTIPO**, com provas locais de arquivo e DOM; áudio SVC/Plasmo, GUI e nove pares permanecem nos gates anteriores.
 
 Incremento67: recibos duráveis e retomada segura de restauração em cópias diagnósticas, com provas independentes SVC/Plasmo de arquivo e Recovery. [Contrato67](../aurora-connect-durable-voice-receipts.md). **PROTÓTIPO**; sem áudio, JVM, rede externa ou promoção de qualquer um dos nove pares.

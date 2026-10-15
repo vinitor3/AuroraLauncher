@@ -1,7 +1,8 @@
 //! Narrow local-window caller. Private transport keys never cross this boundary.
 use aurora_launcher_core::engine::connect::{
     ConnectCapabilities, ConnectManager, ConnectPreparation, ConnectReview, ConnectSnapshot,
-    FragmentedHostRequest, GuestRequest, HostRequest, InvitationExport,
+    FragmentedHostRequest, GroupHostRequest, GroupInvitationExport, GroupParticipantRequest,
+    GroupPreparation, GroupReview, GuestRequest, HostRequest, InvitationExport,
     SessionFragmentedDiscoveredHostRequest, SessionFragmentedHostRequest, SessionHostRequest,
 };
 use aurora_launcher_core::engine::connect_discovery::{
@@ -14,6 +15,68 @@ fn owner(window: &WebviewWindow) -> Result<&str, &'static str> {
         return Err("connect_owner_mismatch");
     }
     Ok(window.label())
+}
+
+#[tauri::command]
+pub fn connect_prepare_session_group_host(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    request: GroupHostRequest,
+) -> Result<GroupPreparation, &'static str> {
+    manager
+        .prepare_session_group_host(owner(&window)?, request)
+        .map_err(|error| error.code())
+}
+#[tauri::command]
+pub fn connect_review_session_group_host(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    operation_id: String,
+    participants: Vec<GroupParticipantRequest>,
+) -> Result<GroupReview, &'static str> {
+    manager
+        .review_session_group_host(owner(&window)?, &operation_id, participants)
+        .map_err(|error| error.code())
+}
+#[tauri::command]
+pub async fn connect_confirm_session_group_host(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    operation_id: String,
+    digest: String,
+) -> Result<ConnectSnapshot, &'static str> {
+    manager
+        .confirm_session_group_host(owner(&window)?, &operation_id, &digest)
+        .await
+        .map_err(|error| error.code())
+}
+#[tauri::command]
+pub fn connect_export_session_group_invitation(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    operation_id: String,
+    participant_id: String,
+) -> Result<GroupInvitationExport, &'static str> {
+    manager
+        .export_session_group_invitation(owner(&window)?, &operation_id, &participant_id)
+        .map_err(|error| error.code())
+}
+#[tauri::command]
+pub fn connect_revoke_session_group_participant(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    operation_id: String,
+    participant_id: String,
+    expected_generation: u64,
+) -> Result<ConnectSnapshot, &'static str> {
+    manager
+        .revoke_session_group_participant(
+            owner(&window)?,
+            &operation_id,
+            &participant_id,
+            expected_generation,
+        )
+        .map_err(|error| error.code())
 }
 
 #[tauri::command]

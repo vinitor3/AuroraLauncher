@@ -3,6 +3,7 @@ import {
   fragmentedReviewFieldsFrom, fragmentedSnapshotFieldsFrom, type FragmentedGuestUdp, type FragmentedUdpCapability,
   type FragmentedUdpContract, type FragmentedUdpReview, type SessionFragmentedUdpCapability, type SessionUdpRecovery, isDirectIpv4Address,
 } from "./fragmented-types";
+import { groupCapabilityFrom, groupSnapshotFieldsFrom, type GroupCapability, type HostGroup } from "./group-types";
 
 export type ConnectMode = "loopback" | "externalIpv6" | "directIpv4";
 export type ConnectRole = "host" | "guest";
@@ -21,6 +22,7 @@ export type ConnectCapabilities = {
   sessionInvitations?: { profile: "sessionGameTcp"; schemaVersion: 2; maxAdmissionSeconds: 600; maxSessionSeconds: 3600 };
   fragmentedUdpInvitations?: FragmentedUdpCapability;
   sessionFragmentedUdpInvitations?: SessionFragmentedUdpCapability;
+  sessionFragmentedHostGroups?: GroupCapability;
 };
 export type ConnectStatusSummary = {
   requestedProtocol: number; reportedProtocol: number; protocolMatchesRequested: boolean;
@@ -39,6 +41,7 @@ export type ConnectSnapshot = {
   invitationProfile?: ConnectInvitationProfile; sessionTiming?: ConnectSessionTiming;
   fragmentedUdp?: FragmentedUdpContract;
   udpRecovery?: SessionUdpRecovery;
+  hostGroup?: HostGroup;
 } & Partial<FragmentedGuestUdp>;
 export type ConnectPreparation = { operationId: string; generation: number; publicId: string; expiresAtMs: number; invitationProfile?: ConnectInvitationProfile };
 export type ConnectReview = {
@@ -148,6 +151,10 @@ export function capabilitiesFrom(value: unknown): ConnectCapabilities {
     if (!value.available) return invalid();
     sessionFragmentedCapabilityFrom(value.sessionFragmentedUdpInvitations);
   }
+  if (value.sessionFragmentedHostGroups !== undefined) {
+    if (!value.available || value.sessionFragmentedUdpInvitations === undefined) return invalid();
+    groupCapabilityFrom(value.sessionFragmentedHostGroups);
+  }
   return value as ConnectCapabilities;
 }
 export function snapshotFrom(value: unknown): ConnectSnapshot {
@@ -161,6 +168,10 @@ export function snapshotFrom(value: unknown): ConnectSnapshot {
     || value.relayEnabled !== false || value.pathState !== "notVerified"
     || !invitationProfile(value.invitationProfile)
     || !["notStarted", "pending", "complete", "failed"].includes(value.cleanupState as string)) return invalid();
+  if (value.hostGroup !== undefined) {
+    groupSnapshotFieldsFrom(value);
+    return value as ConnectSnapshot;
+  }
   if (fragmentedProfile(value.invitationProfile)) fragmentedSnapshotFieldsFrom(value, value.invitationProfile);
   else noFragmentedFields(value);
   const timing = value.sessionTiming === undefined ? undefined : sessionTimingFrom(value.sessionTiming);
@@ -193,13 +204,13 @@ export function snapshotFrom(value: unknown): ConnectSnapshot {
 }
 export function preparationFrom(value: unknown): ConnectPreparation {
   if (!record(value) || !text(value.operationId) || !integer(value.generation) || !hash(value.publicId) || !integer(value.expiresAtMs)
-    || !invitationProfile(value.invitationProfile) || value.sessionTiming !== undefined) return invalid();
+    || value.kind !== undefined || value.hostGroup !== undefined || !invitationProfile(value.invitationProfile) || value.sessionTiming !== undefined) return invalid();
   if (fragmentedProfile(value.invitationProfile)) fragmentedPreparationFieldsFrom(value, value.invitationProfile);
   else noFragmentedFields(value);
   return value as ConnectPreparation;
 }
 export function reviewFrom(value: unknown): ConnectReview {
-  if (!record(value) || !text(value.operationId) || !integer(value.generation) || !hash(value.digest)
+  if (!record(value) || value.kind !== undefined || value.hostGroup !== undefined || value.participants !== undefined || !text(value.operationId) || !integer(value.generation) || !hash(value.digest)
     || !hash(value.invitationDigest) || !hash(value.hostPublicId) || !hash(value.guestPublicId)
     || !role(value.role) || !mode(value.mode) || !text(value.directAddress)
     || (value.mode === "directIpv4" && !isDirectIpv4Address(value.directAddress))
@@ -229,7 +240,7 @@ export function reviewFrom(value: unknown): ConnectReview {
   return value as ConnectReview;
 }
 export function exportFrom(value: unknown): ConnectExport {
-  if (!record(value) || typeof value.invitation !== "string" || !value.invitation.length
+  if (!record(value) || value.participantId !== undefined || value.hostGroup !== undefined || typeof value.invitation !== "string" || !value.invitation.length
     || new TextEncoder().encode(value.invitation).length > 4096 || !hash(value.hostPublicId) || !integer(value.expiresAtMs)) return invalid();
   if (value.invitationProfile !== undefined) return invalid();
   const timing = value.sessionTiming === undefined ? undefined : sessionTimingFrom(value.sessionTiming);

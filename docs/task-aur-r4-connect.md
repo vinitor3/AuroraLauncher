@@ -1755,6 +1755,39 @@ Novos testes **2 PASS**,0,07s, compilação48,03s; caso original **1 PASS**,2,34
 
 Revisão independente e do coordenador confirmaram propriedade do worker e ausência de await sob mutex. TCP/UDP preservados; nenhuma alteração de autoridade, rede externa, Minecraft, SVC/Plasmo, configurações pessoais, dependências ou matriz. A correção só usa testes locais, incluindo os recursos de transporte próprios da regressão. Rollback não deve reinterpretar cleanup incerto como completo; encerrar recursos antes de reverter código. Nenhuma ação humana necessária.
 
+## Incremento72 — grupo estático no launcher, com observações individuais
+
+Base `f85e6ab`. O mesmo slot Connect passa a preparar, revisar e confirmar um anfitrião com2–8 convites schema3 individuais; exportação e revogação selecionam o participante exato. Preparo próprio600s, revisão≤60s e prazos assinados independentes, sem reemissão. Guests anteriores conservam preparo60s. Transporte ativo é observado pela conexão autenticada e autoridade vigente, separado de consumo do convite e de presença Minecraft. [Contrato72](aurora-connect-multiparticipant-desktop.md).
+
+Arquivos nativos: `apps/connect-lab/src/host.rs` e novo `host_active_observation_tests.rs`; `engine/connect/{mod,live,group_profile,session_group,session_group_tests}.rs`, caller `connect_commands.rs` e registros `main.rs`. Interface: `features/connect/{ConnectView.tsx,ConnectView.smoke.mjs,types.ts,GroupHostPanel.tsx,group-types.ts}`. Nenhuma alteração de App, estilo global, dependência, lockfile, matriz ou configuração pessoal. Arquivos do futuro73 não integram este incremento.
+
+Confirmação conserva o worker mesmo se a resposta IPC for perdida; stop/logout aguardam a tarefa e o Host compartilhado. Encerrar/revogar/expirar A não encerra B. Snapshot distingue erro de cleanup de recursos comprovadamente fechados. Perda da consulta de capability mantém observação e encerramento disponíveis, bloqueando novas autorizações. Exportações tardias, gerações divergentes, revisão cruzada ou estado incerto não reaplicam comandos.
+
+Comandos efetivamente executados, com fontes congeladas:
+
+```powershell
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-features --lib session_group -- --test-threads=1
+cargo test --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --lib active_invitation_observation -- --test-threads=1
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-features --all-targets -- --test-threads=1
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-targets -- --test-threads=1
+cargo test --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --all-targets -- --test-threads=1
+cargo test --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --all-targets --features local-relay-lab -- --test-threads=1
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-targets -- -D warnings
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --locked --jobs 2 --all-features --all-targets -- -D warnings
+node --test apps/desktop/src/features/connect/ConnectView.smoke.mjs apps/desktop/src/features/connect/fragmented-types.test.mjs
+npm --prefix apps/desktop run build
+```
+
+Foco grupo **10 PASS/0 ignorados**,6,77s/compilação47,09s; observação do Host **1 PASS**,0,11s/17,64s. Desktop combinado **399 PASS/61 ignorados/0 falhas**,185,68s/2m00s; padrão **279 PASS/5 ignorados/0 falhas**,57,47s/50,25s. A primeira compilação padrão falhou porque o teste de feature desligada usava Tokio opcional ausente; corrigido para `#[test]` e poll único da future que deve retornar Disabled imediatamente, sem acrescentar runtime/dependência. Log reprovado preservado. A mudança só afeta o teste padrão, excluído da configuração combinada.
+
+Biblioteca padrão **247 PASS/7 ignorados**,156,12s/3m31s; relay local **257 PASS/8 ignorados**,165,08s/4m48s, ambas sem falhas. Clippy desktop padrão/combinado **PASS12,80s/17,29s**. Interface final **117 PASS/0 ignorados**,2367,4747ms; build366 módulos PASS, aviso anterior de chunk>500kB. Não somar focos e regressões sobrepostos; opt-ins ignorados permanecem sem nova evidência.
+
+Logs privados: `group-72-{native-first,host-active,desktop-full,default-full,default-full-fixed,library-default,library-relay,default-clippy,desktop-clippy,frontend-third,frontend-build-third}.log`. Revisões independentes e do coordenador corrigiram amostragem active/consumed, flags de revisão, validação IPv6 e cleanup após falha de capability. Testes reais usam Host e dois Guests neste PC, TCP simultâneo e UDP isolado, revogação/expiração individuais, rebind, resposta perdida e barreiras causais. O caso de panic usa fixture privada sem Host para provar que incerteza não libera o slot.
+
+Verificações adicionais executadas: `cargo clippy --manifest-path apps/connect-lab/Cargo.toml --target-dir .aurora/connect-validation/relay50-target --offline --locked --jobs 2 --all-targets -- -D warnings` e a mesma chamada com `--features local-relay-lab`: **PASS23,87s/12,45s**, logs `group-72-library-clippy-{default,relay}.log`. `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check`, equivalente do laboratório e `git diff --check`: PASS. Hashes dos dois locks e da matriz foram reconferidos e permanecem iguais aos anteriores.
+
+Estado: TCP e UDP avançaram no grupo local; conexão direta sem nova prova externa; relay público desativado; Minecraft sem nova execução; convites/interface implementados mas não homologados; SVC e Plasmo sem nova prova de áudio. Dois Guests de teste não equivalem a dois jogadores ou contas mistas. Rollback: encerrar e aguardar cleanup, depois revert local revisado; não converter grupo vivo em autorização manual. Nenhuma ação humana necessária para continuar.
+
 ### Achados históricos de transporte
 
 Primeiro Rust: dois unitários e seis de oito testes de integração aprovados. Dois ajustes: a recusa UDP após fechar listener pode retornar erro de socket Windows, além de timeout; o teste deve recusar **qualquer payload**, não impor um erro de sistema específico. O teto genérico atual do transporte podia ser maior que o negociado na associação: `UdpBridge.max_payload()` agora expõe o menor limite real; crescimento exige reabertura, redução é imediata, sem truncamento.

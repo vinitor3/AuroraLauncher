@@ -2,10 +2,15 @@
 //! transport, private keys and sockets exist only with the connect-lab feature.
 use serde::{Deserialize, Serialize};
 mod fragmented_profile;
+mod group_profile;
 pub use fragmented_profile::{
     FragmentedGuestState, FragmentedHostRequest, FragmentedUdpCapabilities, FragmentedUdpContract,
     FragmentedUdpReview, SessionFragmentedDiscoveredHostRequest, SessionFragmentedHostRequest,
     SessionFragmentedUdpCapabilities, UdpRecoveryCapabilities, UdpRecoveryState,
+};
+pub use group_profile::{
+    GroupHostRequest, GroupInvitationExport, GroupParticipant, GroupParticipantRequest,
+    GroupPreparation, GroupReview, HostGroupSnapshot, SessionFragmentedHostGroupsCapabilities,
 };
 
 #[cfg(feature = "connect-lab")]
@@ -83,6 +88,8 @@ pub struct ConnectCapabilities {
     pub fragmented_udp_invitations: Option<FragmentedUdpCapabilities>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_fragmented_udp_invitations: Option<SessionFragmentedUdpCapabilities>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_fragmented_host_groups: Option<SessionFragmentedHostGroupsCapabilities>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -187,6 +194,8 @@ pub struct ConnectSnapshot {
     pub udp: Option<FragmentedGuestState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub udp_recovery: Option<UdpRecoveryState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_group: Option<HostGroupSnapshot>,
 }
 impl ConnectSnapshot {
     fn idle() -> Self {
@@ -215,6 +224,7 @@ impl ConnectSnapshot {
             fragmented_udp: None,
             udp: None,
             udp_recovery: None,
+            host_group: None,
         }
     }
 }
@@ -325,6 +335,8 @@ impl ConnectManager {
                 .then(FragmentedUdpCapabilities::default),
             session_fragmented_udp_invitations: cfg!(feature = "connect-lab")
                 .then(SessionFragmentedUdpCapabilities::default),
+            session_fragmented_host_groups: cfg!(feature = "connect-lab")
+                .then(SessionFragmentedHostGroupsCapabilities::default),
         }
     }
     pub fn snapshot(&self, owner: &str) -> Result<ConnectSnapshot, ConnectError> {
@@ -350,6 +362,95 @@ impl ConnectManager {
         #[cfg(not(feature = "connect-lab"))]
         {
             let _ = (owner, request);
+            Err(ConnectError::Disabled)
+        }
+    }
+    pub fn prepare_session_group_host(
+        &self,
+        owner: &str,
+        request: GroupHostRequest,
+    ) -> Result<GroupPreparation, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live.prepare_session_group_host(owner, request)
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, request);
+            Err(ConnectError::Disabled)
+        }
+    }
+    pub fn review_session_group_host(
+        &self,
+        owner: &str,
+        operation_id: &str,
+        participants: Vec<GroupParticipantRequest>,
+    ) -> Result<GroupReview, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live
+                .review_session_group_host(owner, operation_id, participants)
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, operation_id, participants);
+            Err(ConnectError::Disabled)
+        }
+    }
+    pub async fn confirm_session_group_host(
+        &self,
+        owner: &str,
+        operation_id: &str,
+        digest: &str,
+    ) -> Result<ConnectSnapshot, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live
+                .confirm_session_group_host(owner, operation_id, digest)
+                .await
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, operation_id, digest);
+            Err(ConnectError::Disabled)
+        }
+    }
+    pub fn export_session_group_invitation(
+        &self,
+        owner: &str,
+        operation_id: &str,
+        participant_id: &str,
+    ) -> Result<GroupInvitationExport, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live
+                .export_session_group_invitation(owner, operation_id, participant_id)
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, operation_id, participant_id);
+            Err(ConnectError::Disabled)
+        }
+    }
+    pub fn revoke_session_group_participant(
+        &self,
+        owner: &str,
+        operation_id: &str,
+        participant_id: &str,
+        expected_generation: u64,
+    ) -> Result<ConnectSnapshot, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live.revoke_session_group_participant(
+                owner,
+                operation_id,
+                participant_id,
+                expected_generation,
+            )
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, operation_id, participant_id, expected_generation);
             Err(ConnectError::Disabled)
         }
     }

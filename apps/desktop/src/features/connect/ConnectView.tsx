@@ -9,12 +9,15 @@ import "./connect.css";
 import { DiscoveryPicker, type DiscoveredTarget } from "./DiscoveryPicker";
 import { FragmentedFields, FragmentedReviewFields, FragmentedStatusFields } from "./FragmentedFields";
 import { FRAGMENTED_PROFILE, SESSION_FRAGMENTED_PROFILE, fragmentedGuestUdpFrom, isDirectIpv4Address, isFragmentedLifetime, isLoopbackUdpTarget } from "./fragmented-types";
+import { GroupHostPanel, type GroupAction } from "./GroupHostPanel";
+import { groupPreparationFrom } from "./group-types";
 
-type Action = "prepareHost" | "prepareGuest" | "reviewHost" | "reviewGuest" | "confirm" | "export" | "probe" | "retryUdp" | "stop" | "refresh";
+type Action = "prepareHost" | "prepareGuest" | "reviewHost" | "reviewGuest" | "confirm" | "export" | "probe" | "retryUdp" | "stop" | "refresh" | GroupAction;
 const actionText: Record<Action, string> = {
   prepareHost: "Preparando anfitrião…", prepareGuest: "Preparando convidado…", reviewHost: "Preparando revisão…",
   reviewGuest: "Verificando convite…", confirm: "Estabelecendo conexão…", export: "Obtendo convite…",
   probe: "Consultando servidor…", retryUdp: "Solicitando nova tentativa UDP…", stop: "Encerrando recursos…", refresh: "Consultando estado…",
+  reviewGroup: "Preparando revisão do grupo…", confirmGroup: "Estabelecendo o grupo…", exportGroup: "Obtendo convite do participante…", revokeGroup: "Revogando participante…",
 };
 const finalPhase = (snapshot: ConnectSnapshot) => ["idle", "closed", "failed"].includes(snapshot.phase);
 
@@ -34,7 +37,7 @@ export function ConnectView() {
   const [discoveredTarget, setDiscoveredTarget] = useState<DiscoveredTarget>();
   const [discoveryEpoch, setDiscoveryEpoch] = useState(0);
   const [lifetime, setLifetime] = useState("600");
-  const [invitationProfile, setInvitationProfile] = useState<"legacy" | ConnectInvitationProfile>("legacy");
+  const [invitationProfile, setInvitationProfile] = useState<"legacy" | "sessionGroup" | ConnectInvitationProfile>("legacy");
   const [fragmentedLifetime, setFragmentedLifetime] = useState("120");
   const [udpTarget, setUdpTarget] = useState("");
   const [admissionSeconds, setAdmissionSeconds] = useState("600");
@@ -106,7 +109,14 @@ export function ConnectView() {
         if (disposed) return;
         setCapabilities(value);
         if (value.available) await poll();
-      } catch (cause) { if (!disposed) setError(connectError(cause)); }
+      } catch (cause) {
+        if (!disposed) {
+          setError(connectError(cause));
+          // Capabilities gate new actions, not observation or cleanup of an
+          // already owned operation recovered after navigation/remount.
+          await poll();
+        }
+      }
       finally { if (!disposed) setLoading(false); }
     })();
     return () => { disposed = true; mounted.current = false; epoch.current += 1; if (timer !== undefined) window.clearTimeout(timer); };
@@ -124,8 +134,13 @@ export function ConnectView() {
     finally { if (current()) { pendingRef.current = undefined; setPending(undefined); } }
   }
   async function refresh(current: () => boolean) {
-    const value = await invoke<unknown>("connect_snapshot");
-    if (current()) acceptSnapshot(value);
+    try {
+      const value = await invoke<unknown>("connect_snapshot");
+      if (current()) acceptSnapshot(value);
+    } catch (cause) {
+      if (current()) setWarning("O estado não pôde ser atualizado. A última observação pode estar desatualizada.");
+      throw cause;
+    }
   }
   async function copy(value: string, current = () => mounted.current) {
     try {
@@ -141,6 +156,20 @@ export function ConnectView() {
     if (active || !capabilities?.available) return;
     if (!capabilities.modes.includes(mode) || (selectedRole === "host" && mode === "directIpv4" && !isDirectIpv4Address(bindAddress.trim()))) {
       setError(connectError("connect_invalid_request"));
+      return;
+    }
+    if (invitationProfile === "sessionGroup") {
+      if (selectedRole !== "host" || !capabilities.sessionFragmentedHostGroups || !isLoopbackUdpTarget(gameTarget.trim()) || !isLoopbackUdpTarget(udpTarget.trim())) {
+        setError(connectError("connect_invalid_request")); return;
+      }
+      void perform("prepareHost", async current => {
+        const value = groupPreparationFrom(await invoke<unknown>("connect_prepare_session_group_host", {
+          request: { mode, bindAddress: bindAddress.trim(), gameTarget: gameTarget.trim(), udpTarget: udpTarget.trim() },
+        }));
+        if (!current()) return;
+        setKnownOperationId(value.operationId); setSnapshot(undefined); setDiscoveredTarget(undefined);
+        await refresh(current);
+      });
       return;
     }
     const sessionUdp = invitationProfile === SESSION_FRAGMENTED_PROFILE && Boolean(capabilities.sessionFragmentedUdpInvitations);
@@ -260,16 +289,17 @@ export function ConnectView() {
   const busy = Boolean(pending);
   const prepared = snapshot?.preparation;
   const reviewed = snapshot?.review;
-  const canReview = snapshot?.phase === "hostPrepared" || snapshot?.phase === "guestPrepared";
+  const canReview = !snapshot?.hostGroup && (snapshot?.phase === "hostPrepared" || snapshot?.phase === "guestPrepared");
   const canProbe = snapshot?.phase === "guestConnected";
-  const canExport = snapshot?.role === "host" && snapshot.phase === "hostListening" && snapshot.transportState === "listening"
+  const canExport = !snapshot?.hostGroup && snapshot?.role === "host" && snapshot.phase === "hostListening" && snapshot.transportState === "listening"
     && (!snapshot.sessionTiming || Date.now() < snapshot.sessionTiming.admissionExpiresAtMs);
   const sessionUdpSelected = invitationProfile === SESSION_FRAGMENTED_PROFILE && Boolean(capabilities?.sessionFragmentedUdpInvitations);
   const sessionSelected = sessionUdpSelected || invitationProfile === "sessionGameTcp" && Boolean(capabilities?.sessionInvitations);
   const fragmentedSelected = sessionUdpSelected || invitationProfile === FRAGMENTED_PROFILE && Boolean(capabilities?.fragmentedUdpInvitations);
-  const discoveryAvailable = sessionUdpSelected ? capabilities?.sessionFragmentedUdpInvitations?.ownedGameTcpDiscovery === true
+  const groupSelected = invitationProfile === "sessionGroup" && selectedRole === "host" && Boolean(capabilities?.sessionFragmentedHostGroups);
+  const discoveryAvailable = groupSelected ? false : sessionUdpSelected ? capabilities?.sessionFragmentedUdpInvitations?.ownedGameTcpDiscovery === true
     : !fragmentedSelected && capabilities?.ownedInstanceDiscovery === true;
-  const displayedProfile = active ? snapshot?.invitationProfile : sessionSelected || fragmentedSelected ? invitationProfile : undefined;
+  const displayedProfile = active ? snapshot?.hostGroup ? "sessionGroup" : snapshot?.invitationProfile : groupSelected || sessionSelected || fragmentedSelected ? invitationProfile : undefined;
   const sessionDisplayed = displayedProfile === "sessionGameTcp" || displayedProfile === SESSION_FRAGMENTED_PROFILE;
   const fragmentedDisplayed = displayedProfile === FRAGMENTED_PROFILE || displayedProfile === SESSION_FRAGMENTED_PROFILE;
 
@@ -280,8 +310,10 @@ export function ConnectView() {
     {warning && <p className="connect-warning" role="status">{warning}</p>}
     {message && <p className="connect-message" role="status">{message}</p>}
     {!loading && capabilities && !capabilities.available && <p className="connect-warning">Este recurso está desligado nesta versão do launcher.</p>}
-    {capabilities?.available && <>
-      <p>{fragmentedDisplayed && sessionDisplayed
+    {(capabilities?.available || snapshot) && <>
+      <p>{displayedProfile === "sessionGroup"
+        ? "Um grupo fixo de dois a oito participantes, com convites e prazos individuais. Os destinos TCP e UDP são manuais e o servidor deve permanecer aberto."
+        : fragmentedDisplayed && sessionDisplayed
         ? "Transporte TCP e UDP experimental. O prazo para entrar e o encerramento da sessão são separados, sem renovação automática. O servidor deve permanecer aberto."
         : fragmentedDisplayed
         ? "Transporte TCP e UDP experimental. Convite e conexão expiram juntos em até 120 segundos, sem renovação automática. O servidor deve permanecer aberto."
@@ -289,7 +321,7 @@ export function ConnectView() {
         ? "Uma tentativa por janela. O prazo para entrar e o encerramento da sessão são separados, sem renovação automática. O servidor deve permanecer aberto."
         : "Uma tentativa por janela. A conexão expira em até 10 minutos e não é renovada automaticamente. O servidor deve permanecer aberto."}</p>
       <section className="connect-status" aria-label="Estado observado da conexão">
-        <header><h3>{snapshot ? snapshot.phase === "hostListening" && snapshot.transportState === "admitted" ? "Convite utilizado · conexão ativa" : phaseText[snapshot.phase] : "Estado ainda não disponível"}</h3><div className="connect-actions">
+        <header><h3>{snapshot ? snapshot.hostGroup && snapshot.phase === "hostListening" ? "Anfitrião do grupo disponível" : snapshot.phase === "hostListening" && snapshot.transportState === "admitted" ? "Convite utilizado · conexão ativa" : phaseText[snapshot.phase] : "Estado ainda não disponível"}</h3><div className="connect-actions">
           <button className="secondary" type="button" disabled={busy} onClick={() => { void perform("refresh", refresh); }}>Atualizar estado</button>
           {active && <button className="danger" type="button" disabled={pending === "stop" || snapshot?.phase === "closing"} onClick={stop}>Encerrar Connect</button>}
         </div></header>
@@ -304,6 +336,7 @@ export function ConnectView() {
               : snapshot.expiresAtMs !== null && <><dt>Limite desta etapa</dt><dd>{connectDate(snapshot.expiresAtMs)} · horário local</dd></>}
             {snapshot.cleanupState !== "notStarted" && <><dt>Encerramento</dt><dd>{{ pending: "Aguardando liberação dos recursos", complete: "Recursos liberados", failed: "Liberação não confirmada" }[snapshot.cleanupState]}</dd></>}
           </dl>
+          {snapshot.hostGroup && snapshot.cleanupState === "failed" && <p className="connect-warning" role="status">O encerramento não foi confirmado. O transporte exibido é a última observação; não confirma recursos liberados nem participantes ativos.</p>}
           {snapshot.errorCode && <p className="connect-error" role="alert">{connectError(snapshot.errorCode)}</p>}
           {snapshot.udpRecovery && <div className="connect-hint">
             <p>Novas tentativas UDP utilizadas: {snapshot.udpRecovery.attemptsUsed} de {snapshot.udpRecovery.maxAttempts}.</p>
@@ -316,23 +349,23 @@ export function ConnectView() {
           </div>}
           {snapshot.statusSummary && <div className="connect-status-summary"><p>Última resposta: protocolo {snapshot.statusSummary.reportedProtocol}, {snapshot.statusSummary.protocolMatchesRequested ? "correspondente ao solicitado" : "diferente do solicitado"}.</p>
             <p>Jogadores informados pelo servidor: {snapshot.statusSummary.reportedPlayersOnline ?? "não informado"} / {snapshot.statusSummary.reportedPlayersMax ?? "não informado"}. Essa contagem não confirma quem entrou no mundo.</p></div>}
-          {snapshot.tcpAddress && snapshot.phase === "guestConnected" && <div className="connect-output"><label htmlFor="connect-local-address">Endereço para Conexão direta no Minecraft</label><input id="connect-local-address" readOnly value={snapshot.tcpAddress} />
+          {capabilities?.available && snapshot.tcpAddress && snapshot.phase === "guestConnected" && <div className="connect-output"><label htmlFor="connect-local-address">Endereço para Conexão direta no Minecraft</label><input id="connect-local-address" readOnly value={snapshot.tcpAddress} />
             <div><button className="secondary" type="button" onClick={() => { void copy(snapshot.tcpAddress!); }}>Copiar endereço do jogo</button></div><small>Abra o Minecraft compatível e use Multiplayer → Conexão direta. Este painel não inicia nem fecha o jogo.</small></div>}
-          {canProbe && <div><button type="button" disabled={busy || snapshot.statusState === "checking"} onClick={() => { void perform("probe", async current => { const value = await invoke<unknown>("connect_probe_status", { operationId }); if (current()) acceptSnapshot(value); }); }}>Consultar servidor</button><p className="connect-hint">Consulta de Minecraft 1.21.1 (protocolo {capabilities.statusProtocol}), com endereço lógico {capabilities.statusHandshakeHost}:{capabilities.statusHandshakePort}. Não comprova compatibilidade com outras versões.</p></div>}
+          {capabilities?.available && canProbe && <div><button type="button" disabled={busy || snapshot.statusState === "checking"} onClick={() => { void perform("probe", async current => { const value = await invoke<unknown>("connect_probe_status", { operationId }); if (current()) acceptSnapshot(value); }); }}>Consultar servidor</button><p className="connect-hint">Consulta de Minecraft 1.21.1 (protocolo {capabilities.statusProtocol}), com endereço lógico {capabilities.statusHandshakeHost}:{capabilities.statusHandshakePort}. Não comprova compatibilidade com outras versões.</p></div>}
         </>}
       </section>
-      {!active && snapshot && <section className="connect-card">
-        <div className="connect-tabs" aria-label="Papel nesta tentativa"><button type="button" aria-pressed={selectedRole === "host"} disabled={busy} onClick={() => { setSelectedRole("host"); setDiscoveredTarget(undefined); }}>Anfitrião</button><button type="button" aria-pressed={selectedRole === "guest"} disabled={busy} onClick={() => { setSelectedRole("guest"); setDiscoveredTarget(undefined); }}>Convidado</button></div>
+      {capabilities?.available && !active && snapshot && <section className="connect-card">
+        <div className="connect-tabs" aria-label="Papel nesta tentativa"><button type="button" aria-pressed={selectedRole === "host"} disabled={busy} onClick={() => { setSelectedRole("host"); setDiscoveredTarget(undefined); }}>Anfitrião</button><button type="button" aria-pressed={selectedRole === "guest"} disabled={busy} onClick={() => { setSelectedRole("guest"); if (invitationProfile === "sessionGroup") setInvitationProfile("legacy"); setDiscoveredTarget(undefined); }}>Convidado</button></div>
         <form className="connect-form" onSubmit={prepare}>
           <h3>{selectedRole === "host" ? "Compartilhar servidor local" : "Preparar recebimento do convite"}</h3>
           {(capabilities.sessionInvitations || capabilities.fragmentedUdpInvitations || capabilities.sessionFragmentedUdpInvitations) && <label>Tipo de convite<select value={invitationProfile} disabled={busy} onChange={event => {
             const next = event.target.value;
-            setInvitationProfile(next === SESSION_FRAGMENTED_PROFILE && capabilities.sessionFragmentedUdpInvitations ? SESSION_FRAGMENTED_PROFILE
+            setInvitationProfile(next === "sessionGroup" && selectedRole === "host" && capabilities.sessionFragmentedHostGroups ? "sessionGroup" : next === SESSION_FRAGMENTED_PROFILE && capabilities.sessionFragmentedUdpInvitations ? SESSION_FRAGMENTED_PROFILE
               : next === FRAGMENTED_PROFILE && capabilities.fragmentedUdpInvitations ? FRAGMENTED_PROFILE
               : next === "sessionGameTcp" && capabilities.sessionInvitations ? "sessionGameTcp" : "legacy");
             setDiscoveredTarget(undefined);
-            if (next === FRAGMENTED_PROFILE || next === SESSION_FRAGMENTED_PROFILE) setTargetMode("manual");
-          }}><option value="legacy">Convite curto · até 10 minutos</option>{capabilities.sessionInvitations && <option value="sessionGameTcp">Sessão de jogo · até 1 hora</option>}{capabilities.fragmentedUdpInvitations && <option value={FRAGMENTED_PROFILE}>Transporte TCP e UDP · até 2 minutos</option>}{capabilities.sessionFragmentedUdpInvitations && <option value={SESSION_FRAGMENTED_PROFILE}>Sessão TCP e UDP · até 1 hora</option>}</select></label>}
+            if (next === FRAGMENTED_PROFILE || next === SESSION_FRAGMENTED_PROFILE || next === "sessionGroup") setTargetMode("manual");
+          }}><option value="legacy">Convite curto · até 10 minutos</option>{capabilities.sessionInvitations && <option value="sessionGameTcp">Sessão de jogo · até 1 hora</option>}{capabilities.fragmentedUdpInvitations && <option value={FRAGMENTED_PROFILE}>Transporte TCP e UDP · até 2 minutos</option>}{capabilities.sessionFragmentedUdpInvitations && <option value={SESSION_FRAGMENTED_PROFILE}>Sessão TCP e UDP · até 1 hora</option>}{selectedRole === "host" && capabilities.sessionFragmentedHostGroups && <option value="sessionGroup">Grupo TCP e UDP · de 2 a 8 participantes</option>}</select></label>}
           <label>Modo de conexão<select value={mode} disabled={busy} onChange={event => { const next = event.target.value as ConnectMode; if (!capabilities.modes.includes(next)) return; setMode(next); setBindAddress(next === "loopback" ? "127.0.0.1:42000" : ""); }}><option value="loopback">Ensaio neste computador</option><option value="externalIpv6">IPv6 externo autorizado</option>{capabilities.modes.includes("directIpv4") && <option value="directIpv4">IPv4 direto autorizado</option>}</select></label>
           {mode === "externalIpv6" && <p>Use o endereço inicial IPv6 autorizado. Este modo compartilha informações de rede com o participante; não configura o roteador nem garante alcance.</p>}
           {mode === "directIpv4" && <p>{selectedRole === "host" ? "Informe um IPv4 deste computador e a porta autorizada, alcançáveis pelo convidado." : "O convite deve usar o IPv4 e a porta autorizados do anfitrião, alcançáveis por este computador."} Este modo compartilha esse endereço, não configura NAT ou roteador e não habilita relay; redes diferentes podem não alcançar esse endereço.</p>}
@@ -343,28 +376,31 @@ export function ConnectView() {
               ? <><DiscoveryPicker key={`${invitationProfile}:${discoveryEpoch}`} disabled={busy} onSelect={setDiscoveredTarget} />
                 {sessionUdpSelected && <p>Esta seleção confere somente a porta TCP do jogo. O destino UDP abaixo continua manual e exige sua autorização separada; não foi conferido como parte desse processo.</p>}</>
               : <label>Servidor neste computador<input required maxLength={128} value={gameTarget} disabled={busy} onChange={event => setGameTarget(event.target.value)} autoComplete="off" spellCheck={false} /><small>Somente endereço loopback e porta do jogo que você autoriza compartilhar. A seleção manual não comprova qual processo possui essa porta.</small></label>}
-            {fragmentedSelected && <FragmentedFields role="host" disabled={busy} udpTarget={udpTarget} lifetimeSeconds={fragmentedLifetime} separateSession={sessionSelected}
+            {(fragmentedSelected || groupSelected) && <FragmentedFields role="host" disabled={busy} udpTarget={udpTarget} lifetimeSeconds={fragmentedLifetime} separateSession={sessionSelected || groupSelected}
               onUdpTargetChange={setUdpTarget} onLifetimeChange={setFragmentedLifetime} />}
             {sessionSelected ? <>
               <label>Prazo para entrar, em segundos<input required type="number" min={1} max={600} step={1} value={admissionSeconds} disabled={busy} onChange={event => setAdmissionSeconds(event.target.value)} /></label>
               <label>Duração máxima da sessão, em segundos<input required type="number" min={1} max={3600} step={1} value={sessionSeconds} disabled={busy} onChange={event => setSessionSeconds(event.target.value)} /><small>Os dois prazos começam na emissão do convite. A duração da sessão deve ser igual ou maior que o prazo para entrar.</small></label>
-            </> : !fragmentedSelected && <label>Prazo da sessão, em segundos<input required type="number" min={1} max={capabilities.maxLifetimeSeconds} step={1} value={lifetime} disabled={busy} onChange={event => setLifetime(event.target.value)} /></label>}
+            </> : !fragmentedSelected && !groupSelected && <label>Prazo da sessão, em segundos<input required type="number" min={1} max={capabilities.maxLifetimeSeconds} step={1} value={lifetime} disabled={busy} onChange={event => setLifetime(event.target.value)} /></label>}
+            {groupSelected && <p>Após preparar, receba os códigos públicos de cada convidado e defina seus prazos na revisão do grupo. A lista será fixa depois da autorização.</p>}
           </div> : <label>Código público do anfitrião<input required maxLength={64} value={hostPublicId} disabled={busy} onChange={event => setHostPublicId(event.target.value)} autoComplete="off" spellCheck={false} /><small>Receba este código diretamente do anfitrião, por um canal autorizado.</small></label>}
           {fragmentedSelected && selectedRole === "guest" && <FragmentedFields role="guest" disabled={busy} udpTarget={udpTarget} lifetimeSeconds={fragmentedLifetime}
             onUdpTargetChange={setUdpTarget} onLifetimeChange={setFragmentedLifetime} />}
           <div><button type="submit" disabled={busy || (discoveryAvailable && selectedRole === "host" && targetMode === "ownedInstance" && !discoveredTarget)}>{selectedRole === "host" ? "Preparar anfitrião" : "Preparar convidado"}</button></div>
         </form>
       </section>}
-      {prepared && <section className="connect-card"><h3>Troque os códigos públicos</h3><p>{snapshot?.role === "host" ? "Envie seu código ao convidado e receba o código gerado por ele nesta tentativa." : "Envie seu código ao anfitrião e aguarde o convite destinado a esta tentativa."}</p>
+      {snapshot?.hostGroup && <GroupHostPanel key={snapshot.operationId} snapshot={snapshot} supported={Boolean(capabilities?.available && capabilities.sessionFragmentedHostGroups && capabilities.modes.includes(snapshot.hostGroup.mode))} busy={busy} stale={Boolean(warning)}
+        perform={perform} refresh={refresh} acceptSnapshot={acceptSnapshot} copy={copy} />}
+      {capabilities?.available && prepared && <section className="connect-card"><h3>Troque os códigos públicos</h3><p>{snapshot?.role === "host" ? "Envie seu código ao convidado e receba o código gerado por ele nesta tentativa." : "Envie seu código ao anfitrião e aguarde o convite destinado a esta tentativa."}</p>
         <div className="connect-output"><label htmlFor="connect-public-code">Seu código público</label><textarea id="connect-public-code" readOnly value={prepared.publicId} /><div><button className="secondary" type="button" onClick={() => { void copy(prepared.publicId); }}>Copiar meu código</button></div></div>
         <small>Preparação válida até {connectDate(prepared.expiresAtMs)}. Nenhuma chave privada é exibida.</small>
       </section>}
-      {canReview && <form className="connect-card connect-form" onSubmit={review}>
+      {capabilities?.available && canReview && <form className="connect-card connect-form" onSubmit={review}>
         {snapshot.role === "host" ? <label>Código público recebido do convidado<input required maxLength={64} value={guestPublicId} disabled={busy} onChange={event => { setGuestPublicId(event.target.value); setAcknowledged(false); }} autoComplete="off" spellCheck={false} /></label>
           : <label>Convite recebido<textarea required maxLength={4096} value={invitation} disabled={busy} onChange={event => { setInvitation(event.target.value); setAcknowledged(false); }} autoComplete="off" spellCheck={false} /></label>}
         <div><button type="submit" disabled={busy}>Revisar convite</button></div>
       </form>}
-      {reviewed && snapshot?.phase === "reviewed" && <section className="connect-card connect-review" aria-labelledby="connect-review-title"><h3 id="connect-review-title">Revise antes de autorizar</h3>
+      {capabilities?.available && reviewed && snapshot?.phase === "reviewed" && <section className="connect-card connect-review" aria-labelledby="connect-review-title"><h3 id="connect-review-title">Revise antes de autorizar</h3>
         <dl><dt>Papel</dt><dd>{reviewed.role === "host" ? "Anfitrião" : "Convidado"}</dd><dt>Modo</dt><dd>{reviewed.mode === "loopback" ? "Neste computador" : reviewed.mode === "directIpv4" ? "IPv4 direto autorizado" : "IPv6 externo autorizado"}</dd>
           <dt>Endereço inicial</dt><dd><code>{reviewed.directAddress}</code></dd>{reviewed.gameTarget && <><dt>Destino autorizado</dt><dd><code>{reviewed.gameTarget}</code></dd></>}
           {reviewed.targetSource === "ownedInstance" && <><dt>Origem TCP conferida</dt><dd>Instância {reviewed.instanceId} iniciada por este launcher. A conexão encerra se o processo ou a porta TCP deixar de corresponder à seleção.</dd>
@@ -382,7 +418,7 @@ export function ConnectView() {
           : `Conferi o participante, o destino e ${reviewed.sessionTiming ? "os dois prazos" : "o prazo"} e autorizo esta conexão experimental.`}</span></label>
         <div className="connect-actions"><button type="button" disabled={busy || !acknowledged} onClick={confirm}>Autorizar conexão</button><button className="secondary" type="button" disabled={pending === "stop"} onClick={stop}>Cancelar tentativa</button></div>
       </section>}
-      {canExport && <section className="connect-card"><h3>Envie o convite ao participante</h3><p>Somente o convidado autorizado pode usar este convite. Envie também seu código público pelo canal combinado.</p><div><button type="button" disabled={busy} onClick={exportInvitation}>Copiar convite</button></div>
+      {capabilities?.available && canExport && <section className="connect-card"><h3>Envie o convite ao participante</h3><p>Somente o convidado autorizado pode usar este convite. Envie também seu código público pelo canal combinado.</p><div><button type="button" disabled={busy} onClick={exportInvitation}>Copiar convite</button></div>
         {exportedInvitation && <label className="connect-output">Convite desta tentativa<textarea readOnly value={exportedInvitation} spellCheck={false} /></label>}
       </section>}
       <small>Navegar pelo launcher mantém a tentativa ativa. Use Encerrar Connect para liberar a ponte; o Minecraft continua sob seu controle. Porta revisada e resposta de servidor não comprovam entrada no mundo ou voz.</small>
