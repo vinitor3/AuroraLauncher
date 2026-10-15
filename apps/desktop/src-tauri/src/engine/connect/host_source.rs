@@ -231,6 +231,7 @@ mod enabled {
                 group: None,
                 group_source: None,
                 host_source: Some(SourceWork { worker: None }),
+                host_review: None,
                 guest_source: None,
                 ready_game: None,
                 #[cfg(test)]

@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 15/10/2026
 
+Incremento76/002/003/005/008 trata revisão individual com trabalho próprio e cancelamento do Host durante consultas de origem. [Contrato76](../../aurora-connect-owned-source-review.md). **PROTÓTIPO**, provas nativas locais/DOM/build e revisão aprovados; interface mantém revisão explícita e ignora respostas atrasadas. Primeiras falhas e correções preservadas no task. Sem ampliar prazos, perfis, matriz ou gates. Grupo, redes externas e áudio conservam validação própria.
+
 Incremento75/002/003/005/008 torna o preparo individual descoberto observável antes da consulta de origem. [Contrato75](../../aurora-connect-discovery-lifecycle.md). **PROTÓTIPO**: comandos/retorno preservados, trabalho retido após IPC perdido e limpeza integrada a stop/logout/expiração. A interface não repete seleção consumida e exige prova nova após rejeição. Evidências locais e falhas preparatórias registradas no task; nenhum gate gráfico, Minecraft, voz, rede ou R3 é promovido. A revisão de origem posterior ao preparo permanece um limite separado.
 
 Incremento74/002/003/005/008 integra descoberta de game/TCP no Host de grupo, mantendo UDP manual e prazos/convites individuais. [Contrato74](../../aurora-connect-discovered-group.md). **PROTÓTIPO**: preparo observável/cancelável antes de consultar a seleção, perda da origem encerrando o grupo e evidências locais próprias de transporte/DOM. A regressão de concorrência usa carga controlada após registrar perda UDP em rajada; não aprova saturação/fairness/perda zero. Todos os gates de jogo, áudio, redes e R3 permanecem.

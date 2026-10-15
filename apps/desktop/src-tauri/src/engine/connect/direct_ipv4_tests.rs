@@ -245,8 +245,8 @@ fn four_profiles_reject_invalid_ipv4_and_nonloopback_services_before_io() {
     }
 }
 
-#[test]
-fn ipv4_reviews_preserve_authority_and_reject_other_modes_and_profiles_without_io() {
+#[tokio::test]
+async fn ipv4_reviews_preserve_authority_and_reject_other_modes_and_profiles_without_io() {
     for source in PROFILES {
         for selected in PROFILES {
             for mode in [
@@ -260,7 +260,10 @@ fn ipv4_reviews_preserve_authority_and_reject_other_modes_and_profiles_without_i
                 let hp = request.prepare(&host, source).unwrap();
                 let gp = prepare_guest(&guest, selected, mode, &hp.public_id);
                 let review = host
-                    .review_host("main", &hp.operation_id, &gp.public_id)
+                    .reserve_host_review("main", &hp.operation_id, &gp.public_id)
+                    .unwrap()
+                    .wait()
+                    .await
                     .unwrap();
                 assert_eq!(review.mode, ConnectMode::DirectIpv4);
                 assert_eq!(review.direct_address, request.bind);
@@ -333,7 +336,10 @@ fn ipv4_reviews_preserve_authority_and_reject_other_modes_and_profiles_without_i
             let guest = ConnectManager::default();
             let hp = Request::pure(mode).prepare(&host, profile).unwrap();
             let gp = prepare_guest(&guest, profile, ConnectMode::DirectIpv4, &hp.public_id);
-            host.review_host("main", &hp.operation_id, &gp.public_id)
+            host.reserve_host_review("main", &hp.operation_id, &gp.public_id)
+                .unwrap()
+                .wait()
+                .await
                 .unwrap();
             assert!(matches!(
                 guest.review_guest("main", &gp.operation_id, &encoded(&host)),
@@ -353,8 +359,8 @@ fn ipv4_reviews_preserve_authority_and_reject_other_modes_and_profiles_without_i
     }
 }
 
-#[test]
-fn ipv4_review_digest_binds_mode_and_original_deadlines_are_not_extended() {
+#[tokio::test]
+async fn ipv4_review_digest_binds_mode_and_original_deadlines_are_not_extended() {
     for profile in PROFILES {
         let host = ConnectManager::default();
         let guest = ConnectManager::default();
@@ -363,7 +369,10 @@ fn ipv4_review_digest_binds_mode_and_original_deadlines_are_not_extended() {
             .unwrap();
         let gp = prepare_guest(&guest, profile, ConnectMode::DirectIpv4, &hp.public_id);
         let review = host
-            .review_host("main", &hp.operation_id, &gp.public_id)
+            .reserve_host_review("main", &hp.operation_id, &gp.public_id)
+            .unwrap()
+            .wait()
+            .await
             .unwrap();
         let stored = host.snapshot("main").unwrap().review.unwrap();
         assert_eq!(
@@ -450,7 +459,10 @@ impl Pair {
         let hp = request.prepare(&host, profile).unwrap();
         let gp = prepare_guest(&guest, profile, ConnectMode::DirectIpv4, &hp.public_id);
         let review = host
-            .review_host("main", &hp.operation_id, &gp.public_id)
+            .reserve_host_review("main", &hp.operation_id, &gp.public_id)
+            .unwrap()
+            .wait()
+            .await
             .unwrap();
         assert_eq!(review.mode, ConnectMode::DirectIpv4);
         assert!(review.direct_address == bind.to_string());

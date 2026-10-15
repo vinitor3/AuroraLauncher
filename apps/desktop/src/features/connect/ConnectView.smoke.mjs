@@ -2381,6 +2381,69 @@ test("single source proof accepts an unchanged completed baseline but never an a
   assert.equal(hostSourceTypes.provesNoSourceReservation(idle(), undefined), false);
 });
 
+function expiredManualHost() {
+  return { ...idle(), operationId, generation: 2, role: "host", phase: "closed", cleanupState: "complete", errorCode: "connect_plan_expired" };
+}
+
+test("single source definitive pre-rejection recovers after a manual host expires before transport starts", async () => {
+  singleSourceFixtures("legacy"); snapshot = expiredManualHost();
+  await selectSingleSource("legacy");
+  handlers.set(sourceCommands.legacy, () => { throw "connect_invalid_request"; });
+  const start = calls.length;
+  await submit();
+  assert.deepEqual(calls.slice(start).map(item => item.command), [sourceCommands.legacy, "connect_snapshot"]);
+  assert.doesNotMatch(container.textContent, /resultado do preparo ainda não foi confirmado/);
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  await submit(); assert.equal(count(sourceCommands.legacy), 1);
+});
+
+test("never-started terminal proof requires unchanged ownership, phase, generation and completed cleanup", () => {
+  const baseline = expiredManualHost();
+  assert.deepEqual(types.snapshotFrom(baseline), baseline);
+  assert.equal(hostSourceTypes.provesNoSourceReservation(baseline, baseline), true);
+  for (const patch of [{ operationId: "different" }, { generation: 1 }, { generation: 3 }, { role: "guest" },
+    { phase: "failed" }, { phase: "hostPrepared" }, { transportState: "closed" }, { transportState: "listening" },
+    { cleanupState: "pending" }, { cleanupState: "failed" }, { preparation }, { review }]) {
+    assert.equal(hostSourceTypes.provesNoSourceReservation({ ...baseline, ...patch }, baseline), false);
+    assert.equal(hostSourceTypes.provesNoSourceReservation(baseline, { ...baseline, ...patch }), false);
+  }
+});
+
+test("expired manual baseline cannot settle in-flight preparation or a snapshot started before rejection", async () => {
+  singleSourceFixtures("legacy"); snapshot = expiredManualHost();
+  await selectSingleSource("legacy");
+  let rejectPrepare, completeOldSnapshot;
+  handlers.set(sourceCommands.legacy, () => new Promise((_, reject) => { rejectPrepare = reject; }));
+  await submit(); await click("Atualizar estado");
+  assert.match(container.textContent, /resultado do preparo ainda não foi confirmado/);
+  assert.equal(container.querySelector("form"), null);
+  handlers.set("connect_snapshot", () => new Promise(resolve => { completeOldSnapshot = resolve; }));
+  await click("Atualizar estado");
+  await act(async () => rejectPrepare("connect_invalid_request"));
+  await act(async () => completeOldSnapshot(expiredManualHost()));
+  assert.match(container.textContent, /resultado do preparo ainda não foi confirmado/);
+  assert.equal(container.querySelector("form"), null);
+  handlers.delete("connect_snapshot"); await click("Atualizar estado");
+  assert.doesNotMatch(container.textContent, /resultado do preparo ainda não foi confirmado/);
+  assert.equal(button("Preparar anfitrião").disabled, true);
+  assert.equal(count(sourceCommands.legacy), 1);
+});
+
+for (const failure of ["unknown", "malformed"]) {
+  test(`expired manual baseline is not proof after ${failure} preparation reply`, async () => {
+    singleSourceFixtures("legacy"); snapshot = expiredManualHost();
+    await selectSingleSource("legacy");
+    handlers.set(sourceCommands.legacy, () => {
+      if (failure === "unknown") throw new Error("connect_invalid_request");
+      return { code: "connect_invalid_request" };
+    });
+    await submit(); await click("Atualizar estado");
+    assert.match(container.textContent, /resultado do preparo ainda não foi confirmado/);
+    assert.equal(container.querySelector("form"), null);
+    assert.equal(count(sourceCommands.legacy), 1);
+  });
+}
+
 test("single source remount and failed capability query still recover cancellation for every profile", async () => {
   singleSourceFixtures(sessionFragmentedProfile); snapshot = pendingSingleSource(sessionFragmentedProfile);
   handlers.set("connect_capabilities", () => { throw new Error("capability unavailable"); });
@@ -2428,4 +2491,144 @@ test("single source reservation parser rejects cross-profile metadata and fabric
   for (const value of [new Error("connect_internal"), { code: "connect_internal" }, "private internal", "connect_transport_failed", null]) {
     assert.equal(hostSourceTypes.isControlledSourceRejection(value), false);
   }
+});
+
+function ownedSourceReview(profile) {
+  const base = preparedSingleSource(profile);
+  const value = profile === sessionFragmentedProfile ? reviewedDiscoveredSessionFragmented().review : profile === "sessionGameTcp" ? sessionReview : review;
+  const projected = { ...value, operationId: sourceOperationId, targetSource: "ownedInstance", instanceId: discoverySelected.instanceId,
+    runId: discoverySelected.runId, gameTarget: discoverySelected.target };
+  return { ...base, generation: 3, phase: "reviewed", expiresAtMs: projected.expiresAtMs, review: projected,
+    ...(projected.sessionTiming ? { sessionTiming: projected.sessionTiming } : {}),
+    ...(projected.fragmentedUdp ? { fragmentedUdp: sessionFragmentedContract } : {}) };
+}
+
+for (const profile of sourceProfiles) {
+  test(`owned review ${profile} remains observable and cancellable while late result cannot defeat retained stop`, async () => {
+    singleSourceFixtures(profile); snapshot = preparedSingleSource(profile);
+    let finishReview, finishStop;
+    handlers.set("connect_review_host", () => new Promise(resolve => { finishReview = resolve; }));
+    handlers.set("connect_stop", () => {
+      snapshot = { ...terminalSingleSource(profile), generation: 4, phase: "closing", errorCode: null };
+      return new Promise(resolve => { finishStop = resolve; });
+    });
+    await render(); await submit();
+    assert.deepEqual(calls.find(item => item.command === "connect_review_host").args, { operationId: sourceOperationId, guestPublicId: "" });
+    assert.equal(button("Atualizar estado").disabled, false);
+    assert.equal(button("Revisar convite").disabled, true);
+    await click("Atualizar estado");
+    assert.match(container.textContent, /A revisão ainda não foi confirmada/);
+    assert.equal(button("Revisar convite").disabled, true);
+    await submit(); assert.equal(count("connect_review_host"), 1);
+    await click("Encerrar Connect");
+    await act(async () => finishReview(ownedSourceReview(profile).review));
+    assert.match(container.textContent, /Encerrando recursos/);
+    assert.doesNotMatch(container.textContent, /Recursos liberados/);
+    assert.equal(container.querySelector('.connect-consent input'), null);
+    await act(async () => finishStop({ ...snapshot, generation: 5, phase: "closed", cleanupState: "complete" }));
+    assert.match(container.textContent, /Recursos liberados/);
+    assert.equal(count("connect_review_host"), 1); assert.equal(count("connect_confirm"), 0);
+    assert.equal(count("connect_export_invitation"), 0);
+  });
+
+  test(`owned review ${profile} reconciles lost reply by observation without recovering consent`, async () => {
+    singleSourceFixtures(profile); snapshot = preparedSingleSource(profile);
+    handlers.set("connect_review_host", () => { snapshot = ownedSourceReview(profile); throw new Error("review reply lost"); });
+    await render(); await submit();
+    assert.equal(button("Revisar convite").disabled, true);
+    await click("Atualizar estado");
+    assert.equal(button("Autorizar conexão").disabled, true);
+    assert.equal(container.querySelector('.connect-consent input').checked, false);
+    assert.doesNotMatch(container.textContent, /A revisão ainda não foi confirmada/);
+    assert.equal(count("connect_review_host"), 1); assert.equal(count("connect_confirm"), 0);
+    await click("Encerrar Connect");
+  });
+
+  test(`owned review ${profile} failure keeps cleanup pending and no new preparation is available`, async () => {
+    singleSourceFixtures(profile); snapshot = preparedSingleSource(profile);
+    handlers.set("connect_review_host", () => { snapshot = { ...terminalSingleSource(profile), generation: 3 }; throw "connect_source_changed"; });
+    await render(); await submit(); await click("Atualizar estado");
+    assert.match(container.textContent, /Aguardando liberação dos recursos/);
+    assert.equal(container.querySelector("form"), null);
+    assert.equal(container.querySelector('.connect-consent input'), null);
+    await click("Encerrar Connect"); assert.match(container.textContent, /Recursos liberados/);
+    assert.equal(count("connect_review_host"), 1); assert.equal(count("connect_confirm"), 0);
+    assert.equal(count(sourceCommands[profile]), 0);
+  });
+}
+
+for (const failure of ["connect_busy", "unknown", "malformed"]) {
+  test(`owned review ${failure} does not interpret unchanged hostPrepared as a finished review`, async () => {
+    singleSourceFixtures("legacy"); snapshot = preparedSingleSource("legacy");
+    handlers.set("connect_review_host", () => {
+      if (failure === "unknown") throw new Error("private unresolved review");
+      if (failure === "malformed") return { operationId: sourceOperationId, digest };
+      throw failure;
+    });
+    await render(); await submit(); await click("Atualizar estado");
+    assert.equal(button("Revisar convite").disabled, true);
+    assert.match(container.textContent, /A revisão ainda não foi confirmada/);
+    await submit(); assert.equal(count("connect_review_host"), 1);
+    snapshot = ownedSourceReview("legacy"); await click("Atualizar estado");
+    assert.equal(button("Autorizar conexão").disabled, true);
+    assert.equal(count("connect_confirm"), 0);
+    await click("Encerrar Connect");
+  });
+}
+
+test("pure native review input rejection permits editing and a separate explicit review", async () => {
+  singleSourceFixtures("legacy"); snapshot = preparedSingleSource("legacy");
+  handlers.set("connect_review_host", () => { throw "connect_invalid_request"; });
+  await render(); await submit();
+  assert.equal(button("Revisar convite").disabled, false);
+  assert.doesNotMatch(container.textContent, /A revisão ainda não foi confirmada/);
+  assert.equal(count("connect_review_host"), 1);
+  await editInput(labeledInput("Código público recebido do convidado"), guestId);
+  handlers.set("connect_review_host", () => { snapshot = ownedSourceReview("legacy"); return snapshot.review; });
+  await submit(); assert.equal(count("connect_review_host"), 2);
+  assert.equal(button("Autorizar conexão").disabled, true);
+  assert.equal(count("connect_confirm"), 0);
+});
+
+test("host public code cannot be submitted as its own guest and remains editable", async () => {
+  singleSourceFixtures("legacy"); snapshot = preparedSingleSource("legacy");
+  await render(); await editInput(labeledInput("Código público recebido do convidado"), hostId.toUpperCase());
+  await submit();
+  assert.equal(count("connect_review_host"), 0);
+  assert.equal(button("Revisar convite").disabled, false);
+  assert.match(container.textContent, /Confira os endereços, o código público/);
+  assert.doesNotMatch(container.textContent, /A revisão ainda não foi confirmada/);
+  await editInput(labeledInput("Código público recebido do convidado"), guestId);
+  handlers.set("connect_review_host", () => { snapshot = ownedSourceReview("legacy"); return snapshot.review; });
+  await submit(); assert.equal(count("connect_review_host"), 1);
+  assert.equal(button("Autorizar conexão").disabled, true);
+  assert.equal(count("connect_confirm"), 0);
+});
+
+test("review observation that supersedes initial IPC does not permit its late reply to restore an older digest", async () => {
+  singleSourceFixtures("legacy"); snapshot = preparedSingleSource("legacy");
+  let finish;
+  handlers.set("connect_review_host", () => new Promise(resolve => { finish = resolve; }));
+  await render(); await submit();
+  snapshot = ownedSourceReview("legacy"); snapshot.review = { ...snapshot.review, digest: "e".repeat(64) };
+  await click("Atualizar estado");
+  assert.equal(button("Autorizar conexão").disabled, true);
+  await act(async () => finish(ownedSourceReview("legacy").review));
+  assert.match(container.textContent, new RegExp("e".repeat(64)));
+  assert.equal(button("Autorizar conexão").disabled, true);
+  assert.equal(count("connect_confirm"), 0); assert.equal(count("connect_review_host"), 1);
+});
+
+test("remount during review recovers the native review without consent or accepting an old component reply", async () => {
+  singleSourceFixtures("sessionGameTcp"); snapshot = preparedSingleSource("sessionGameTcp");
+  let finish;
+  handlers.set("connect_review_host", () => new Promise(resolve => { finish = resolve; }));
+  await render(); await submit();
+  await act(async () => root.unmount()); root = createRoot(container);
+  snapshot = ownedSourceReview("sessionGameTcp"); await render();
+  assert.equal(button("Autorizar conexão").disabled, true);
+  await act(async () => finish(ownedSourceReview("sessionGameTcp").review));
+  assert.equal(button("Autorizar conexão").disabled, true);
+  assert.equal(count("connect_review_host"), 1); assert.equal(count("connect_confirm"), 0);
+  await click("Encerrar Connect");
 });

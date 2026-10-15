@@ -113,6 +113,28 @@ pub struct ConnectPreparation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invitation_profile: Option<&'static str>,
 }
+/// Native-only result receipt. The manager retains any source-query worker.
+#[derive(Debug)]
+pub struct PendingHostReview {
+    #[cfg(feature = "connect-lab")]
+    result:
+        Result<ConnectReview, tokio::sync::oneshot::Receiver<Result<ConnectReview, ConnectError>>>,
+}
+impl PendingHostReview {
+    pub async fn wait(self) -> Result<ConnectReview, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            match self.result {
+                Ok(review) => Ok(review),
+                Err(receiver) => receiver.await.unwrap_or(Err(ConnectError::Internal)),
+            }
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            Err(ConnectError::Disabled)
+        }
+    }
+}
 /// Observation while an owned game source is checked, before an identity exists.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -659,15 +681,16 @@ impl ConnectManager {
         self.live
             .reserve_host_discovered(owner, request, selection_id, discovery)
     }
-    pub fn review_host(
+    pub fn reserve_host_review(
         &self,
         owner: &str,
         operation_id: &str,
         guest_public_id: &str,
-    ) -> Result<ConnectReview, ConnectError> {
+    ) -> Result<PendingHostReview, ConnectError> {
         #[cfg(feature = "connect-lab")]
         {
-            self.live.review_host(owner, operation_id, guest_public_id)
+            self.live
+                .reserve_host_review(owner, operation_id, guest_public_id)
         }
         #[cfg(not(feature = "connect-lab"))]
         {

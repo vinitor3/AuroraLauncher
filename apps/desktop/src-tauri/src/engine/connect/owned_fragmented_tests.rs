@@ -104,7 +104,10 @@ async fn owned_game_and_manual_udp_continue_after_ingress_then_source_loss_close
         )
         .unwrap();
     let review = host
-        .review_host("main", &hp.operation_id, &gp.public_id)
+        .reserve_host_review("main", &hp.operation_id, &gp.public_id)
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     assert_eq!(review.target_source, Some("ownedInstance"));
     assert_eq!(review.instance_id.as_deref(), Some("fixture-instance"));
@@ -289,11 +292,14 @@ async fn source_loss_between_review_and_confirm_cannot_start_either_service() {
         .await
         .unwrap();
     let review = host
-        .review_host(
+        .reserve_host_review(
             "main",
             &hp.operation_id,
             &lab::generate_key().public().to_string(),
         )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     fixture.stop();
     let replacement = std::net::TcpListener::bind(game).unwrap();
@@ -341,7 +347,10 @@ async fn manual_udp_failure_keeps_discovered_game_status_until_explicit_stop() {
         )
         .unwrap();
     let review = host
-        .review_host("main", &hp.operation_id, &gp.public_id)
+        .reserve_host_review("main", &hp.operation_id, &gp.public_id)
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     let timing = review.session_timing.unwrap();
     drop(held);

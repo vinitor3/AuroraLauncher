@@ -193,6 +193,7 @@ impl Manager {
             guest_source: None,
             ready_game: None,
             host_source: None,
+            host_review: None,
             group_source: Some(SourceWork {
                 #[cfg(test)]
                 hooks: hooks.clone(),

@@ -562,7 +562,7 @@ async fn native_group_policy_slot_owner_review_digest_and_old_profiles_remain_se
         .is_err());
     assert!(f
         .manager
-        .review_host("main", f.id(), &f.keys[0].public().to_string())
+        .reserve_host_review("main", f.id(), &f.keys[0].public().to_string())
         .is_err());
     assert!(f.manager.export_invitation("main", f.id()).is_err());
     assert!(f

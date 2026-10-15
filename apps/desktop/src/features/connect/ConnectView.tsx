@@ -57,6 +57,7 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   const [knownOperationId, setKnownOperationId] = useState<string>();
   const [udpRecoveryAwaitingSnapshot, setUdpRecoveryAwaitingSnapshot] = useState(false);
   const [sourcePreparationUncertain, setSourcePreparationUncertain] = useState(false);
+  const [hostReviewUncertain, setHostReviewUncertain] = useState(false);
   const epoch = useRef(0);
   const mounted = useRef(false);
   const pendingRef = useRef<Action | undefined>(undefined);
@@ -65,10 +66,14 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   const exportedFor = useRef<string | undefined>(undefined);
   const udpRetryContext = useRef<{ operationId: string; generation: number } | undefined>(undefined);
   const sourcePreparationAwaiting = useRef<SourcePreparationAwaiting | undefined>(undefined);
+  const hostReviewAwaiting = useRef<{ operationId: string } | undefined>(undefined);
 
   function acceptSnapshot(value: unknown, rejectionProof?: symbol) {
     const next = snapshotFrom(value);
     if (snapshotRef.current && next.generation < snapshotRef.current.generation) return;
+    if (hostReviewAwaiting.current && (next.operationId !== hostReviewAwaiting.current.operationId || next.phase !== "hostPrepared")) {
+      hostReviewAwaiting.current = undefined; setHostReviewUncertain(false); setAcknowledged(false);
+    }
     const awaitingSource = sourcePreparationAwaiting.current;
     if (awaitingSource) {
       // An old idle/closed observation cannot prove that a lost preparation
@@ -159,7 +164,7 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   }, []);
 
   async function perform(action: Action, operation: (current: () => boolean) => Promise<void>) {
-    if (pendingRef.current && action !== "stop" && !(action === "refresh" && sourcePreparationAwaiting.current)) return;
+    if (pendingRef.current && action !== "stop" && !(action === "refresh" && (sourcePreparationAwaiting.current || hostReviewAwaiting.current))) return;
     if (pendingRef.current === "stop") return;
     const request = ++epoch.current;
     const current = () => mounted.current && request === epoch.current;
@@ -307,11 +312,26 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   }
   function review(event: FormEvent) {
     event.preventDefault();
-    if (!operationId || !snapshot?.role) return;
+    if (!operationId || !snapshot?.role || hostReviewAwaiting.current) return;
     setAcknowledged(false);
+    if (snapshot.role === "host" && guestPublicId.trim().toLowerCase() === snapshot.preparation?.publicId.toLowerCase()) {
+      setError(connectError("connect_invalid_request")); return;
+    }
     void perform(snapshot.role === "host" ? "reviewHost" : "reviewGuest", async current => {
-      const value = reviewFrom(await invoke<unknown>(snapshot.role === "host" ? "connect_review_host" : "connect_review_guest",
-        snapshot.role === "host" ? { operationId, guestPublicId: guestPublicId.trim() } : { operationId, encodedInvitation: invitation }));
+      const awaiting = snapshot.role === "host" ? { operationId } : undefined;
+      if (awaiting) { hostReviewAwaiting.current = awaiting; setHostReviewUncertain(true); }
+      let value;
+      try {
+        value = reviewFrom(await invoke<unknown>(snapshot.role === "host" ? "connect_review_host" : "connect_review_guest",
+          snapshot.role === "host" ? { operationId, guestPublicId: guestPublicId.trim() } : { operationId, encodedInvitation: invitation }));
+      } catch (cause) {
+        // This exact native code rejects pure input before reserving a review
+        // worker. Busy, unknown IPC errors and malformed replies prove nothing.
+        if (awaiting && mounted.current && hostReviewAwaiting.current === awaiting && cause === "connect_invalid_request") {
+          hostReviewAwaiting.current = undefined; setHostReviewUncertain(false);
+        }
+        throw cause;
+      }
       if (!current()) return;
       if (value.operationId !== operationId) throw new Error("Wrong operation projection");
       if ((value.fragmentedUdp?.profile ?? value.sessionTiming?.profile) !== snapshot.invitationProfile) throw new Error("Wrong review profile");
@@ -412,11 +432,12 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
         : "Uma tentativa por janela. A conexão expira em até 10 minutos e não é renovada automaticamente. O servidor deve permanecer aberto."}</p>
       <section className="connect-status" aria-label="Estado observado da conexão">
         <header><h3>{snapshot ? snapshot.pendingHostSource ? "Conferindo a origem do jogo…" : snapshot.hostGroup && snapshot.phase === "hostListening" ? "Anfitrião do grupo disponível" : snapshot.phase === "hostListening" && snapshot.transportState === "admitted" ? "Convite utilizado · conexão ativa" : phaseText[snapshot.phase] : "Estado ainda não disponível"}</h3><div className="connect-actions">
-          <button className="secondary" type="button" disabled={busy && !sourcePreparationUncertain} onClick={() => { void perform("refresh", refresh); }}>Atualizar estado</button>
+          <button className="secondary" type="button" disabled={pending === "stop" || busy && !sourcePreparationUncertain && !hostReviewUncertain} onClick={() => { void perform("refresh", refresh); }}>Atualizar estado</button>
           {activeOperation && <button className="danger" type="button" disabled={pending === "stop" || snapshot?.phase === "closing"} onClick={stop}>Encerrar Connect</button>}
         </div></header>
         {pending && <p role="status">{actionText[pending]}</p>}
         {sourcePreparationUncertain && <p role="status">O resultado do preparo ainda não foi confirmado. Atualize o estado; a seleção não será enviada novamente.</p>}
+        {hostReviewUncertain && <p role="status">A revisão ainda não foi confirmada. Você pode atualizar o estado ou encerrar Connect; o pedido não será repetido.</p>}
         {snapshot?.pendingGroupSource && <p role="status">Conferindo o jogo selecionado. O código público e os convites só ficarão disponíveis depois dessa etapa; você pode encerrar Connect enquanto aguarda.</p>}
         {snapshot?.pendingHostSource && <p role="status">Conferindo o jogo selecionado. Você pode encerrar Connect enquanto aguarda. O código público só ficará disponível após a conferência, dentro do prazo original de 60 segundos.</p>}
         {snapshot && <>
@@ -492,9 +513,9 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
         <small>Preparação válida até {connectDate(prepared.expiresAtMs)}. Nenhuma chave privada é exibida.</small>
       </section>}
       {capabilities?.available && canReview && <form className="connect-card connect-form" onSubmit={review}>
-        {snapshot.role === "host" ? <label>Código público recebido do convidado<input required maxLength={64} value={guestPublicId} disabled={busy} onChange={event => { setGuestPublicId(event.target.value); setAcknowledged(false); }} autoComplete="off" spellCheck={false} /></label>
+        {snapshot.role === "host" ? <label>Código público recebido do convidado<input required maxLength={64} value={guestPublicId} disabled={busy || hostReviewUncertain} onChange={event => { setGuestPublicId(event.target.value); setAcknowledged(false); }} autoComplete="off" spellCheck={false} /></label>
           : <label>Convite recebido<textarea required maxLength={4096} value={invitation} disabled={busy} onChange={event => { setInvitation(event.target.value); setAcknowledged(false); }} autoComplete="off" spellCheck={false} /></label>}
-        <div><button type="submit" disabled={busy}>Revisar convite</button></div>
+        <div><button type="submit" disabled={busy || hostReviewUncertain}>Revisar convite</button></div>
       </form>}
       {capabilities?.available && reviewed && snapshot?.phase === "reviewed" && <section className="connect-card connect-review" aria-labelledby="connect-review-title"><h3 id="connect-review-title">Revise antes de autorizar</h3>
         <dl><dt>Papel</dt><dd>{reviewed.role === "host" ? "Anfitrião" : "Convidado"}</dd><dt>Modo</dt><dd>{reviewed.mode === "loopback" ? "Neste computador" : reviewed.mode === "directIpv4" ? "IPv4 direto autorizado" : "IPv6 externo autorizado"}</dd>

@@ -395,11 +395,14 @@ async fn owned_host_all_profiles_publication_tail_survives_fast_confirmation_and
             if profile == 0 { 4 } else { 5 }
         );
         let review = manager
-            .review_host(
+            .reserve_host_review(
                 "main",
                 &prepared.operation_id,
                 &lab::generate_key().public().to_string(),
             )
+            .unwrap()
+            .wait()
+            .await
             .unwrap();
         assert_eq!(review.target_source, Some("ownedInstance"));
         drop(held);
@@ -504,7 +507,7 @@ async fn owned_host_prepared_expiry_keeps_publication_tail_and_cannot_restore_au
     assert_eq!(expired.cleanup_state, "pending");
     assert!(expired.preparation.is_none() && expired.review.is_none());
     assert!(manager
-        .review_host(
+        .reserve_host_review(
             "main",
             &prepared.operation_id,
             &lab::generate_key().public().to_string()

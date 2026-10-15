@@ -27,6 +27,11 @@ mod udp_recovery_tests;
 mod fragmented_desktop;
 #[path = "group_source.rs"]
 mod group_source;
+#[path = "host_review.rs"]
+mod host_review;
+#[cfg(all(test, windows))]
+#[path = "host_review_tests.rs"]
+mod host_review_tests;
 #[path = "host_source.rs"]
 mod host_source;
 #[cfg(all(test, windows))]
@@ -139,6 +144,7 @@ struct Attempt {
     group: Option<session_group::GroupOperation>,
     group_source: Option<group_source::SourceWork>,
     host_source: Option<host_source::SourceWork>,
+    host_review: Option<host_review::ReviewWork>,
     guest_source: Option<Arc<ready_game::GuestSource>>,
     ready_game: Option<ready_game::ReadyWork>,
     #[cfg(test)]
@@ -221,6 +227,7 @@ fn terminal(a: &Attempt) -> bool {
     ready_game::finished(a)
         && group_source::finished(a)
         && host_source::finished(a)
+        && host_review::finished(a)
         && !a.probe_active
         && matches!(a.snapshot.phase, "closed" | "failed")
         && a.snapshot.cleanup_state == "complete"
@@ -274,12 +281,12 @@ fn expire_pending_at(a: &mut Attempt, now_unix: u64) {
             a.snapshot.preparation = None;
             a.snapshot.review = None;
             a.snapshot.phase = "closed";
-            a.snapshot.cleanup_state = if host_source::finished(a) {
+            a.snapshot.cleanup_state = if host_source::finished(a) && host_review::finished(a) {
                 "complete"
             } else {
                 "pending"
             };
-            if a.host_source.is_some() {
+            if a.host_source.is_some() || a.host_review.is_some() {
                 a.cancel.cancel();
                 a.snapshot.transport_state = "closed";
                 a.snapshot.expires_at_ms = None;
@@ -322,6 +329,7 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
         a.snapshot.cleanup_state = if ready_game::finished(a)
             && group_source::finished(a)
             && host_source::finished(a)
+            && host_review::finished(a)
             && !a.probe_active
         {
             "complete"
@@ -443,6 +451,7 @@ impl Manager {
         }
         if let Some(a) = state.attempt.as_mut() {
             expire_pending(a);
+            ready_game::refresh_cleanup(a);
             if !terminal(a) {
                 return Err(ConnectError::Busy);
             }
@@ -498,6 +507,7 @@ impl Manager {
             ready_game: None,
             group_source: None,
             host_source: None,
+            host_review: None,
             #[cfg(test)]
             recovery_gate: None,
             #[cfg(test)]
@@ -761,35 +771,23 @@ impl Manager {
         a.snapshot.expires_at_ms = Some(review.expires_at_ms);
         Ok(review)
     }
-    pub(super) fn review_host(
-        &self,
-        owner: &str,
+    fn issue_host_review(
+        a: &mut Attempt,
         id: &str,
-        guest_public_id: &str,
+        recipient: lab::EndpointId,
     ) -> Result<ConnectReview, ConnectError> {
-        let recipient = peer(guest_public_id)?;
-        let mut state = lock(&self.state)?;
-        let a = selected(&mut state, owner, id)?;
-        expire_pending(a);
-        if a.snapshot.phase != "hostPrepared" {
-            return Err(ConnectError::PlanExpired);
-        }
         let draft = a.draft.take().ok_or(ConnectError::StaleOperation)?;
         let Draft::Host {
             request,
             key,
             bind,
             services,
-            source,
+            ..
         } = &draft
         else {
             a.draft = Some(draft);
             return Err(ConnectError::InvalidRequest);
         };
-        if let Err(error) = source.recheck() {
-            a.draft = Some(draft);
-            return Err(error);
-        }
         let at = Instant::now();
         let now = lab::unix_millis();
         let admission_deadline = at + Duration::from_secs(request.admission_seconds.into());
@@ -876,7 +874,25 @@ impl Manager {
                 return Err(ConnectError::InvitationRejected);
             }
         };
-        Self::save_review(a, draft, invitation, admission_deadline, deadline)
+        #[cfg(test)]
+        if a.host_review
+            .as_ref()
+            .is_some_and(|work| work.hooks.expire_after_issue)
+        {
+            a.prepared_deadline = Instant::now();
+        }
+        // Signature/serialization never grant a new preparation budget. The
+        // same lock protects publication, including this last expiry check.
+        expire_pending(a);
+        if a.snapshot.phase != "hostPrepared" || a.cancel.is_cancelled() {
+            return Err(ConnectError::PlanExpired);
+        }
+        let review = Self::save_review(a, draft, invitation, admission_deadline, deadline)?;
+        expire_pending(a);
+        if a.snapshot.phase != "reviewed" {
+            return Err(ConnectError::PlanExpired);
+        }
+        Ok(review)
     }
     pub(super) fn review_guest(
         &self,
@@ -1175,6 +1191,7 @@ impl Manager {
                         && ready_game::finished(a)
                         && group_source::finished(a)
                         && host_source::finished(a)
+                        && host_review::finished(a)
                         && !a.probe_active
                         && matches!(a.snapshot.phase, "closed" | "failed")
                         && matches!(a.snapshot.cleanup_state, "complete" | "failed")
@@ -1227,6 +1244,7 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
         draft,
         invitation,
         deadline,
+        admission_deadline,
         ..
     } = reviewed;
     match draft {
@@ -1237,12 +1255,40 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
             services,
             source,
         } => {
-            if source.recheck().is_err() {
-                close_operation(&state, &id, &cancel, Some(ConnectError::SourceChanged)).await;
-                return;
-            }
+            use host_review::{ActorSource, QueryStage};
             let lease = invitation.lease();
             let lease_id = lease.lease_id.clone();
+            let mut source_work = ActorSource {
+                state: &state,
+                id: &id,
+                cancel: &cancel,
+                authority: &invitation,
+                admission_deadline,
+                deadline,
+                host: None,
+                lease_id: &lease_id,
+                #[cfg(test)]
+                monotonic_now: lock(&state).ok().and_then(|state| {
+                    state
+                        .attempt
+                        .as_ref()
+                        .and_then(|a| a.host_review.as_ref())
+                        .and_then(|work| work.hooks.monotonic_now.clone())
+                }),
+                #[cfg(test)]
+                monitor_observation: lock(&state).ok().and_then(|state| {
+                    state
+                        .attempt
+                        .as_ref()
+                        .and_then(|a| a.host_review.as_ref())
+                        .and_then(|work| work.hooks.monitor_observation.clone())
+                }),
+            };
+            let (checked, interrupted) = source_work.recheck(&source, QueryStage::BeforeBind).await;
+            if checked.is_err() || interrupted || !source_work.permitted(QueryStage::BeforeBind) {
+                close_operation(&state, &id, &cancel, checked.err()).await;
+                return;
+            }
             let config = lab::HostConfig {
                 secret_key: key,
                 bind_addr: bind,
@@ -1266,15 +1312,20 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                 .await;
                 return;
             };
-            let host = Arc::new(host);
-            let mut source_error = source.recheck().err();
+            source_work.host = Some(Arc::new(host));
+            let (checked, interrupted) = source_work.recheck(&source, QueryStage::AfterBind).await;
+            let mut source_error = checked.err();
+            let mut published = false;
             if source_error.is_none()
-                && !cancel.is_cancelled()
-                && Instant::now() < deadline
-                && invitation.check_admission().is_ok()
+                && !interrupted
+                && source_work.permitted(QueryStage::AfterBind)
             {
                 update(&state, &id, |a| {
-                    if a.snapshot.phase != "closing" {
+                    if a.snapshot.phase == "starting"
+                        && !a.cancel.is_cancelled()
+                        && source_work.permitted(QueryStage::AfterBind)
+                    {
+                        let host = source_work.host.as_ref().expect("authorized Host owner");
                         a.snapshot.phase = "hostListening";
                         a.snapshot.transport_state = "listening";
                         a.host = Some((host.clone(), lease_id.clone()));
@@ -1285,8 +1336,11 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                             session_timing: a.snapshot.session_timing.clone(),
                             fragmented_udp: a.snapshot.fragmented_udp.clone(),
                         });
+                        published = true;
                     }
                 });
+            }
+            if published {
                 let mut interval = tokio::time::interval(Duration::from_millis(100));
                 let mut admitted = false;
                 let mut source_checked = Instant::now();
@@ -1296,14 +1350,16 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                         _=tokio::time::sleep_until(deadline.into())=>break,
                         _ = interval.tick() => {
                             if source_checked.elapsed()>=Duration::from_secs(1){source_checked=Instant::now();
-                                #[cfg(windows)] if let TargetGuard::Owned(target)=&source {let target=target.clone();if !matches!(tokio::task::spawn_blocking(move||target.recheck_owned()).await,Ok(Ok(_))){source_error=Some(ConnectError::SourceChanged);break;}}
+                                let (checked, interrupted) = source_work.recheck(&source, QueryStage::Monitor).await;
+                                if let Err(error) = checked { source_error=Some(error); break; }
+                                if interrupted { break; }
                             }
                             if invitation.check_session().is_err() { break; }
                             let Some(consumed) = admission_state(
-                                || invitation.check_admission().is_ok(),
-                                || host.invitation_consumed(&lease_id),
+                                || Instant::now() < admission_deadline && invitation.check_admission().is_ok(),
+                                || source_work.host.as_ref().is_some_and(|host| host.invitation_consumed(&lease_id)),
                             ) else { break; };
-                            let active = host.metrics().active_peers > 0;
+                            let active = source_work.host.as_ref().is_some_and(|host| host.metrics().active_peers > 0);
                             if consumed && !admitted {
                                 admitted = true;
                                 update(&state, &id, |a| {
@@ -1321,16 +1377,14 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                     update(&state, &id, |a| a.snapshot.error_code = Some(error.code()));
                 }
             }
-            cancel.cancel();
-            update(&state, &id, |a| {
-                a.snapshot.phase = "closing";
-                a.host = None;
-                a.export = None;
-            });
-            host.revoke(&lease_id);
-            host.shutdown().await;
-            drop(host);
-            let source_error = source_error.or_else(|| source.recheck().err());
+            source_work.interrupt().await;
+            if source_error.is_none() {
+                source_error = source_work
+                    .recheck(&source, QueryStage::Final)
+                    .await
+                    .0
+                    .err();
+            }
             close_operation(&state, &id, &cancel, source_error).await;
         }
         Draft::Guest { request, key, .. } => {

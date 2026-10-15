@@ -288,3 +288,29 @@ test("account cleanup refuses a terminal single source while its blocking worker
   const value = { ...stopped(), operationId: "11111111-2222-4333-8444-555555555555", role: "host", phase: "failed", cleanupState: "pending" };
   await assert.rejects(stopConnectForAccountTransition(async () => value), /connect_account_cleanup_incomplete/);
 });
+
+for (const profile of ["legacy", "sessionGameTcp", "sessionFragmentedGameUdp"]) {
+  test(`account transition waits for retained ${profile} review even while its public phase remains hostPrepared`, async () => {
+    const operationId = "11111111-2222-4333-8444-555555555555";
+    const invitationProfile = profile === "legacy" ? {} : { invitationProfile: profile };
+    const prepared = { ...idle(), available: true, operationId, generation: 2, role: "host", phase: "hostPrepared",
+      preparation: { operationId, generation: 2, publicId: "a".repeat(64), expiresAtMs: 1800000060000, ...invitationProfile },
+      ...invitationProfile };
+    const cleanup = deferred(), calls = [];
+    const f = await establishedFixture(() => stopConnectForAccountTransition(async (command, args) => {
+      calls.push([command, args]);
+      if (command === "connect_snapshot") return prepared;
+      assert.equal(command, "connect_stop");
+      return cleanup.promise;
+    }));
+    f.controller.accept(ready("B")); const waiting = f.controller.retry(); await tick();
+    assert.deepEqual(f.published.at(-1), { phase: "loading" });
+    assert.deepEqual(f.barriers, ["closing"]);
+    assert.deepEqual(calls, [["connect_snapshot", undefined], ["connect_stop", { operationId }]]);
+    cleanup.resolve({ ...prepared, generation: 4, phase: "closed", transportState: "closed", preparation: null, cleanupState: "complete" });
+    await waiting;
+    assert.deepEqual(f.published.at(-1), ready("B"));
+    assert.deepEqual(f.barriers, ["closing", "idle"]);
+    assert.equal(calls.length, 2);
+  });
+}

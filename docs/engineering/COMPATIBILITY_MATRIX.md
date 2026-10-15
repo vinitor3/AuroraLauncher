@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 15/10/2026
 
+Incremento76: revisão e consultas de origem do Host individual com encerramento independente da demora da consulta. [Contrato76](../aurora-connect-owned-source-review.md). **PROTÓTIPO**, testes nativos locais/DOM/build e revisão aprovados, incluindo liberação real da porta antes de terminar a consulta. Nenhuma célula de Minecraft, Core/Skins, GUI, rede ou áudio é promovida; o monitor de grupo permanece separado.
+
 Incremento75: preparo individual descoberto cancelável desde a reserva, preservando TCP48/56 e TCP+UDP64. [Contrato75](../aurora-connect-discovery-lifecycle.md). **PROTÓTIPO**, com provas locais de ownership e interface; nenhuma célula de runtime, par Core/Skins ou gate externo é promovido. Revisão posterior e validações gráficas permanecem separadas.
 
 Incremento74: descoberta TCP para grupos com UDP manual e preparo cancelável. [Contrato74](../aurora-connect-discovered-group.md). **PROTÓTIPO**, com processo/listener de fixture próprio, três agentes locais e interface testada por DOM. Sem promoção de qualquer célula da matriz; fases, nove pares, GUI, Minecraft LAN, áudio e redes conservam seus gates próprios. O teste concorrente controlado não comprova entrega UDP sem perdas sob saturação.

@@ -206,7 +206,10 @@ impl Pair {
             )
             .unwrap();
         let review = host
-            .review_host("main", &hp.operation_id, &gp.public_id)
+            .reserve_host_review("main", &hp.operation_id, &gp.public_id)
+            .unwrap()
+            .wait()
+            .await
             .unwrap();
         drop(hold);
         host.confirm("main", &hp.operation_id, &review.digest)

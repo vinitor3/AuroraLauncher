@@ -273,6 +273,7 @@ impl Manager {
             ready_game: None,
             group_source: None,
             host_source: None,
+            host_review: None,
             group: Some(GroupOperation {
                 draft: Some(GroupDraft {
                     request,

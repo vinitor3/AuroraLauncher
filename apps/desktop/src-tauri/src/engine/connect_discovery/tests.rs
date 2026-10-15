@@ -502,11 +502,14 @@ async fn actor_owned_target_activation_match_digest_and_lost_source_are_enforced
     // The consumed selection expires independently of the already activated guard.
     expire_selection(&discovery);
     let review = actor
-        .review_host(
+        .reserve_host_review(
             "main",
             &prepared.operation_id,
             &aurora_connect_lab::generate_key().public().to_string(),
         )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     assert!(
         review.target_source == Some("ownedInstance")
@@ -541,11 +544,14 @@ async fn actor_owned_target_activation_match_digest_and_lost_source_are_enforced
         .await
         .unwrap();
     let review = actor
-        .review_host(
+        .reserve_host_review(
             "main",
             &prepared.operation_id,
             &aurora_connect_lab::generate_key().public().to_string(),
         )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     drop(reservation);
     actor
@@ -597,11 +603,14 @@ async fn discovered_owned_server_two_managers_status_and_source_loss_cleanup() {
         )
         .unwrap();
     let host_review = host
-        .review_host(
+        .reserve_host_review(
             "main",
             &prepared_host.operation_id,
             &prepared_guest.public_id,
         )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     drop(reservation);
     host.confirm("main", &prepared_host.operation_id, &host_review.digest)

@@ -154,7 +154,10 @@ impl Pair {
         assert!(prepared.fragmented_udp.is_none() && prepared.session_timing.is_none());
         assert_eq!(prepared.udp.unwrap().udp_state, UdpState::NotStarted);
         let review = host
-            .review_host("main", &hp.operation_id, &gp.public_id)
+            .reserve_host_review("main", &hp.operation_id, &gp.public_id)
+            .unwrap()
+            .wait()
+            .await
             .unwrap();
         let timing = review.session_timing.clone().unwrap();
         assert_eq!(timing.profile, SESSION_PROFILE);
@@ -568,11 +571,14 @@ async fn unconsumed_host_closes_at_admission_with_no_service_access() {
         )
         .unwrap();
     let r = host
-        .review_host(
+        .reserve_host_review(
             "main",
             &p.operation_id,
             &lab::generate_key().public().to_string(),
         )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     drop(held);
     host.confirm("main", &p.operation_id, &r.digest)

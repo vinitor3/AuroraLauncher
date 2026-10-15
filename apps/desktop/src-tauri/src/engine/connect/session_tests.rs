@@ -65,7 +65,10 @@ impl Pair {
         assert_eq!(hp.invitation_profile, Some("sessionGameTcp"));
         assert_eq!(gp.invitation_profile, Some("sessionGameTcp"));
         let review = host
-            .review_host("main", &hp.operation_id, &gp.public_id)
+            .reserve_host_review("main", &hp.operation_id, &gp.public_id)
+            .unwrap()
+            .wait()
+            .await
             .unwrap();
         let timing = review.session_timing.clone().unwrap();
         assert_eq!(timing.admission_seconds, admission);
@@ -256,11 +259,14 @@ async fn preparation_civil_expiry_blocks_confirmation_before_monotonic_or_admiss
         )
         .unwrap();
     let review = host
-        .review_host(
+        .reserve_host_review(
             "main",
             &p.operation_id,
             &lab::generate_key().public().to_string(),
         )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     {
         let mut state = host.live.state.lock().unwrap();
@@ -495,11 +501,14 @@ async fn unconsumed_host_closes_at_admission_without_waiting_for_session_or_dest
         .prepare_session_host("main", request(bind, canary.local_addr().unwrap(), 1, 30))
         .unwrap();
     let r = host
-        .review_host(
+        .reserve_host_review(
             "main",
             &hp.operation_id,
             &lab::generate_key().public().to_string(),
         )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     drop(held);
     host.confirm("main", &hp.operation_id, &r.digest)
@@ -568,11 +577,14 @@ async fn session_policy_and_expired_preparation_cannot_confirm_or_open_transport
         .unwrap();
     assert!(host.snapshot("other").is_err());
     let review = host
-        .review_host(
+        .reserve_host_review(
             "main",
             &p.operation_id,
             &lab::generate_key().public().to_string(),
         )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     assert!(review.expires_at_ms <= p.expires_at_ms);
     {
@@ -696,11 +708,14 @@ async fn legacy_review_bytes_and_digest_keep_their_original_shape() {
         .get("invitationProfile")
         .is_none());
     let mut r = host
-        .review_host(
+        .reserve_host_review(
             "main",
             &p.operation_id,
             &lab::generate_key().public().to_string(),
         )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     let expected = r.digest.clone();
     r.digest = String::new();
@@ -762,7 +777,10 @@ async fn discovered_session_retains_owned_process_guard_after_ingress() {
         )
         .unwrap();
     let review = host
-        .review_host("main", &hp.operation_id, &gp.public_id)
+        .reserve_host_review("main", &hp.operation_id, &gp.public_id)
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     assert_eq!(review.target_source, Some("ownedInstance"));
     let timing = review.session_timing.unwrap();

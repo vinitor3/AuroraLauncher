@@ -416,15 +416,16 @@ pub fn connect_prepare_host(
 }
 
 #[tauri::command]
-pub fn connect_review_host(
+pub async fn connect_review_host(
     window: WebviewWindow,
     manager: State<'_, ConnectManager>,
     operation_id: String,
     guest_public_id: String,
 ) -> Result<ConnectReview, &'static str> {
-    manager
-        .review_host(owner(&window)?, &operation_id, &guest_public_id)
-        .map_err(|error| error.code())
+    let pending = manager
+        .reserve_host_review(owner(&window)?, &operation_id, &guest_public_id)
+        .map_err(|error| error.code())?;
+    pending.wait().await.map_err(|error| error.code())
 }
 
 #[tauri::command]

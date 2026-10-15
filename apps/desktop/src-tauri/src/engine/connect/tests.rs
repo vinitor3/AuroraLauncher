@@ -29,8 +29,8 @@ async fn wait(manager: &ConnectManager, id: &str, phase: &str) -> ConnectSnapsho
     .await
     .expect("bounded manager transition")
 }
-#[test]
-fn policy_owner_single_slot_and_review_restore_are_enforced_without_network() {
+#[tokio::test]
+async fn policy_owner_single_slot_and_review_restore_are_enforced_without_network() {
     let manager = ConnectManager::default();
     let request = host_request(
         "127.0.0.1:42000".parse().unwrap(),
@@ -47,12 +47,15 @@ fn policy_owner_single_slot_and_review_restore_are_enforced_without_network() {
         Err(ConnectError::OwnerMismatch)
     ));
     assert!(matches!(
-        manager.review_host("main", "stale", "bad"),
+        manager.reserve_host_review("main", "stale", "bad"),
         Err(ConnectError::InvalidRequest)
     ));
     let recipient = aurora_connect_lab::generate_key().public().to_string();
     let review = manager
-        .review_host("main", &prepared.operation_id, &recipient)
+        .reserve_host_review("main", &prepared.operation_id, &recipient)
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     let snapshot = manager.snapshot("main").unwrap();
     assert!(
@@ -133,11 +136,14 @@ async fn pair(
         )
         .unwrap();
     let review = host
-        .review_host(
+        .reserve_host_review(
             "main",
             &host_prepared.operation_id,
             &guest_prepared.public_id,
         )
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     assert!(matches!(
         host.confirm("main", &host_prepared.operation_id, "wrong")
@@ -264,7 +270,10 @@ async fn fast_disconnect_cannot_export_consumed_invitation() {
         .unwrap();
     let key = aurora_connect_lab::generate_key();
     let review = host
-        .review_host("main", &prepared.operation_id, &key.public().to_string())
+        .reserve_host_review("main", &prepared.operation_id, &key.public().to_string())
+        .unwrap()
+        .wait()
+        .await
         .unwrap();
     drop(reservation);
     host.confirm("main", &prepared.operation_id, &review.digest)

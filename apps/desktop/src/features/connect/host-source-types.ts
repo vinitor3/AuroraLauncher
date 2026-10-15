@@ -41,10 +41,14 @@ export function isControlledSourceRejection(cause: unknown): boolean {
 // reservation cannot produce the same UUID and generation as this baseline.
 export function provesNoSourceReservation(next: ConnectSnapshot, baseline: ConnectSnapshot | undefined): boolean {
   if (!baseline || next.operationId !== baseline.operationId || next.generation !== baseline.generation) return false;
+  // A manual preparation may expire without ever opening a transport. Only
+  // the unchanged terminal projection can establish that historical case.
+  if (next.operationId !== null && (next.transportState === "notStarted" || baseline.transportState === "notStarted")
+    && (next.transportState !== baseline.transportState || next.phase !== baseline.phase || next.role !== baseline.role)) return false;
   const released = (value: ConnectSnapshot) => value.phase === "idle"
     ? value.operationId === null && value.role === null && value.transportState === "notStarted"
       && ["notStarted", "complete"].includes(value.cleanupState) && value.preparation === null && value.review === null
-    : ["closed", "failed"].includes(value.phase) && value.operationId !== null && value.transportState === "closed"
+    : ["closed", "failed"].includes(value.phase) && value.operationId !== null && ["closed", "notStarted"].includes(value.transportState)
       && value.cleanupState === "complete" && value.preparation === null && value.review === null;
   return released(baseline) && released(next);
 }

@@ -6,6 +6,12 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento76 — revisão e consulta de origem sem bloquear encerramento
+
+Separar a revisão individual descoberta em reserva síncrona, worker bloqueante próprio e publicação condicionada ao mesmo Attempt/geração/fase/prazo. Manter o draft no manager durante a consulta permite removê-lo ao parar sem restauração tardia. O retorno público continua `ConnectReview`; manual não exige consulta Windows. Admissão/sessão nascem após a consulta e os gates, enquanto o preparo60s conserva sua âncora. A perda do waiter não provoca emissão nova nem libera trabalho próprio. Falha de origem após reserva encerra a tentativa, exigindo novo preparo.
+
+As consultas do ator individual são executadas por trabalho bloqueante próprio e aguardadas pelo ator. Com Host já aberto, observar cancelamento/expiração durante a consulta, fechar transporte e soltar seus owners antes de aguardar o término para cleanup. Consulta lenta não estende autorização nem autoriza publicar listening após stop. [Contrato76](../../aurora-connect-owned-source-review.md). Implementação e provas locais aprovadas, com falhas iniciais preservadas no task; a análise estática não é demonstração de travamento real ou homologação. Grupo permanece escopo separado.
+
 ### Incremento75 — reserva antes da consulta individual
 
 Aplicar a propriedade de trabalho também aos preparos descobertos48/56/64, preservando os três comandos e o retorno `ConnectPreparation`. Reservar UUID, geração, prazo60s e worker sob o mutex antes de consumir a seleção ou despachar consulta bloqueante; somente então aguardar o receptor interno. O worker permanece pertencente ao manager se o IPC desaparecer, inclusive depois da publicação. A seleção mantém seu prazo30s e consumo único. `pendingHostSource` torna o preparo observável sem identidade ou socket. Nenhuma falha depois da reserva devolve o manager ao UUID/geração anteriores.
