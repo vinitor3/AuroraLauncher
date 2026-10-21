@@ -1,5 +1,7 @@
 //! Explicit static Host roster. Single-party and Guest DTOs keep their shape.
-use super::{ConnectMode, FragmentedUdpContract, FragmentedUdpReview, SessionTiming};
+use super::{
+    ConnectMode, ConnectPathObservation, FragmentedUdpContract, FragmentedUdpReview, SessionTiming,
+};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "connect-lab")]
@@ -83,6 +85,8 @@ pub struct GroupParticipant {
     pub admission_valid: bool,
     pub session_valid: bool,
     pub transport_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_observation: Option<ConnectPathObservation>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

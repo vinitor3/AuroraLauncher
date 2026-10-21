@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 mod fragmented_profile;
 mod group_profile;
+mod path_observation;
+pub use path_observation::{ConnectPathObservation, ConnectPathState};
 mod ready_game_caller;
 mod ready_game_profile;
 pub use ready_game_profile::*;
@@ -255,6 +257,8 @@ pub struct ConnectSnapshot {
     pub plasmo_voice_state: &'static str,
     pub relay_enabled: bool,
     pub path_state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_observation: Option<ConnectPathObservation>,
     pub cleanup_state: &'static str,
     pub preparation: Option<ConnectPreparation>,
     pub review: Option<ConnectReview>,
@@ -294,6 +298,7 @@ impl ConnectSnapshot {
             plasmo_voice_state: "disabled",
             relay_enabled: false,
             path_state: "notVerified",
+            path_observation: None,
             cleanup_state: "notStarted",
             preparation: None,
             review: None,

@@ -6,6 +6,10 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento80 — observação transitória no painel, sem nova autorização
+
+Projetar a seleção78 somente durante fases vivas e sob a autoridade original, em cada resposta de snapshot após os gates do comando. Usar DTO opcional fechado schema1; conservar pathState/relayEnabled anteriores e omitir em revisão/exportação/digest. No grupo, cada participante recebe somente a sua amostra, sem agregado global. Fonte Guest promove Weak apenas na consulta síncrona, preservando79. Geração muda somente quando a projeção efetiva muda; cancelamento não produz amostra intermediária. Frontend oculta informação anterior após Stop incerto até receber confirmação válida e mantém os controles de encerramento. [Contrato80](../../aurora-connect-desktop-path-observation.md). Nenhuma permissão de rede/serviço/relay público ou homologação decorre da apresentação.
+
 ### Incremento79 — origem de abertura não possui o transporte
 
 Após reproduzir retenção de UDP depois de cleanup completo, manter Arc Guest somente no ator e Weak Guest/ponte na origem de abertura pronta. Os workers conservam a mesma origem/autoridade para seus gates, mas nenhum owner de Endpoint deve atravessar preparação ou espera de spawn. Upgrades duram apenas a verificação síncrona; encerramento retira a origem do Attempt e aguarda trabalho real sem matar jogo já registrado. [Contrato79](../../aurora-connect-guest-source-cleanup.md). Baseline falhou antes da correção, quatro provas causais e regressão490 PASS aprovadas; sem homologação gráfica/de jogo/voz/rede.

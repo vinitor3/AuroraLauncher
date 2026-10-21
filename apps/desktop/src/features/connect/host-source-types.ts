@@ -10,7 +10,7 @@ const invalid = (): never => { throw new Error("Invalid pending host source"); }
 
 export function pendingHostSourceFieldsFrom(value: Record<string, unknown>): PendingHostSource {
   const pending = value.pendingHostSource;
-  if (!exact(pending, ["kind", "mode", "profile"]) || pending.kind !== "ownedGameTcp"
+  if (Object.hasOwn(value, "pathObservation") || !exact(pending, ["kind", "mode", "profile"]) || pending.kind !== "ownedGameTcp"
     || !["loopback", "externalIpv6", "directIpv4"].includes(pending.mode as string)
     || !["legacy", "sessionGameTcp", "sessionFragmentedGameUdp"].includes(pending.profile as string)) return invalid();
   const session = pending.profile !== "legacy";

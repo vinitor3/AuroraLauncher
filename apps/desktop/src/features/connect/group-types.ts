@@ -1,5 +1,6 @@
 import { fragmentedContractFrom, isDirectIpv4Address, isLoopbackUdpTarget, SESSION_FRAGMENTED_PROFILE, type FragmentedUdpContract, type FragmentedUdpReview } from "./fragmented-types";
 import type { ConnectMode, ConnectSessionTiming } from "./types";
+import { pathObservationFrom, type PathObservation } from "./path-observation-types";
 
 export const GROUP_KIND = "staticSessionFragmentedHost" as const;
 export type GroupCapability = {
@@ -12,6 +13,7 @@ export type GroupPreparation = { operationId: string; generation: number; public
 export type GroupParticipant = {
   participantId: string; guestPublicId: string; invitationDigest: string; sessionTiming: ConnectSessionTiming;
   consumed: boolean; transportActive: boolean; revoked: boolean; admissionValid: boolean; sessionValid: boolean;
+  pathObservation?: PathObservation;
 };
 export type GroupReview = {
   operationId: string; generation: number; digest: string; kind: typeof GROUP_KIND; mode: ConnectMode;
@@ -96,15 +98,22 @@ export function groupPreparationFrom(value: unknown): GroupPreparation {
     || !id(value.operationId) || !integer(value.generation) || !hash(value.publicId) || !integer(value.expiresAtMs) || value.expiresAtMs === 0) return bad();
   return value as GroupPreparation;
 }
-function participantsFrom(value: unknown, hostId: string, allowEmpty = false): GroupParticipant[] {
+function participantsFrom(value: unknown, hostId: string, allowEmpty = false, allowPathObservation = false): GroupParticipant[] {
   if (!Array.isArray(value) || (!(allowEmpty && value.length === 0) && (value.length < 2 || value.length > 8))) return bad();
   const ids = new Set<string>(), peers = new Set<string>(), digests = new Set<string>();
   for (const item of value) {
-    if (!exact(item, PARTICIPANT_KEYS) || !id(item.participantId) || !hash(item.guestPublicId) || item.guestPublicId === hostId || !hash(item.invitationDigest)
+    if (record(item) && "pathObservation" in item && !Object.hasOwn(item, "pathObservation")) return bad();
+    const observationKeys = record(item) && Object.hasOwn(item, "pathObservation") && allowPathObservation ? ["pathObservation"] : [];
+    if (!exact(item, [...PARTICIPANT_KEYS, ...observationKeys]) || !id(item.participantId) || !hash(item.guestPublicId) || item.guestPublicId === hostId || !hash(item.invitationDigest)
       || !["consumed", "transportActive", "revoked", "admissionValid", "sessionValid"].every(key => typeof item[key] === "boolean")
       || ids.has(item.participantId) || peers.has(item.guestPublicId) || digests.has(item.invitationDigest)
       || (item.revoked && (item.admissionValid || item.sessionValid || item.transportActive))
       || (item.admissionValid && !item.sessionValid) || (item.transportActive && (!item.consumed || !item.sessionValid))) return bad();
+    if (observationKeys.length) {
+      const observation = pathObservationFrom(item.pathObservation);
+      if (!item.consumed || item.revoked || !item.sessionValid
+        || (observation.state === "closed" ? item.transportActive : !item.transportActive)) return bad();
+    }
     timingFrom(item.sessionTiming);
     ids.add(item.participantId); peers.add(item.guestPublicId); digests.add(item.invitationDigest);
   }
@@ -132,14 +141,14 @@ export function groupReviewFrom(value: unknown): GroupReview {
 }
 export function groupSnapshotFieldsFrom(value: RecordValue): HostGroup {
   const group = value.hostGroup;
-  if (!exact(group, ["kind", "profile", "invitationSchemaVersion", "mode", "hostPublicId", "preparation", "review", "participants"])
+  if (Object.hasOwn(value, "pathObservation") || !exact(group, ["kind", "profile", "invitationSchemaVersion", "mode", "hostPublicId", "preparation", "review", "participants"])
     || group.kind !== GROUP_KIND || group.profile !== SESSION_FRAGMENTED_PROFILE || group.invitationSchemaVersion !== 3
     || !mode(group.mode) || !hash(group.hostPublicId) || value.available !== true || value.role !== "host" || !id(value.operationId) || value.pendingGroupSource !== undefined
     || !["hostPrepared", "reviewed", "starting", "hostListening", "closing", "closed", "failed"].includes(value.phase as string)
     || value.preparation !== null || value.review !== null || value.tcpAddress !== null || value.statusSummary !== null || value.statusState !== "notChecked"
     || ["invitationProfile", "sessionTiming", "fragmentedUdp", "udpState", "udpAddress", "udpErrorCode", "udpOriginalCapacity", "udpCapacityScope", "udpRecovery", "udpTarget"]
       .some(key => value[key] !== undefined)) return bad();
-  const participants = participantsFrom(group.participants, group.hostPublicId, ["hostPrepared", "closing", "closed", "failed"].includes(value.phase as string));
+  const participants = participantsFrom(group.participants, group.hostPublicId, ["hostPrepared", "closing", "closed", "failed"].includes(value.phase as string), value.phase === "hostListening");
   if (participants.some(item => item.transportActive && value.phase !== "hostListening")) return bad();
   if (["closing", "closed", "failed"].includes(value.phase as string)
     && participants.some(item => item.admissionValid || item.sessionValid || item.transportActive)) return bad();

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { connectDate, snapshotFrom, type ConnectSnapshot } from "./types";
 import { groupExportFrom, groupReviewFrom, sameGroupParticipant, sameGroupTiming, type GroupParticipant } from "./group-types";
 import { FragmentedReviewFields } from "./FragmentedFields";
+import { pathObservationText } from "./path-observation-types";
 
 export type GroupAction = "reviewGroup" | "confirmGroup" | "exportGroup" | "revokeGroup";
 type Props = {
@@ -160,7 +161,8 @@ export function GroupHostPanel({ snapshot, supported, busy, stale, perform, refr
       <h4>Participante {index + 1}</h4><code>{participant.guestPublicId}</code>
       <dl><dt>Entrar até</dt><dd>{connectDate(participant.sessionTiming.admissionExpiresAtMs)}</dd><dt>Encerramento da sessão</dt><dd>{connectDate(participant.sessionTiming.sessionExpiresAtMs)}</dd>
         <dt>Convite</dt><dd>{participant.revoked ? "Revogado" : participant.consumed ? "Ingresso consumido · não reutilizável" : participant.admissionValid && now < participant.sessionTiming.admissionExpiresAtMs ? "Aguardando ingresso" : "Ingresso indisponível"}</dd>
-        <dt>Transporte individual</dt><dd>{participant.transportActive ? "Conexão autenticada observada" : "Sem conexão autenticada observada"}</dd></dl>
+        <dt>Transporte individual</dt><dd>{participant.transportActive ? "Conexão autenticada observada" : "Sem conexão autenticada observada"}</dd>
+        {snapshot.phase === "hostListening" && <><dt>Caminho individual</dt><dd>{pathObservationText(stale ? undefined : participant.pathObservation)}</dd></>}</dl>
       {snapshot.phase === "hostListening" && <div className="connect-actions">
         <button type="button" className="secondary" aria-pressed={selectedId === participant.participantId} disabled={blocked || !exportable(participant, now)} onClick={() => { setSelectedId(participant.participantId); setExported(""); exportContext.current = undefined; }}>Selecionar convite {index + 1}</button>
         <button type="button" className="danger" disabled={blocked || participant.revoked || !participant.sessionValid} onClick={() => revoke(participant)}>Revogar participante {index + 1}</button>

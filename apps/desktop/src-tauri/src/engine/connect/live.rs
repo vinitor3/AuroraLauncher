@@ -40,6 +40,11 @@ mod host_source_tests;
 #[cfg(all(test, windows))]
 #[path = "owned_group_tests.rs"]
 mod owned_group_tests;
+#[path = "path_projection.rs"]
+mod path_projection;
+#[cfg(test)]
+#[path = "path_projection_tests.rs"]
+mod path_projection_tests;
 #[path = "ready_game.rs"]
 pub(super) mod ready_game;
 #[cfg(test)]
@@ -315,6 +320,11 @@ fn update(state: &Mutex<State>, id: &str, change: impl FnOnce(&mut Attempt)) {
         if let Some(a) = state.attempt.as_mut() {
             if a.snapshot.operation_id.as_deref() == Some(id) {
                 change(a);
+                if a.cancel.is_cancelled()
+                    || !matches!(a.snapshot.phase, "hostListening" | "guestConnected")
+                {
+                    path_projection::clear(a);
+                }
                 a.snapshot.generation = a.snapshot.generation.saturating_add(1);
             }
         }
@@ -431,9 +441,8 @@ impl Manager {
                 return Err(ConnectError::OwnerMismatch);
             }
             expire_pending(a);
-            session_group::refresh(a);
             ready_game::refresh_cleanup(a);
-            return Ok(a.snapshot.clone());
+            return Ok(path_projection::snapshot(a));
         }
         Ok(ConnectSnapshot::idle())
     }
@@ -1032,7 +1041,7 @@ impl Manager {
         a.worker = Some(tokio::spawn(async move {
             run(shared, operation, cancel, reviewed).await;
         }));
-        Ok(a.snapshot.clone())
+        Ok(path_projection::snapshot(a))
     }
     pub(super) fn export_invitation(
         &self,
@@ -1107,7 +1116,7 @@ impl Manager {
         let a = selected(&mut state, owner, id)?;
         a.probe_active = false;
         if a.snapshot.phase != "guestConnected" {
-            return Ok(a.snapshot.clone());
+            return Ok(path_projection::snapshot(a));
         }
         if a.authority
             .as_ref()
@@ -1116,7 +1125,7 @@ impl Manager {
             a.snapshot.status_state = "failed";
             a.snapshot.error_code = Some(ConnectError::PlanExpired.code());
             a.snapshot.generation = a.snapshot.generation.saturating_add(1);
-            return Ok(a.snapshot.clone());
+            return Ok(path_projection::snapshot(a));
         }
         match result {
             Ok(summary) => {
@@ -1140,7 +1149,7 @@ impl Manager {
             }
         }
         a.snapshot.generation = a.snapshot.generation.saturating_add(1);
-        Ok(a.snapshot.clone())
+        Ok(path_projection::snapshot(a))
     }
     pub(super) async fn stop(
         &self,
@@ -1151,6 +1160,7 @@ impl Manager {
             let mut state = lock(&self.state)?;
             let a = selected(&mut state, owner, id)?;
             a.cancel.cancel();
+            path_projection::clear(a);
             udp_recovery::clear(a);
             ready_game::cancel(a);
             a.guest_source = None;
@@ -1199,7 +1209,7 @@ impl Manager {
                         && matches!(a.snapshot.phase, "closed" | "failed")
                         && matches!(a.snapshot.cleanup_state, "complete" | "failed")
                     {
-                        return Ok(a.snapshot.clone());
+                        return Ok(path_projection::snapshot(a));
                     }
                     None
                 }

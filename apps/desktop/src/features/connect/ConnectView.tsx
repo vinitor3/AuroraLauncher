@@ -14,6 +14,7 @@ import { groupPreparationFrom } from "./group-types";
 import { ConnectGameLaunchPanel } from "../connect-game-launch/ConnectGameLaunchPanel";
 import type { ReadyGameLaunchContext } from "../connect-game-launch/types";
 import { isControlledSourceRejection, provesNoSourceReservation, type HostSourceProfile } from "./host-source-types";
+import { pathObservationText } from "./path-observation-types";
 
 type Action = "prepareHost" | "prepareGuest" | "reviewHost" | "reviewGuest" | "confirm" | "export" | "probe" | "retryUdp" | "stop" | "refresh" | GroupAction;
 const actionText: Record<Action, string> = {
@@ -350,9 +351,18 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   function stop() {
     if (!operationId) return;
     setAcknowledged(false); setExportedInvitation("");
+    // A lost/invalid stop reply cannot make an earlier path sample current.
+    // Only acceptSnapshot from a later valid observation clears this warning.
+    const unconfirmed = "O encerramento ainda não foi confirmado. A última observação pode estar desatualizada.";
+    setWarning(unconfirmed);
     void perform("stop", async current => {
-      const value = await invoke<unknown>("connect_stop", { operationId });
-      if (current()) acceptSnapshot(value);
+      try {
+        const value = await invoke<unknown>("connect_stop", { operationId });
+        if (current()) acceptSnapshot(value);
+      } catch (cause) {
+        if (current()) setWarning(unconfirmed);
+        throw cause;
+      }
     });
   }
   function udpRetryAllowed(value: ConnectSnapshot | undefined): value is ConnectSnapshot & { operationId: string } {
@@ -442,7 +452,8 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
         {snapshot?.pendingHostSource && <p role="status">Conferindo o jogo selecionado. Você pode encerrar Connect enquanto aguarda. O código público só ficará disponível após a conferência, dentro do prazo original de 60 segundos.</p>}
         {snapshot && <>
           <dl><dt>Transporte</dt><dd>{transportText[snapshot.transportState]}</dd><dt>Servidor Minecraft</dt><dd>{statusText[snapshot.statusState]}</dd>
-            <dt>Caminho da conexão</dt><dd>Não confirmado · relay desligado</dd><dt>Entrada no mundo</dt><dd>Não verificada</dd>
+            {!snapshot.hostGroup && <><dt>Caminho da conexão</dt><dd>{pathObservationText(warning || pending === "stop" ? undefined : snapshot.pathObservation)}{!snapshot.pathObservation && " · relay desligado"}</dd></>}
+            <dt>Entrada no mundo</dt><dd>Não verificada</dd>
             <dt>Simple Voice Chat</dt><dd>Desativado nesta integração</dd><dt>Plasmo Voice</dt><dd>Desativado nesta integração</dd>
             {(snapshot.invitationProfile === FRAGMENTED_PROFILE || snapshot.invitationProfile === SESSION_FRAGMENTED_PROFILE) && <FragmentedStatusFields udp={snapshot.role === "guest" ? fragmentedGuestUdpFrom(snapshot, snapshot.invitationProfile) : undefined} />}
             {snapshot.sessionTiming
@@ -450,6 +461,8 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
               : snapshot.expiresAtMs !== null && <><dt>Limite desta etapa</dt><dd>{connectDate(snapshot.expiresAtMs)} · horário local</dd></>}
             {snapshot.cleanupState !== "notStarted" && <><dt>Encerramento</dt><dd>{{ pending: "Aguardando liberação dos recursos", complete: "Recursos liberados", failed: "Liberação não confirmada" }[snapshot.cleanupState]}</dd></>}
           </dl>
+          {!warning && pending !== "stop" && (snapshot.pathObservation || snapshot.hostGroup?.participants.some(participant => participant.pathObservation))
+            && <p>O caminho pode mudar durante a conexão. Esta observação não confirma entrada no mundo.</p>}
           {(snapshot.hostGroup || snapshot.role === "host") && snapshot.cleanupState === "failed" && <p className="connect-warning" role="status">O encerramento não foi confirmado. O transporte exibido é a última observação; não confirma recursos liberados nem participantes ativos.</p>}
           {snapshot.errorCode && <p className="connect-error" role="alert">{connectError(snapshot.errorCode)}</p>}
           {snapshot.udpRecovery && <div className="connect-hint">
@@ -506,7 +519,7 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
         </form>
       </section>}
       {snapshot?.hostGroup && <GroupHostPanel key={snapshot.operationId} snapshot={snapshot} supported={Boolean(capabilities?.available && capabilities.sessionFragmentedHostGroups && capabilities.modes.includes(snapshot.hostGroup.mode)
-        && (snapshot.hostGroup.review?.targetSource !== "ownedInstance" || capabilities.sessionFragmentedHostGroups.ownedGameTcpDiscovery))} busy={busy} stale={Boolean(warning)}
+        && (snapshot.hostGroup.review?.targetSource !== "ownedInstance" || capabilities.sessionFragmentedHostGroups.ownedGameTcpDiscovery))} busy={busy} stale={Boolean(warning) || pending === "stop"}
         perform={perform} refresh={refresh} acceptSnapshot={acceptSnapshot} copy={copy} />}
       {capabilities?.available && prepared && <section className="connect-card"><h3>Troque os códigos públicos</h3><p>{snapshot?.role === "host" ? "Envie seu código ao convidado e receba o código gerado por ele nesta tentativa." : "Envie seu código ao anfitrião e aguarde o convite destinado a esta tentativa."}</p>
         <div className="connect-output"><label htmlFor="connect-public-code">Seu código público</label><textarea id="connect-public-code" readOnly value={prepared.publicId} /><div><button className="secondary" type="button" onClick={() => { void copy(prepared.publicId); }}>Copiar meu código</button></div></div>

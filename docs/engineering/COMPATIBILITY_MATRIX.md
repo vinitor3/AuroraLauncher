@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 21/10/2026
 
+Incremento80: observação do caminho no painel e snapshots individuais/por participante, com fontes e autoridades originais. [Contrato80](../aurora-connect-desktop-path-observation.md). **PROTÓTIPO**, testes de transporte local, DTO/DOM e build não promovem GUI, mundo, Core/Skins, rede externa ou áudio. Não amplia a matriz nem habilita relay público; nove pares conservam seus gates.
+
 Incremento79: origem de abertura pronta do Guest deixa de reter seu Endpoint após cleanup. [Contrato79](../aurora-connect-guest-source-cleanup.md). **PROTÓTIPO**, com rebind real e processos de fixture próprios. Não altera nenhuma célula de Minecraft/Java/loader, Core/Skins, GUI, voz ou rede; nove pares e validações externas mantêm seus resultados separados.
 
 Incremento78: observação do caminho selecionado na biblioteca, com classificação direta/relay local e autoridades originais. [Contrato78](../aurora-connect-path-observation.md). **PROTÓTIPO**. A prova no IPv4 próprio e no relay local continua neste PC; não promove alcance externo, interface, jogo, voz ou qualquer um dos nove pares. Relay público permanece desligado.

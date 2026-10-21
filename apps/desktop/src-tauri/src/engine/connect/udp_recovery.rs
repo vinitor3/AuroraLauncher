@@ -70,7 +70,7 @@ impl Manager {
         // A lost IPC reply/double click does not spend another attempt. This
         // applies only after checking the original live session above.
         if control.accepted_generation == Some(expected_generation) {
-            return Ok(a.snapshot.clone());
+            return Ok(path_projection::snapshot(a));
         }
         if a.snapshot.generation != expected_generation {
             return Err(ConnectError::StaleOperation);
@@ -111,7 +111,7 @@ impl Manager {
         a.snapshot.udp = Some(FragmentedGuestState::starting());
         a.snapshot.generation = a.snapshot.generation.saturating_add(1);
         permit.send(sequence);
-        Ok(a.snapshot.clone())
+        Ok(path_projection::snapshot(a))
     }
 }
 

@@ -33,6 +33,21 @@ impl GuestSource {
             .upgrade()
             .map_or_else(Vec::new, |guest| guest.bound_sockets())
     }
+    pub(super) fn path_observation(&self) -> Option<ConnectPathObservation> {
+        let current = || {
+            !self.cancel.is_cancelled()
+                && Instant::now() < self.deadline
+                && self.authority.check_session().is_ok()
+        };
+        if !current() {
+            return None;
+        }
+        // Observe the original transport, independently of QuickPlay and the
+        // TCP bridge. The temporary owner cannot escape this synchronous read.
+        let guest = self.guest.upgrade()?;
+        let observation = guest.path_observation();
+        current().then(|| observation.into())
+    }
     fn address(&self) -> Result<SocketAddr, ReadyGameLaunchError> {
         if self.cancel.is_cancelled()
             || Instant::now() >= self.deadline

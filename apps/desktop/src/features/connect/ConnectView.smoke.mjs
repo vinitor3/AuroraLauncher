@@ -57,6 +57,7 @@ const review = { operationId, generation: 1, digest, invitationDigest: "d".repea
 const idle = () => ({ available: true, operationId: null, generation: 0, role: null, phase: "idle", transportState: "notStarted", statusState: "notChecked",
   tcpAddress: null, expiresAtMs: null, statusSummary: null, errorCode: null, worldState: "notVerified", simpleVoiceChatState: "disabled",
   plasmoVoiceState: "disabled", relayEnabled: false, pathState: "notVerified", preparation: null, review: null, cleanupState: "notStarted" });
+const withoutPathObservation = value => { const { pathObservation: _path, ...previous } = value; return previous; };
 let snapshot, capabilities, calls, handlers, root;
 const nativeInvoke = async (command, args) => {
   calls.push({ command, args });
@@ -84,7 +85,7 @@ const nativeInvoke = async (command, args) => {
         reportedPlayersOnline: 1, reportedPlayersMax: 2, connectMicros: 10, statusMicros: 20, pingMicros: 30, totalMicros: 60 } };
       return structuredClone(snapshot);
     case "connect_stop":
-      snapshot = { ...snapshot, phase: "closed", transportState: "closed", preparation: null, review: null, tcpAddress: null, cleanupState: "complete" };
+      snapshot = { ...withoutPathObservation(snapshot), phase: "closed", transportState: "closed", preparation: null, review: null, tcpAddress: null, cleanupState: "complete" };
       return structuredClone(snapshot);
     default: throw new Error(`Unexpected fixture command ${command}`);
   }
@@ -1663,13 +1664,13 @@ function groupFixtures() {
     assert.equal(operationId, groupOperation); assert.equal(expectedGeneration, snapshot.generation);
     snapshot = { ...snapshot, generation: snapshot.generation + 1, hostGroup: { ...snapshot.hostGroup,
       participants: snapshot.hostGroup.participants.map(row => row.participantId === participantId
-        ? { ...row, revoked: true, admissionValid: false, sessionValid: false, transportActive: false } : row) } };
+        ? { ...withoutPathObservation(row), revoked: true, admissionValid: false, sessionValid: false, transportActive: false } : row) } };
     return structuredClone(snapshot);
   });
   handlers.set("connect_stop", () => {
     snapshot = { ...snapshot, phase: "closed", transportState: "closed", expiresAtMs: null, cleanupState: "complete",
       hostGroup: { ...snapshot.hostGroup, preparation: null, review: null,
-        participants: snapshot.hostGroup.participants.map(row => ({ ...row, transportActive: false, admissionValid: false, sessionValid: false })) } };
+        participants: snapshot.hostGroup.participants.map(row => ({ ...withoutPathObservation(row), transportActive: false, admissionValid: false, sessionValid: false })) } };
     return structuredClone(snapshot);
   });
 }
@@ -2632,3 +2633,225 @@ test("remount during review recovers the native review without consent or accept
   assert.equal(count("connect_review_host"), 1); assert.equal(count("connect_confirm"), 0);
   await click("Encerrar Connect");
 });
+
+const pathObservation = state => ({ schemaVersion: 1, state });
+function legacyPathSnapshot(role = "host") {
+  return { ...idle(), operationId, generation: 1, role, phase: role === "host" ? "hostListening" : "guestConnected",
+    transportState: role === "host" ? "listening" : "authenticated", tcpAddress: role === "guest" ? "127.0.0.1:42123" : null };
+}
+
+test("optional path observations preserve every single-peer profile and all legacy projections", () => {
+  for (const role of ["host", "guest"]) {
+    for (const value of [legacyPathSnapshot(role), activeSession(role), activeFragmented(role), activeSessionFragmented(role)]) {
+      assert.deepEqual(types.snapshotFrom(value), value);
+      for (const state of ["unknown", "direct", "relay", "closed"]) {
+        const observed = { ...value, pathObservation: pathObservation(state) };
+        assert.deepEqual(types.snapshotFrom(observed), observed);
+        assert.equal(observed.pathState, "notVerified"); assert.equal(observed.relayEnabled, false);
+      }
+    }
+  }
+});
+
+test("path observations are absent from preparation, review, capability and invitation exports", () => {
+  const extra = { pathObservation: pathObservation("direct") };
+  for (const value of [preparation, sessionPreparation, fragmentedPreparation, preparedSessionFragmented().preparation]) {
+    assert.throws(() => types.preparationFrom({ ...value, ...extra }));
+  }
+  for (const value of [review, sessionReview, fragmentedReview, reviewedSessionFragmented().review]) {
+    assert.throws(() => types.reviewFrom({ ...value, ...extra }));
+  }
+  for (const value of [{ invitation: "opaque", hostPublicId: hostId, expiresAtMs: 1800000600000 }, sessionExport, fragmentedExport, sessionFragmentedExport]) {
+    assert.throws(() => types.exportFrom({ ...value, ...extra }));
+  }
+  assert.throws(() => types.capabilitiesFrom({ ...caps, ...extra }));
+  assert.throws(() => types.reviewFrom({ ...review, pathObservation: undefined }));
+});
+
+test("path guards reject malformed, wrong-role and non-live snapshots before specialized returns", () => {
+  for (const value of [undefined, null, {}, [], { schemaVersion: 2, state: "direct" }, { schemaVersion: 1, state: "mixed" },
+    { ...pathObservation("direct"), ip: "untrusted" }]) {
+    assert.throws(() => types.snapshotFrom({ ...activeSession(), pathObservation: value }));
+  }
+  for (const value of [idle(), preparedSession(), preparedSession("guest"), reviewedSession(),
+    { ...activeSession(), phase: "starting" }, { ...activeSession(), phase: "closing" },
+    { ...activeSession(), phase: "closed", transportState: "closed" }, { ...activeSession(), phase: "failed", transportState: "closed" },
+    { ...activeSession(), role: "guest" }, { ...activeSession("guest"), role: "host" }, { ...activeSession(), available: false },
+    pendingDiscoveredGroup(), ...["legacy", "sessionGameTcp", sessionFragmentedProfile].map(pendingSingleSource)]) {
+    assert.throws(() => types.snapshotFrom({ ...value, pathObservation: pathObservation("direct") }));
+  }
+  assert.throws(() => hostSourceTypes.pendingHostSourceFieldsFrom({ ...pendingSingleSource("legacy"), pathObservation: undefined }));
+});
+
+test("group paths are individual, consumed and phase-bound; reviews never accept an observation", () => {
+  for (const state of ["unknown", "direct", "relay", "closed"]) {
+    const value = activeGroup();
+    Object.assign(value.hostGroup.participants[0], { consumed: true, admissionValid: false,
+      transportActive: state !== "closed", pathObservation: pathObservation(state) });
+    assert.deepEqual(types.snapshotFrom(value), value);
+    assert.deepEqual(groupTypes.groupSnapshotFieldsFrom(value), value.hostGroup);
+    for (const changed of [{ consumed: false }, { sessionValid: false, admissionValid: false, transportActive: false },
+      { revoked: true, sessionValid: false, admissionValid: false, transportActive: false }, { transportActive: state === "closed" },
+      { pathObservation: { ...pathObservation(state), peer: "untrusted" } }]) {
+      const broken = structuredClone(value); Object.assign(broken.hostGroup.participants[0], changed);
+      assert.throws(() => types.snapshotFrom(broken));
+    }
+    for (const phase of ["starting", "closing", "closed", "failed"]) {
+      const broken = structuredClone(value); broken.phase = phase;
+      broken.transportState = phase === "starting" ? "notStarted" : "closed";
+      if (phase !== "starting") for (const row of broken.hostGroup.participants) Object.assign(row, { admissionValid: false, sessionValid: false, transportActive: false });
+      assert.throws(() => types.snapshotFrom(broken));
+    }
+  }
+  for (const value of [preparedGroup(), reviewedGroup(), activeGroup()]) {
+    assert.throws(() => types.snapshotFrom({ ...value, pathObservation: pathObservation("direct") }));
+    assert.throws(() => groupTypes.groupSnapshotFieldsFrom({ ...value, pathObservation: undefined }));
+  }
+  const reviewed = reviewedGroup(); reviewed.hostGroup.review.participants[0].pathObservation = pathObservation("closed");
+  assert.throws(() => groupTypes.groupReviewFrom(reviewed.hostGroup.review));
+  assert.throws(() => types.snapshotFrom(reviewed));
+  const exported = { operationId: groupOperation, participantId: groupParticipants()[0].participantId, invitationDigest: digest,
+    invitation: "opaque", hostPublicId: hostId, expiresAtMs: groupParticipants()[0].sessionTiming.admissionExpiresAtMs,
+    sessionTiming: groupParticipants()[0].sessionTiming, fragmentedUdp: sessionFragmentedContract };
+  assert.throws(() => groupTypes.groupExportFrom({ ...exported, pathObservation: pathObservation("direct") }));
+});
+
+test("participant identity ignores only a changing observation and preserves every authority field", () => {
+  const original = groupParticipants()[0];
+  assert.equal(groupTypes.sameGroupParticipant({ ...original, pathObservation: pathObservation("direct") },
+    { ...original, pathObservation: pathObservation("relay") }), true);
+  for (const changed of [{ participantId: groupParticipants()[1].participantId }, { guestPublicId: "7".repeat(64) },
+    { invitationDigest: "8".repeat(64) }, { sessionTiming: { ...original.sessionTiming, sessionExpiresAtMs: original.sessionTiming.sessionExpiresAtMs + 1 } }]) {
+    assert.equal(groupTypes.sameGroupParticipant(original, { ...original, ...changed, pathObservation: pathObservation("direct") }), false);
+  }
+});
+
+for (const [state, label] of Object.entries({ unknown: "Não confirmado", direct: "Caminho direto observado", relay: "Relay observado", closed: "Conexão encerrada" })) {
+  test(`single ${state} path is descriptive and never grants a world, voice or new connection`, async () => {
+    sessionFixtures(); snapshot = { ...activeSession("guest"), pathObservation: pathObservation(state) }; await render();
+    assert.match(container.textContent, new RegExp(label));
+    assert.equal(container.textContent.split("O caminho pode mudar durante a conexão.").length - 1, 1);
+    assert.match(container.textContent, /Esta observação não confirma entrada no mundo/);
+    assert.match(container.textContent, /Entrada no mundoNão verificada/);
+    assert.match(container.textContent, /Simple Voice ChatDesativado nesta integração/);
+    assert.match(container.textContent, /Plasmo VoiceDesativado nesta integração/);
+    assert.equal(count("connect_confirm"), 0); assert.equal(count("connect_probe_status"), 0); assert.deepEqual(copied, []);
+    assert.equal(snapshot.pathState, "notVerified"); assert.equal(snapshot.relayEnabled, false);
+    await click("Encerrar Connect"); assert.match(container.textContent, /Recursos liberados/);
+    assert.doesNotMatch(container.textContent, /Caminho direto observado|Relay observado|O caminho pode mudar durante a conexão/);
+  });
+}
+
+test("old backends and initial addresses alone keep the path unconfirmed", async () => {
+  sessionFixtures(); snapshot = activeSession("guest"); await render();
+  assert.match(container.textContent, /Não confirmado · relay desligado/);
+  assert.doesNotMatch(container.textContent, /Caminho direto observado|Relay observado|O caminho pode mudar/);
+  assert.equal(count("connect_confirm"), 0); assert.equal(count("connect_probe_status"), 0);
+});
+
+test("group shows paths per participant and revoking one preserves the other's observation", async () => {
+  groupFixtures(); snapshot = activeGroup();
+  snapshot.hostGroup.participants.forEach((row, index) => Object.assign(row, { consumed: true, admissionValid: false, transportActive: true,
+    pathObservation: pathObservation(index === 0 ? "direct" : "relay") }));
+  await render();
+  const rows = () => [...container.querySelectorAll('section[aria-label^="Participante autorizado"]')];
+  assert.match(rows()[0].textContent, /Caminho individualCaminho direto observado/);
+  assert.match(rows()[1].textContent, /Caminho individualRelay observado/);
+  assert.doesNotMatch(container.querySelector('section[aria-label="Estado observado da conexão"]').textContent, /Caminho da conexão/);
+  assert.equal(container.textContent.split("O caminho pode mudar durante a conexão.").length - 1, 1);
+  await click("Revogar participante 1");
+  assert.doesNotMatch(rows()[0].textContent, /Caminho direto observado/);
+  assert.match(rows()[1].textContent, /Relay observado/);
+  assert.equal(count("connect_revoke_session_group_participant"), 1);
+  assert.equal(count("connect_confirm_session_group_host"), 0); assert.equal(count("connect_export_session_group_invitation"), 0);
+  await click("Encerrar Connect");
+  assert.match(container.textContent, /Recursos liberados/);
+  assert.doesNotMatch(container.textContent, /Caminho individual|Caminho direto observado|Relay observado/);
+});
+
+test("path changes never renew or re-export an unrelated participant's invitation", async () => {
+  groupFixtures(); snapshot = activeGroup();
+  Object.assign(snapshot.hostGroup.participants[0], { consumed: true, transportActive: true, pathObservation: pathObservation("direct") });
+  await render(); await click("Selecionar convite 2"); await click("Copiar convite selecionado");
+  assert.equal(copied.length, 1);
+  const timing = structuredClone(snapshot.hostGroup.participants.map(row => row.sessionTiming));
+  snapshot = { ...snapshot, generation: snapshot.generation + 1, hostGroup: { ...snapshot.hostGroup,
+    participants: snapshot.hostGroup.participants.map((row, index) => index === 0 ? { ...row, pathObservation: pathObservation("relay") } : row) } };
+  await click("Atualizar estado");
+  assert.deepEqual(snapshot.hostGroup.participants.map(row => row.sessionTiming), timing);
+  assert.equal(count("connect_export_session_group_invitation"), 1); assert.equal(copied.length, 1);
+  assert.equal(container.querySelector("textarea[readonly]")?.value.includes("opaque-"), undefined);
+  assert.equal(count("connect_confirm_session_group_host"), 0);
+});
+
+test("invalid path refresh hides the stale sample while keeping trusted stop and cleanup available", async () => {
+  sessionFixtures(); snapshot = { ...activeSession("guest"), pathObservation: pathObservation("direct") }; await render();
+  assert.match(container.textContent, /Caminho direto observado/);
+  snapshot = { ...snapshot, generation: snapshot.generation + 1, pathObservation: { ...pathObservation("direct"), url: "private fixture value" } };
+  await click("Atualizar estado");
+  assert.match(container.textContent, /estado não pôde ser atualizado/);
+  assert.doesNotMatch(container.textContent, /Caminho direto observado|private fixture value/);
+  assert.equal(button("Encerrar Connect").disabled, false);
+  await click("Encerrar Connect");
+  assert.equal(count("connect_stop"), 1); assert.match(container.textContent, /Recursos liberados/);
+});
+
+test("late path refresh after stop and remount cannot republish a previous connection", async () => {
+  sessionFixtures(); snapshot = { ...activeSession("guest"), pathObservation: pathObservation("direct") }; await render();
+  const late = { ...snapshot, generation: snapshot.generation + 1, pathObservation: pathObservation("relay") };
+  let finish; handlers.set("connect_snapshot", () => new Promise(resolve => { finish = resolve; }));
+  await click("Atualizar estado"); await click("Encerrar Connect");
+  await act(async () => root.unmount()); root = createRoot(container);
+  handlers.delete("connect_snapshot"); await render();
+  await act(async () => finish(late));
+  assert.match(container.textContent, /Recursos liberados/);
+  assert.doesNotMatch(container.textContent, /Caminho direto observado|Relay observado|O caminho pode mudar/);
+  assert.equal(count("connect_confirm"), 0); assert.equal(count("connect_stop"), 1);
+});
+
+for (const kind of ["single", "group"]) {
+  test(`${kind} lost stop reply keeps path samples hidden until a fresh valid snapshot`, async () => {
+    if (kind === "group") {
+      groupFixtures(); snapshot = activeGroup();
+      snapshot.hostGroup.participants.forEach(row => Object.assign(row, { consumed: true, transportActive: true, pathObservation: pathObservation("direct") }));
+    } else { sessionFixtures(); snapshot = { ...activeSession("guest"), pathObservation: pathObservation("direct") }; }
+    const original = structuredClone(snapshot);
+    const originalStop = handlers.get("connect_stop");
+    await render(); assert.match(container.textContent, /Caminho direto observado/);
+    let finishDuringStop;
+    handlers.set("connect_snapshot", () => new Promise(resolve => { finishDuringStop = resolve; }));
+    await click("Atualizar estado");
+    let failStop;
+    handlers.set("connect_stop", () => new Promise((_resolve, reject) => { failStop = reject; }));
+    await click("Encerrar Connect");
+    // A prior poll may finish while Stop is awaiting its reply. The old epoch
+    // cannot clear uncertainty or publish a path from that response.
+    await act(async () => finishDuringStop(original));
+    assert.doesNotMatch(container.textContent, /Caminho direto observado|Relay observado/);
+    await act(async () => failStop(new Error("lost stop fixture")));
+    assert.match(container.textContent, /encerramento ainda não foi confirmado/);
+    assert.doesNotMatch(container.textContent, /Caminho direto observado|Relay observado|O caminho pode mudar/);
+    assert.equal(button("Encerrar Connect").disabled, false);
+    let failObservation;
+    handlers.set("connect_snapshot", () => new Promise((_resolve, reject) => { failObservation = reject; }));
+    await click("Atualizar estado");
+    assert.doesNotMatch(container.textContent, /Caminho direto observado|Relay observado/);
+    assert.equal(button("Encerrar Connect").disabled, false);
+    await act(async () => failObservation(new Error("unobserved state fixture")));
+    assert.doesNotMatch(container.textContent, /Caminho direto observado|Relay observado|lost stop fixture|unobserved state fixture/);
+    assert.equal(button("Encerrar Connect").disabled, false);
+    handlers.delete("connect_snapshot");
+    snapshot = { ...original, generation: original.generation + 1 };
+    if (kind === "group") snapshot.hostGroup.participants.forEach(row => { row.pathObservation = pathObservation("relay"); });
+    else snapshot.pathObservation = pathObservation("relay");
+    await click("Atualizar estado");
+    assert.match(container.textContent, /Relay observado/);
+    assert.doesNotMatch(container.textContent, /Caminho direto observado|encerramento ainda não foi confirmado/);
+    assert.equal(count("connect_stop"), 1);
+    assert.equal(count("connect_confirm"), 0); assert.equal(count("connect_confirm_session_group_host"), 0);
+    if (originalStop) handlers.set("connect_stop", originalStop); else handlers.delete("connect_stop");
+    await click("Encerrar Connect");
+    assert.match(container.textContent, /Recursos liberados/);
+    assert.doesNotMatch(container.textContent, /Caminho direto observado|Relay observado/);
+  });
+}

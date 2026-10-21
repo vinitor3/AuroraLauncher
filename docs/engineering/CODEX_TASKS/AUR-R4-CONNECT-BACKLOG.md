@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 21/10/2026
 
+Incremento80/002/004/005/008 integra a observação transitória78 no painel experimental e em cada retorno de snapshot. [Contrato80](../../aurora-connect-desktop-path-observation.md). **PROTÓTIPO**, sem nova capability, autorização, cache, owner de Endpoint ou alteração dos legados. Grupo observa cada lease, sem agregado; estado incerto de Stop conserva controles e oculta amostra até confirmação válida. Provas locais próprias no task; GUI, áudio, Minecraft, redes externas e R3 conservam seus gates.
+
 Incremento79/002/003/005/008 libera o transporte do Guest após encerrar mesmo com manager e workers de abertura prontos ainda vivos. [Contrato79](../../aurora-connect-guest-source-cleanup.md). **PROTÓTIPO**, defeito reproduzido antes da correção, Weak no lugar de clone forte e provas de rebind/ownership. Jogo registrado permanece independente. Nenhum gate de GUI, Minecraft, Core/Skins, áudio, redes ou R3 é promovido.
 
 Incremento78/002/004/008 implementa observação redigida da seleção real do transporte na biblioteca. [Contrato78](../../aurora-connect-path-observation.md). **PROTÓTIPO**, com autoridades originais, recusa conservadora, testes locais de quatro perfis, grupo, IPv4 próprio e relay de fixture. Não concede recurso, não altera quotas/prazos nem libera relay público; desktop/presença, redes externas, áudio e R3 conservam seus gates.

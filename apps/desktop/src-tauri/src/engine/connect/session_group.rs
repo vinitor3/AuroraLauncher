@@ -87,7 +87,7 @@ pub(super) struct GroupTestGate {
     pub(super) release: tokio::sync::Notify,
 }
 
-fn projection(member: &Member, host: Option<&lab::Host>) -> GroupParticipant {
+fn projection(member: &Member, host: Option<&lab::Host>, observe_path: bool) -> GroupParticipant {
     let session_valid = !member.revoked && member.invitation.check_session_current().is_ok();
     let admission_valid = session_valid && member.invitation.check_admission_current().is_ok();
     // Consumption is sampled after the clock, so an admission immediately
@@ -98,6 +98,19 @@ fn projection(member: &Member, host: Option<&lab::Host>) -> GroupParticipant {
     let transport_active =
         session_valid && host.is_some_and(|host| host.invitation_active(lease_id));
     let consumed = host.is_some_and(|host| host.invitation_consumed(lease_id));
+    let path_observation = if observe_path {
+        host.and_then(|host| {
+            path_projection::participant(
+                host,
+                &member.invitation,
+                member.revoked,
+                consumed,
+                transport_active && consumed,
+            )
+        })
+    } else {
+        None
+    };
     GroupParticipant {
         participant_id: member.participant_id.clone(),
         guest_public_id: member.invitation.guest_key().to_string(),
@@ -108,6 +121,7 @@ fn projection(member: &Member, host: Option<&lab::Host>) -> GroupParticipant {
         admission_valid,
         session_valid,
         transport_active: transport_active && consumed,
+        path_observation,
     }
 }
 
@@ -120,10 +134,11 @@ pub(super) fn refresh(a: &mut Attempt) -> bool {
     if a.snapshot.phase != "hostListening" {
         return false;
     }
+    let observe_path = !a.cancel.is_cancelled();
     let participants: Vec<_> = group
         .members
         .iter()
-        .map(|member| projection(member, group.host.as_deref()))
+        .map(|member| projection(member, group.host.as_deref(), observe_path))
         .collect();
     let finished = participants.iter().all(|member| {
         member.revoked || !member.session_valid || (!member.consumed && !member.admission_valid)
@@ -152,6 +167,7 @@ pub(super) fn closing(a: &mut Attempt) {
             participant.admission_valid = false;
             participant.session_valid = false;
             participant.transport_active = false;
+            participant.path_observation = None;
         }
         a.snapshot.expires_at_ms = None;
     }
@@ -465,7 +481,7 @@ impl Manager {
             },
             participants: members
                 .iter()
-                .map(|member| projection(member, None))
+                .map(|member| projection(member, None, false))
                 .collect(),
             expires_at_ms: expires,
         };
@@ -562,7 +578,7 @@ impl Manager {
             )
             .await;
         }));
-        Ok(a.snapshot.clone())
+        Ok(path_projection::snapshot(a))
     }
 
     pub(in crate::engine::connect) fn export_session_group_invitation(
@@ -585,7 +601,7 @@ impl Manager {
             .find(|member| member.participant_id == participant_id)
             .ok_or(ConnectError::StaleOperation)?;
         let host = group.host.as_ref().ok_or(ConnectError::StaleOperation)?;
-        let current = projection(member, Some(host));
+        let current = projection(member, Some(host), false);
         if current.revoked || !current.admission_valid || !current.session_valid {
             return Err(ConnectError::PlanExpired);
         }
@@ -627,8 +643,7 @@ impl Manager {
             .find(|member| member.participant_id == participant_id)
             .ok_or(ConnectError::StaleOperation)?;
         if member.revoked {
-            refresh(a);
-            return Ok(a.snapshot.clone());
+            return Ok(path_projection::snapshot(a));
         }
         if a.snapshot.generation != expected_generation {
             return Err(ConnectError::StaleOperation);
@@ -638,8 +653,7 @@ impl Manager {
             return Err(ConnectError::StaleOperation);
         }
         member.revoked = true;
-        refresh(a);
-        Ok(a.snapshot.clone())
+        Ok(path_projection::snapshot(a))
     }
 }
 
