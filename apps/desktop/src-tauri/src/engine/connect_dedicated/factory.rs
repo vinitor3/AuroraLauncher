@@ -85,17 +85,13 @@ pub(super) fn plan(
     let destination = lab.join(format!("native-status-{}", id.0));
     absent(&destination)?;
     let review_id = Uuid::new_v4();
-    let data = encode(&(
-        1,
-        "native_status_factory",
+    let data = factory_digest_input(
         review_id,
         id,
         directory_identity(lab)?,
         destination.to_str().ok_or(Error::UnsafePath)?,
         &resources.records,
-        digest(resources::PROPERTIES),
-        digest(EULA_FALSE),
-    ))?;
+    )?;
     Ok(FactoryPlan {
         lab: lab.into(),
         id,
@@ -119,8 +115,40 @@ pub(super) fn plan(
         _pins: directories,
     })
 }
+// Production and compatibility replay use exactly this preimage/encoder.
+// Callers obtain the observations and original review UUID before entering it.
+fn factory_digest_input(
+    review_id: Uuid,
+    id: BundleId,
+    lab_identity: FileIdentity,
+    destination: &str,
+    records: &[resources::ResourceRecord],
+) -> Result<Vec<u8>> {
+    encode(&(
+        1,
+        "native_status_factory",
+        review_id,
+        id,
+        lab_identity,
+        destination,
+        records,
+        digest(resources::PROPERTIES),
+        digest(EULA_FALSE),
+    ))
+}
 #[allow(dead_code)] // Functional consumed-plan API, reserved for the native caller.
 impl FactoryPlan {
+    #[cfg(test)]
+    pub(super) fn v1_digest_input_for_test(&self) -> Result<Vec<u8>> {
+        let destination = self.lab.join(format!("native-status-{}", self.id.0));
+        factory_digest_input(
+            self.review.review_id,
+            self.id,
+            directory_identity(&self.lab)?,
+            destination.to_str().ok_or(Error::UnsafePath)?,
+            &self.resources.records,
+        )
+    }
     pub(crate) fn review(&self) -> &Review {
         &self.review
     }
@@ -476,4 +504,58 @@ impl Bundle {
             transaction: self.transaction.clone(),
         }
     }
+}
+
+#[cfg(test)]
+pub(super) fn roundtrip_manifest_for_test(bytes: &[u8]) -> Result<Vec<u8>> {
+    let manifest: Manifest = serde_json::from_slice(bytes).map_err(|_| Error::Identity)?;
+    encode(&manifest)
+}
+
+#[cfg(test)]
+pub(super) fn replay_factory_input_for_test(
+    lab: &Path,
+    stage: &Path,
+    jdk: &Path,
+    id: BundleId,
+    original_input: &[u8],
+) -> Result<Vec<u8>> {
+    type OriginalInput = (
+        u32,
+        String,
+        Uuid,
+        BundleId,
+        FileIdentity,
+        String,
+        Vec<resources::ResourceRecord>,
+        String,
+        String,
+    );
+    let (
+        schema,
+        purpose,
+        review_id,
+        original_id,
+        original_lab,
+        original_destination,
+        records,
+        _,
+        _,
+    ): OriginalInput = serde_json::from_slice(original_input).map_err(|_| Error::Identity)?;
+    if schema != 1 || purpose != "native_status_factory" || original_id != id {
+        return Err(Error::Identity);
+    }
+    let current = resources::Resources::inspect(lab, stage, jdk, resources::fixture_pins())?;
+    let lab_identity = directory_identity(lab)?;
+    let destination = lab.join(format!("native-status-{}", id.0));
+    let destination = destination.to_str().ok_or(Error::UnsafePath)?;
+    if original_lab != lab_identity
+        || original_destination != destination
+        || current.records != records
+    {
+        return Err(Error::Changed);
+    }
+    // Reobserve real resources and retain their normal pins until the same
+    // production encoder has consumed them. No executable plan is recreated.
+    factory_digest_input(review_id, id, lab_identity, destination, &current.records)
 }

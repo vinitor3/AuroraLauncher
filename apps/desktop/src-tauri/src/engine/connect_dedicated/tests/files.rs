@@ -15,6 +15,7 @@ pub(super) struct TestRoot {
     parent: PathBuf,
     canonical_path: PathBuf,
     pins: Option<Vec<fs::File>>,
+    retain: bool,
 }
 
 impl TestRoot {
@@ -35,11 +36,18 @@ impl TestRoot {
             parent,
             canonical_path,
             pins: Some(pins),
+            retain: false,
         }
     }
 
     pub(super) fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(super) fn preserve_on_drop(&mut self) {
+        // Retain disk data only. The normal Drop path still validates this
+        // generated directory and closes all pins; it never leaks ownership.
+        self.retain = true;
     }
 }
 
@@ -48,9 +56,11 @@ impl Drop for TestRoot {
         // Keep failed fixtures intact for diagnosis. Check the exact generated
         // directory while its original Windows deny-delete handles remain held.
         if std::thread::panicking() {
+            drop(self.pins.take());
             return;
         }
         let Ok(metadata) = fs::symlink_metadata(&self.path) else {
+            drop(self.pins.take());
             return;
         };
         if is_link(&metadata)
@@ -66,7 +76,9 @@ impl Drop for TestRoot {
             panic!("fixture_cleanup_identity");
         }
         drop(self.pins.take());
-        fs::remove_dir_all(&self.path).expect("fixture_cleanup");
+        if !self.retain {
+            fs::remove_dir_all(&self.path).expect("fixture_cleanup");
+        }
     }
 }
 

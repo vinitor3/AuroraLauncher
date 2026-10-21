@@ -27,6 +27,8 @@ mod producer_pre_spawn;
 mod recovery_guards;
 #[path = "tests/transactions.rs"]
 mod transactions;
+#[path = "tests/v1_upgrade_capture.rs"]
+mod v1_upgrade_capture;
 
 use fixture::{bytes, locked, slot, target, unlocked, Fixture};
 

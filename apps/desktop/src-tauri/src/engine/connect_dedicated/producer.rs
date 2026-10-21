@@ -136,7 +136,14 @@ pub(super) struct Recipe {
 }
 impl Recipe {
     fn production(prepared: &factory::PreparedStatus) -> Result<Self> {
-        let cwd = prepared.bundle.copy.root().to_path_buf();
+        Self::production_paths(
+            &prepared.resources,
+            prepared.bundle.copy.root().to_path_buf(),
+        )
+    }
+    // Kept private: executable selection still comes from verified Resources,
+    // never from an argv/recipe/approval deserialized by a caller or test index.
+    fn production_paths(resources: &resources::Resources, cwd: PathBuf) -> Result<Self> {
         let temp = cwd.join(".connect-run-temp");
         absent(&temp)?;
         let windows = windows_directory()?;
@@ -149,7 +156,7 @@ impl Recipe {
             ("USERPROFILE".into(), own_temp),
         ]);
         Ok(Self {
-            executable: prepared.resources.java_executable()?.to_path_buf(),
+            executable: resources.java_executable()?.to_path_buf(),
             args: vec![
                 "-Djava.io.tmpdir=.connect-run-temp".into(),
                 "-Duser.home=.connect-run-temp".into(),
@@ -225,14 +232,12 @@ impl ExecutionApproval {
         approve(&self.review, self.deadline, &self.review.digest)
     }
     fn digest_for(&self, prepared: &factory::PreparedStatus) -> Result<String> {
-        Ok(digest(&encode(&(
-            1,
-            PURPOSE,
+        Ok(digest(&execution_digest_input(
             self.review.review_id,
             &prepared.bundle.manifest,
             &self.file_digest,
             &self.recipe,
-        ))?))
+        )?))
     }
     pub(super) fn check(&self, prepared: &factory::PreparedStatus) -> Result<()> {
         self.check_fresh()?;
@@ -246,6 +251,14 @@ impl ExecutionApproval {
         }
         Ok(())
     }
+}
+fn execution_digest_input(
+    review_id: Uuid,
+    manifest: &factory::Manifest,
+    file_digest: &str,
+    recipe: &Recipe,
+) -> Result<Vec<u8>> {
+    encode(&(1, PURPOSE, review_id, manifest, file_digest, recipe))
 }
 
 #[allow(dead_code)] // Explicit internal execution plan; no IPC or automatic caller.
@@ -704,4 +717,59 @@ pub(super) fn plan_for_test(
     recipe.synthetic = true;
     recipe.limits = limits;
     make_plan(prepared, recipe, hooks)
+}
+
+#[cfg(test)]
+pub(super) type V1StatusPlanCapture = (factory::PreparedStatus, Vec<u8>, Vec<u8>, Uuid, String);
+#[cfg(test)]
+pub(super) fn capture_status_plan_for_test(
+    prepared: factory::PreparedStatus,
+) -> RunResult<V1StatusPlanCapture> {
+    // The real plan path validates Resources, original file review/deadline,
+    // manifest/provenance and the actual compiled production recipe. No start.
+    let plan = plan(prepared)?;
+    let recipe = encode(&plan.approval.recipe)?;
+    let input = execution_digest_input(
+        plan.approval.review.review_id,
+        &plan.prepared.bundle.manifest,
+        &plan.approval.file_digest,
+        &plan.approval.recipe,
+    )?;
+    let review_id = plan.approval.review.review_id;
+    let digest = plan.approval.review.digest.clone();
+    let DedicatedPlan {
+        prepared,
+        approval,
+        hooks,
+    } = plan;
+    drop((approval, hooks));
+    Ok((prepared, recipe, input, review_id, digest))
+}
+
+#[cfg(test)]
+pub(super) fn replay_status_input_for_test(
+    copy: &Path,
+    jdk: &Path,
+    manifest_bytes: &[u8],
+    original_input: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>, Uuid)> {
+    use serde::de::IgnoredAny;
+    type OriginalContext = (u32, String, Uuid, IgnoredAny, String, IgnoredAny);
+    let (schema, purpose, review_id, _, file_digest, _): OriginalContext =
+        serde_json::from_slice(original_input).map_err(|_| Error::Identity)?;
+    if schema != 1 || purpose != PURPOSE {
+        return Err(Error::Identity);
+    }
+    let manifest: factory::Manifest =
+        serde_json::from_slice(manifest_bytes).map_err(|_| Error::Identity)?;
+    // These are the private Fixture's fixed paths. The captured recipe/argv is
+    // ignored; java still comes only from newly verified Resources, and the
+    // same private compiled builder is called by Recipe::production above.
+    let lab = jdk.parent().ok_or(Error::UnsafePath)?.join("lab");
+    let stage = lab.join("prepared-Test84");
+    let resources = resources::Resources::inspect(&lab, &stage, jdk, resources::fixture_pins())?;
+    let recipe = Recipe::production_paths(&resources, copy.to_path_buf())?;
+    let encoded_recipe = encode(&recipe)?;
+    let input = execution_digest_input(review_id, &manifest, &file_digest, &recipe)?;
+    Ok((encoded_recipe, input, review_id))
 }

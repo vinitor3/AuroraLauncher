@@ -113,6 +113,7 @@ pub(crate) struct EulaRecoveryPlan {
     hooks: Hooks,
 }
 #[derive(Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(Deserialize))]
 pub(super) struct ApprovedFiles {
     original: Observation,
     properties: Observation,
@@ -142,14 +143,25 @@ fn digest_observations(
     review_id: Uuid,
     observations: &ApprovedFiles,
 ) -> Result<String> {
-    Ok(digest(&encode(&(
+    Ok(digest(&eula_digest_input(
+        &bundle.manifest,
+        review_id,
+        observations,
+    )?))
+}
+fn eula_digest_input(
+    manifest: &factory::Manifest,
+    review_id: Uuid,
+    observations: &ApprovedFiles,
+) -> Result<Vec<u8>> {
+    encode(&(
         1,
         "native_status_eula",
         review_id,
-        &bundle.manifest,
+        manifest,
         observations,
         digest(EULA_TRUE),
-    ))?))
+    ))
 }
 pub(super) fn execution_review(
     bundle: &Bundle,
@@ -753,4 +765,47 @@ impl EulaRecoveryPlan {
     pub(super) fn test_paths(&self) -> TestPaths {
         self.bundle.test_paths()
     }
+}
+
+#[cfg(test)]
+pub(super) fn roundtrip_claim_for_test(bytes: &[u8]) -> Result<Vec<u8>> {
+    let claim: Claim = serde_json::from_slice(bytes).map_err(|_| Error::Identity)?;
+    encode(&claim)
+}
+
+#[cfg(test)]
+pub(super) fn roundtrip_approved_for_test(bytes: &[u8]) -> Result<Vec<u8>> {
+    let observations: ApprovedFiles = serde_json::from_slice(bytes).map_err(|_| Error::Identity)?;
+    encode(&observations)
+}
+
+#[cfg(test)]
+pub(super) fn eula_input_for_test(prepared: &PreparedStatus) -> Result<Vec<u8>> {
+    eula_digest_input(
+        &prepared.bundle.manifest,
+        prepared.review().review_id,
+        &prepared.approved_files,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn replay_eula_input_for_test(
+    manifest_bytes: &[u8],
+    approved_bytes: &[u8],
+    original_input: &[u8],
+) -> Result<Vec<u8>> {
+    use serde::de::IgnoredAny;
+    type OriginalContext = (u32, String, Uuid, IgnoredAny, IgnoredAny, String);
+    let (schema, purpose, review_id, _, _, _): OriginalContext =
+        serde_json::from_slice(original_input).map_err(|_| Error::Identity)?;
+    if schema != 1 || purpose != "native_status_eula" {
+        return Err(Error::Identity);
+    }
+    let manifest: factory::Manifest =
+        serde_json::from_slice(manifest_bytes).map_err(|_| Error::Identity)?;
+    let observations: ApprovedFiles =
+        serde_json::from_slice(approved_bytes).map_err(|_| Error::Identity)?;
+    // Same original UUID/observations, current production encoder. IgnoredAny
+    // only extracts tuple context; it never normalizes either typed payload.
+    eula_digest_input(&manifest, review_id, &observations)
 }
