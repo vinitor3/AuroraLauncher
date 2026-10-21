@@ -14,6 +14,12 @@ pub(super) use inspection::inspect_public;
 mod restoration;
 pub(super) use restoration::reconcile;
 
+#[cfg(all(windows, feature = "connect-lab"))]
+#[path = "connect_voice_plasmo_runtime.rs"]
+mod runtime;
+#[cfg(all(windows, feature = "connect-lab"))]
+pub(super) use runtime::validate_runtime_configuration;
+
 #[derive(Deserialize)]
 struct Document {
     host: Host,

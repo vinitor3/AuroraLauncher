@@ -23,6 +23,8 @@ mod manifest;
 mod producer;
 #[path = "connect_dedicated/resources.rs"]
 mod resources;
+#[path = "connect_dedicated/runtime_config.rs"]
+mod runtime_config;
 #[path = "connect_dedicated/voice_profile.rs"]
 mod voice_profile;
 
