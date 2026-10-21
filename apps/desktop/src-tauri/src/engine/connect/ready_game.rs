@@ -5,7 +5,7 @@ use crate::engine::connect::ready_game_backend::ReadyGameBackend;
 use std::sync::{mpsc, Weak};
 
 pub(super) struct GuestSource {
-    guest: lab::Guest,
+    guest: Weak<lab::Guest>,
     pub(super) bridge: Weak<lab::TcpBridge>,
     authority: Authority,
     deadline: Instant,
@@ -13,26 +13,40 @@ pub(super) struct GuestSource {
 }
 impl GuestSource {
     pub(super) fn new(
-        guest: &lab::Guest,
+        guest: &Arc<lab::Guest>,
         bridge: &Arc<lab::TcpBridge>,
         authority: &Authority,
         deadline: Instant,
         cancel: &CancellationToken,
     ) -> Arc<Self> {
         Arc::new(Self {
-            guest: guest.clone(),
+            guest: Arc::downgrade(guest),
             bridge: Arc::downgrade(bridge),
             authority: authority.clone(),
             deadline,
             cancel: cancel.clone(),
         })
     }
+    #[cfg(test)]
+    pub(super) fn bound_sockets_for_test(&self) -> Vec<SocketAddr> {
+        self.guest
+            .upgrade()
+            .map_or_else(Vec::new, |guest| guest.bound_sockets())
+    }
     fn address(&self) -> Result<SocketAddr, ReadyGameLaunchError> {
         if self.cancel.is_cancelled()
             || Instant::now() >= self.deadline
             || self.authority.check_session().is_err()
-            || self.guest.connection().close_reason().is_some()
         {
+            return Err(ReadyGameLaunchError::Unavailable);
+        }
+        // A source or a blocked launch worker must never own an Endpoint.
+        // These upgrades live only until this synchronous check returns.
+        let guest = self
+            .guest
+            .upgrade()
+            .ok_or(ReadyGameLaunchError::Unavailable)?;
+        if guest.connection().close_reason().is_some() {
             return Err(ReadyGameLaunchError::Unavailable);
         }
         let bridge = self

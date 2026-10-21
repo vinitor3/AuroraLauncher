@@ -6,6 +6,10 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento79 — origem de abertura não possui o transporte
+
+Após reproduzir retenção de UDP depois de cleanup completo, manter Arc Guest somente no ator e Weak Guest/ponte na origem de abertura pronta. Os workers conservam a mesma origem/autoridade para seus gates, mas nenhum owner de Endpoint deve atravessar preparação ou espera de spawn. Upgrades duram apenas a verificação síncrona; encerramento retira a origem do Attempt e aguarda trabalho real sem matar jogo já registrado. [Contrato79](../../aurora-connect-guest-source-cleanup.md). Baseline falhou antes da correção, quatro provas causais e regressão490 PASS aprovadas; sem homologação gráfica/de jogo/voz/rede.
+
 ### Incremento78 — observar somente o caminho selecionado
 
 Acrescentar à biblioteca uma observação redigida e transitória do snapshot `Connection::paths()` da versão Iroh1.3.0 já fixada. Classificar somente uma seleção inequívoca; ausência, múltiplas seleções e ambiguidade permanecem unknown. Autoridade original/cancelamento/fechamento têm precedência. Host observa somente sua lease de convite consumida e válida, sem enumerar peers ou revelar endereços; Guest conserva o prazo original de cada família. Sem I/O, cache, watcher, novo protocolo, relay público ou integração desktop implícita. [Contrato78](../../aurora-connect-path-observation.md). Implementação e provas locais aprovadas, com primeira falha da fixture preservada; regressão266 PASS e opt-in IPv4 separado no task. Sem homologação de runtime, GUI ou rede externa.

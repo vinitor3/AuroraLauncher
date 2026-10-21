@@ -172,20 +172,28 @@ struct Pair {
     guest: Arc<ConnectManager>,
     host_id: String,
     guest_id: String,
+    host_public_id: String,
     tcp: SocketAddr,
     backend: tokio::task::JoinHandle<()>,
+    _aux: Option<std::net::UdpSocket>,
 }
 impl Pair {
     async fn new() -> Self {
         Self::with_duration(120).await
     }
     async fn with_duration(session_seconds: u16) -> Self {
+        Self::with_profile(Profile::Session, session_seconds).await
+    }
+    async fn with_profile(profile: Profile, session_seconds: u16) -> Self {
         let (target, backend) = crate::engine::connect::tests::status_fixture().await;
         let hold = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let aux = profile
+            .is_fragmented()
+            .then(|| std::net::UdpSocket::bind("127.0.0.1:0").unwrap());
         let host = ConnectManager::default();
         let guest = Arc::new(ConnectManager::default());
-        let hp = host
-            .prepare_session_host(
+        let hp = match profile {
+            Profile::Session => host.prepare_session_host(
                 "main",
                 SessionHostRequest {
                     mode: ConnectMode::Loopback,
@@ -194,17 +202,50 @@ impl Pair {
                     admission_seconds: 60.min(session_seconds),
                     session_seconds,
                 },
-            )
-            .unwrap();
-        let gp = guest
-            .prepare_session_guest(
+            ),
+            Profile::Legacy => host.prepare_host(
                 "main",
-                GuestRequest {
+                HostRequest {
                     mode: ConnectMode::Loopback,
-                    expected_host_public_id: hp.public_id,
+                    bind_address: hold.local_addr().unwrap().to_string(),
+                    game_target: target.to_string(),
+                    lifetime_seconds: session_seconds,
                 },
-            )
-            .unwrap();
+            ),
+            Profile::Fragmented => host.prepare_fragmented_host(
+                "main",
+                FragmentedHostRequest {
+                    mode: ConnectMode::Loopback,
+                    bind_address: hold.local_addr().unwrap().to_string(),
+                    game_target: target.to_string(),
+                    udp_target: aux.as_ref().unwrap().local_addr().unwrap().to_string(),
+                    lifetime_seconds: session_seconds,
+                },
+            ),
+            Profile::SessionFragmented => host.prepare_session_fragmented_host(
+                "main",
+                SessionFragmentedHostRequest {
+                    mode: ConnectMode::Loopback,
+                    bind_address: hold.local_addr().unwrap().to_string(),
+                    game_target: target.to_string(),
+                    udp_target: aux.as_ref().unwrap().local_addr().unwrap().to_string(),
+                    admission_seconds: 60.min(session_seconds),
+                    session_seconds,
+                },
+            ),
+        }
+        .unwrap();
+        let request = GuestRequest {
+            mode: ConnectMode::Loopback,
+            expected_host_public_id: hp.public_id.clone(),
+        };
+        let gp = match profile {
+            Profile::Session => guest.prepare_session_guest("main", request),
+            Profile::Legacy => guest.prepare_guest("main", request),
+            Profile::Fragmented => guest.prepare_fragmented_guest("main", request),
+            Profile::SessionFragmented => guest.prepare_session_fragmented_guest("main", request),
+        }
+        .unwrap();
         let review = host
             .reserve_host_review("main", &hp.operation_id, &gp.public_id)
             .unwrap()
@@ -235,9 +276,22 @@ impl Pair {
             guest,
             host_id: hp.operation_id,
             guest_id: gp.operation_id,
+            host_public_id: hp.public_id,
             tcp,
             backend,
+            _aux: aux,
         }
+    }
+    fn transport_ports(&self) -> Vec<SocketAddr> {
+        let state = self.guest.live.state.lock().unwrap();
+        state
+            .attempt
+            .as_ref()
+            .unwrap()
+            .guest_source
+            .as_ref()
+            .unwrap()
+            .bound_sockets_for_test()
     }
     fn request(&self) -> ReadyGameLaunchRequest {
         ReadyGameLaunchRequest {
@@ -653,4 +707,306 @@ async fn ready_game_owned_watchdog_cancels_blocking_preparation_and_preserves_ex
     assert_eq!(backend.spawns.load(Ordering::SeqCst), 0);
     assert_eq!(pair.guest.snapshot("main").unwrap().phase, "guestConnected");
     pair.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ready_game_guest_source_stop_releases_transport_with_manager_alive_without_new_preparation(
+) {
+    let pair = Pair::new().await;
+    let status = pair
+        .guest
+        .probe_status("main", &pair.guest_id)
+        .await
+        .unwrap();
+    assert_eq!(status.status_state, "responded");
+    // Only addresses leave this lock. Retaining a Guest or GuestSource here
+    // would manufacture the ownership failure this test is meant to expose.
+    let ports = {
+        let state = pair.guest.live.state.lock().unwrap();
+        let attempt = state.attempt.as_ref().unwrap();
+        assert!(attempt.ready_game.is_none());
+        attempt
+            .guest_source
+            .as_ref()
+            .unwrap()
+            .bound_sockets_for_test()
+    };
+    assert!(!ports.is_empty());
+    let stopped = timeout(
+        Duration::from_secs(5),
+        pair.guest.stop("main", &pair.guest_id),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let rebound = timeout(Duration::from_secs(2), async {
+        loop {
+            let sockets: std::io::Result<Vec<_>> =
+                ports.iter().map(std::net::UdpSocket::bind).collect();
+            if let Ok(sockets) = sockets {
+                break sockets;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    // Observe the OS while this exact manager and terminal Attempt remain
+    // alive. No new preparation or manager drop may release the old Endpoint.
+    let udp_rebound_while_manager_alive = rebound.is_ok();
+    drop(rebound);
+    let tcp_rebound_while_manager_alive = std::net::TcpListener::bind(pair.tcp).is_ok();
+    let source_removed = pair
+        .guest
+        .live
+        .state
+        .lock()
+        .unwrap()
+        .attempt
+        .as_ref()
+        .unwrap()
+        .guest_source
+        .is_none();
+    // The red baseline must still reap every fixture before its expected
+    // assertion fails. Pair::close keeps the current manager until cleanup.
+    pair.close().await;
+    assert_eq!(stopped.cleanup_state, "complete");
+    assert!(tcp_rebound_while_manager_alive);
+    assert!(
+        udp_rebound_while_manager_alive,
+        "Guest transport UDP remained bound after cleanup complete with manager alive"
+    );
+    assert!(source_removed);
+}
+
+async fn rebound_guest_sockets(ports: &[SocketAddr]) -> Option<Vec<std::net::UdpSocket>> {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let sockets: std::io::Result<Vec<_>> =
+                ports.iter().map(std::net::UdpSocket::bind).collect();
+            if let Ok(sockets) = sockets {
+                break sockets;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .ok()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ready_game_guest_source_retained_workers_do_not_retain_transport_or_detach_on_lost_waiter()
+{
+    for stage in 0..3 {
+        let pair = Pair::new().await;
+        let ports = pair.transport_ports();
+        assert!(!ports.is_empty());
+        assert_eq!(
+            pair.guest
+                .probe_status("main", &pair.guest_id)
+                .await
+                .unwrap()
+                .status_state,
+            "responded"
+        );
+        let gate = Arc::new(Gate::default());
+        let backend = fixture_backend(|backend| match stage {
+            0 => backend.before_prepare = Some(gate.clone()),
+            1 => backend.before_spawn = Some(gate.clone()),
+            2 => backend.after_spawn = Some(gate.clone()),
+            _ => unreachable!(),
+        });
+        pair.prepare(backend.clone());
+        if stage != 0 {
+            let review = launch_phase(&pair, "reviewed").await.review.unwrap();
+            pair.guest
+                .confirm_ready_game_launch("main", &pair.guest_id, &review.plan_id, &review.digest)
+                .unwrap();
+        }
+        gate.arrived().await;
+        let manager = pair.guest.clone();
+        let id = pair.guest_id.clone();
+        let waiter = tokio::spawn(async move { manager.stop("main", &id).await });
+        let closed = phase(&pair.guest, "closed").await;
+        // These are observations while the exact blocking worker is still
+        // held. Its source/gate must not keep a strong Guest alive.
+        let rebound = rebound_guest_sockets(&ports).await;
+        let udp_released_before_worker = rebound.is_some();
+        drop(rebound);
+        let tcp_released_before_worker = std::net::TcpListener::bind(pair.tcp).is_ok();
+        let pending_waiter = !waiter.is_finished();
+        waiter.abort();
+        let lost_waiter = matches!(waiter.await, Err(error) if error.is_cancelled());
+        let pending = pair.guest.snapshot("main").unwrap();
+        let source_removed = pair
+            .guest
+            .live
+            .state
+            .lock()
+            .unwrap()
+            .attempt
+            .as_ref()
+            .unwrap()
+            .guest_source
+            .is_none();
+        let new_preparation_refused = matches!(
+            pair.guest.prepare_session_guest(
+                "main",
+                GuestRequest {
+                    mode: ConnectMode::Loopback,
+                    expected_host_public_id: pair.host_public_id.clone(),
+                }
+            ),
+            Err(ConnectError::Busy)
+        );
+        let child_alive_while_worker_held = stage != 2
+            || backend
+                .child
+                .lock()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .try_wait()
+                .unwrap()
+                .is_none();
+        gate.open();
+        let complete = timeout(
+            Duration::from_secs(5),
+            pair.guest.stop("main", &pair.guest_id),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let outcome = pair
+            .guest
+            .ready_game_launch_snapshot("main", &pair.guest_id)
+            .unwrap();
+        let child_alive_after_stop = stage != 2
+            || backend
+                .child
+                .lock()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .try_wait()
+                .unwrap()
+                .is_none();
+        pair.close().await;
+        assert_eq!(closed.cleanup_state, "pending");
+        assert_eq!(pending.cleanup_state, "pending");
+        assert!(udp_released_before_worker && tcp_released_before_worker);
+        assert!(pending_waiter && lost_waiter && source_removed && new_preparation_refused);
+        assert_eq!(complete.cleanup_state, "complete");
+        assert_eq!(
+            backend.spawns.load(Ordering::SeqCst),
+            usize::from(stage == 2)
+        );
+        assert_eq!(
+            outcome.phase,
+            if stage == 2 { "started" } else { "cancelled" }
+        );
+        assert!(child_alive_while_worker_held && child_alive_after_stop);
+        assert_eq!(outcome.result.is_some(), stage == 2);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ready_game_guest_source_expiry_or_remote_revocation_releases_transport_without_new_attempt(
+) {
+    for remote_revocation in [false, true] {
+        let pair = Pair::with_duration(if remote_revocation { 30 } else { 2 }).await;
+        let ports = pair.transport_ports();
+        assert!(!ports.is_empty());
+        assert_eq!(
+            pair.guest
+                .probe_status("main", &pair.guest_id)
+                .await
+                .unwrap()
+                .status_state,
+            "responded"
+        );
+        let before = pair.guest.snapshot("main").unwrap();
+        if remote_revocation {
+            // Revoke the actual original lease through its Host. No cancel
+            // token or snapshot is used to manufacture the remote close.
+            let state = pair.host.live.state.lock().unwrap();
+            let (host, lease) = state.attempt.as_ref().unwrap().host.as_ref().unwrap();
+            assert!(host.revoke(lease));
+        }
+        let closed = phase(&pair.guest, "closed").await;
+        let rebound = rebound_guest_sockets(&ports).await;
+        let udp_released = rebound.is_some();
+        drop(rebound);
+        let tcp_released = std::net::TcpListener::bind(pair.tcp).is_ok();
+        let after = pair.guest.snapshot("main").unwrap();
+        let source_removed = pair
+            .guest
+            .live
+            .state
+            .lock()
+            .unwrap()
+            .attempt
+            .as_ref()
+            .unwrap()
+            .guest_source
+            .is_none();
+        pair.close().await;
+        assert_eq!(closed.phase, "closed");
+        assert_eq!(after.operation_id, before.operation_id);
+        assert_eq!(after.session_timing, before.session_timing);
+        assert!(udp_released && tcp_released && source_removed);
+        if !remote_revocation {
+            assert!(lab::unix_millis() >= before.session_timing.unwrap().session_expires_at_ms);
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ready_game_guest_source_shared_actor_releases_legacy_and_fragmented_profiles() {
+    for profile in [
+        Profile::Legacy,
+        Profile::Fragmented,
+        Profile::SessionFragmented,
+    ] {
+        let pair = Pair::with_profile(profile, 30).await;
+        let mut ports = pair.transport_ports();
+        assert!(!ports.is_empty());
+        if profile.is_fragmented() {
+            let local_udp = timeout(Duration::from_secs(5), async {
+                loop {
+                    let snapshot = pair.guest.snapshot("main").unwrap();
+                    if let Some(udp) = snapshot.udp {
+                        if udp.udp_state == fragmented_profile::UdpState::Available {
+                            break udp.udp_address.unwrap().parse().unwrap();
+                        }
+                    }
+                    sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            ports.push(local_udp);
+        }
+        assert_eq!(
+            pair.guest
+                .probe_status("main", &pair.guest_id)
+                .await
+                .unwrap()
+                .status_state,
+            "responded"
+        );
+        let stopped = timeout(
+            Duration::from_secs(5),
+            pair.guest.stop("main", &pair.guest_id),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let rebound = rebound_guest_sockets(&ports).await;
+        let udp_released = rebound.is_some();
+        drop(rebound);
+        let tcp_released = std::net::TcpListener::bind(pair.tcp).is_ok();
+        pair.close().await;
+        assert_eq!(stopped.cleanup_state, "complete");
+        assert!(udp_released && tcp_released);
+    }
 }

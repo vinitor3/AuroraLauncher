@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 21/10/2026
 
+Incremento79/002/003/005/008 libera o transporte do Guest após encerrar mesmo com manager e workers de abertura prontos ainda vivos. [Contrato79](../../aurora-connect-guest-source-cleanup.md). **PROTÓTIPO**, defeito reproduzido antes da correção, Weak no lugar de clone forte e provas de rebind/ownership. Jogo registrado permanece independente. Nenhum gate de GUI, Minecraft, Core/Skins, áudio, redes ou R3 é promovido.
+
 Incremento78/002/004/008 implementa observação redigida da seleção real do transporte na biblioteca. [Contrato78](../../aurora-connect-path-observation.md). **PROTÓTIPO**, com autoridades originais, recusa conservadora, testes locais de quatro perfis, grupo, IPv4 próprio e relay de fixture. Não concede recurso, não altera quotas/prazos nem libera relay público; desktop/presença, redes externas, áudio e R3 conservam seus gates.
 
 Incremento77/002/003/005/008 fecha o transporte do grupo durante consulta retida de origem, mantendo cleanup pertencente à operação. [Contrato77](../../aurora-connect-group-source-shutdown.md). **PROTÓTIPO**, com testes locais de dois Guests, autoridades individuais, TCP/UDP e liberação da porta antes do retorno da consulta. O roster revisado conserva o gate estrito inicial; stop não altera o histórico de revogação individual. Nenhum gate de jogo, voz, redes externas, GUI, matriz ou R3 é promovido. Comandos e resultados finais no task.

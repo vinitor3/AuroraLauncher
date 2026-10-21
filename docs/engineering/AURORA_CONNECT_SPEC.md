@@ -4,6 +4,8 @@ Reconciliação: 29/09/2026, base cumulativa alpha.14 em `5ac2f7e288e77fbb0d5c0d
 
 ## 1. Escopo e autoridade
 
+Incremento79 remove a retenção de Endpoint pela origem de abertura pronta do Guest. [Contrato79](../aurora-connect-guest-source-cleanup.md). A origem usa referência fraca ao ator e é removida ao encerrar, enquanto workers continuam pertencentes à operação até terminar. **PROTÓTIPO**, com reprodução da falha anterior, rebind causal e regressão local; não homologa launcher gráfico, jogo, voz ou rede externa. Observar caminho não deve recriar esse owner.
+
 Incremento78 observa o caminho selecionado na biblioteca, por API redigida e sem I/O adicional. [Contrato78](../aurora-connect-path-observation.md). direct/relay exigem seleção única inequívoca; unknown preserva ambiguidade, closed respeita cancelamento/autoridade original. Host consulta somente convite consumido e válido. **PROTÓTIPO**, validado em loopback, IPv4 próprio e relay local; não implementa ainda apresentação desktop nem habilita relay público ou homologa uma rede externa, Minecraft ou voz.
 
 Incremento77 estende o encerramento durante consulta ao ator de grupo. [Contrato77](../aurora-connect-group-source-shutdown.md). O transporte fecha e libera seus owners antes de aguardar a mesma consulta, enquanto cleanup continua pendente. Preserva o roster estrito antes da publicação, autoridades individuais depois dela e histórico cumulativo de consumo/revogação explícita. **PROTÓTIPO**, com provas locais e revisão independente; não amplia homologação de Minecraft, voz ou redes. Evidências e regressão no task.

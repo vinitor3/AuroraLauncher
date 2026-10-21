@@ -343,6 +343,7 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
         a.snapshot.error_code = error.map(ConnectError::code);
         a.export = None;
         a.host = None;
+        a.guest_source = None;
         a.authority = None;
         a.snapshot.preparation = None;
         a.snapshot.review = None;
@@ -375,6 +376,7 @@ async fn close_operation(
         session_group::closing(a);
         a.snapshot.phase = "closing";
         udp_recovery::clear(a);
+        a.guest_source = None;
         a.snapshot.cleanup_state = "pending";
     });
     cancel.cancel();
@@ -1151,6 +1153,7 @@ impl Manager {
             a.cancel.cancel();
             udp_recovery::clear(a);
             ready_game::cancel(a);
+            a.guest_source = None;
             session_group::closing(a);
             host_source::closing(a);
             a.draft = None;
@@ -1406,6 +1409,9 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
                 .await;
                 return;
             };
+            // Only this actor owns the Guest. Ready-game sources carry Weak
+            // references, so retained workers cannot retain a closed Endpoint.
+            let guest = Arc::new(guest);
             if cancel.is_cancelled()
                 || Instant::now() >= deadline
                 || invitation.check_session().is_err()
@@ -1522,6 +1528,7 @@ async fn run(state: Arc<Mutex<State>>, id: String, cancel: CancellationToken, re
             update(&state, &id, |a| {
                 a.snapshot.phase = "closing";
                 udp_recovery::clear(a);
+                a.guest_source = None;
             });
             guest.shutdown().await;
             bridge.shutdown().await;

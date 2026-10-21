@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 21/10/2026
 
+Incremento79: origem de abertura pronta do Guest deixa de reter seu Endpoint após cleanup. [Contrato79](../aurora-connect-guest-source-cleanup.md). **PROTÓTIPO**, com rebind real e processos de fixture próprios. Não altera nenhuma célula de Minecraft/Java/loader, Core/Skins, GUI, voz ou rede; nove pares e validações externas mantêm seus resultados separados.
+
 Incremento78: observação do caminho selecionado na biblioteca, com classificação direta/relay local e autoridades originais. [Contrato78](../aurora-connect-path-observation.md). **PROTÓTIPO**. A prova no IPv4 próprio e no relay local continua neste PC; não promove alcance externo, interface, jogo, voz ou qualquer um dos nove pares. Relay público permanece desligado.
 
 Incremento77: grupo encerra TCP/UDP e libera Host/Endpoint antes de aguardar consulta de origem pendente. [Contrato77](../aurora-connect-group-source-shutdown.md). **PROTÓTIPO**, com provas locais de autoridades individuais e três agentes sintéticos; sem promoção de GUI, Minecraft LAN, dois jogadores, Core/Skins, redes externas ou áudio. Os nove pares e os gates existentes permanecem.
