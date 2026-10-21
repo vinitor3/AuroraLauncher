@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 21/10/2026
 
+Incremento83: supervisor nativo de Child próprio, com23 focais/537 regressão PASS e correção causal de saída precoce. [Contrato83](../aurora-connect-native-owned-run.md). **PROTÓTIPO**, bytesTCP/UDP loopbackV4/V6 de fixtures e consultaOS, sem Java/Minecraft/mod/áudio. Não promove qualquer célula dos nove pares, GUI ou rede; produtor dedicado e vínculo em execução permanecem separados. Defaults preservados.
+
 Incremento82: consulta interna de binding UDP do Child próprio no Windows. [Contrato82](../aurora-connect-owned-udp-binding.md). **PROTÓTIPO**,19 focais e514 regressão PASS; V4/V6 loopback com filhos de teste próprios. Não há Java/mod/áudio, produtor dedicado, GUI ou nova topologia. Nenhuma célula de Minecraft, Core/Skins, SVC ou Plasmo é promovida; nove pares preservados.
 
 Incremento81: desativação UDP independente por lease/serviço no Host, preservando TCP e outros participantes. [Contrato81](../aurora-connect-udp-service-disable.md). **PROTÓTIPO**, focais, regressões locais e revisão aprovados, bytes opacos e portas reais. Não comprova áudio SVC/Plasmo, Minecraft, GUI ou rede externa nem altera qualquer célula dos nove pares. Sem caller novo, configuração ou relay público.

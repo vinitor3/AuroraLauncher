@@ -6,6 +6,10 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento83 — ownership de execução nativa antes do produtor dedicado
+
+Separar o núcleo real de lifecycle da verificação/lançamento Java futuro. Start síncrono aceita Command somente do caller Rust confiável; instala owner imediatamente após spawn e conserva Child/pipes/readers, razão e primeira falha, independente do waiter ou runtimeTokio. Controle não clonável pede stop sincronamente; observer fraco registra uma queryUDP82 sob o mesmo gate de selo/decisão final. Child/reap/readers terminam sem esperar query retida, mas completion conserva cleanup pendente até a mesma query liberar prova/trabalho. Completion contém só relatório/canal, sem owners. Saída já observada antes do write de stop recebe EarlyExit mesmo com Requested concorrente; RED causal precedeu correção. [Contrato83](../../aurora-connect-native-owned-run.md).23 focais/537 regressão, checks e QA aprovados; nenhuma autoridade nova de cópia, EULA, app shutdown, interface ou voz. O processo launcher precisa continuar vivo até completion; não prometer Job Object/crash kill.
+
 ### Incremento82 — observar UDP do filho original sem adotar processo
 
 Consultar GetExtendedUdpTable OWNER_PID somente para endpoint literal loopback exato, com o mesmo handle/PID/criação antes/depois inclusive quando não há correspondência. Memória/linhas/tentativas limitadas, comprimento retornado separado da capacidade e tabela inteira validada antes de aceitar linha. [Contrato82](../../aurora-connect-owned-udp-binding.md). Sem inventário público, normalização wildcard/mapped, PID da interface, novo caller ou mudança na descobertaTCP existente. Os rótulos instância/run vêm do caller confiável; não constituem prova nova de cópia/Doctor. Consulta não comprova intenção de receber, mod, continuidade física ou áudio; não reativa81. Provas com filhos próprios, regressões e QA aprovados; supervisão de dedicado e leitura de configuração viva continuam em contratos separados.

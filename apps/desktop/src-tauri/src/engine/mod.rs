@@ -6,6 +6,8 @@ pub mod connect;
 pub mod connect_discovery;
 #[cfg(all(windows, feature = "connect-lab"))]
 pub mod connect_java_probe;
+#[cfg(all(windows, feature = "connect-lab"))]
+pub(crate) mod connect_owned_run;
 #[cfg(feature = "connect-lab")]
 pub mod connect_quick_play;
 #[cfg(feature = "connect-lab")]
