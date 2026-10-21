@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 21/10/2026
 
+Incremento78/002/004/008 implementa observação redigida da seleção real do transporte na biblioteca. [Contrato78](../../aurora-connect-path-observation.md). **PROTÓTIPO**, com autoridades originais, recusa conservadora, testes locais de quatro perfis, grupo, IPv4 próprio e relay de fixture. Não concede recurso, não altera quotas/prazos nem libera relay público; desktop/presença, redes externas, áudio e R3 conservam seus gates.
+
 Incremento77/002/003/005/008 fecha o transporte do grupo durante consulta retida de origem, mantendo cleanup pertencente à operação. [Contrato77](../../aurora-connect-group-source-shutdown.md). **PROTÓTIPO**, com testes locais de dois Guests, autoridades individuais, TCP/UDP e liberação da porta antes do retorno da consulta. O roster revisado conserva o gate estrito inicial; stop não altera o histórico de revogação individual. Nenhum gate de jogo, voz, redes externas, GUI, matriz ou R3 é promovido. Comandos e resultados finais no task.
 
 Incremento76/002/003/005/008 trata revisão individual com trabalho próprio e cancelamento do Host durante consultas de origem. [Contrato76](../../aurora-connect-owned-source-review.md). **PROTÓTIPO**, provas nativas locais/DOM/build e revisão aprovados; interface mantém revisão explícita e ignora respostas atrasadas. Primeiras falhas e correções preservadas no task. Sem ampliar prazos, perfis, matriz ou gates. Grupo, redes externas e áudio conservam validação própria.

@@ -6,6 +6,10 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento78 — observar somente o caminho selecionado
+
+Acrescentar à biblioteca uma observação redigida e transitória do snapshot `Connection::paths()` da versão Iroh1.3.0 já fixada. Classificar somente uma seleção inequívoca; ausência, múltiplas seleções e ambiguidade permanecem unknown. Autoridade original/cancelamento/fechamento têm precedência. Host observa somente sua lease de convite consumida e válida, sem enumerar peers ou revelar endereços; Guest conserva o prazo original de cada família. Sem I/O, cache, watcher, novo protocolo, relay público ou integração desktop implícita. [Contrato78](../../aurora-connect-path-observation.md). Implementação e provas locais aprovadas, com primeira falha da fixture preservada; regressão266 PASS e opt-in IPv4 separado no task. Sem homologação de runtime, GUI ou rede externa.
+
 ### Incremento77 — consulta do grupo sem reter transporte encerrado
 
 Aplicar ao ator de grupo o fechamento antecipado dos recursos enquanto a mesma consulta de origem permanece pertencente à operação. Antes de listening, todos os ingressos do roster revisado devem continuar válidos; depois, conservar as decisões individuais e fechar o conjunto somente por stop, origem perdida ou fim de todas as autoridades. Remover/dropar os owners Host/Endpoint depois de revogar e capturar consumo histórico, antes de aguardar a consulta. A flag pública de revogação continua sendo a decisão individual explícita, sem inferência pelo stop global. [Contrato77](../../aurora-connect-group-source-shutdown.md). Implementação e seis provas causais locais aprovadas, regressões486/289 no task; sem homologação de runtime ou redes.

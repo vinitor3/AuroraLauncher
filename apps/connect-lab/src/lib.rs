@@ -9,6 +9,7 @@ mod invitation;
 mod local_relay;
 mod minecraft_status;
 mod model;
+mod path_observation;
 mod plan;
 mod session_invitation;
 mod transport;
@@ -34,6 +35,7 @@ pub use minecraft_status::{
     MinecraftStatusSummary, probe_minecraft_status,
 };
 pub use model::*;
+pub use path_observation::{PathObservation, PathState};
 pub use plan::{MAX_PLAN_BYTES, PlanError, ValidatedPlan, load_fragmented_plan, load_plan};
 pub use session_invitation::{
     MAX_ADMISSION_LIFETIME, MAX_SESSION_INVITATION_BYTES, MAX_SESSION_LIFETIME, SessionDeadlines,

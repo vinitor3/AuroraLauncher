@@ -4,6 +4,8 @@ Reconciliação: 29/09/2026, base cumulativa alpha.14 em `5ac2f7e288e77fbb0d5c0d
 
 ## 1. Escopo e autoridade
 
+Incremento78 observa o caminho selecionado na biblioteca, por API redigida e sem I/O adicional. [Contrato78](../aurora-connect-path-observation.md). direct/relay exigem seleção única inequívoca; unknown preserva ambiguidade, closed respeita cancelamento/autoridade original. Host consulta somente convite consumido e válido. **PROTÓTIPO**, validado em loopback, IPv4 próprio e relay local; não implementa ainda apresentação desktop nem habilita relay público ou homologa uma rede externa, Minecraft ou voz.
+
 Incremento77 estende o encerramento durante consulta ao ator de grupo. [Contrato77](../aurora-connect-group-source-shutdown.md). O transporte fecha e libera seus owners antes de aguardar a mesma consulta, enquanto cleanup continua pendente. Preserva o roster estrito antes da publicação, autoridades individuais depois dela e histórico cumulativo de consumo/revogação explícita. **PROTÓTIPO**, com provas locais e revisão independente; não amplia homologação de Minecraft, voz ou redes. Evidências e regressão no task.
 
 Incremento76 separa a revisão individual descoberta da consulta bloqueante e conserva seu trabalho no Attempt, inclusive após perda da resposta. As consultas do ator individual observam cancelamento/autoridade e soltam o Host/Endpoint antes de aguardar consulta pendente. [Contrato76](../aurora-connect-owned-source-review.md). Estado **PROTÓTIPO**, testes locais e revisão aprovados; formatos, prazos e aprovação por digest preservados, sem homologação adicional. O monitor de grupo é escopo posterior separado.

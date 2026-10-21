@@ -582,6 +582,45 @@ impl Host {
         let active = self.state.active_leases.lock().unwrap();
         active_invitation(&self.state, &active, lease_id)
     }
+    /// Redacted instantaneous path for one already-consumed, current invitation.
+    /// Manual, unknown, unconsumed, expired and revoked leases all return None.
+    /// The existing admission lock linearizes this read with revoke/admission.
+    pub fn invitation_path_observation(&self, lease_id: &str) -> Option<PathObservation> {
+        let active = self.state.active_leases.lock().ok()?;
+        let lease = self.state.leases.get(lease_id)?;
+        if self.state.cancel.is_cancelled() || lease.invitation.is_none() {
+            return None;
+        }
+        // Check the original clocks before cumulative consumption; expired
+        // ingress alone does not invalidate an already-admitted session.
+        authorize_session(&self.state, lease_id, lease.value.peer).ok()?;
+        if !lease.consumed.load(Ordering::Acquire) {
+            return None;
+        }
+        let connection = active.get(lease_id);
+        let mut observation = match connection {
+            Some(connection) => {
+                if connection.remote_id() != lease.value.peer {
+                    return None;
+                }
+                if connection.close_reason().is_some() {
+                    PathObservation::new(PathState::Closed)
+                } else {
+                    PathObservation::sample(connection)
+                }
+            }
+            None => PathObservation::new(PathState::Closed),
+        };
+        if self.state.cancel.is_cancelled()
+            || authorize_session(&self.state, lease_id, lease.value.peer).is_err()
+        {
+            return None;
+        }
+        if connection.is_some_and(|connection| connection.close_reason().is_some()) {
+            observation = PathObservation::new(PathState::Closed);
+        }
+        Some(observation)
+    }
     pub fn revoke(&self, lease_id: &str) -> bool {
         // Linearize revocation with admission and its single-use decision.
         let _admission = self.state.active_leases.lock().unwrap();

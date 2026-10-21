@@ -43,6 +43,9 @@ struct Inner {
     task: Mutex<Option<JoinHandle<()>>>,
     session_task: Mutex<Option<JoinHandle<()>>>,
     session_authority: Option<SessionInvitation>,
+    // Keep the original short invitation's clocks for read-only observations.
+    // No watcher, new verification or transport authorization is added here.
+    legacy_authority: Option<Invitation>,
     fragment_memory: fragment::PeerBudget,
     fragmented_capability: bool,
 }
@@ -56,6 +59,9 @@ impl Drop for Inner {
 pub struct Guest {
     inner: Arc<Inner>,
 }
+#[cfg(test)]
+#[path = "path_observation_clock_tests.rs"]
+mod path_clock_tests;
 
 impl Guest {
     pub async fn connect(config: GuestConfig) -> Result<Self> {
@@ -264,6 +270,7 @@ impl Guest {
             Some(invitation.proof()),
             transport::EndpointMode::Direct,
             None,
+            Some(invitation.clone()),
             observer,
         )
         .await
@@ -398,6 +405,7 @@ impl Guest {
             transport::EndpointMode::Direct,
             Some(invitation.clone()),
             None,
+            None,
         )
         .await
     }
@@ -406,13 +414,14 @@ impl Guest {
         invitation: Option<InvitationProof>,
         mode: transport::EndpointMode,
     ) -> Result<Self> {
-        Self::connect_inner_authorized(config, invitation, mode, None, None).await
+        Self::connect_inner_authorized(config, invitation, mode, None, None, None).await
     }
     async fn connect_inner_authorized(
         config: GuestConfig,
         invitation: Option<InvitationProof>,
         mode: transport::EndpointMode,
         session_authority: Option<SessionInvitation>,
+        legacy_authority: Option<Invitation>,
         observer: Option<&ConnectObserver>,
     ) -> Result<Self> {
         config.limits.validate()?;
@@ -536,6 +545,7 @@ impl Guest {
                 task: Mutex::new(Some(task)),
                 session_task: Mutex::new(session_task),
                 session_authority,
+                legacy_authority,
                 fragment_memory,
                 fragmented_capability,
             }),
@@ -552,6 +562,34 @@ impl Guest {
     }
     pub fn metrics(&self) -> MetricsSnapshot {
         self.inner.metrics.snapshot()
+    }
+    /// Sample the selected application path without new I/O or remote data.
+    /// Remote revocation is only known once its close notification arrives;
+    /// original invitation expiry is also checked locally before and after.
+    pub fn path_observation(&self) -> PathObservation {
+        let closed = || {
+            self.inner.cancel.is_cancelled()
+                || self.inner.connection.close_reason().is_some()
+                || self
+                    .inner
+                    .session_authority
+                    .as_ref()
+                    .is_some_and(|authority| authority.check_session_current().is_err())
+                || self
+                    .inner
+                    .legacy_authority
+                    .as_ref()
+                    .is_some_and(|authority| authority.check_current().is_err())
+        };
+        if closed() {
+            return PathObservation::new(PathState::Closed);
+        }
+        let observation = PathObservation::sample(&self.inner.connection);
+        if closed() {
+            PathObservation::new(PathState::Closed)
+        } else {
+            observation
+        }
     }
     pub fn max_datagram_payload(&self, service_max: usize) -> Option<usize> {
         transport::payload_limit(&self.inner.connection, service_max)
