@@ -6,6 +6,10 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento85A — política UDP separada e qualificação restrita
+
+[Contrato85](../../aurora-connect-native-voice-runtime.md), aprovado antes do código e emendado restritivamente antes do patch corretivo. Mesmo proprietário83/slot/Weak/gate; duas famílias, validação inteira e limites conjuntos, sem adotar PID ou normalizar. Diagnóstico do mesmo Child mostrou o socket dual-stack como mapped no CIM e literal no IPHelper. A API publica somente literalOS e recusa mapped com Unavailable após recheck original; decoder mapped não é qualificação runtime. Gate mapped original permanece BLOQUEADO/NÃO VERIFICADO. Focais corrigidos18 discovery/39 owner PASS; full/checks no task.82 continua inalterado; não acrescenta ainda perfilJava/configuração viva/Host/áudio e não promove matriz/UI/rede.
+
 ### Incremento84 — produtor STATUS privado por checkpoints
 
 84A entrega transação EULA e factory privada reais,27 focais PASS e opt-in de arquivos reais1 PASS; vínculo ancestral teve RED causal e fix preservando teste. Guard de recovery é adquirido internamente, sem restore(report) ou configuração de Instance pessoal; observações conservam DB sem init/write. Lock comum pode criar arquivo vazio ausente sem truncar. Grafia extended-Disk é derivação interna com pins/mesmo ID, não nova sintaxe de entrada. Full578 PASS/66 ignorados e checks PASS pertencem a84A. Estado máximo daquele checkpoint é **PROTÓTIPO de arquivos**, sem Java/STATUS; a execução posterior84C tem revisão de receita própria e ownership original83. EULA-only continua sem autorizar spawn.

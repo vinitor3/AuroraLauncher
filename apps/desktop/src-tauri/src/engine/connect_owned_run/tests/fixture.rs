@@ -50,6 +50,14 @@ impl Bindings {
         let tcp4 = TcpListener::bind(self.tcp4).expect("owned_fixture_tcp4_released");
         let tcp6 = TcpListener::bind(self.tcp6).expect("owned_fixture_tcp6_released");
         let udp4 = UdpSocket::bind(self.udp4).expect("owned_fixture_udp4_released");
+        #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+        let udp6 = if super::udp_loopback_fixture::is_mapped(self.udp6) {
+            super::udp_loopback_fixture::bind_mapped(self.udp6)
+                .expect("owned_fixture_mapped_released")
+        } else {
+            UdpSocket::bind(self.udp6).expect("owned_fixture_udp6_released")
+        };
+        #[cfg(not(all(windows, feature = "connect-lab", feature = "connect-voice-lab")))]
         let udp6 = UdpSocket::bind(self.udp6).expect("owned_fixture_udp6_released");
         drop((tcp4, tcp6, udp4, udp6));
     }
@@ -74,6 +82,12 @@ impl Bindings {
                 .expect("owned_fixture_tcp_close");
         }
         for endpoint in self.udp() {
+            #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+            let endpoint = if super::udp_loopback_fixture::is_mapped(endpoint) {
+                SocketAddr::V4(super::udp_loopback_fixture::target(endpoint))
+            } else {
+                endpoint
+            };
             let local = if endpoint.is_ipv4() {
                 SocketAddr::from((Ipv4Addr::LOCALHOST, 0))
             } else {
@@ -153,6 +167,14 @@ pub(super) struct Harness {
 impl Harness {
     pub(super) fn new() -> Self {
         Self::at(Bindings::default())
+    }
+
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    pub(super) fn with_mapped_udp() -> Self {
+        Self::at(Bindings {
+            udp6: (Ipv4Addr::LOCALHOST.to_ipv6_mapped(), 0).into(),
+            ..Default::default()
+        })
     }
 
     pub(super) fn at(wanted: Bindings) -> Self {
@@ -371,6 +393,13 @@ fn echo_udp(socket: &UdpSocket) -> Result<(), &'static str> {
 
 fn bind_udp(bindings: &Bindings) -> Result<(UdpSocket, UdpSocket), &'static str> {
     let one = UdpSocket::bind(bindings.udp4).map_err(|_| "child_udp4_bind")?;
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    let two = if super::udp_loopback_fixture::is_mapped(bindings.udp6) {
+        super::udp_loopback_fixture::bind_mapped(bindings.udp6)?
+    } else {
+        UdpSocket::bind(bindings.udp6).map_err(|_| "child_udp6_bind")?
+    };
+    #[cfg(not(all(windows, feature = "connect-lab", feature = "connect-voice-lab")))]
     let two = UdpSocket::bind(bindings.udp6).map_err(|_| "child_udp6_bind")?;
     one.set_nonblocking(true)
         .map_err(|_| "child_udp_nonblocking")?;
@@ -383,11 +412,19 @@ fn child_loop(nonce: String) -> Result<(), &'static str> {
     let requested: Bindings =
         serde_json::from_str(&std::env::var(ENDPOINTS).map_err(|_| "child_endpoints")?)
             .map_err(|_| "child_endpoints")?;
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    let expected_udp6 = if super::udp_loopback_fixture::is_mapped(requested.udp6) {
+        requested.udp6
+    } else {
+        SocketAddr::from((Ipv6Addr::LOCALHOST, 0))
+    };
+    #[cfg(not(all(windows, feature = "connect-lab", feature = "connect-voice-lab")))]
+    let expected_udp6 = SocketAddr::from((Ipv6Addr::LOCALHOST, 0));
     for (endpoint, expected) in [
         (requested.tcp4, SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
         (requested.tcp6, SocketAddr::from((Ipv6Addr::LOCALHOST, 0))),
         (requested.udp4, SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
-        (requested.udp6, SocketAddr::from((Ipv6Addr::LOCALHOST, 0))),
+        (requested.udp6, expected_udp6),
     ] {
         if endpoint.ip() != expected.ip()
             || matches!(endpoint, SocketAddr::V6(v) if v.scope_id() != 0 || v.flowinfo() != 0)

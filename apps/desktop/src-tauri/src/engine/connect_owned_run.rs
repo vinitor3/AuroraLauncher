@@ -3,6 +3,10 @@
 use super::connect_discovery::{
     require_owned_tcp_listener, require_owned_udp_binding, DiscoveryError, OwnedChildProof,
 };
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+use super::connect_discovery::{require_owned_udp_loopback_binding, UdpLoopbackRepresentation};
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+use std::net::SocketAddrV4;
 use std::{
     net::SocketAddr,
     process::Command,
@@ -150,14 +154,31 @@ impl Drop for OwnedRun {
 #[allow(dead_code)] // Internal read-only entry point; no caller in this increment.
 impl OwnedRunObserver {
     pub(crate) fn observe_udp(&self, endpoint: SocketAddr) -> Result<(), OwnedRunError> {
-        self.observe(endpoint, QueryProtocol::Udp)
+        match self.observe(QueryRequest::Udp(endpoint))? {
+            QueryResult::Udp => Ok(()),
+            _ => Err(OwnedRunError::Internal),
+        }
     }
 
     pub(crate) fn observe_tcp(&self, endpoint: SocketAddr) -> Result<(), OwnedRunError> {
-        self.observe(endpoint, QueryProtocol::Tcp)
+        match self.observe(QueryRequest::Tcp(endpoint))? {
+            QueryResult::Tcp => Ok(()),
+            _ => Err(OwnedRunError::Internal),
+        }
     }
 
-    fn observe(&self, endpoint: SocketAddr, protocol: QueryProtocol) -> Result<(), OwnedRunError> {
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    pub(crate) fn observe_udp_loopback_binding(
+        &self,
+        endpoint: SocketAddrV4,
+    ) -> Result<UdpLoopbackRepresentation, OwnedRunError> {
+        match self.observe(QueryRequest::UdpLoopbackBinding(endpoint))? {
+            QueryResult::UdpLoopbackBinding(representation) => Ok(representation),
+            _ => Err(OwnedRunError::Internal),
+        }
+    }
+
+    fn observe(&self, request: QueryRequest) -> Result<QueryResult, OwnedRunError> {
         let shared = self.shared.upgrade().ok_or(OwnedRunError::Closed)?;
         let job = {
             let mut state = shared.lock();
@@ -178,9 +199,22 @@ impl OwnedRunObserver {
         #[cfg(test)]
         shared.hooks.before_query();
         let proof = job.proof.as_ref().expect("registered proof");
-        let result = match protocol {
-            QueryProtocol::Tcp => require_owned_tcp_listener(proof, endpoint),
-            QueryProtocol::Udp => require_owned_udp_binding(proof, endpoint),
+        let result = match request {
+            QueryRequest::Tcp(endpoint) => match require_owned_tcp_listener(proof, endpoint) {
+                Ok(()) => Ok(QueryResult::Tcp),
+                Err(error) => Err(error),
+            },
+            QueryRequest::Udp(endpoint) => match require_owned_udp_binding(proof, endpoint) {
+                Ok(()) => Ok(QueryResult::Udp),
+                Err(error) => Err(error),
+            },
+            #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+            QueryRequest::UdpLoopbackBinding(endpoint) => {
+                match require_owned_udp_loopback_binding(proof, endpoint) {
+                    Ok(representation) => Ok(QueryResult::UdpLoopbackBinding(representation)),
+                    Err(error) => Err(error),
+                }
+            }
         }
         .map_err(OwnedRunError::Discovery);
         #[cfg(test)]
@@ -196,9 +230,19 @@ impl OwnedRunObserver {
     }
 }
 
-enum QueryProtocol {
+// Explicit, closed dispatches share the same reservation, original proof,
+// QueryJob and final stop gate. There is no callback or per-protocol slot.
+enum QueryRequest {
+    Tcp(SocketAddr),
+    Udp(SocketAddr),
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    UdpLoopbackBinding(SocketAddrV4),
+}
+enum QueryResult {
     Tcp,
     Udp,
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    UdpLoopbackBinding(UdpLoopbackRepresentation),
 }
 #[allow(dead_code)] // Completion is reserved for the future trusted producer.
 impl OwnedRunCompletion {

@@ -37,6 +37,19 @@ pub(crate) fn require_owned_udp_binding(
     udp::require_owned_udp_binding(proof, endpoint)
 }
 
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+pub(crate) use udp::loopback::UdpLoopbackRepresentation;
+
+/// Samples both UDP families using the explicit voice-lab policy. Only a unique
+/// literal IPv4 row is qualified; mapped classification remains unavailable.
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+pub(crate) fn require_owned_udp_loopback_binding(
+    proof: &OwnedChildProof,
+    endpoint: std::net::SocketAddrV4,
+) -> Result<UdpLoopbackRepresentation, DiscoveryError> {
+    udp::loopback::require_owned_udp_loopback_binding(proof, endpoint)
+}
+
 /// Exact literal-loopback TCP sample of the original child. This does not
 /// normalize wildcard/mapped addresses or confer transport/readiness authority.
 #[cfg(all(windows, feature = "connect-lab"))]

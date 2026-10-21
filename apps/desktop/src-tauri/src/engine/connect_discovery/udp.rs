@@ -18,6 +18,9 @@ const MAX_BYTES: usize = 1024 * 1024;
 const MAX_ROWS: usize = 16384;
 const FILL_ATTEMPTS: usize = 2;
 
+#[cfg(feature = "connect-voice-lab")]
+pub(super) mod loopback;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Family {
     V4,

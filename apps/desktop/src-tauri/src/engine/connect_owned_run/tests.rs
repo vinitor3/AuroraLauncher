@@ -4,6 +4,10 @@ use std::time::Duration;
 mod fixture;
 mod lifecycle_gates;
 mod tcp_queries;
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+mod udp_loopback_fixture;
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+mod udp_loopback_queries;
 use fixture::{Action, Harness, WAIT};
 
 struct ReleaseGate(Arc<test_support::TestGate>);
