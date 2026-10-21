@@ -6,6 +6,10 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento77 — consulta do grupo sem reter transporte encerrado
+
+Aplicar ao ator de grupo o fechamento antecipado dos recursos enquanto a mesma consulta de origem permanece pertencente à operação. Antes de listening, todos os ingressos do roster revisado devem continuar válidos; depois, conservar as decisões individuais e fechar o conjunto somente por stop, origem perdida ou fim de todas as autoridades. Remover/dropar os owners Host/Endpoint depois de revogar e capturar consumo histórico, antes de aguardar a consulta. A flag pública de revogação continua sendo a decisão individual explícita, sem inferência pelo stop global. [Contrato77](../../aurora-connect-group-source-shutdown.md). Implementação e seis provas causais locais aprovadas, regressões486/289 no task; sem homologação de runtime ou redes.
+
 ### Incremento76 — revisão e consulta de origem sem bloquear encerramento
 
 Separar a revisão individual descoberta em reserva síncrona, worker bloqueante próprio e publicação condicionada ao mesmo Attempt/geração/fase/prazo. Manter o draft no manager durante a consulta permite removê-lo ao parar sem restauração tardia. O retorno público continua `ConnectReview`; manual não exige consulta Windows. Admissão/sessão nascem após a consulta e os gates, enquanto o preparo60s conserva sua âncora. A perda do waiter não provoca emissão nova nem libera trabalho próprio. Falha de origem após reserva encerra a tentativa, exigindo novo preparo.

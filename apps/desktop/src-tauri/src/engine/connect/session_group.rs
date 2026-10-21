@@ -4,6 +4,11 @@
 use super::*;
 use crate::engine::connect::group_profile::GROUP_KIND;
 use std::collections::HashSet;
+#[path = "group_actor_source.rs"]
+mod actor_source;
+#[cfg(all(test, windows))]
+#[path = "group_actor_source_tests.rs"]
+mod actor_source_tests;
 
 struct GroupDraft {
     request: GroupHostRequest,
@@ -646,38 +651,18 @@ async fn run_group(
     invitations: Vec<lab::SessionInvitation>,
     #[cfg(test)] gate: Option<Arc<GroupTestGate>>,
 ) {
-    if cancel.is_cancelled()
-        || invitations
-            .iter()
-            .any(|invitation| invitation.check_admission_current().is_err())
-    {
-        close_operation(&state, &id, &cancel, None).await;
-        return;
-    }
+    use actor_source::{ActorSource, Stage};
+    let mut actor = ActorSource {
+        state: &state,
+        id: &id,
+        cancel: &cancel,
+        invitations: &invitations,
+        host: None,
+    };
     let source = draft.source.clone();
-    if group_source::recheck(
-        source.clone(),
-        #[cfg(test)]
-        None,
-    )
-    .await
-    .is_err()
-    {
-        close_operation(
-            &state,
-            &id,
-            &cancel,
-            (!cancel.is_cancelled()).then_some(ConnectError::SourceChanged),
-        )
-        .await;
-        return;
-    }
-    if cancel.is_cancelled()
-        || invitations
-            .iter()
-            .any(|invitation| invitation.check_admission_current().is_err())
-    {
-        close_operation(&state, &id, &cancel, None).await;
+    let (checked, interrupted) = actor.recheck(&source, Stage::BeforeBind).await;
+    if checked.is_err() || interrupted || !actor.strict_current() {
+        close_operation(&state, &id, &cancel, checked.err()).await;
         return;
     }
     let config = lab::HostConfig {
@@ -704,7 +689,7 @@ async fn run_group(
                 .await
         }
     };
-    let host = match result {
+    actor.host = Some(match result {
         Ok(host) => Arc::new(host),
         Err(_) => {
             close_operation(
@@ -716,59 +701,46 @@ async fn run_group(
             .await;
             return;
         }
-    };
+    });
     #[cfg(test)]
     if let Some(gate) = gate {
         gate.entered.notify_one();
         gate.release.notified().await;
     }
-    let mut final_error = None;
-    if !cancel.is_cancelled()
-        && invitations
-            .iter()
-            .all(|invitation| invitation.check_admission_current().is_ok())
-    {
+    let (checked, interrupted) = actor.recheck(&source, Stage::AfterBind).await;
+    let mut final_error = checked.err();
+    let mut published = false;
+    if final_error.is_none() && !interrupted && actor.strict_current() {
         update(&state, &id, |a| {
-            if a.snapshot.phase == "starting" && !a.cancel.is_cancelled() {
+            if a.snapshot.phase == "starting" && !a.cancel.is_cancelled() && actor.strict_current()
+            {
                 if let Some(group) = a.group.as_mut() {
-                    group.host = Some(host.clone());
+                    group.host = actor.host.clone();
                     a.snapshot.phase = "hostListening";
                     a.snapshot.transport_state = "listening";
+                    published = true;
                 }
             }
         });
+    }
+    if published {
         let mut tick = tokio::time::interval(Duration::from_millis(100));
         let mut source_tick = tokio::time::interval(Duration::from_secs(1));
         loop {
             tokio::select! {
                 _=cancel.cancelled()=>break,
                 _=source_tick.tick()=> {
-                    #[cfg(test)] let gate = lock(&state).ok().and_then(|state| state.attempt.as_ref().and_then(|a| a.group_source.as_ref()).and_then(|work| work.hooks.monitor.clone()));
-                    // Await the real query even if stop arrives during it. The
-                    // Host actor remains owned until this query has returned.
-                    if group_source::recheck(source.clone(), #[cfg(test)] gate).await.is_err() {
-                        if !cancel.is_cancelled() { final_error = Some(ConnectError::SourceChanged); }
-                        break;
-                    }
+                    let (checked, interrupted) = actor.recheck(&source, Stage::Monitor).await;
+                    if let Err(error) = checked { final_error = Some(error); break; }
+                    if interrupted { break; }
                 }
                 _=tick.tick()=> {
-                    let done=lock(&state).map(|mut state|state.attempt.as_mut().is_none_or(|a|a.snapshot.operation_id.as_deref()!=Some(&id)||a.snapshot.phase!="hostListening"||refresh(a))).unwrap_or(true);
-                    if done {break;}
+                    if !actor.monitor_current() {break;}
                 }
             }
         }
     }
-    cancel.cancel();
-    update(&state, &id, |a| {
-        closing(a);
-        a.snapshot.phase = "closing";
-        a.snapshot.cleanup_state = "pending";
-    });
-    for invitation in &invitations {
-        host.revoke(invitation.invitation_id());
-    }
-    host.shutdown().await;
-    drop(host);
+    actor.interrupt().await;
     close_operation(&state, &id, &cancel, final_error).await;
 }
 

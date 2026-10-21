@@ -6,7 +6,9 @@ Base atualizada: `6a107b87adc4882bd464909e22650185f862ea5e`, launcher `0.1.1-alp
 
 Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../AURORA_CONNECT_SPEC.md), [proposta de ADR sem número reservado](../ADR/PROPOSAL-aurora-connect.md), [dependências e zero-spend](../AURORA_CONNECT_DEPENDENCIES.md), [diagnóstico/rastreabilidade/alterações](../../task-aur-r4-connect-v2-review.md) e [prompt Codex](../CODEX_PROMPTS/AUR-R4-CONNECT-V2.md). Requisitos explícitos da revisão V2 prevalecem sobre proibições antigas de todo relay.
 
-## Estado da execução — 15/10/2026
+## Estado da execução — 21/10/2026
+
+Incremento77/002/003/005/008 fecha o transporte do grupo durante consulta retida de origem, mantendo cleanup pertencente à operação. [Contrato77](../../aurora-connect-group-source-shutdown.md). **PROTÓTIPO**, com testes locais de dois Guests, autoridades individuais, TCP/UDP e liberação da porta antes do retorno da consulta. O roster revisado conserva o gate estrito inicial; stop não altera o histórico de revogação individual. Nenhum gate de jogo, voz, redes externas, GUI, matriz ou R3 é promovido. Comandos e resultados finais no task.
 
 Incremento76/002/003/005/008 trata revisão individual com trabalho próprio e cancelamento do Host durante consultas de origem. [Contrato76](../../aurora-connect-owned-source-review.md). **PROTÓTIPO**, provas nativas locais/DOM/build e revisão aprovados; interface mantém revisão explícita e ignora respostas atrasadas. Primeiras falhas e correções preservadas no task. Sem ampliar prazos, perfis, matriz ou gates. Grupo, redes externas e áudio conservam validação própria.
 

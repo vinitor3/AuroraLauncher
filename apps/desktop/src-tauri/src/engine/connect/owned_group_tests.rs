@@ -682,7 +682,16 @@ async fn owned_group_monitor_query_survives_lost_stop_waiter_until_cleanup() {
     first.abort();
     assert!(first.await.unwrap_err().is_cancelled());
     assert_eq!(manager.snapshot("main").unwrap().cleanup_state, "pending");
-    assert!(std::net::UdpSocket::bind(bind).is_err());
+    //77 keeps the query owned, but now releases transport before it returns.
+    let released_port = bounded(async {
+        loop {
+            if let Ok(socket) = std::net::UdpSocket::bind(bind) {
+                break socket;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
     assert!(matches!(
         manager.prepare_session_group_host_discovered(
             "main",
@@ -695,6 +704,7 @@ async fn owned_group_monitor_query_survives_lost_stop_waiter_until_cleanup() {
     gate.release();
     let closed = stopped(&manager, &id).await;
     assert!(closed.error_code.is_none());
+    drop(released_port);
     assert!(std::net::UdpSocket::bind(bind).is_ok());
     assert!(DiscoveryManager::default()
         .inventory("main", fixture.proof())

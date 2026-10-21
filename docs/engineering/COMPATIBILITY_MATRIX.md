@@ -1,6 +1,8 @@
 # Compatibility Matrix
 
-## Aurora Connect V2 — evidências até 15/10/2026
+## Aurora Connect V2 — evidências até 21/10/2026
+
+Incremento77: grupo encerra TCP/UDP e libera Host/Endpoint antes de aguardar consulta de origem pendente. [Contrato77](../aurora-connect-group-source-shutdown.md). **PROTÓTIPO**, com provas locais de autoridades individuais e três agentes sintéticos; sem promoção de GUI, Minecraft LAN, dois jogadores, Core/Skins, redes externas ou áudio. Os nove pares e os gates existentes permanecem.
 
 Incremento76: revisão e consultas de origem do Host individual com encerramento independente da demora da consulta. [Contrato76](../aurora-connect-owned-source-review.md). **PROTÓTIPO**, testes nativos locais/DOM/build e revisão aprovados, incluindo liberação real da porta antes de terminar a consulta. Nenhuma célula de Minecraft, Core/Skins, GUI, rede ou áudio é promovida; o monitor de grupo permanece separado.
 

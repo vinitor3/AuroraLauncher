@@ -4,6 +4,8 @@ Reconciliação: 29/09/2026, base cumulativa alpha.14 em `5ac2f7e288e77fbb0d5c0d
 
 ## 1. Escopo e autoridade
 
+Incremento77 estende o encerramento durante consulta ao ator de grupo. [Contrato77](../aurora-connect-group-source-shutdown.md). O transporte fecha e libera seus owners antes de aguardar a mesma consulta, enquanto cleanup continua pendente. Preserva o roster estrito antes da publicação, autoridades individuais depois dela e histórico cumulativo de consumo/revogação explícita. **PROTÓTIPO**, com provas locais e revisão independente; não amplia homologação de Minecraft, voz ou redes. Evidências e regressão no task.
+
 Incremento76 separa a revisão individual descoberta da consulta bloqueante e conserva seu trabalho no Attempt, inclusive após perda da resposta. As consultas do ator individual observam cancelamento/autoridade e soltam o Host/Endpoint antes de aguardar consulta pendente. [Contrato76](../aurora-connect-owned-source-review.md). Estado **PROTÓTIPO**, testes locais e revisão aprovados; formatos, prazos e aprovação por digest preservados, sem homologação adicional. O monitor de grupo é escopo posterior separado.
 
 Incremento75 corrige a propriedade do preparo descoberto individual48/56/64, reservando a operação antes das consultas. `pendingHostSource` observa trabalho sem chave/socket; três comandos e retorno `ConnectPreparation` preservados. [Contrato75](../aurora-connect-discovery-lifecycle.md). Worker, prazo60s e seleção30s originais independem do waiter IPC; cancelamento/troca de conta aguardam término real. Nova seleção após rejeição exige prova atualizada do manager, nunca reenvio automático. **PROTÓTIPO**, sem ampliar perfis ou homologar GUI, jogo, áudio ou rede externa; provas finais registradas no task.

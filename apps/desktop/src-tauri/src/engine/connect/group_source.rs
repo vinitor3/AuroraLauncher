@@ -58,24 +58,6 @@ pub(super) fn begin_review(a: &Attempt) -> Result<Option<ReviewGuard>, ConnectEr
         .map_err(|_| ConnectError::Busy)?;
     Ok(Some(ReviewGuard(work.review_active.clone())))
 }
-pub(super) async fn recheck(
-    source: TargetGuard,
-    #[cfg(test)] gate: Option<Arc<SourceGate>>,
-) -> Result<(), ConnectError> {
-    if matches!(source, TargetGuard::Manual) {
-        return Ok(());
-    }
-    tokio::task::spawn_blocking(move || {
-        #[cfg(test)]
-        if let Some(gate) = gate {
-            gate.wait();
-        }
-        source.recheck().map(|_| ())
-    })
-    .await
-    .map_err(|_| ConnectError::Internal)?
-}
-
 #[cfg(test)]
 #[derive(Clone, Default)]
 pub(super) struct SourceHooks {
@@ -83,6 +65,11 @@ pub(super) struct SourceHooks {
     pub(super) published: Option<Arc<SourceGate>>,
     pub(super) review: Option<Arc<SourceGate>>,
     pub(super) monitor: Option<Arc<SourceGate>>,
+    pub(super) before_bind: Option<Arc<SourceGate>>,
+    pub(super) after_bind: Option<Arc<SourceGate>>,
+    pub(super) panic_before_bind: bool,
+    pub(super) panic_after_bind: bool,
+    pub(super) panic_monitor: bool,
 }
 #[cfg(test)]
 #[derive(Default)]
