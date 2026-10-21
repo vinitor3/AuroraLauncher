@@ -1,4 +1,8 @@
 use super::eula::AppliedEula;
+#[cfg(test)]
+use super::manifest::decode_manifest;
+pub(super) use super::manifest::Manifest;
+use super::manifest::{read_manifest, ManifestKind, ManifestV1};
 use super::*;
 use crate::engine::{
     acquire_instance_mutation_lock, acquire_instance_recovery_lock, ContentUpdateError,
@@ -203,7 +207,7 @@ impl FactoryPlan {
                 name,
             });
         }
-        let manifest = Manifest {
+        let manifest = Manifest::StatusV1(ManifestV1 {
             schema: 1,
             id: self.id,
             lab_identity: directory_identity(&self.lab)?,
@@ -218,7 +222,7 @@ impl FactoryPlan {
             resources: self.resources.records.clone(),
             installed,
             provenance,
-        };
+        });
         publish(&bundle_path.join("bundle.json"), &manifest)?;
         let tx = bundle_path.join("eula-transaction");
         fs::create_dir(&tx)?;
@@ -260,9 +264,10 @@ impl PreparedStatus {
         &self.review
     }
     pub(crate) fn bundle_id(&self) -> BundleId {
-        self.bundle.manifest.id
+        self.bundle.manifest.id()
     }
     pub(super) fn apply_eula(self, expected: &str) -> Result<AppliedEula> {
+        self.bundle.manifest.status_v1()?;
         approve(&self.review, self.deadline, expected)?;
         self.resources.recheck()?;
         self.bundle.validate(&self.guard)?;
@@ -294,24 +299,6 @@ impl PreparedStatus {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Manifest {
-    pub schema: u32,
-    pub id: BundleId,
-    pub lab_identity: FileIdentity,
-    pub bundle_identity: FileIdentity,
-    pub native_identity: FileIdentity,
-    pub copy_id: String,
-    pub copy_uuid: String,
-    pub origin_uuid: String,
-    pub copy_identity: String,
-    pub origin_identity: String,
-    pub origin_fingerprint: String,
-    pub resources: Vec<resources::ResourceRecord>,
-    pub installed: Vec<resources::ResourceRecord>,
-    pub provenance: Vec<resources::ResourceRecord>,
-}
 fn provenance_names(copy_id: &str) -> Result<Vec<String>> {
     let uuid = copy_id
         .strip_prefix("aurora-test-")
@@ -343,23 +330,28 @@ impl Bundle {
         let path = lab.join(format!("native-status-{}", id.0));
         let mut pins = recovery::pin_directory(&path)?;
         let native = internal_directory(&path.join("native"), &mut pins)?;
-        let manifest: Manifest = read_json(&path.join("bundle.json"))?;
-        if manifest.schema != 1
-            || manifest.id != id
-            || manifest.lab_identity != directory_identity(lab)?
-            || manifest.bundle_identity != directory_identity(&path)?
-            || manifest.native_identity != directory_identity(&native)?
-            || manifest.copy_uuid == manifest.origin_uuid
-            || Uuid::parse_str(&manifest.copy_uuid).is_err()
-            || Uuid::parse_str(&manifest.origin_uuid).is_err()
-            || manifest.installed.len() != 9
-            || manifest.resources.len() != 11
-            || manifest.provenance.len() != 6
+        let manifest = read_manifest(&path.join("bundle.json"))?;
+        // B1 recognizes the closed V2 wire format, but no V2 bundle can acquire
+        // file pins, Recovery/EULA authority or an execution preparation yet.
+        if manifest.kind() != ManifestKind::StatusV1 {
+            return Err(Error::Identity);
+        }
+        if manifest.schema() != 1
+            || manifest.id() != id
+            || manifest.lab_identity() != &directory_identity(lab)?
+            || manifest.bundle_identity() != &directory_identity(&path)?
+            || manifest.native_identity() != &directory_identity(&native)?
+            || manifest.copy_uuid() == manifest.origin_uuid()
+            || Uuid::parse_str(manifest.copy_uuid()).is_err()
+            || Uuid::parse_str(manifest.origin_uuid()).is_err()
+            || manifest.installed().len() != 9
+            || manifest.resources().len() != 11
+            || manifest.provenance().len() != 6
         {
             return Err(Error::Identity);
         }
         let layout = InstanceLayout::new(&native);
-        let copy = layout.open(InstanceId::parse(&manifest.copy_id).map_err(|_| Error::Identity)?);
+        let copy = layout.open(InstanceId::parse(manifest.copy_id()).map_err(|_| Error::Identity)?);
         if !diagnostic_lab::is_lab_candidate(&copy) {
             return Err(Error::Identity);
         }
@@ -380,9 +372,10 @@ impl Bundle {
         Ok(result)
     }
     fn pin_files(&mut self) -> Result<()> {
+        self.manifest.status_v1()?;
         self._files
             .push(recovery::secure_open(&self.path.join("bundle.json"))?);
-        for record in &self.manifest.installed {
+        for record in self.manifest.installed() {
             if !resources::artifact_name(&record.name) {
                 return Err(Error::Identity);
             }
@@ -391,7 +384,7 @@ impl Bundle {
         }
         let expected = provenance_names(self.copy.id().as_str())?;
         let mut names = std::collections::BTreeSet::new();
-        for record in &self.manifest.provenance {
+        for record in self.manifest.provenance() {
             if !expected.contains(&record.name) || !names.insert(&record.name) {
                 return Err(Error::Identity);
             }
@@ -401,21 +394,23 @@ impl Bundle {
         Ok(())
     }
     pub fn validate(&self, guard: &InstanceMutationGuard) -> Result<()> {
+        self.manifest.status_v1()?;
         if self.path
             != self
                 .lab
-                .join(format!("native-status-{}", self.manifest.id.0))
+                .join(format!("native-status-{}", self.manifest.id().0))
             || !diagnostic_lab::is_lab_candidate(&self.copy)
-            || directory_identity(&self.lab)? != self.manifest.lab_identity
-            || directory_identity(&self.path)? != self.manifest.bundle_identity
-            || directory_identity(&self.native)? != self.manifest.native_identity
-            || self.manifest.installed.len() != 9
-            || self.manifest.resources.len() != 11
-            || self.manifest.provenance.len() != 6
+            || &directory_identity(&self.lab)? != self.manifest.lab_identity()
+            || &directory_identity(&self.path)? != self.manifest.bundle_identity()
+            || &directory_identity(&self.native)? != self.manifest.native_identity()
+            || self.manifest.installed().len() != 9
+            || self.manifest.resources().len() != 11
+            || self.manifest.provenance().len() != 6
         {
             return Err(Error::Identity);
         }
-        let actual: Manifest = read_json(&self.path.join("bundle.json"))?;
+        let actual = read_manifest(&self.path.join("bundle.json"))?;
+        actual.status_v1()?;
         if actual != self.manifest {
             return Err(Error::Changed);
         }
@@ -432,17 +427,17 @@ impl Bundle {
         recovery::with_existing_observation(&self.copy, guard, |observation| {
             diagnostic_lab::ensure_launchable(&self.copy)?;
             let origin = diagnostic_lab::origin_instance(&self.native, &self.copy)?;
-            if observation.instance_uuid != self.manifest.copy_uuid
+            if observation.instance_uuid != self.manifest.copy_uuid()
                 || origin.id() != self.origin.id()
-                || recovery::filesystem_identity(&self.copy)? != self.manifest.copy_identity
-                || recovery::filesystem_identity(&origin)? != self.manifest.origin_identity
+                || recovery::filesystem_identity(&self.copy)? != self.manifest.copy_identity()
+                || recovery::filesystem_identity(&origin)? != self.manifest.origin_identity()
                 || recovery::identity_lookup(&origin)?.as_deref()
-                    != Some(self.manifest.origin_uuid.as_str())
+                    != Some(self.manifest.origin_uuid())
             {
                 return Err(recovery::RecoveryError::Identity);
             }
             recovery::with_existing_observation(&origin, &source_guard, |source| {
-                if source.fingerprint != self.manifest.origin_fingerprint {
+                if source.fingerprint != self.manifest.origin_fingerprint() {
                     return Err(recovery::RecoveryError::OriginChanged);
                 }
                 Ok(())
@@ -468,7 +463,7 @@ impl Bundle {
             return Err(Error::Changed);
         }
         let mut names = std::collections::BTreeSet::new();
-        for record in &self.manifest.installed {
+        for record in self.manifest.installed() {
             if !resources::artifact_name(&record.name)
                 || !names.insert(record.name.clone())
                 || record.observation.bytes > 64 * 1024 * 1024
@@ -483,7 +478,7 @@ impl Bundle {
         }
         let expected = provenance_names(self.copy.id().as_str())?;
         let mut names = std::collections::BTreeSet::new();
-        for record in &self.manifest.provenance {
+        for record in self.manifest.provenance() {
             if !expected.contains(&record.name)
                 || !names.insert(&record.name)
                 || record.observation.bytes > 1024 * 1024
@@ -508,7 +503,7 @@ impl Bundle {
 
 #[cfg(test)]
 pub(super) fn roundtrip_manifest_for_test(bytes: &[u8]) -> Result<Vec<u8>> {
-    let manifest: Manifest = serde_json::from_slice(bytes).map_err(|_| Error::Identity)?;
+    let manifest = decode_manifest(bytes)?;
     encode(&manifest)
 }
 

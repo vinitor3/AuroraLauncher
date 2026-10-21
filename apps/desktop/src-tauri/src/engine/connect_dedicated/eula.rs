@@ -175,7 +175,7 @@ pub(super) fn execution_review(
             review_id,
             digest: digest_observations(bundle, review_id, &observations)?,
             purpose: "native_status_eula",
-            bundle_id: bundle.manifest.id,
+            bundle_id: bundle.manifest.id(),
             before: String::from_utf8_lossy(EULA_FALSE).into(),
             after: format!(
                 "{}Restauração byte-exata do original após o término próprio.",
@@ -249,7 +249,7 @@ fn read_state(bundle: &Bundle) -> Result<State> {
     let names = names(bundle)?;
     let claim: Claim = read_json(&bundle.transaction.join(CLAIM))?;
     if claim.schema != 1
-        || claim.bundle != bundle.manifest.id
+        || claim.bundle != bundle.manifest.id()
         || claim.manifest_sha256 != digest(&encode(&bundle.manifest)?)
         || claim.original.bytes != EULA_FALSE.len() as u64
         || claim.original.sha256 != digest(EULA_FALSE)
@@ -471,7 +471,7 @@ fn apply_reviewed(prepared: PreparedStatus, review: ApplyReview<'_>) -> Result<A
     let transaction = Uuid::new_v4();
     let claim = Claim {
         schema: 1,
-        bundle: bundle.manifest.id,
+        bundle: bundle.manifest.id(),
         transaction,
         manifest_sha256: digest(&encode(&bundle.manifest)?),
         review_digest: review.digest().into(),
@@ -721,11 +721,11 @@ pub(super) fn prepare_recovery(
             1,
             "native_status_eula_recovery",
             review_id,
-            bundle.manifest.id,
+            bundle.manifest.id(),
             &state.digest,
         ))?),
         purpose: "native_status_eula_recovery",
-        bundle_id: bundle.manifest.id,
+        bundle_id: bundle.manifest.id(),
         before: format!("{:?}", state.physical),
         after: String::from_utf8_lossy(EULA_FALSE).into(),
         details: vec![
@@ -801,8 +801,8 @@ pub(super) fn replay_eula_input_for_test(
     if schema != 1 || purpose != "native_status_eula" {
         return Err(Error::Identity);
     }
-    let manifest: factory::Manifest =
-        serde_json::from_slice(manifest_bytes).map_err(|_| Error::Identity)?;
+    let manifest = super::manifest::decode_manifest(manifest_bytes)?;
+    manifest.status_v1()?;
     let observations: ApprovedFiles =
         serde_json::from_slice(approved_bytes).map_err(|_| Error::Identity)?;
     // Same original UUID/observations, current production encoder. IgnoredAny

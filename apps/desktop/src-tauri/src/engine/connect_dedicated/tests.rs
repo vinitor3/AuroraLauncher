@@ -11,6 +11,8 @@ mod files;
 mod fixture;
 #[path = "tests/hardening.rs"]
 mod hardening;
+#[path = "tests/manifest_gates.rs"]
+mod manifest_gates;
 #[path = "tests/probe.rs"]
 mod probe;
 #[path = "tests/producer_boot_bounds.rs"]

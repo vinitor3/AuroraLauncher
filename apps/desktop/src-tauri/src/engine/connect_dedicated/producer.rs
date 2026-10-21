@@ -136,6 +136,7 @@ pub(super) struct Recipe {
 }
 impl Recipe {
     fn production(prepared: &factory::PreparedStatus) -> Result<Self> {
+        prepared.bundle.manifest.status_v1()?;
         Self::production_paths(
             &prepared.resources,
             prepared.bundle.copy.root().to_path_buf(),
@@ -263,6 +264,7 @@ fn execution_digest_input(
 
 #[allow(dead_code)] // Explicit internal execution plan; no IPC or automatic caller.
 pub(crate) fn plan(prepared: factory::PreparedStatus) -> RunResult<DedicatedPlan> {
+    prepared.bundle.manifest.status_v1()?;
     let recipe = Recipe::production(&prepared)?;
     #[cfg(test)]
     let hooks = Arc::new(TestHooks::default());
@@ -760,8 +762,8 @@ pub(super) fn replay_status_input_for_test(
     if schema != 1 || purpose != PURPOSE {
         return Err(Error::Identity);
     }
-    let manifest: factory::Manifest =
-        serde_json::from_slice(manifest_bytes).map_err(|_| Error::Identity)?;
+    let manifest = super::manifest::decode_manifest(manifest_bytes)?;
+    manifest.status_v1()?;
     // These are the private Fixture's fixed paths. The captured recipe/argv is
     // ignored; java still comes only from newly verified Resources, and the
     // same private compiled builder is called by Recipe::production above.

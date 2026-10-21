@@ -17,10 +17,14 @@ use uuid::Uuid;
 mod eula;
 #[path = "connect_dedicated/factory.rs"]
 mod factory;
+#[path = "connect_dedicated/manifest.rs"]
+mod manifest;
 #[path = "connect_dedicated/producer.rs"]
 mod producer;
 #[path = "connect_dedicated/resources.rs"]
 mod resources;
+#[path = "connect_dedicated/voice_profile.rs"]
+mod voice_profile;
 
 #[cfg(test)]
 use eula::EulaOutcome;
@@ -41,6 +45,7 @@ pub(crate) fn plan_eula_recovery(id: BundleId) -> Result<EulaRecoveryPlan> {
 pub(crate) fn plan_status_execution(
     prepared: factory::PreparedStatus,
 ) -> std::result::Result<producer::DedicatedPlan, producer::DedicatedError> {
+    prepared.bundle.manifest.status_v1()?;
     producer::plan(prepared)
 }
 
