@@ -1,6 +1,8 @@
 //! Native ownership of one trusted Child. This is lifecycle infrastructure,
 //! not a Java launch plan, copy/provenance check or voice readiness claim.
-use super::connect_discovery::{require_owned_udp_binding, DiscoveryError, OwnedChildProof};
+use super::connect_discovery::{
+    require_owned_tcp_listener, require_owned_udp_binding, DiscoveryError, OwnedChildProof,
+};
 use std::{
     net::SocketAddr,
     process::Command,
@@ -142,6 +144,14 @@ impl Drop for OwnedRun {
 #[allow(dead_code)] // Internal read-only entry point; no caller in this increment.
 impl OwnedRunObserver {
     pub(crate) fn observe_udp(&self, endpoint: SocketAddr) -> Result<(), OwnedRunError> {
+        self.observe(endpoint, QueryProtocol::Udp)
+    }
+
+    pub(crate) fn observe_tcp(&self, endpoint: SocketAddr) -> Result<(), OwnedRunError> {
+        self.observe(endpoint, QueryProtocol::Tcp)
+    }
+
+    fn observe(&self, endpoint: SocketAddr, protocol: QueryProtocol) -> Result<(), OwnedRunError> {
         let shared = self.shared.upgrade().ok_or(OwnedRunError::Closed)?;
         let job = {
             let mut state = shared.lock();
@@ -161,9 +171,12 @@ impl OwnedRunObserver {
         };
         #[cfg(test)]
         shared.hooks.before_query();
-        let result =
-            require_owned_udp_binding(job.proof.as_ref().expect("registered proof"), endpoint)
-                .map_err(OwnedRunError::Discovery);
+        let proof = job.proof.as_ref().expect("registered proof");
+        let result = match protocol {
+            QueryProtocol::Tcp => require_owned_tcp_listener(proof, endpoint),
+            QueryProtocol::Udp => require_owned_udp_binding(proof, endpoint),
+        }
+        .map_err(OwnedRunError::Discovery);
         #[cfg(test)]
         shared.hooks.after_query(result.is_ok());
         // The decision, not the later machine instruction returning to the
@@ -175,6 +188,11 @@ impl OwnedRunObserver {
         }
         result
     }
+}
+
+enum QueryProtocol {
+    Tcp,
+    Udp,
 }
 #[allow(dead_code)] // Completion is reserved for the future trusted producer.
 impl OwnedRunCompletion {

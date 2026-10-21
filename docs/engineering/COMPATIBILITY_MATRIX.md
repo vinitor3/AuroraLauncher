@@ -4,6 +4,8 @@
 
 Incremento84 **PARCIAL**: prelude de correção do readerTCP Windows,8 focais/545 regressão PASS, sem Java/Minecraft/voz/GUI/rede externa novos. [Contrato84](../aurora-connect-dedicated-status.md). Tabelas sintéticas e sockets locais reais não validam servidor dedicado, configuração viva, SVC ou Plasmo. Nenhuma célula dos nove pares é promovida; EULA/produtor/fonteTCP sob83 seguem em implementação.
 
+84B comprova consultaTCP literal/exata do mesmo Child83 e limite compartilhado com UDP:29 focais PASS/1 helper ignorado, fixtures reaisV4/V6, sem Java/áudio/GUI/rede novos. Isso não promove dedicado/Minecraft, SVC, Plasmo ou matriz; EULA/produtor ainda não registrados neste checkpoint.
+
 Incremento83: supervisor nativo de Child próprio, com23 focais/537 regressão PASS e correção causal de saída precoce. [Contrato83](../aurora-connect-native-owned-run.md). **PROTÓTIPO**, bytesTCP/UDP loopbackV4/V6 de fixtures e consultaOS, sem Java/Minecraft/mod/áudio. Não promove qualquer célula dos nove pares, GUI ou rede; produtor dedicado e vínculo em execução permanecem separados. Defaults preservados.
 
 Incremento82: consulta interna de binding UDP do Child próprio no Windows. [Contrato82](../aurora-connect-owned-udp-binding.md). **PROTÓTIPO**,19 focais e514 regressão PASS; V4/V6 loopback com filhos de teste próprios. Não há Java/mod/áudio, produtor dedicado, GUI ou nova topologia. Nenhuma célula de Minecraft, Core/Skins, SVC ou Plasmo é promovida; nove pares preservados.

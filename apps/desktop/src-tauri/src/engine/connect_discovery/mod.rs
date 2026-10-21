@@ -15,6 +15,8 @@ use std::{
 };
 
 #[cfg(all(windows, feature = "connect-lab"))]
+mod tcp;
+#[cfg(all(windows, feature = "connect-lab"))]
 mod udp;
 #[cfg(all(windows, feature = "connect-lab"))]
 mod windows;
@@ -33,6 +35,16 @@ pub(crate) fn require_owned_udp_binding(
     endpoint: SocketAddr,
 ) -> Result<(), DiscoveryError> {
     udp::require_owned_udp_binding(proof, endpoint)
+}
+
+/// Exact literal-loopback TCP sample of the original child. This does not
+/// normalize wildcard/mapped addresses or confer transport/readiness authority.
+#[cfg(all(windows, feature = "connect-lab"))]
+pub(crate) fn require_owned_tcp_listener(
+    proof: &OwnedChildProof,
+    endpoint: SocketAddr,
+) -> Result<(), DiscoveryError> {
+    tcp::require_owned_tcp_listener(proof, endpoint)
 }
 
 #[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq)]

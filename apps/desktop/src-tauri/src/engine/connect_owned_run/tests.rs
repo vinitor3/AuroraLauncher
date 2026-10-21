@@ -3,6 +3,7 @@ use std::time::Duration;
 
 mod fixture;
 mod lifecycle_gates;
+mod tcp_queries;
 use fixture::{Action, Harness, WAIT};
 
 struct ReleaseGate(Arc<test_support::TestGate>);

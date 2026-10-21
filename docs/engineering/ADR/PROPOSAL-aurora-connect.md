@@ -8,6 +8,8 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ### Incremento84 — produtor STATUS privado por checkpoints
 
+Checkpoint84B compartilha queryJob83 integralmente entre TCP e UDP, sem novo owner/slot/callback. ObservaçãoTCP exige literal loopback exato e revalida original antes/depois; sela decisões tardias e mantém cleanup pendente sem atrasar reap/readers.29 focais/checks/QA aprovados; não é prontidão contínua do socket, autoridade Connect ou produtorJava. Não alterar UDP82/política48/64 por essa integração.
+
 Contrato antes do código, com factory em Root privado novo, cópia/proveniência real, EULA por slots duráveis e recovery com VoiceMutationGuard/revisão novos, original completion83 e provaTCP própria antes/depois de STATUS. [Contrato84](../../aurora-connect-dedicated-status.md). **PARCIAL**: prelude executado corrige somente bounds/scope/pós-proof do readerTCP,8 focais/545 regressão e checks/QA. Não importar autoridade por JSON/PID Node, aplicar a Instance pessoal ou promover Java/voz/GUI por esses testes. Uso único pertence à factory privada; futura exposição no Root/UI comum exige gate próprio. Sem novo caller de produto nesta fase.
 
 ### Incremento83 — ownership de execução nativa antes do produtor dedicado
