@@ -1,6 +1,8 @@
 use super::*;
 use std::sync::{atomic::Ordering, Arc};
 
+#[path = "tests/actual_producer.rs"]
+mod actual_producer;
 #[path = "tests/actual_resources.rs"]
 mod actual_resources;
 #[path = "tests/files.rs"]
@@ -11,6 +13,16 @@ mod fixture;
 mod hardening;
 #[path = "tests/probe.rs"]
 mod probe;
+#[path = "tests/producer_boot_bounds.rs"]
+mod producer_boot_bounds;
+#[path = "tests/producer_fixture.rs"]
+mod producer_fixture;
+#[path = "tests/producer_hardening.rs"]
+mod producer_hardening;
+#[path = "tests/producer_lifecycle.rs"]
+mod producer_lifecycle;
+#[path = "tests/producer_pre_spawn.rs"]
+mod producer_pre_spawn;
 #[path = "tests/recovery_guards.rs"]
 mod recovery_guards;
 #[path = "tests/transactions.rs"]

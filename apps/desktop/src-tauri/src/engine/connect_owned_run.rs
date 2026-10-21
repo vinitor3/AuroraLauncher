@@ -12,8 +12,14 @@ use std::{
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(all(test, feature = "connect-voice-lab"))]
+mod dedicated_test;
 #[cfg(test)]
 mod test_support;
+#[cfg(all(test, feature = "connect-voice-lab"))]
+pub(crate) use dedicated_test::{
+    start_owned_run_dedicated_test, DedicatedTestHooks, OwnerTestGate,
+};
 #[cfg(test)]
 mod tests;
 mod worker;

@@ -70,6 +70,13 @@ pub(super) fn pins() -> Vec<Pin> {
 pub(super) fn artifact_name(name: &str) -> bool {
     ARTIFACTS.iter().any(|(candidate, _, _)| *candidate == name)
 }
+pub(super) fn status_classpath() -> String {
+    ARTIFACTS[1..]
+        .iter()
+        .map(|(name, _, _)| *name)
+        .collect::<Vec<_>>()
+        .join(";")
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -89,6 +96,13 @@ pub(super) struct Resources {
     _directories: Vec<File>,
 }
 impl Resources {
+    pub(super) fn java_executable(&self) -> Result<&Path> {
+        self.files
+            .iter()
+            .find(|pin| pin.name == "jdk/java.exe")
+            .map(|pin| pin.path.as_path())
+            .ok_or(Error::Resources)
+    }
     pub fn inspect(lab: &Path, stage: &Path, jdk: &Path, pins: Vec<Pin>) -> Result<Self> {
         explicit_path(lab)?;
         explicit_path(stage)?;

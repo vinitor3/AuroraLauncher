@@ -249,6 +249,13 @@ impl PreparedStatus {
     pub(super) fn confirm_fresh(&self, expected: &str) -> Result<()> {
         approve(&self.review, self.deadline, expected)
     }
+    pub(super) fn approval_deadline(&self) -> Instant {
+        self.deadline
+    }
+    #[cfg(test)]
+    pub(super) fn shorten_approval_for_test(&mut self, remaining: Duration) {
+        self.deadline = self.deadline.min(Instant::now() + remaining);
+    }
     #[cfg(test)]
     pub(super) fn expire_for_test(&mut self) {
         self.deadline = Instant::now() - Duration::from_secs(1);

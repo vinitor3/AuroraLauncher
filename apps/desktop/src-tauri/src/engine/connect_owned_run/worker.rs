@@ -219,6 +219,10 @@ fn spawn_reader(
             if outcome.is_err() {
                 shared.fail(OwnedRunFailure::Panic);
             }
+            // Test-only: retain the actual drained pipe/reader before its
+            // thread returns. No synthetic completion or process is supplied.
+            #[cfg(test)]
+            shared.hooks.reader_final();
         })
         .map_err(|_| OwnedRunFailure::Thread)
 }

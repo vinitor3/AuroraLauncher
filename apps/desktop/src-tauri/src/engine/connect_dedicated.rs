@@ -1,5 +1,5 @@
 //! Private diagnostic STATUS factory and its closed EULA transaction.
-//! This checkpoint does not spawn Java or expose a launcher/IPC entry point.
+//! Execution requires its own consumed review; there is no launcher/IPC entry point.
 use crate::engine::{
     diagnostic_lab, recovery, Instance, InstanceId, InstanceLayout, InstanceMutationGuard,
 };
@@ -17,6 +17,8 @@ use uuid::Uuid;
 mod eula;
 #[path = "connect_dedicated/factory.rs"]
 mod factory;
+#[path = "connect_dedicated/producer.rs"]
+mod producer;
 #[path = "connect_dedicated/resources.rs"]
 mod resources;
 
@@ -34,6 +36,12 @@ pub(crate) fn plan_status_factory(stage: &Path, jdk: &Path, accepted: bool) -> R
 #[allow(dead_code)] // Recovery is explicit; never invoked automatically at startup.
 pub(crate) fn plan_eula_recovery(id: BundleId) -> Result<EulaRecoveryPlan> {
     eula::plan_eula_recovery(id)
+}
+#[allow(dead_code)] // Explicit native execution review, separate from file-only EULA.
+pub(crate) fn plan_status_execution(
+    prepared: factory::PreparedStatus,
+) -> std::result::Result<producer::DedicatedPlan, producer::DedicatedError> {
+    producer::plan(prepared)
 }
 
 const REVIEW_TTL: Duration = Duration::from_secs(60);

@@ -64,6 +64,7 @@ pub(super) struct TestHooks {
     pub(super) before_stop_gate: Option<Arc<TestGate>>,
     pub(super) read_error_gate: Option<Arc<TestGate>>,
     pub(super) before_report_gate: Option<Arc<TestGate>>,
+    pub(super) reader_final_gate: Option<Arc<TestGate>>,
     pub(super) after_exit_gate: Option<Arc<TestGate>>,
     pub(super) init_failure: Option<InitStage>,
     pub(super) init_panic: Option<InitStage>,
@@ -136,6 +137,11 @@ impl TestHooks {
     }
     pub(super) fn before_report(&self) {
         if let Some(gate) = &self.before_report_gate {
+            gate.reach();
+        }
+    }
+    pub(super) fn reader_final(&self) {
+        if let Some(gate) = &self.reader_final_gate {
             gate.reach();
         }
     }

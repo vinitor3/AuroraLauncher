@@ -2,6 +2,9 @@ use super::super::VoiceMutationGuard;
 use super::*;
 use factory::{Bundle, PreparedStatus};
 
+#[path = "producer_worker.rs"]
+pub(super) mod producer_worker;
+
 const CLAIM: &str = "claim.json";
 const INTENT: &str = "intent.json";
 const SNAPSHOT: &str = "snapshot.bin";
@@ -98,6 +101,7 @@ struct State {
 pub(crate) struct AppliedEula {
     prepared: PreparedStatus,
     transaction: Uuid,
+    reviewed_digest: String,
     may_have_spawned: bool,
 }
 pub(crate) struct EulaRecoveryPlan {
@@ -412,6 +416,34 @@ pub(super) fn apply(prepared: PreparedStatus, expected: &str) -> Result<AppliedE
     if expected != prepared.review_digest() {
         return Err(Error::Digest);
     }
+    apply_reviewed(prepared, ApplyReview::Files(expected))
+}
+pub(super) fn apply_execution(
+    prepared: PreparedStatus,
+    approval: &producer::ExecutionApproval,
+) -> Result<AppliedEula> {
+    approval.check(&prepared)?;
+    apply_reviewed(prepared, ApplyReview::Execution(approval))
+}
+enum ApplyReview<'a> {
+    Files(&'a str),
+    Execution(&'a producer::ExecutionApproval),
+}
+impl ApplyReview<'_> {
+    fn digest(&self) -> &str {
+        match self {
+            Self::Files(expected) => expected,
+            Self::Execution(approval) => &approval.review.digest,
+        }
+    }
+    fn check_before_claim(&self, prepared: &PreparedStatus) -> Result<()> {
+        match self {
+            Self::Files(expected) => prepared.confirm_fresh(expected),
+            Self::Execution(approval) => approval.check(prepared),
+        }
+    }
+}
+fn apply_reviewed(prepared: PreparedStatus, review: ApplyReview<'_>) -> Result<AppliedEula> {
     let bundle = &prepared.bundle;
     prepared.hooks.before_claim()?;
     absent(&bundle.transaction.join(CLAIM))?;
@@ -430,10 +462,13 @@ pub(super) fn apply(prepared: PreparedStatus, expected: &str) -> Result<AppliedE
         bundle: bundle.manifest.id,
         transaction,
         manifest_sha256: digest(&encode(&bundle.manifest)?),
-        review_digest: expected.into(),
+        review_digest: review.digest().into(),
         original,
     };
-    prepared.confirm_fresh(expected)?;
+    // The original ApprovedFiles observation is used above and remains the
+    // Claim baseline. Execution additionally rechecks its separate recipe
+    // digest and the same original deadline before the one Claim publication.
+    review.check_before_claim(&prepared)?;
     publish(&bundle.transaction.join(CLAIM), &claim)?;
     prepared.hooks.checkpoint(Step::Claim)?;
     recovery::write_new(&bundle.transaction.join(SNAPSHOT), bytes)?;
@@ -482,18 +517,30 @@ pub(super) fn apply(prepared: PreparedStatus, expected: &str) -> Result<AppliedE
     Ok(AppliedEula {
         prepared,
         transaction,
+        reviewed_digest: claim.review_digest,
         may_have_spawned: false,
     })
 }
-#[allow(dead_code)] // Private transaction operations; producer integration follows84A.
+#[allow(dead_code)] // File-only restore remains a private optional operation.
 impl AppliedEula {
+    pub(super) fn recheck_approved_properties(&self) -> Result<()> {
+        let (observed, bytes) = observe_file(
+            &self.prepared.bundle.copy.root().join("server.properties"),
+            4096,
+        )?;
+        if observed != self.prepared.approved_files.properties || bytes != resources::PROPERTIES {
+            return Err(Error::Changed);
+        }
+        Ok(())
+    }
+
     pub(super) fn restore_before_spawn(self) -> Result<EulaOutcome> {
         if self.may_have_spawned {
             return Err(Error::NeedsRecovery);
         }
         let state = read_state(&self.prepared.bundle)?;
         if state.claim.transaction != self.transaction
-            || state.claim.review_digest != self.prepared.review_digest()
+            || state.claim.review_digest != self.reviewed_digest
             || state.may_have_spawned
         {
             return Err(Error::NeedsRecovery);
@@ -510,13 +557,16 @@ impl AppliedEula {
         if self.may_have_spawned {
             return Err(Error::Consumed);
         }
+        // Preserve the same reviewed physical file without retaining a
+        // deny-write handle while Minecraft legitimately rewrites it at boot.
+        self.recheck_approved_properties()?;
         self.may_have_spawned = true;
         let bundle = &self.prepared.bundle;
         bundle.validate(&self.prepared.guard)?;
         let state = read_state(bundle)?;
         if state.physical != Physical::Applied
             || state.claim.transaction != self.transaction
-            || state.claim.review_digest != self.prepared.review_digest()
+            || state.claim.review_digest != self.reviewed_digest
         {
             return Err(Error::NeedsRecovery);
         }
@@ -531,12 +581,15 @@ impl AppliedEula {
 
 enum Authority<'a> {
     NeverSpawned(&'a InstanceMutationGuard),
+    // Only the private worker descendant constructs this after awaiting the
+    // completion it obtained from its own supervisor83 call and all84 jobs.
+    CompletedOriginalRun(&'a InstanceMutationGuard),
     Recovery(&'a VoiceMutationGuard),
 }
 impl Authority<'_> {
     fn check(&self, bundle: &Bundle) -> Result<()> {
         match self {
-            Self::NeverSpawned(guard) => bundle.validate(guard),
+            Self::NeverSpawned(guard) | Self::CompletedOriginalRun(guard) => bundle.validate(guard),
             Self::Recovery(guard) => {
                 guard.recheck()?;
                 bundle.validate(guard.inner())?;
