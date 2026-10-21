@@ -1,6 +1,6 @@
-//! Causal B1 admission gates. These real STATUS fixtures only provide a V1
-//! baseline. The V2 configuration record below is synthetic parser data: it
-//! does not identify a configuration file, authorize EULA, or admit a V2 run.
+//! Legacy B1 negatives retained after physical V2 admission in B2. These
+//! relabelled STATUS records lack the required voice artifacts and baseline.
+//! Their synthetic configuration metadata grants no EULA or run authority.
 use super::*;
 use crate::engine::connect_voice::dedicated::{manifest, voice_profile};
 use manifest::{
@@ -28,8 +28,8 @@ fn decoded_voice_manifest(prepared: &PreparedStatus, profile: StoredVoiceProfile
         copy_identity: original.copy_identity,
         origin_identity: original.origin_identity,
         origin_fingerprint: original.origin_fingerprint,
-        // Preserve V1 counts and every common identity so Identity cannot be
-        // explained by a malformed count or a different fixture directory.
+        // Preserve the original V1 counts and identities. B1 rejected its
+        // kind; B2 rejects these incomplete voice resource sets before IO.
         initial_voice_configuration: InitialVoiceConfigurationV2 {
             name: profile.configuration_name().into(),
             observation: Observation {
@@ -67,7 +67,7 @@ fn no_eula_claim(paths: &TestPaths) {
 }
 
 #[test]
-fn decoded_v2_in_memory_is_rejected_before_status_manifest_comparison_or_recovery_io() {
+fn relabelled_status_records_are_rejected_before_disk_comparison_or_recovery_io() {
     for profile in [StoredVoiceProfileV2::Svc, StoredVoiceProfileV2::Plasmo] {
         let fixture = Fixture::new();
         let mut prepared = fixture.prepared(Hooks::default());
@@ -82,8 +82,8 @@ fn decoded_v2_in_memory_is_rejected_before_status_manifest_comparison_or_recover
             prepared.bundle.validate(&prepared.guard),
             Err(Error::Identity)
         );
-        // All common IDs/counts still match, and disk contains the original
-        // valid V1. Without the early kind gate, comparison would be Changed.
+        // Disk still contains valid V1. Voice shape rejects the incomplete
+        // resource sets before that comparison, which would return Changed.
         assert_eq!(bytes(&paths.bundle.join("bundle.json")), original);
         files::assert_tree(fixture.root.path(), &before);
         no_eula_claim(&paths);
@@ -93,7 +93,7 @@ fn decoded_v2_in_memory_is_rejected_before_status_manifest_comparison_or_recover
 }
 
 #[test]
-fn persisted_decodable_v2_cannot_reopen_as_an_admitted_bundle_or_retain_file_pins() {
+fn persisted_v2_with_status_resource_counts_cannot_reopen_or_retain_file_pins() {
     for profile in [StoredVoiceProfileV2::Svc, StoredVoiceProfileV2::Plasmo] {
         let fixture = Fixture::new();
         let prepared = fixture.prepared(Hooks::default());

@@ -5,6 +5,8 @@ use std::sync::{atomic::Ordering, Arc};
 mod actual_producer;
 #[path = "tests/actual_resources.rs"]
 mod actual_resources;
+#[path = "tests/actual_voice_resources.rs"]
+mod actual_voice_resources;
 #[path = "tests/files.rs"]
 mod files;
 #[path = "tests/fixture.rs"]
@@ -31,6 +33,12 @@ mod recovery_guards;
 mod transactions;
 #[path = "tests/v1_upgrade_capture.rs"]
 mod v1_upgrade_capture;
+#[path = "tests/voice_eula.rs"]
+mod voice_eula;
+#[path = "tests/voice_factory.rs"]
+mod voice_factory;
+#[path = "tests/voice_fixture.rs"]
+mod voice_fixture;
 
 use fixture::{bytes, locked, slot, target, unlocked, Fixture};
 

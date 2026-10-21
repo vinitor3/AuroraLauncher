@@ -163,7 +163,7 @@ impl Worker {
         // the original approval after it, outside the lifecycle mutex. A
         // refusal here keeps NeedsRecovery even though83 was never dispatched.
         applied
-            .recheck_approved_properties()
+            .recheck_approved_launch_files()
             .map_err(DedicatedFailure::Preparation)?;
         // This transition precedes the call. Even an Err returned after83's
         // private cleanup never manufactures a completion or NeverCalled state.

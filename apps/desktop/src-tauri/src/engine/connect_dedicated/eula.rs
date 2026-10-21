@@ -1,6 +1,7 @@
 use super::super::VoiceMutationGuard;
 use super::*;
 use factory::{Bundle, PreparedStatus};
+use manifest::Manifest;
 
 #[path = "producer_worker.rs"]
 pub(super) mod producer_worker;
@@ -112,11 +113,58 @@ pub(crate) struct EulaRecoveryPlan {
     deadline: Instant,
     hooks: Hooks,
 }
+// This inner retains the original fields, order and serde attributes. V1
+// review preimages and the B0 persisted goldens bind these exact bytes.
 #[derive(Serialize, PartialEq, Eq)]
 #[cfg_attr(test, derive(Deserialize))]
-pub(super) struct ApprovedFiles {
+pub(super) struct ApprovedFilesV1 {
     original: Observation,
     properties: Observation,
+}
+#[derive(Serialize, PartialEq, Eq)]
+pub(super) struct ApprovedFilesV2 {
+    original: Observation,
+    properties: Observation,
+    voice_configuration: Observation,
+}
+#[derive(PartialEq, Eq)]
+pub(super) enum ApprovedFiles {
+    StatusV1(ApprovedFilesV1),
+    VoiceV2(ApprovedFilesV2),
+}
+impl Serialize for ApprovedFiles {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            Self::StatusV1(files) => files.serialize(serializer),
+            Self::VoiceV2(files) => files.serialize(serializer),
+        }
+    }
+}
+impl ApprovedFiles {
+    pub(super) fn require_manifest_kind(&self, manifest: &Manifest) -> Result<()> {
+        match (manifest, self) {
+            (Manifest::StatusV1(_), Self::StatusV1(_))
+            | (Manifest::VoiceV2(_), Self::VoiceV2(_)) => Ok(()),
+            _ => Err(Error::Identity),
+        }
+    }
+
+    fn original(&self) -> &Observation {
+        match self {
+            Self::StatusV1(files) => &files.original,
+            Self::VoiceV2(files) => &files.original,
+        }
+    }
+
+    fn properties(&self) -> &Observation {
+        match self {
+            Self::StatusV1(files) => &files.properties,
+            Self::VoiceV2(files) => &files.properties,
+        }
+    }
 }
 
 pub(super) fn execution_digest(bundle: &Bundle, review_id: Uuid) -> Result<String> {
@@ -133,10 +181,36 @@ fn execution_observations(bundle: &Bundle) -> Result<ApprovedFiles> {
     if bytes != EULA_FALSE || configuration != resources::PROPERTIES {
         return Err(Error::Changed);
     }
-    Ok(ApprovedFiles {
-        original: eula,
-        properties,
-    })
+    match &bundle.manifest {
+        Manifest::StatusV1(_) => Ok(ApprovedFiles::StatusV1(ApprovedFilesV1 {
+            original: eula,
+            properties,
+        })),
+        Manifest::VoiceV2(_) => Ok(ApprovedFiles::VoiceV2(ApprovedFilesV2 {
+            original: eula,
+            properties,
+            voice_configuration: initial_voice_configuration(bundle)?,
+        })),
+    }
+}
+
+fn initial_voice_configuration(bundle: &Bundle) -> Result<Observation> {
+    let voice = bundle.manifest.voice_v2()?;
+    // The closed profile selects the compiled path. The persisted name never
+    // chooses a join, and the persisted observation never approves a new file.
+    if voice.initial_voice_configuration.name != voice.profile.configuration_name() {
+        return Err(Error::Identity);
+    }
+    let (observed, bytes) = observe_file(
+        &bundle.copy.root().join(voice.profile.configuration_name()),
+        256 * 1024,
+    )?;
+    if observed != voice.initial_voice_configuration.observation
+        || bytes != voice.profile.configuration()
+    {
+        return Err(Error::Changed);
+    }
+    Ok(observed)
 }
 fn digest_observations(
     bundle: &Bundle,
@@ -154,14 +228,25 @@ fn eula_digest_input(
     review_id: Uuid,
     observations: &ApprovedFiles,
 ) -> Result<Vec<u8>> {
-    encode(&(
-        1,
-        "native_status_eula",
-        review_id,
-        manifest,
-        observations,
-        digest(EULA_TRUE),
-    ))
+    match (manifest, observations) {
+        (Manifest::StatusV1(_), ApprovedFiles::StatusV1(_)) => encode(&(
+            1,
+            "native_status_eula",
+            review_id,
+            manifest,
+            observations,
+            digest(EULA_TRUE),
+        )),
+        (Manifest::VoiceV2(_), ApprovedFiles::VoiceV2(_)) => encode(&(
+            2,
+            "native_voice_eula_v2",
+            review_id,
+            manifest,
+            observations,
+            digest(EULA_TRUE),
+        )),
+        _ => Err(Error::Identity),
+    }
 }
 pub(super) fn execution_review(
     bundle: &Bundle,
@@ -174,17 +259,53 @@ pub(super) fn execution_review(
         Review {
             review_id,
             digest: digest_observations(bundle, review_id, &observations)?,
-            purpose: "native_status_eula",
+            purpose: match &bundle.manifest {
+                Manifest::StatusV1(_) => "native_status_eula",
+                Manifest::VoiceV2(_) => "native_voice_eula_v2",
+            },
             bundle_id: bundle.manifest.id(),
             before: String::from_utf8_lossy(EULA_FALSE).into(),
             after: format!(
                 "{}Restauração byte-exata do original após o término próprio.",
                 String::from_utf8_lossy(EULA_TRUE)
             ),
-            details: vec![
-                bundle.copy.root().display().to_string(),
-                "Uso único; revisão EULA; nenhuma execução Java neste checkpoint".into(),
-            ],
+            details: {
+                let mut details = vec![
+                    bundle.copy.root().display().to_string(),
+                    "Uso único; revisão EULA; nenhuma execução Java neste checkpoint".into(),
+                ];
+                if let Manifest::VoiceV2(voice) = &bundle.manifest {
+                    details.push(match voice.profile {
+                        manifest::StoredVoiceProfileV2::Svc => {
+                            "Perfil: Simple Voice Chat 2.6.22".into()
+                        }
+                        manifest::StoredVoiceProfileV2::Plasmo => {
+                            "Perfil: Plasmo Voice 2.1.17; Fabric API 0.116.10+1.21.1".into()
+                        }
+                    });
+                    details.push(format!(
+                        "Runtime aprovado: Minecraft {}; Fabric {}; protocolo {}",
+                        voice_profile::MINECRAFT,
+                        voice_profile::LOADER_VERSION,
+                        voice_profile::PROTOCOL,
+                    ));
+                    details.push(format!(
+                        "Configuração inicial compilada: {}; {} bytes; SHA-256 {}",
+                        voice.profile.configuration_name(),
+                        voice.profile.configuration().len(),
+                        voice.profile.configuration_sha256(),
+                    ));
+                    let initial = &voice.initial_voice_configuration.observation;
+                    details.push(format!(
+                        "Observação inicial: volume {}; índice {}; {} bytes; SHA-256 {}",
+                        initial.identity.volume,
+                        initial.identity.index,
+                        initial.bytes,
+                        initial.sha256,
+                    ));
+                }
+                details
+            },
         },
         observations,
     ))
@@ -434,6 +555,9 @@ pub(super) fn apply_execution(
     prepared: PreparedStatus,
     approval: &producer::ExecutionApproval,
 ) -> Result<AppliedEula> {
+    prepared
+        .approved_files
+        .require_manifest_kind(&prepared.bundle.manifest)?;
     approval.check(&prepared)?;
     apply_reviewed(prepared, ApplyReview::Execution(approval))
 }
@@ -457,6 +581,9 @@ impl ApplyReview<'_> {
 }
 fn apply_reviewed(prepared: PreparedStatus, review: ApplyReview<'_>) -> Result<AppliedEula> {
     let bundle = &prepared.bundle;
+    prepared
+        .approved_files
+        .require_manifest_kind(&bundle.manifest)?;
     prepared.hooks.before_claim()?;
     absent(&bundle.transaction.join(CLAIM))?;
     if fs::read_dir(&bundle.transaction)?.next().is_some() {
@@ -466,7 +593,7 @@ fn apply_reviewed(prepared: PreparedStatus, review: ApplyReview<'_>) -> Result<A
     if observed != prepared.approved_files {
         return Err(Error::Changed);
     }
-    let original = observed.original;
+    let original = observed.original().clone();
     let bytes = EULA_FALSE;
     let transaction = Uuid::new_v4();
     let claim = Claim {
@@ -535,13 +662,20 @@ fn apply_reviewed(prepared: PreparedStatus, review: ApplyReview<'_>) -> Result<A
 }
 #[allow(dead_code)] // File-only restore remains a private optional operation.
 impl AppliedEula {
-    pub(super) fn recheck_approved_properties(&self) -> Result<()> {
-        let (observed, bytes) = observe_file(
-            &self.prepared.bundle.copy.root().join("server.properties"),
-            4096,
-        )?;
-        if observed != self.prepared.approved_files.properties || bytes != resources::PROPERTIES {
+    pub(super) fn recheck_approved_launch_files(&self) -> Result<()> {
+        let bundle = &self.prepared.bundle;
+        self.prepared
+            .approved_files
+            .require_manifest_kind(&bundle.manifest)?;
+        let (observed, bytes) = observe_file(&bundle.copy.root().join("server.properties"), 4096)?;
+        if &observed != self.prepared.approved_files.properties() || bytes != resources::PROPERTIES
+        {
             return Err(Error::Changed);
+        }
+        if let ApprovedFiles::VoiceV2(files) = &self.prepared.approved_files {
+            if initial_voice_configuration(bundle)? != files.voice_configuration {
+                return Err(Error::Changed);
+            }
         }
         Ok(())
     }
@@ -571,7 +705,7 @@ impl AppliedEula {
         }
         // Preserve the same reviewed physical file without retaining a
         // deny-write handle while Minecraft legitimately rewrites it at boot.
-        self.recheck_approved_properties()?;
+        self.recheck_approved_launch_files()?;
         self.may_have_spawned = true;
         let bundle = &self.prepared.bundle;
         bundle.validate(&self.prepared.guard)?;
@@ -706,6 +840,56 @@ pub(super) fn prepare_recovery(
 ) -> Result<EulaRecoveryPlan> {
     let bundle = Bundle::reopen(lab, id)?;
     #[cfg(test)]
+    {
+        prepare_recovery_bundle(bundle, probe, hooks)
+    }
+    #[cfg(not(test))]
+    {
+        prepare_recovery_bundle(bundle, hooks)
+    }
+}
+#[cfg(test)]
+pub(super) fn prepare_recovery_fixture_voice(
+    lab: &Path,
+    id: BundleId,
+    pins: Vec<resources::Pin>,
+    probe: TestProbe,
+    hooks: Hooks,
+) -> Result<EulaRecoveryPlan> {
+    // Fixed test pins are selected by the explicit Rust fixture caller, never
+    // inferred from a persisted profile/path. Guard and recovery are unchanged.
+    let bundle = Bundle::reopen_fixture(lab, id, pins)?;
+    prepare_recovery_bundle(bundle, Some(probe), hooks)
+}
+fn recovery_digest_input(
+    manifest: &Manifest,
+    review_id: Uuid,
+    state_digest: &str,
+) -> Result<Vec<u8>> {
+    match manifest {
+        Manifest::StatusV1(_) => encode(&(
+            1,
+            "native_status_eula_recovery",
+            review_id,
+            manifest.id(),
+            state_digest,
+        )),
+        Manifest::VoiceV2(voice) => encode(&(
+            2,
+            "native_voice_eula_recovery_v2",
+            review_id,
+            voice.profile,
+            manifest.id(),
+            state_digest,
+        )),
+    }
+}
+fn prepare_recovery_bundle(
+    bundle: Bundle,
+    #[cfg(test)] probe: Option<TestProbe>,
+    hooks: Hooks,
+) -> Result<EulaRecoveryPlan> {
+    #[cfg(test)]
     let guard = match probe {
         Some(probe) => super::super::process::acquire_with_probe(&bundle.copy, probe)?,
         None => super::super::acquire_voice_mutation_guard(&bundle.copy)?,
@@ -717,14 +901,15 @@ pub(super) fn prepare_recovery(
     let review_id = Uuid::new_v4();
     let review = Review {
         review_id,
-        digest: digest(&encode(&(
-            1,
-            "native_status_eula_recovery",
+        digest: digest(&recovery_digest_input(
+            &bundle.manifest,
             review_id,
-            bundle.manifest.id(),
             &state.digest,
-        ))?),
-        purpose: "native_status_eula_recovery",
+        )?),
+        purpose: match &bundle.manifest {
+            Manifest::StatusV1(_) => "native_status_eula_recovery",
+            Manifest::VoiceV2(_) => "native_voice_eula_recovery_v2",
+        },
         bundle_id: bundle.manifest.id(),
         before: format!("{:?}", state.physical),
         after: String::from_utf8_lossy(EULA_FALSE).into(),
@@ -775,8 +960,10 @@ pub(super) fn roundtrip_claim_for_test(bytes: &[u8]) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 pub(super) fn roundtrip_approved_for_test(bytes: &[u8]) -> Result<Vec<u8>> {
-    let observations: ApprovedFiles = serde_json::from_slice(bytes).map_err(|_| Error::Identity)?;
-    encode(&observations)
+    // This is the original V1 golden replay, with its original exact derive.
+    let observations: ApprovedFilesV1 =
+        serde_json::from_slice(bytes).map_err(|_| Error::Identity)?;
+    encode(&ApprovedFiles::StatusV1(observations))
 }
 
 #[cfg(test)]
@@ -785,6 +972,15 @@ pub(super) fn eula_input_for_test(prepared: &PreparedStatus) -> Result<Vec<u8>> 
         &prepared.bundle.manifest,
         prepared.review().review_id,
         &prepared.approved_files,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn recovery_input_for_test(plan: &EulaRecoveryPlan) -> Result<Vec<u8>> {
+    recovery_digest_input(
+        &plan.bundle.manifest,
+        plan.review.review_id,
+        &plan.state_digest,
     )
 }
 
@@ -803,9 +999,9 @@ pub(super) fn replay_eula_input_for_test(
     }
     let manifest = super::manifest::decode_manifest(manifest_bytes)?;
     manifest.status_v1()?;
-    let observations: ApprovedFiles =
+    let observations: ApprovedFilesV1 =
         serde_json::from_slice(approved_bytes).map_err(|_| Error::Identity)?;
     // Same original UUID/observations, current production encoder. IgnoredAny
     // only extracts tuple context; it never normalizes either typed payload.
-    eula_digest_input(&manifest, review_id, &observations)
+    eula_digest_input(&manifest, review_id, &ApprovedFiles::StatusV1(observations))
 }

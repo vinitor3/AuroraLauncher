@@ -1,4 +1,21 @@
-//! Compiled runtime/configuration baselines. No profile API or serde authority.
+//! Compiled profiles and baselines. Native selection is never deserializable.
+
+use super::manifest::StoredVoiceProfileV2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Experimental factory has no production caller yet.
+pub(crate) enum NativeVoiceProfile {
+    SimpleVoiceChat,
+    PlasmoVoice,
+}
+impl NativeVoiceProfile {
+    pub(super) const fn stored(self) -> StoredVoiceProfileV2 {
+        match self {
+            Self::SimpleVoiceChat => StoredVoiceProfileV2::Svc,
+            Self::PlasmoVoice => StoredVoiceProfileV2::Plasmo,
+        }
+    }
+}
 
 pub(super) const MINECRAFT: &str = "1.21.1";
 pub(super) const LOADER: &str = "fabric";

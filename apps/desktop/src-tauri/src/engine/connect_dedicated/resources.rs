@@ -1,4 +1,6 @@
 use super::*;
+use super::{manifest::StoredVoiceProfileV2, voice_profile::NativeVoiceProfile};
+use std::collections::BTreeSet;
 use std::io::{Seek, SeekFrom};
 
 pub(super) const PROPERTIES: &[u8] = b"# Disposable Aurora Connect STATUS laboratory; no personal world.\nserver-ip=127.0.0.1\nserver-port=43001\nonline-mode=false\nwhite-list=true\nenforce-whitelist=true\nenable-rcon=false\nenable-query=false\nenable-jmx-monitoring=false\nenable-status=true\nmax-players=2\nview-distance=2\nsimulation-distance=5\nlevel-name=connect-lab-world\nlevel-seed=0\ngenerate-structures=false\nmotd=Aurora Connect disposable status lab\n";
@@ -49,11 +51,187 @@ const ARTIFACTS: [(&str, u64, &str); 9] = [
         "9ed7b7f4197153ad97d71b4b9cd9148989e8f0c600934b035ce45f3ef003efc0",
     ),
 ];
+#[derive(Clone)]
 pub(super) struct Pin {
     name: &'static str,
     size: u64,
     expected: String,
     sha1: bool,
+}
+
+const SVC_ARTIFACTS: [(&str, u64, &str); 1] = [(
+    "mods/voicechat-fabric-1.21.1-2.6.22.jar",
+    5_369_475,
+    "972a01592f670aa57f2dc2e3587a656b798106037468c61e4bfb49eba7d6ae36",
+)];
+const PLASMO_ARTIFACTS: [(&str, u64, &str); 2] = [
+    (
+        "mods/plasmovoice-fabric-1.21.1-2.1.17.jar",
+        12_365_966,
+        "46e1a4ae51786457712991ba05bf573e2d11331aeadb63b7d108839def022a2b",
+    ),
+    (
+        "mods/fabric-api-0.116.10+1.21.1.jar",
+        2_425_988,
+        "af0eb792940568fdb1f37bb65a2599773bc47d2010aedf5ec5ed0bd3b6fc40e6",
+    ),
+];
+fn voice_extras(profile: StoredVoiceProfileV2) -> &'static [(&'static str, u64, &'static str)] {
+    match profile {
+        StoredVoiceProfileV2::Svc => &SVC_ARTIFACTS,
+        StoredVoiceProfileV2::Plasmo => &PLASMO_ARTIFACTS,
+    }
+}
+pub(super) fn compiled_voice_pins(profile: StoredVoiceProfileV2) -> Vec<Pin> {
+    let mut selected = pins();
+    selected.extend(voice_extras(profile).iter().map(|(name, size, hash)| Pin {
+        name,
+        size: *size,
+        expected: (*hash).into(),
+        sha1: false,
+    }));
+    selected
+}
+pub(super) fn voice_pins(profile: NativeVoiceProfile) -> Vec<Pin> {
+    compiled_voice_pins(profile.stored())
+}
+fn voice_names(profile: StoredVoiceProfileV2) -> BTreeSet<&'static str> {
+    ARTIFACTS
+        .iter()
+        .chain(voice_extras(profile))
+        .map(|(name, _, _)| *name)
+        .collect()
+}
+fn require_names(records: &[ResourceRecord], expected: &BTreeSet<&str>) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    if records.len() != expected.len()
+        || records.iter().any(|record| {
+            !expected.contains(record.name.as_str()) || !seen.insert(record.name.as_str())
+        })
+    {
+        return Err(Error::Identity);
+    }
+    Ok(())
+}
+pub(super) fn voice_record_shape(
+    profile: StoredVoiceProfileV2,
+    resources: &[ResourceRecord],
+    installed: &[ResourceRecord],
+) -> Result<()> {
+    let installed_names = voice_names(profile);
+    require_names(installed, &installed_names)?;
+    let mut resource_names = installed_names;
+    resource_names.extend(["jdk/release", "jdk/java.exe"]);
+    require_names(resources, &resource_names)?;
+    for record in resources {
+        let hash = &record.observation.sha256;
+        if hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(Error::Identity);
+        }
+        let maximum = match record.name.as_str() {
+            "jdk/release" => 64 * 1024,
+            "jdk/java.exe" => 4 * 1024 * 1024,
+            _ => 64 * 1024 * 1024,
+        };
+        if record.observation.bytes == 0 || record.observation.bytes > maximum {
+            return Err(Error::Identity);
+        }
+    }
+    Ok(())
+}
+fn voice_directory_inventory(
+    root: &Path,
+    directory: &str,
+    expected: &BTreeSet<&str>,
+) -> Result<()> {
+    let path = root.join(directory);
+    let _pins = recovery::pin_directory(&path)?;
+    let mut actual = BTreeSet::new();
+    let prefix = format!("{directory}/");
+    let names: BTreeSet<_> = expected
+        .iter()
+        .filter_map(|name| name.strip_prefix(prefix.as_str()))
+        .collect();
+    for entry in fs::read_dir(&path)? {
+        let name = entry?
+            .file_name()
+            .into_string()
+            .map_err(|_| Error::UnsafePath)?;
+        if !names.contains(name.as_str()) || !actual.insert(name) || actual.len() > names.len() {
+            return Err(Error::Identity);
+        }
+    }
+    if actual.iter().map(String::as_str).collect::<BTreeSet<_>>() != names {
+        return Err(Error::Identity);
+    }
+    Ok(())
+}
+pub(super) fn voice_inventory(root: &Path, profile: StoredVoiceProfileV2) -> Result<()> {
+    let expected = voice_names(profile);
+    voice_directory_inventory(root, "mods", &expected)?;
+    voice_directory_inventory(root, "libraries", &expected)
+}
+pub(super) fn validate_voice_artifacts(
+    root: &Path,
+    profile: StoredVoiceProfileV2,
+    resources: &[ResourceRecord],
+    installed: &[ResourceRecord],
+    expected_pins: &[Pin],
+) -> Result<()> {
+    // Names/counts are closed before any record-derived join. The actual paths
+    // below come from compiled pins (or the explicit private fixture context).
+    voice_record_shape(profile, resources, installed)?;
+    let expected_names = voice_names(profile);
+    if expected_pins.len() != expected_names.len()
+        || expected_pins
+            .iter()
+            .map(|pin| pin.name)
+            .collect::<BTreeSet<_>>()
+            != expected_names
+    {
+        return Err(Error::Identity);
+    }
+    voice_inventory(root, profile)?;
+    for pin in expected_pins {
+        let resource = resources
+            .iter()
+            .find(|record| record.name == pin.name)
+            .ok_or(Error::Identity)?;
+        let installed = installed
+            .iter()
+            .find(|record| record.name == pin.name)
+            .ok_or(Error::Identity)?;
+        let (actual, bytes) =
+            observe_file(&root.join(pin.name), 64 * 1024 * 1024).map_err(|error| {
+                if error == Error::Limit {
+                    Error::Resources
+                } else {
+                    error
+                }
+            })?;
+        let hash = if pin.sha1 {
+            format!("{:x}", sha1::Sha1::digest(&bytes))
+        } else {
+            actual.sha256.clone()
+        };
+        if actual.bytes != pin.size
+            || hash != pin.expected
+            || resource.observation.bytes != actual.bytes
+            || resource.observation.sha256 != actual.sha256
+            || installed.observation.bytes != actual.bytes
+            || installed.observation.sha256 != actual.sha256
+        {
+            return Err(Error::Resources);
+        }
+        if actual.identity != installed.observation.identity {
+            return Err(Error::Changed);
+        }
+    }
+    Ok(())
 }
 pub(super) fn pins() -> Vec<Pin> {
     ARTIFACTS
@@ -256,6 +434,28 @@ pub(super) fn fixture_pins() -> Vec<Pin> {
             sha1: false,
         })
         .collect()
+}
+#[cfg(test)]
+pub(super) fn fixture_voice_artifacts(profile: NativeVoiceProfile) -> Vec<(&'static str, Vec<u8>)> {
+    voice_extras(profile.stored())
+        .iter()
+        .map(|(name, _, _)| (*name, format!("fixture:{name}\n").into_bytes()))
+        .collect()
+}
+#[cfg(test)]
+pub(super) fn fixture_voice_pins(profile: NativeVoiceProfile) -> Vec<Pin> {
+    let mut selected = fixture_pins();
+    selected.extend(
+        fixture_voice_artifacts(profile)
+            .into_iter()
+            .map(|(name, bytes)| Pin {
+                name,
+                size: bytes.len() as u64,
+                expected: digest(&bytes),
+                sha1: false,
+            }),
+    );
+    selected
 }
 #[cfg(test)]
 pub(super) fn fixture_jdk() -> (Vec<u8>, Vec<u8>) {

@@ -1,4 +1,4 @@
-//! Private diagnostic STATUS factory and its closed EULA transaction.
+//! Private diagnostic factories and their closed EULA transactions.
 //! Execution requires its own consumed review; there is no launcher/IPC entry point.
 use crate::engine::{
     diagnostic_lab, recovery, Instance, InstanceId, InstanceLayout, InstanceMutationGuard,
@@ -26,6 +26,8 @@ mod resources;
 #[path = "connect_dedicated/voice_profile.rs"]
 mod voice_profile;
 
+pub(crate) use voice_profile::NativeVoiceProfile;
+
 #[cfg(test)]
 use eula::EulaOutcome;
 use eula::EulaRecoveryPlan;
@@ -36,6 +38,15 @@ use factory::PreparedStatus;
 #[allow(dead_code)] // Closed experimental entry point; no IPC/production caller in84A.
 pub(crate) fn plan_status_factory(stage: &Path, jdk: &Path, accepted: bool) -> Result<FactoryPlan> {
     factory::plan_status_factory(stage, jdk, accepted)
+}
+#[allow(dead_code)] // Closed file-only experimental entry point; no IPC caller.
+pub(crate) fn plan_voice_factory(
+    stage: &Path,
+    jdk: &Path,
+    profile: NativeVoiceProfile,
+    accepted: bool,
+) -> Result<FactoryPlan> {
+    factory::plan_voice_factory(stage, jdk, profile, accepted)
 }
 #[allow(dead_code)] // Recovery is explicit; never invoked automatically at startup.
 pub(crate) fn plan_eula_recovery(id: BundleId) -> Result<EulaRecoveryPlan> {
