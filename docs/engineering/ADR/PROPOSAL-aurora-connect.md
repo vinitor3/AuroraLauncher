@@ -6,6 +6,10 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento84 — produtor STATUS privado por checkpoints
+
+Contrato antes do código, com factory em Root privado novo, cópia/proveniência real, EULA por slots duráveis e recovery com VoiceMutationGuard/revisão novos, original completion83 e provaTCP própria antes/depois de STATUS. [Contrato84](../../aurora-connect-dedicated-status.md). **PARCIAL**: prelude executado corrige somente bounds/scope/pós-proof do readerTCP,8 focais/545 regressão e checks/QA. Não importar autoridade por JSON/PID Node, aplicar a Instance pessoal ou promover Java/voz/GUI por esses testes. Uso único pertence à factory privada; futura exposição no Root/UI comum exige gate próprio. Sem novo caller de produto nesta fase.
+
 ### Incremento83 — ownership de execução nativa antes do produtor dedicado
 
 Separar o núcleo real de lifecycle da verificação/lançamento Java futuro. Start síncrono aceita Command somente do caller Rust confiável; instala owner imediatamente após spawn e conserva Child/pipes/readers, razão e primeira falha, independente do waiter ou runtimeTokio. Controle não clonável pede stop sincronamente; observer fraco registra uma queryUDP82 sob o mesmo gate de selo/decisão final. Child/reap/readers terminam sem esperar query retida, mas completion conserva cleanup pendente até a mesma query liberar prova/trabalho. Completion contém só relatório/canal, sem owners. Saída já observada antes do write de stop recebe EarlyExit mesmo com Requested concorrente; RED causal precedeu correção. [Contrato83](../../aurora-connect-native-owned-run.md).23 focais/537 regressão, checks e QA aprovados; nenhuma autoridade nova de cópia, EULA, app shutdown, interface ou voz. O processo launcher precisa continuar vivo até completion; não prometer Job Object/crash kill.

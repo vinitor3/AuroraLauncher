@@ -134,7 +134,90 @@ fn creation(handle: &OwnedHandle, pid: u32) -> Result<u64, DiscoveryError> {
     }
     Ok(birth)
 }
-fn table(family: u32) -> Result<Vec<u32>, DiscoveryError> {
+struct Table {
+    storage: Vec<u32>,
+    returned_bytes: usize,
+}
+
+impl Table {
+    fn count(&self, offset: usize, row_bytes: usize) -> Result<usize, DiscoveryError> {
+        let capacity = self
+            .storage
+            .len()
+            .checked_mul(size_of::<u32>())
+            .ok_or(DiscoveryError::Limit)?;
+        if self.returned_bytes > capacity
+            || self.returned_bytes > MAX_BYTES
+            || self.returned_bytes < size_of::<u32>()
+            || self.returned_bytes < offset
+        {
+            return Err(DiscoveryError::Limit);
+        }
+        let count = *self.storage.first().ok_or(DiscoveryError::Limit)? as usize;
+        // Validate the whole table before reading even a favorable first row.
+        if count > MAX_ROWS
+            || count
+                .checked_mul(row_bytes)
+                .and_then(|bytes| bytes.checked_add(offset))
+                .is_none_or(|end| end > self.returned_bytes)
+        {
+            return Err(DiscoveryError::Limit);
+        }
+        Ok(count)
+    }
+
+    fn v4_listeners(&self, pid: u32) -> Result<Vec<SocketAddr>, DiscoveryError> {
+        let mut result = Vec::new();
+        let offset = offset_of!(MIB_TCPTABLE_OWNER_PID, table);
+        for index in 0..self.count(offset, size_of::<MIB_TCPROW_OWNER_PID>())? {
+            // SAFETY: count checked every row against both initialized storage
+            // and the length actually returned by Win32; SDK rows are integers.
+            let row = unsafe {
+                self.storage
+                    .as_ptr()
+                    .cast::<u8>()
+                    .add(offset + index * size_of::<MIB_TCPROW_OWNER_PID>())
+                    .cast::<MIB_TCPROW_OWNER_PID>()
+                    .read_unaligned()
+            };
+            if row.dwOwningPid == pid && row.dwState == MIB_TCP_STATE_LISTEN as u32 {
+                result.push(SocketAddr::from((
+                    Ipv4Addr::from(row.dwLocalAddr.to_ne_bytes()),
+                    u16::from_be(row.dwLocalPort as u16),
+                )));
+            }
+        }
+        Ok(result)
+    }
+
+    fn v6_listeners(&self, pid: u32) -> Result<Vec<SocketAddr>, DiscoveryError> {
+        let mut result = Vec::new();
+        let offset = offset_of!(MIB_TCP6TABLE_OWNER_PID, table);
+        for index in 0..self.count(offset, size_of::<MIB_TCP6ROW_OWNER_PID>())? {
+            // SAFETY: same complete-table validation as IPv4, without assuming
+            // that the SDK row is aligned at this byte offset.
+            let row = unsafe {
+                self.storage
+                    .as_ptr()
+                    .cast::<u8>()
+                    .add(offset + index * size_of::<MIB_TCP6ROW_OWNER_PID>())
+                    .cast::<MIB_TCP6ROW_OWNER_PID>()
+                    .read_unaligned()
+            };
+            if row.dwOwningPid == pid && row.dwState == MIB_TCP_STATE_LISTEN as u32 {
+                result.push(SocketAddr::V6(SocketAddrV6::new(
+                    Ipv6Addr::from(row.ucLocalAddr),
+                    u16::from_be(row.dwLocalPort as u16),
+                    0,
+                    u32::from_be(row.dwLocalScopeId),
+                )));
+            }
+        }
+        Ok(result)
+    }
+}
+
+fn table(family: u32) -> Result<Table, DiscoveryError> {
     let mut needed = 0_u32;
     // SAFETY: null pointer is the documented size query, no buffer is written.
     let status = unsafe {
@@ -170,10 +253,13 @@ fn table(family: u32) -> Result<Vec<u32>, DiscoveryError> {
             )
         };
         if status == 0 {
-            if length as usize > buffer.len() * 4 {
+            if !(size_of::<u32>()..=buffer.len() * size_of::<u32>()).contains(&(length as usize)) {
                 return Err(DiscoveryError::Limit);
             }
-            return Ok(buffer);
+            return Ok(Table {
+                storage: buffer,
+                returned_bytes: length as usize,
+            });
         }
         if status != ERROR_INSUFFICIENT_BUFFER {
             return Err(DiscoveryError::Unavailable);
@@ -182,66 +268,23 @@ fn table(family: u32) -> Result<Vec<u32>, DiscoveryError> {
     }
     Err(DiscoveryError::Limit)
 }
-fn count(buffer: &[u32], offset: usize, row_bytes: usize) -> Result<usize, DiscoveryError> {
-    let count = *buffer.first().ok_or(DiscoveryError::Unavailable)? as usize;
-    if count > MAX_ROWS
-        || count
-            .checked_mul(row_bytes)
-            .and_then(|bytes| bytes.checked_add(offset))
-            .is_none_or(|bytes| bytes > buffer.len() * 4)
-    {
-        return Err(DiscoveryError::Limit);
-    }
-    Ok(count)
-}
 pub(super) fn listeners(proof: &OwnedChildProof) -> Result<Vec<SocketAddr>, DiscoveryError> {
     proof.recheck()?;
-    let mut result = Vec::new();
-    let v4 = table(AF_INET as u32)?;
-    let offset = offset_of!(MIB_TCPTABLE_OWNER_PID, table);
-    for index in 0..count(&v4, offset, size_of::<MIB_TCPROW_OWNER_PID>())? {
-        // SAFETY: count validates each row range; read_unaligned avoids relying
-        // on an undocumented padding assumption beyond the SDK table offset.
-        let row = unsafe {
-            v4.as_ptr()
-                .cast::<u8>()
-                .add(offset + index * size_of::<MIB_TCPROW_OWNER_PID>())
-                .cast::<MIB_TCPROW_OWNER_PID>()
-                .read_unaligned()
-        };
-        if row.dwOwningPid == proof.pid && row.dwState == MIB_TCP_STATE_LISTEN as u32 {
-            result.push(SocketAddr::from((
-                Ipv4Addr::from(row.dwLocalAddr.to_ne_bytes()),
-                u16::from_be(row.dwLocalPort as u16),
-            )));
-        }
-    }
-    let v6 = table(AF_INET6 as u32)?;
-    let offset = offset_of!(MIB_TCP6TABLE_OWNER_PID, table);
-    for index in 0..count(&v6, offset, size_of::<MIB_TCP6ROW_OWNER_PID>())? {
-        // SAFETY: same bounded-row reasoning as IPv4; no row from another PID
-        // is retained, exposed, logged or used as a connection destination.
-        let row = unsafe {
-            v6.as_ptr()
-                .cast::<u8>()
-                .add(offset + index * size_of::<MIB_TCP6ROW_OWNER_PID>())
-                .cast::<MIB_TCP6ROW_OWNER_PID>()
-                .read_unaligned()
-        };
-        if row.dwOwningPid == proof.pid && row.dwState == MIB_TCP_STATE_LISTEN as u32 {
-            result.push(SocketAddr::V6(SocketAddrV6::new(
-                Ipv6Addr::from(row.ucLocalAddr),
-                u16::from_be(row.dwLocalPort as u16),
-                0,
-                row.dwLocalScopeId,
-            )));
-        }
-    }
+    let observed = (|| {
+        let v4 = table(AF_INET as u32)?;
+        let mut result = v4.v4_listeners(proof.pid)?;
+        let v6 = table(AF_INET6 as u32)?;
+        result.extend(v6.v6_listeners(proof.pid)?);
+        Ok::<_, DiscoveryError>(result)
+    })();
+    // Process identity has precedence even when a bounded table query failed.
     proof.recheck()?;
+    let mut result = observed?;
     result.sort();
     result.dedup();
     Ok(result)
 }
+
 pub(super) fn require_listener(
     proof: &OwnedChildProof,
     bind: SocketAddr,
@@ -252,3 +295,6 @@ pub(super) fn require_listener(
     }
     proof.recheck()
 }
+
+#[cfg(test)]
+mod tests;
