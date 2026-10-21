@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 21/10/2026
 
+Incremento81/002/003/006/007/008 acrescenta retirada permanente de um grant UDP exato no Host com cleanup aguardado e TCP/outros serviços preservados. [Contrato81](../../aurora-connect-udp-service-disable.md). **PROTÓTIPO**, focais, regressões locais e QA aprovados. É fundamento para falha de voz independente, sem caller/binding novo ou teste de qualquer mod. Nenhum notice remoto, quota/prazo/wire novo, nova rede ou homologação de GUI/Minecraft/áudio/R3. Guest pode conservar ponte; bytes anteriores ao selo não são recolhidos.
+
 Incremento80/002/004/005/008 integra a observação transitória78 no painel experimental e em cada retorno de snapshot. [Contrato80](../../aurora-connect-desktop-path-observation.md). **PROTÓTIPO**, sem nova capability, autorização, cache, owner de Endpoint ou alteração dos legados. Grupo observa cada lease, sem agregado; estado incerto de Stop conserva controles e oculta amostra até confirmação válida. Provas locais próprias no task; GUI, áudio, Minecraft, redes externas e R3 conservam seus gates.
 
 Incremento79/002/003/005/008 libera o transporte do Guest após encerrar mesmo com manager e workers de abertura prontos ainda vivos. [Contrato79](../../aurora-connect-guest-source-cleanup.md). **PROTÓTIPO**, defeito reproduzido antes da correção, Weak no lugar de clone forte e provas de rebind/ownership. Jogo registrado permanece independente. Nenhum gate de GUI, Minecraft, Core/Skins, áudio, redes ou R3 é promovido.

@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 21/10/2026
 
+Incremento81: desativação UDP independente por lease/serviço no Host, preservando TCP e outros participantes. [Contrato81](../aurora-connect-udp-service-disable.md). **PROTÓTIPO**, focais, regressões locais e revisão aprovados, bytes opacos e portas reais. Não comprova áudio SVC/Plasmo, Minecraft, GUI ou rede externa nem altera qualquer célula dos nove pares. Sem caller novo, configuração ou relay público.
+
 Incremento80: observação do caminho no painel e snapshots individuais/por participante, com fontes e autoridades originais. [Contrato80](../aurora-connect-desktop-path-observation.md). **PROTÓTIPO**, testes de transporte local, DTO/DOM e build não promovem GUI, mundo, Core/Skins, rede externa ou áudio. Não amplia a matriz nem habilita relay público; nove pares conservam seus gates.
 
 Incremento79: origem de abertura pronta do Guest deixa de reter seu Endpoint após cleanup. [Contrato79](../aurora-connect-guest-source-cleanup.md). **PROTÓTIPO**, com rebind real e processos de fixture próprios. Não altera nenhuma célula de Minecraft/Java/loader, Core/Skins, GUI, voz ou rede; nove pares e validações externas mantêm seus resultados separados.

@@ -153,6 +153,11 @@ impl Bucket {
     pub fn take(&mut self, count: usize) -> bool {
         self.take_with_reserve(count, 0)
     }
+    // Observe already-accounted state without sampling time or refilling it.
+    #[cfg(test)]
+    pub(crate) fn test_snapshot(&self) -> (f64, f64, f64, Instant) {
+        (self.tokens, self.rate, self.burst, self.at)
+    }
     fn take_with_reserve(&mut self, count: usize, reserve: usize) -> bool {
         let now = Instant::now();
         self.tokens =

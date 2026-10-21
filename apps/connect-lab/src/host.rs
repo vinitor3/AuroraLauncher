@@ -81,6 +81,11 @@ enum HostAuthorities {
 mod active_observation_tests;
 #[path = "host_session_group.rs"]
 mod session_group;
+#[path = "host_udp_service.rs"]
+mod udp_service;
+#[cfg(test)]
+#[path = "host_udp_service_tests.rs"]
+mod udp_service_tests;
 
 #[cfg(test)]
 mod session_clock_tests {
@@ -210,6 +215,7 @@ struct LeaseState {
     downstream_limiters: Mutex<HashMap<u32, Arc<Mutex<UdpLimiter>>>>,
     fragment_ingress: Arc<Mutex<UdpLimiter>>,
     fragment_memory: fragment::PeerBudget,
+    udp_services: HashMap<u32, Arc<udp_service::Control>>,
 }
 
 #[cfg(test)]
@@ -507,6 +513,15 @@ impl Host {
             leases.insert(
                 lease.lease_id.clone(),
                 LeaseState {
+                    udp_services: lease
+                        .services
+                        .iter()
+                        .filter_map(|id| {
+                            let (handle, service) = &services[id];
+                            (service.protocol == Protocol::Udp)
+                                .then(|| (*handle, udp_service::Control::new()))
+                        })
+                        .collect(),
                     fragment_memory: bridge::peer_budget(lease.peer),
                     fragment_ingress: Arc::new(Mutex::new(UdpLimiter::new(&config.limits))),
                     value: lease,
@@ -630,6 +645,41 @@ impl Host {
         } else {
             false
         }
+    }
+    /// Permanently retire one original UDP grant, then wait until its Host
+    /// setup, sockets, deliveries and return workers have actually released.
+    /// TCP and the peer's other services keep their original authorities.
+    pub async fn disable_udp_service(
+        &self,
+        lease_id: &str,
+        service_id: &str,
+        service_revision: u32,
+    ) -> Result<()> {
+        if !valid_id(lease_id) || !valid_id(service_id) || service_revision == 0 {
+            return Err(Error::Configuration);
+        }
+        let lease = self
+            .state
+            .leases
+            .get(lease_id)
+            .ok_or(Error::ServiceDenied)?;
+        let (handle, service) = self
+            .state
+            .services
+            .get(service_id)
+            .ok_or(Error::ServiceDenied)?;
+        if service.protocol != Protocol::Udp
+            || !lease.value.services.iter().any(|id| id == service_id)
+        {
+            return Err(Error::ServiceDenied);
+        }
+        if service_revision != service.revision {
+            return Err(Error::StaleRevision);
+        }
+        let control = lease.udp_services.get(handle).ok_or(Error::ServiceDenied)?;
+        // Retirement deliberately does not require current admission/session.
+        control.disable().await;
+        Ok(())
     }
     pub async fn shutdown(&self) {
         self.state.cancel.cancel();
@@ -799,7 +849,6 @@ async fn handshake(connection: &Connection, state: &Arc<State>) -> Result<(Hello
 }
 
 struct Association {
-    socket: Arc<UdpSocket>,
     service_handle: u32,
     generation: u32,
     max_payload: usize,
@@ -817,18 +866,25 @@ struct Association {
     lease_unix_deadline: u64,
     lease_deadline: Instant,
     session_authority: Option<SessionInvitation>,
+    // Last field: pending fragment reservations drop before socket/work.
+    resource: udp_service::Resource,
 }
 impl Association {
+    fn socket(&self) -> &UdpSocket {
+        &self.resource.socket
+    }
     fn fragment_authorized(&self) -> bool {
-        fragment_authority_valid(
-            &self.cancel,
-            &self.lease_cancel,
-            self.lease_unix_deadline,
-            self.lease_deadline,
-        ) && self
-            .session_authority
-            .as_ref()
-            .is_none_or(|authority| authority.check_session_current().is_ok())
+        self.resource.work.control().enabled()
+            && fragment_authority_valid(
+                &self.cancel,
+                &self.lease_cancel,
+                self.lease_unix_deadline,
+                self.lease_deadline,
+            )
+            && self
+                .session_authority
+                .as_ref()
+                .is_none_or(|authority| authority.check_session_current().is_ok())
     }
 }
 fn fragment_authority_valid(
@@ -1000,16 +1056,30 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
                     }
                     Protocol::Udp => {
                         if associations.lock().unwrap().len() >= state.limits.max_udp_per_peer { let _ = reject(&mut send, Error::Limit, &state).await; continue; }
+                        let service_control = &lease.udp_services[&handle];
+                        let work = match service_control.begin() { Ok(work) => work, Err(error) => { let _ = reject(&mut send, error, &state).await; continue; } };
                         let Ok(permit) = state.udp.clone().try_acquire_owned() else { let _ = reject(&mut send, Error::Limit, &state).await; continue; };
                         let fragmented = request.operation == Operation::OpenFragmented;
                         let maximum = if fragmented { bridge::payload_capacity(&connection, service.max_datagram_bytes) } else { transport::payload_limit(&connection, service.max_datagram_bytes) };
                         let Some(max_payload) = maximum else { let _ = reject(&mut send, Error::CapabilityUnavailable, &state).await; continue; };
+                        #[cfg(test)]
+                        service_control.checkpoint(udp_service::Stage::BeforeBind, None).await;
                         let bind = if service.endpoint.is_ipv4() { "127.0.0.1:0" } else { "[::1]:0" };
-                        let socket = match UdpSocket::bind(bind).await { Ok(s) => s, Err(_) => { let _ = reject(&mut send, Error::Destination, &state).await; continue; } };
+                        if !service_control.enabled() { let _ = reject(&mut send, Error::ServiceDenied, &state).await; continue; }
+                        let socket = tokio::select! { biased; _ = service_control.token().cancelled() => { continue; }, result = UdpSocket::bind(bind) => result };
+                        let socket = match socket { Ok(s) => s, Err(_) => { let _ = reject(&mut send, Error::Destination, &state).await; continue; } };
+                        let resource = udp_service::Resource::new(socket, permit, work.clone());
+                        #[cfg(test)]
+                        service_control.checkpoint(udp_service::Stage::AfterBind, resource.socket.local_addr().ok()).await;
+                        if !service_control.enabled() { continue; }
                         if authorize_session(&state, &hello.lease_id, connection.remote_id()).is_err() { let _ = reject(&mut send, Error::Expired, &state).await; continue; }
-                        if socket.connect(service.endpoint).await.is_err() { let _ = reject(&mut send, Error::Destination, &state).await; continue; }
+                        let connected = tokio::select! { biased; _ = service_control.token().cancelled() => { continue; }, result = resource.socket.connect(service.endpoint) => result };
+                        if connected.is_err() { let _ = reject(&mut send, Error::Destination, &state).await; continue; }
+                        #[cfg(test)]
+                        service_control.checkpoint(udp_service::Stage::AfterConnect, resource.socket.local_addr().ok()).await;
+                        if !service_control.enabled() { continue; }
                         if authorize_session(&state, &hello.lease_id, connection.remote_id()).is_err() { let _ = reject(&mut send, Error::Expired, &state).await; continue; }
-                        let association = Arc::new(Association { socket: Arc::new(socket), service_handle: handle,
+                        let association = Arc::new(Association { service_handle: handle,
                             generation: service.revision, max_payload, cancel: cancel.child_token(), activity: Mutex::new(Instant::now()),
                             sequence: Mutex::new(SequenceWindow::default()), credit: AtomicU64::new(0),
                             limiter: lease.udp_limiters.lock().unwrap().entry(handle).or_insert_with(|| Arc::new(Mutex::new(UdpLimiter::new(&state.limits)))).clone(),
@@ -1018,14 +1088,22 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
                             fragmented: fragmented.then(|| Mutex::new(fragment::Reassembler::new(fragment::Scope { service_handle: handle, association_id: request.request_id, generation: service.revision }, lease.fragment_memory.clone()))),
                             lease_cancel: lease.cancel.clone(), lease_unix_deadline: lease.value.expires_at_unix_ms, lease_deadline,
                             session_authority: match &lease.invitation { Some(InvitationAuthority::Session(value)) => Some(value.clone()), _ => None },
+                            resource,
                         });
-                        associations.lock().unwrap().insert(request.request_id, association.clone());
+                        #[cfg(test)]
+                        service_control.checkpoint(udp_service::Stage::BeforePublish, association.socket().local_addr().ok()).await;
+                        if let Err(error) = work.publish(&associations, request.request_id, &association) { let _ = reject(&mut send, error, &state).await; continue; }
+                        #[cfg(test)]
+                        service_control.checkpoint(udp_service::Stage::AfterPublish, association.socket().local_addr().ok()).await;
                         let response = Reply { service_handle: handle, association_id: request.request_id, generation: service.revision, max_payload: Some(max_payload), fragment_version: fragmented.then_some(2), ..Default::default() };
-                        if reply(&mut send, &response, &state).await.is_err() { associations.lock().unwrap().remove(&request.request_id); continue; }
+                        let replied = tokio::select! { biased; _ = service_control.token().cancelled() => Err(Error::ServiceDenied), result = reply(&mut send, &response, &state) => result };
+                        if replied.is_err() { association.cancel.cancel(); associations.lock().unwrap().remove(&request.request_id); continue; }
                         if !association.fragment_authorized() { association.cancel.cancel(); associations.lock().unwrap().remove(&request.request_id); continue; }
                         let _ = send.finish();
+                        #[cfg(test)]
+                        service_control.checkpoint(udp_service::Stage::BeforeReturn, association.socket().local_addr().ok()).await;
                         state.metrics.udp_associations_opened.fetch_add(1, Ordering::Relaxed);
-                        tasks.spawn(udp_return(connection.clone(), state.clone(), associations.clone(), request.request_id, association, permit));
+                        tasks.spawn(udp_return(connection.clone(), state.clone(), associations.clone(), request.request_id, association, work.clone()));
                     }
                 }
             }
@@ -1083,6 +1161,14 @@ fn validate_open<'a>(
             return Err(Error::CapabilityUnavailable);
         }
         _ => (),
+    }
+    if service.protocol == Protocol::Udp
+        && !lease
+            .udp_services
+            .get(handle)
+            .is_some_and(|control| control.enabled())
+    {
+        return Err(Error::ServiceDenied);
     }
     Ok((*handle, service))
 }
@@ -1190,7 +1276,14 @@ async fn receive_datagrams(
             biased;
             _ = cancel.cancelled() => break,
             _ = a.cancel.cancelled() => continue,
-            result = tokio::time::timeout(Duration::from_millis(40), a.socket.send(&frame.payload)) => result,
+            _ = a.resource.work.control().token().cancelled() => continue,
+            result = tokio::time::timeout(Duration::from_millis(40), async {
+                a.socket().writable().await.map_err(|_| Error::Io)?;
+                a.resource.work.control().send_immediately(|| {
+                    if !a.fragment_authorized() || cancel.is_cancelled() { return Err(Error::ServiceDenied); }
+                    a.socket().try_send(&frame.payload).map_err(|_| Error::Io)
+                })
+            }) => result,
         };
         if matches!(delivered, Ok(Ok(n)) if n == frame.payload.len()) {
             a.first_forwarded.store(true, Ordering::Release);
@@ -1232,10 +1325,20 @@ async fn receive_fragment(
         }
         let output = {
             let mut reassembler = reassembler.lock().unwrap();
-            if !a.fragment_authorized() || cancel.is_cancelled() {
-                return None;
-            }
-            reassembler.push(frame, Instant::now()).ok()?
+            // Reassembler -> ServiceGate. Disable never holds the gate while
+            // clearing a reassembler, and the check itself never re-locks it.
+            a.resource
+                .work
+                .control()
+                .immediately(|| {
+                    if !a.fragment_authorized() || cancel.is_cancelled() {
+                        return Err(Error::ServiceDenied);
+                    }
+                    reassembler
+                        .push(frame, Instant::now())
+                        .map_err(bridge::error)
+                })
+                .ok()?
         };
         Some((
             a,
@@ -1248,8 +1351,21 @@ async fn receive_fragment(
         return;
     };
     let fragment::Progress::Complete(payload) = output else {
+        #[cfg(test)]
+        a.resource
+            .work
+            .control()
+            .checkpoint(udp_service::Stage::Pending, a.socket().local_addr().ok())
+            .await;
         return;
     };
+    let delivery = udp_service::Delivery::new(payload, a.resource.work.clone());
+    #[cfg(test)]
+    a.resource
+        .work
+        .control()
+        .checkpoint(udp_service::Stage::Completed, a.socket().local_addr().ok())
+        .await;
     if !a.fragment_authorized() {
         return;
     }
@@ -1258,17 +1374,17 @@ async fn receive_fragment(
         _ = cancel.cancelled() => return,
         _ = a.cancel.cancelled() => return,
         _ = a.lease_cancel.cancelled() => return,
+        _ = a.resource.work.control().token().cancelled() => return,
         _ = tokio::time::sleep_until(tokio::time::Instant::from_std(a.lease_deadline)) => return,
         result = tokio::time::timeout(Duration::from_millis(40), async {
-            a.socket.writable().await?;
-            // No await between the final authority check and the local send.
-            if !a.fragment_authorized() || cancel.is_cancelled() {
-                return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
-            }
-            a.socket.try_send(payload.as_ref())
+            a.socket().writable().await.map_err(|_| Error::Io)?;
+            a.resource.work.control().send_immediately(|| {
+                if !a.fragment_authorized() || cancel.is_cancelled() { return Err(Error::ServiceDenied); }
+                a.socket().try_send(delivery.payload.as_ref()).map_err(|_| Error::Io)
+            })
         }) => result,
     };
-    if matches!(delivered, Ok(Ok(n)) if n == payload.as_ref().len()) {
+    if matches!(delivered, Ok(Ok(n)) if n == delivery.payload.as_ref().len()) {
         *a.activity.lock().unwrap() = Instant::now();
         let _ = a
             .credit
@@ -1290,7 +1406,7 @@ async fn udp_return(
     associations: Associations,
     id: u64,
     a: Arc<Association>,
-    _permit: OwnedSemaphorePermit,
+    _work: udp_service::Work,
 ) {
     let _active = ActiveGuard::new(state.metrics.clone(), ActiveKind::Udp);
     // A full UDP-family buffer detects oversized payloads without forwarding a truncated prefix.
@@ -1303,11 +1419,14 @@ async fn udp_return(
         tokio::select! {
             biased;
             _ = a.cancel.cancelled() => break,
+            _ = a.resource.work.control().token().cancelled() => break,
             _ = tokio::time::sleep_until(idle_deadline) => {
                 if a.activity.lock().unwrap().elapsed() >= state.limits.udp_idle_timeout { break; }
             }
-            received = a.socket.recv(&mut buffer) => {
+            received = a.socket().recv(&mut buffer) => {
                 let size = match received { Ok(n) => n, Err(_) => break };
+                #[cfg(test)]
+                a.resource.work.control().checkpoint(udp_service::Stage::Return, a.socket().local_addr().ok()).await;
                 // A fast destination may answer before the sender task stores its success.
                 // Wait only for that bounded local send, never enable unsolicited traffic.
                 if !a.first_forwarded.load(Ordering::Acquire) {
@@ -1316,6 +1435,7 @@ async fn udp_return(
                         tokio::select! {
                             biased;
                             _ = a.cancel.cancelled() => break,
+                            _ = a.resource.work.control().token().cancelled() => break,
                             _ = tokio::time::timeout(Duration::from_millis(40), notified) => (),
                         }
                     }
@@ -1323,7 +1443,7 @@ async fn udp_return(
                         state.metrics.udp_dropped.fetch_add(1, Ordering::Relaxed); continue;
                     }
                 }
-                if a.cancel.is_cancelled() || a.activity.lock().unwrap().elapsed() >= state.limits.udp_idle_timeout { break; }
+                if !a.fragment_authorized() || a.activity.lock().unwrap().elapsed() >= state.limits.udp_idle_timeout { break; }
                 let Some(max) = (if a.fragmented.is_some() { bridge::payload_capacity(&connection, a.max_payload) } else { transport::payload_limit(&connection, a.max_payload) }) else { break; };
                 if size > max { state.metrics.udp_oversize.fetch_add(1, Ordering::Relaxed); continue; }
                 if a.fragmented.is_some() {
@@ -1344,7 +1464,10 @@ async fn udp_return(
                 let frame = DatagramFrame { service_handle: a.service_handle, association_id: id, generation: a.generation,
                     sequence, payload: bytes::Bytes::copy_from_slice(&buffer[..size]) };
                 let Some(next) = sequence.checked_add(1) else { break; }; sequence = next;
-                if frame.encode().and_then(|bytes| connection.send_datagram(bytes).map_err(|_| Error::Transport)).is_ok() {
+                if frame.encode().and_then(|bytes| a.resource.work.control().send_immediately(|| {
+                    if !a.fragment_authorized() { return Err(Error::ServiceDenied); }
+                    connection.send_datagram(bytes).map_err(|_| Error::Transport)
+                })).is_ok() {
                     state.metrics.udp_returned.fetch_add(1, Ordering::Relaxed);
                 } else { state.metrics.udp_dropped.fetch_add(1, Ordering::Relaxed); }
             }
@@ -1402,7 +1525,12 @@ fn send_fragmented_return(
         if !permitted || !aggregate || !a.fragment_authorized() {
             return Err(Error::Limit);
         }
-        bridge::send_fragment(connection, frame, capacity)?;
+        a.resource.work.control().send_immediately(|| {
+            if !a.fragment_authorized() {
+                return Err(Error::ServiceDenied);
+            }
+            bridge::send_fragment(connection, frame, capacity)
+        })?;
     }
     Ok(())
 }

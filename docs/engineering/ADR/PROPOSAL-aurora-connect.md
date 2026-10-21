@@ -6,6 +6,10 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento81 — retirar UDP sem revogar a conexão do jogo
+
+Adicionar API local aguardada por lease/serviço/revisão para negar permanentemente novas autorizações UDP e liberar todos os seus recursosHost. Registro estático e Work RAII cobrem setup, socket/permit, retorno e Completed; último drop precede conclusão. Gate de publicação/selo e última tentativa síncrona de I/O linearizam corridas sem await sob mutex. Desativação remove diretamente o recurso do mapa e conserva ownership depois de perder waiter, sem esperar controle do peer. Não alterar TCP, outros grants, buckets, clocks, consumo ou wire. [Contrato81](../../aurora-connect-udp-service-disable.md). Focais, regressões locais e QA aprovados; falhas intermediárias de retenção da fixture preservadas no task. Nenhum aviso remoto ou áudio por consequência; Guest pode manter ponte e bytes já enfileirados podem chegar.
+
 ### Incremento80 — observação transitória no painel, sem nova autorização
 
 Projetar a seleção78 somente durante fases vivas e sob a autoridade original, em cada resposta de snapshot após os gates do comando. Usar DTO opcional fechado schema1; conservar pathState/relayEnabled anteriores e omitir em revisão/exportação/digest. No grupo, cada participante recebe somente a sua amostra, sem agregado global. Fonte Guest promove Weak apenas na consulta síncrona, preservando79. Geração muda somente quando a projeção efetiva muda; cancelamento não produz amostra intermediária. Frontend oculta informação anterior após Stop incerto até receber confirmação válida e mantém os controles de encerramento. [Contrato80](../../aurora-connect-desktop-path-observation.md). Nenhuma permissão de rede/serviço/relay público ou homologação decorre da apresentação.

@@ -48,8 +48,10 @@ async fn original_schema_three_authority_rejects_civil_jumps_before_watcher() {
     let wall = Arc::new(AtomicU64::new(issued));
     let invitation = invitation.with_test_wall_clock(wall.clone());
     let limits = Limits::default();
+    let control = udp_service::Control::new();
+    let work = control.begin().unwrap();
+    let permit = Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap();
     let association = Association {
-        socket: Arc::new(socket),
         service_handle: 2,
         generation: 1,
         max_payload: 4096,
@@ -74,6 +76,7 @@ async fn original_schema_three_authority_rejects_civil_jumps_before_watcher() {
         lease_unix_deadline: invitation.session_expires_at_unix_ms(),
         lease_deadline: Instant::now() + Duration::from_secs(120),
         session_authority: Some(invitation.clone()),
+        resource: udp_service::Resource::new(socket, permit, work),
     };
     assert!(association.fragment_authorized());
     for invalid_wall in [issued - 1, invitation.session_expires_at_unix_ms()] {

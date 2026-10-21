@@ -4,6 +4,8 @@ Reconciliação: 29/09/2026, base cumulativa alpha.14 em `5ac2f7e288e77fbb0d5c0d
 
 ## 1. Escopo e autoridade
 
+Incremento81 permite ao proprietário nativo desativar permanentemente um serviço UDP exato de uma lease e aguardar sua liberação real sem encerrar TCP/outros serviços/participantes. [Contrato81](../aurora-connect-udp-service-disable.md). Registro antes de I/O, último owner de recurso/payload e gates finais V1/V2 preservam quotas/clocks/consumo/wire. **PROTÓTIPO**, focais, regressões locais e revisão aprovados; nenhum novo caller desktop, notice remoto ou binding de voz. Guest pode conservar sua ponte e bytes já enfileirados podem chegar. Não homologa Minecraft/áudio/redes nem reativa serviço na mesma autoridade.
+
 Incremento80 integra a observação78 nos snapshots e no painel experimental: campo opcional schema1 fechado, individual ou por lease do grupo, sem alterar revisão/digest/exportação, contratos legados ou autorização. [Contrato80](../aurora-connect-desktop-path-observation.md). Fonte original revalidada em cada resposta, sem reter Endpoint; cancelamento/resultado incerto removem a amostra da apresentação. **PROTÓTIPO**, provas locais registradas no task, sem homologação gráfica, Minecraft, áudio ou nova rede. Relay público continua desligado.
 
 Incremento79 remove a retenção de Endpoint pela origem de abertura pronta do Guest. [Contrato79](../aurora-connect-guest-source-cleanup.md). A origem usa referência fraca ao ator e é removida ao encerrar, enquanto workers continuam pertencentes à operação até terminar. **PROTÓTIPO**, com reprodução da falha anterior, rebind causal e regressão local; não homologa launcher gráfico, jogo, voz ou rede externa. Observar caminho não deve recriar esse owner.
