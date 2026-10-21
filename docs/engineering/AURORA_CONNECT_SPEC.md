@@ -4,6 +4,8 @@ Reconciliação: 29/09/2026, base cumulativa alpha.14 em `5ac2f7e288e77fbb0d5c0d
 
 ## 1. Escopo e autoridade
 
+84A acrescenta factory privada de cópia Doctor e EULA por slots/IDs/claim duráveis, revisão consumível e recuperação com guard real/revisão novos; **PROTÓTIPO** de arquivos,27 focais PASS e opt-in real de arquivos1 PASS, sem Java. Lab ancestral vinculado; DB observado sem inicialização/reparo/write, lock comum pode criar arquivo vazio ausente sem truncar; paths longos internos derivados/pinados. Preparação incompleta sem IDs publicados fica NeedsRecovery. Full578 PASS/66 ignorados e fmt/Clippy all/default/connect PASS, detalhes no task; review EULA-only não autoriza execução/STATUS84C nem voz/GUI/rede. [Contrato84](../aurora-connect-dedicated-status.md).
+
 Incremento84 está **PARCIAL**: [contrato84](../aurora-connect-dedicated-status.md) aprovado antes do código para produtor STATUS privado. Prelude corrige readerTCP Windows (returned length/tabela inteira/scopeIPv6/pós-proof), com8 focais/545 regressão PASS e checks/QA. Não implementa sozinho EULA/produtorJava/fonteTCP sob83, nem altera política de descoberta. Nenhum gate de jogo/GUI/áudio/redes é promovido; demais checkpoints seguem em implementação.
 
 84B implementa amostraTCP interna do Child original sob o mesmo slot/queryJob83 que UDP, prova e decisão final comuns, literal loopback exato e sem normalização. **PROTÓTIPO**,29 focais PASS/1 helper ignorado, checks/QA;545 acima é regressão do prelude anterior. Não concede readiness/ingresso, não é produtor Minecraft e não altera policy de descoberta pública ou gates de voz.

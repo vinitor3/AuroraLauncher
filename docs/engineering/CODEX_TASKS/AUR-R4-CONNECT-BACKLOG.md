@@ -8,6 +8,8 @@ Documentos de autoridade: [roadmap](../MASTER_ROADMAP.md), [especificação](../
 
 ## Estado da execução — 21/10/2026
 
+84A/002/003/006/007/008 entrega factory privada/Doctor e EULA com slots/claim/IDs, uso único e recovery com guard/revisão novos. **PROTÓTIPO** de arquivos,27 focais PASS, opt-in de arquivos reais1 PASS, full578 PASS/66 ignorados, fmt/Clippy PASS e QA; comandos no task. Corrigiu NoInit, path longo interno e root replay comprovado RED. Sem execução Java/STATUS, EULA-only não concede spawn; produtor84C e vínculo de voz continuam pendentes. Não promover R3/GUI/Minecraft/áudio/redes ou reservar ID novo.
+
 Incremento84/002/003/004/006/007/008 está **PARCIAL**, rumo ao produtor dedicado STATUS privado. [Contrato84](../../aurora-connect-dedicated-status.md) aprovado antes do código. Prelude corrige readerTCP Windows,8 focais/545 regressão PASS/checks/QA; EULA/factory/proveniência, TCP sob83 e opt-inJava ainda não são entregues por esse checkpoint. Nenhum ID novo ou gate R3/Minecraft/GUI/áudio/rede promovido; nove pares e backlog restante preservados.
 
 84B entrega TCP literal/exato sob mesmo QueryJob83 de UDP,29 focais PASS/1 helper ignorado e checks/QA; sem novo slot/owner e sem readiness por inferência. EULA/factory/Java continuam pendentes. Regresso545 é do prelude, sem nova homologação ou ID.

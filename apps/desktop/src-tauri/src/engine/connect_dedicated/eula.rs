@@ -1,0 +1,703 @@
+use super::super::VoiceMutationGuard;
+use super::*;
+use factory::{Bundle, PreparedStatus};
+
+const CLAIM: &str = "claim.json";
+const INTENT: &str = "intent.json";
+const SNAPSHOT: &str = "snapshot.bin";
+const STAGE: &str = "stage.bin";
+const OLD: &str = "old.bin";
+const APPLIED: &str = "applied.bin";
+const ORIGINAL_MARK: &str = "original-moved.json";
+const APPLIED_MARK: &str = "applied.json";
+const SPAWN_MARK: &str = "may-have-spawned.json";
+const RESTORE_INTENT: &str = "restore-intent.json";
+const RESTORED: &str = "restored.json";
+const SLOTS: [&str; 11] = [
+    CLAIM,
+    INTENT,
+    SNAPSHOT,
+    STAGE,
+    OLD,
+    APPLIED,
+    ORIGINAL_MARK,
+    APPLIED_MARK,
+    SPAWN_MARK,
+    RESTORE_INTENT,
+    RESTORED,
+];
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) enum EulaOutcome {
+    Restored,
+    Unchanged,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+enum Physical {
+    Unchanged,
+    Prepared,
+    OriginalParked,
+    Applied,
+    AppliedParked,
+    Restored,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Claim {
+    schema: u32,
+    bundle: BundleId,
+    transaction: Uuid,
+    manifest_sha256: String,
+    review_digest: String,
+    original: Observation,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Intent {
+    schema: u32,
+    transaction: Uuid,
+    snapshot: Observation,
+    stage: Observation,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+enum Phase {
+    OriginalMoved,
+    Applied,
+    MayHaveSpawned,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Marker {
+    schema: u32,
+    transaction: Uuid,
+    phase: Phase,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct RestoreIntent {
+    schema: u32,
+    transaction: Uuid,
+    from: Physical,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Restored {
+    schema: u32,
+    transaction: Uuid,
+    outcome: EulaOutcome,
+}
+struct State {
+    claim: Claim,
+    physical: Physical,
+    restore: Option<RestoreIntent>,
+    terminal: Option<Restored>,
+    digest: String,
+    may_have_spawned: bool,
+}
+
+pub(crate) struct AppliedEula {
+    prepared: PreparedStatus,
+    transaction: Uuid,
+    may_have_spawned: bool,
+}
+pub(crate) struct EulaRecoveryPlan {
+    bundle: Bundle,
+    guard: VoiceMutationGuard,
+    review: Review,
+    state_digest: String,
+    deadline: Instant,
+    hooks: Hooks,
+}
+#[derive(Serialize, PartialEq, Eq)]
+pub(super) struct ApprovedFiles {
+    original: Observation,
+    properties: Observation,
+}
+
+pub(super) fn execution_digest(bundle: &Bundle, review_id: Uuid) -> Result<String> {
+    digest_observations(bundle, review_id, &execution_observations(bundle)?)
+}
+fn execution_observations(bundle: &Bundle) -> Result<ApprovedFiles> {
+    absent(&bundle.transaction.join(CLAIM))?;
+    if fs::read_dir(&bundle.transaction)?.next().is_some() {
+        return Err(Error::NeedsRecovery);
+    }
+    let (eula, bytes) = observe_file(&bundle.copy.root().join("eula.txt"), 4096)?;
+    let (properties, configuration) =
+        observe_file(&bundle.copy.root().join("server.properties"), 4096)?;
+    if bytes != EULA_FALSE || configuration != resources::PROPERTIES {
+        return Err(Error::Changed);
+    }
+    Ok(ApprovedFiles {
+        original: eula,
+        properties,
+    })
+}
+fn digest_observations(
+    bundle: &Bundle,
+    review_id: Uuid,
+    observations: &ApprovedFiles,
+) -> Result<String> {
+    Ok(digest(&encode(&(
+        1,
+        "native_status_eula",
+        review_id,
+        &bundle.manifest,
+        observations,
+        digest(EULA_TRUE),
+    ))?))
+}
+pub(super) fn execution_review(
+    bundle: &Bundle,
+    guard: &InstanceMutationGuard,
+) -> Result<(Review, ApprovedFiles)> {
+    bundle.validate(guard)?;
+    let review_id = Uuid::new_v4();
+    let observations = execution_observations(bundle)?;
+    Ok((
+        Review {
+            review_id,
+            digest: digest_observations(bundle, review_id, &observations)?,
+            purpose: "native_status_eula",
+            bundle_id: bundle.manifest.id,
+            before: String::from_utf8_lossy(EULA_FALSE).into(),
+            after: format!(
+                "{}Restauração byte-exata do original após o término próprio.",
+                String::from_utf8_lossy(EULA_TRUE)
+            ),
+            details: vec![
+                bundle.copy.root().display().to_string(),
+                "Uso único; revisão EULA; nenhuma execução Java neste checkpoint".into(),
+            ],
+        },
+        observations,
+    ))
+}
+fn names(bundle: &Bundle) -> Result<std::collections::BTreeSet<String>> {
+    let mut names = std::collections::BTreeSet::new();
+    for entry in fs::read_dir(&bundle.transaction)? {
+        let entry = entry?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| Error::UnsafePath)?;
+        if !SLOTS.contains(&name.as_str()) || !names.insert(name) || names.len() > SLOTS.len() {
+            return Err(Error::NeedsRecovery);
+        }
+        let _ = recovery::secure_open(&entry.path())?;
+    }
+    Ok(names)
+}
+fn optional(
+    bundle: &Bundle,
+    name: &str,
+    names: &std::collections::BTreeSet<String>,
+) -> Result<Option<Observation>> {
+    if names.contains(name) {
+        Ok(Some(observe_file(&bundle.transaction.join(name), 4096)?.0))
+    } else {
+        Ok(None)
+    }
+}
+fn target(bundle: &Bundle) -> Result<Option<Observation>> {
+    let path = bundle.copy.root().join("eula.txt");
+    match fs::symlink_metadata(&path) {
+        Ok(_) => Ok(Some(observe_file(&path, 4096)?.0)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(Error::Io),
+    }
+}
+fn marker(
+    bundle: &Bundle,
+    names: &std::collections::BTreeSet<String>,
+    name: &str,
+    phase: Phase,
+    transaction: Uuid,
+) -> Result<bool> {
+    if !names.contains(name) {
+        return Ok(false);
+    }
+    let actual: Marker = read_json(&bundle.transaction.join(name))?;
+    if actual
+        != (Marker {
+            schema: 1,
+            transaction,
+            phase,
+        })
+    {
+        return Err(Error::NeedsRecovery);
+    }
+    Ok(true)
+}
+fn read_state(bundle: &Bundle) -> Result<State> {
+    let names = names(bundle)?;
+    let claim: Claim = read_json(&bundle.transaction.join(CLAIM))?;
+    if claim.schema != 1
+        || claim.bundle != bundle.manifest.id
+        || claim.manifest_sha256 != digest(&encode(&bundle.manifest)?)
+        || claim.original.bytes != EULA_FALSE.len() as u64
+        || claim.original.sha256 != digest(EULA_FALSE)
+        || claim.review_digest.len() != 64
+    {
+        return Err(Error::NeedsRecovery);
+    }
+    let current = target(bundle)?;
+    let intent: Option<Intent> = if names.contains(INTENT) {
+        Some(read_json(&bundle.transaction.join(INTENT))?)
+    } else {
+        None
+    };
+    let physical = if let Some(intent) = &intent {
+        if intent.schema != 1
+            || intent.transaction != claim.transaction
+            || intent.snapshot.bytes != EULA_FALSE.len() as u64
+            || intent.snapshot.sha256 != digest(EULA_FALSE)
+            || intent.stage.bytes != EULA_TRUE.len() as u64
+            || intent.stage.sha256 != digest(EULA_TRUE)
+            || intent.snapshot.identity == claim.original.identity
+            || intent.stage.identity == claim.original.identity
+            || intent.stage.identity == intent.snapshot.identity
+        {
+            return Err(Error::NeedsRecovery);
+        }
+        if optional(bundle, SNAPSHOT, &names)?.as_ref() != Some(&intent.snapshot) {
+            return Err(Error::NeedsRecovery);
+        }
+        let n = optional(bundle, STAGE, &names)?;
+        let o = optional(bundle, OLD, &names)?;
+        let a = optional(bundle, APPLIED, &names)?;
+        if n.as_ref().is_some_and(|v| v != &intent.stage)
+            || o.as_ref().is_some_and(|v| v != &claim.original)
+            || a.as_ref().is_some_and(|v| v != &intent.stage)
+        {
+            return Err(Error::NeedsRecovery);
+        }
+        match (n.is_some(), o.is_some(), a.is_some(), current.as_ref()) {
+            (true, false, false, Some(t)) if t == &claim.original => Physical::Prepared,
+            (true, true, false, None) => Physical::OriginalParked,
+            (false, true, false, Some(t)) if t == &intent.stage => Physical::Applied,
+            (false, true, true, None) => Physical::AppliedParked,
+            (false, false, true, Some(t)) if t == &claim.original => Physical::Restored,
+            _ => return Err(Error::NeedsRecovery),
+        }
+    } else {
+        if names
+            .iter()
+            .any(|n| ![CLAIM, RESTORE_INTENT, RESTORED].contains(&n.as_str()))
+            || current.as_ref() != Some(&claim.original)
+        {
+            return Err(Error::NeedsRecovery);
+        }
+        Physical::Unchanged
+    };
+    let original = marker(
+        bundle,
+        &names,
+        ORIGINAL_MARK,
+        Phase::OriginalMoved,
+        claim.transaction,
+    )?;
+    let applied = marker(
+        bundle,
+        &names,
+        APPLIED_MARK,
+        Phase::Applied,
+        claim.transaction,
+    )?;
+    let spawned = marker(
+        bundle,
+        &names,
+        SPAWN_MARK,
+        Phase::MayHaveSpawned,
+        claim.transaction,
+    )?;
+    let restore: Option<RestoreIntent> = if names.contains(RESTORE_INTENT) {
+        Some(read_json(&bundle.transaction.join(RESTORE_INTENT))?)
+    } else {
+        None
+    };
+    if applied && !original || spawned && !applied {
+        return Err(Error::NeedsRecovery);
+    }
+    if matches!(
+        physical,
+        Physical::Applied | Physical::AppliedParked | Physical::Restored
+    ) && !original
+    {
+        return Err(Error::NeedsRecovery);
+    }
+    if matches!(physical, Physical::Unchanged | Physical::OriginalParked) && applied {
+        return Err(Error::NeedsRecovery);
+    }
+    if physical == Physical::Prepared && (applied || (original && restore.is_none())) {
+        return Err(Error::NeedsRecovery);
+    }
+    if let Some(r) = &restore {
+        let allowed = match r.from {
+            Physical::Unchanged => physical == Physical::Unchanged,
+            Physical::Prepared => physical == Physical::Prepared,
+            Physical::OriginalParked => {
+                matches!(physical, Physical::OriginalParked | Physical::Prepared)
+            }
+            Physical::Applied => matches!(
+                physical,
+                Physical::Applied | Physical::AppliedParked | Physical::Restored
+            ),
+            Physical::AppliedParked => {
+                matches!(physical, Physical::AppliedParked | Physical::Restored)
+            }
+            Physical::Restored => physical == Physical::Restored,
+        };
+        if r.schema != 1 || r.transaction != claim.transaction || !allowed {
+            return Err(Error::NeedsRecovery);
+        }
+    } else if matches!(physical, Physical::AppliedParked | Physical::Restored) {
+        return Err(Error::NeedsRecovery);
+    }
+    let terminal: Option<Restored> = if names.contains(RESTORED) {
+        Some(read_json(&bundle.transaction.join(RESTORED))?)
+    } else {
+        None
+    };
+    if let Some(done) = &terminal {
+        if restore.is_none()
+            || done.schema != 1
+            || done.transaction != claim.transaction
+            || match done.outcome {
+                EulaOutcome::Restored => physical != Physical::Restored,
+                EulaOutcome::Unchanged => {
+                    !matches!(physical, Physical::Unchanged | Physical::Prepared)
+                }
+            }
+        {
+            return Err(Error::NeedsRecovery);
+        }
+    }
+    // Review binds physical identities of metadata too, while S/N/O/A/T are
+    // additionally bound to their original identities across rename/reopen.
+    let mut observations = Vec::new();
+    for name in &names {
+        observations.push((
+            name.clone(),
+            observe_file(&bundle.transaction.join(name), MAX_JOURNAL)?.0,
+        ));
+    }
+    let state_digest = digest(&encode(&(
+        claim.transaction,
+        physical,
+        current,
+        observations,
+    ))?);
+    Ok(State {
+        claim,
+        physical,
+        restore,
+        terminal,
+        digest: state_digest,
+        may_have_spawned: spawned,
+    })
+}
+fn write_marker(bundle: &Bundle, transaction: Uuid, name: &str, phase: Phase) -> Result<()> {
+    publish(
+        &bundle.transaction.join(name),
+        &Marker {
+            schema: 1,
+            transaction,
+            phase,
+        },
+    )
+}
+
+pub(super) fn apply(prepared: PreparedStatus, expected: &str) -> Result<AppliedEula> {
+    if expected != prepared.review_digest() {
+        return Err(Error::Digest);
+    }
+    let bundle = &prepared.bundle;
+    prepared.hooks.before_claim()?;
+    absent(&bundle.transaction.join(CLAIM))?;
+    if fs::read_dir(&bundle.transaction)?.next().is_some() {
+        return Err(Error::NeedsRecovery);
+    }
+    let observed = execution_observations(bundle)?;
+    if observed != prepared.approved_files {
+        return Err(Error::Changed);
+    }
+    let original = observed.original;
+    let bytes = EULA_FALSE;
+    let transaction = Uuid::new_v4();
+    let claim = Claim {
+        schema: 1,
+        bundle: bundle.manifest.id,
+        transaction,
+        manifest_sha256: digest(&encode(&bundle.manifest)?),
+        review_digest: expected.into(),
+        original,
+    };
+    prepared.confirm_fresh(expected)?;
+    publish(&bundle.transaction.join(CLAIM), &claim)?;
+    prepared.hooks.checkpoint(Step::Claim)?;
+    recovery::write_new(&bundle.transaction.join(SNAPSHOT), bytes)?;
+    prepared.hooks.checkpoint(Step::Snapshot)?;
+    recovery::write_new(&bundle.transaction.join(STAGE), EULA_TRUE)?;
+    prepared.hooks.checkpoint(Step::Stage)?;
+    let intent = Intent {
+        schema: 1,
+        transaction,
+        snapshot: observe_file(&bundle.transaction.join(SNAPSHOT), 4096)?.0,
+        stage: observe_file(&bundle.transaction.join(STAGE), 4096)?.0,
+    };
+    publish(&bundle.transaction.join(INTENT), &intent)?;
+    prepared.hooks.checkpoint(Step::Intent)?;
+    bundle.validate(&prepared.guard)?;
+    if read_state(bundle)?.physical != Physical::Prepared {
+        return Err(Error::NeedsRecovery);
+    }
+    recovery::durable_rename(
+        &bundle.copy.root().join("eula.txt"),
+        &bundle.transaction.join(OLD),
+    )?;
+    prepared.hooks.renamed();
+    prepared.hooks.checkpoint(Step::OriginalMoved)?;
+    if read_state(bundle)?.physical != Physical::OriginalParked {
+        return Err(Error::NeedsRecovery);
+    }
+    write_marker(bundle, transaction, ORIGINAL_MARK, Phase::OriginalMoved)?;
+    prepared.hooks.checkpoint(Step::OriginalMarked)?;
+    bundle.validate(&prepared.guard)?;
+    if read_state(bundle)?.physical != Physical::OriginalParked {
+        return Err(Error::NeedsRecovery);
+    }
+    recovery::durable_rename(
+        &bundle.transaction.join(STAGE),
+        &bundle.copy.root().join("eula.txt"),
+    )?;
+    prepared.hooks.renamed();
+    prepared.hooks.checkpoint(Step::AppliedMoved)?;
+    if read_state(bundle)?.physical != Physical::Applied {
+        return Err(Error::NeedsRecovery);
+    }
+    write_marker(bundle, transaction, APPLIED_MARK, Phase::Applied)?;
+    prepared.hooks.checkpoint(Step::AppliedMarked)?;
+    bundle.validate(&prepared.guard)?;
+    Ok(AppliedEula {
+        prepared,
+        transaction,
+        may_have_spawned: false,
+    })
+}
+#[allow(dead_code)] // Private transaction operations; producer integration follows84A.
+impl AppliedEula {
+    pub(super) fn restore_before_spawn(self) -> Result<EulaOutcome> {
+        if self.may_have_spawned {
+            return Err(Error::NeedsRecovery);
+        }
+        let state = read_state(&self.prepared.bundle)?;
+        if state.claim.transaction != self.transaction
+            || state.claim.review_digest != self.prepared.review_digest()
+            || state.may_have_spawned
+        {
+            return Err(Error::NeedsRecovery);
+        }
+        restore(
+            &self.prepared.bundle,
+            Authority::NeverSpawned(&self.prepared.guard),
+            &self.prepared.hooks,
+        )
+    }
+    // One-way removal of the pre-spawn authority. No caller supplies a bool,
+    // report or PID to manufacture an opposite transition.
+    pub(super) fn mark_may_have_spawned(&mut self) -> Result<()> {
+        if self.may_have_spawned {
+            return Err(Error::Consumed);
+        }
+        self.may_have_spawned = true;
+        let bundle = &self.prepared.bundle;
+        bundle.validate(&self.prepared.guard)?;
+        let state = read_state(bundle)?;
+        if state.physical != Physical::Applied
+            || state.claim.transaction != self.transaction
+            || state.claim.review_digest != self.prepared.review_digest()
+        {
+            return Err(Error::NeedsRecovery);
+        }
+        write_marker(bundle, self.transaction, SPAWN_MARK, Phase::MayHaveSpawned)?;
+        self.prepared.hooks.checkpoint(Step::MayHaveSpawned)
+    }
+    #[cfg(test)]
+    pub(super) fn test_paths(&self) -> TestPaths {
+        self.prepared.bundle.test_paths()
+    }
+}
+
+enum Authority<'a> {
+    NeverSpawned(&'a InstanceMutationGuard),
+    Recovery(&'a VoiceMutationGuard),
+}
+impl Authority<'_> {
+    fn check(&self, bundle: &Bundle) -> Result<()> {
+        match self {
+            Self::NeverSpawned(guard) => bundle.validate(guard),
+            Self::Recovery(guard) => {
+                guard.recheck()?;
+                bundle.validate(guard.inner())?;
+                guard.recheck()?;
+                Ok(())
+            }
+        }
+    }
+}
+fn restore(bundle: &Bundle, authority: Authority<'_>, hooks: &Hooks) -> Result<EulaOutcome> {
+    authority.check(bundle)?;
+    let mut state = read_state(bundle)?;
+    if let Some(done) = state.terminal {
+        authority.check(bundle)?;
+        if read_state(bundle)?.digest != state.digest {
+            return Err(Error::Changed);
+        }
+        return Ok(done.outcome);
+    }
+    if state.restore.is_none() {
+        publish(
+            &bundle.transaction.join(RESTORE_INTENT),
+            &RestoreIntent {
+                schema: 1,
+                transaction: state.claim.transaction,
+                from: state.physical,
+            },
+        )?;
+        hooks.checkpoint(Step::RestoreIntent)?;
+    }
+    state = read_state(bundle)?;
+    if state.physical == Physical::Applied {
+        authority.check(bundle)?;
+        if read_state(bundle)?.digest != state.digest {
+            return Err(Error::Changed);
+        }
+        recovery::durable_rename(
+            &bundle.copy.root().join("eula.txt"),
+            &bundle.transaction.join(APPLIED),
+        )?;
+        hooks.renamed();
+        hooks.checkpoint(Step::AppliedParked)?;
+        state = read_state(bundle)?;
+        if state.physical != Physical::AppliedParked {
+            return Err(Error::NeedsRecovery);
+        }
+    }
+    if matches!(
+        state.physical,
+        Physical::OriginalParked | Physical::AppliedParked
+    ) {
+        authority.check(bundle)?;
+        if read_state(bundle)?.digest != state.digest {
+            return Err(Error::Changed);
+        }
+        recovery::durable_rename(
+            &bundle.transaction.join(OLD),
+            &bundle.copy.root().join("eula.txt"),
+        )?;
+        hooks.renamed();
+        hooks.checkpoint(Step::OriginalRestored)?;
+        state = read_state(bundle)?;
+    }
+    let outcome = match state.physical {
+        Physical::Restored => EulaOutcome::Restored,
+        Physical::Unchanged | Physical::Prepared => EulaOutcome::Unchanged,
+        _ => return Err(Error::NeedsRecovery),
+    };
+    authority.check(bundle)?;
+    if read_state(bundle)?.digest != state.digest {
+        return Err(Error::Changed);
+    }
+    publish(
+        &bundle.transaction.join(RESTORED),
+        &Restored {
+            schema: 1,
+            transaction: state.claim.transaction,
+            outcome,
+        },
+    )?;
+    hooks.checkpoint(Step::RestoredMarked)?;
+    authority.check(bundle)?;
+    let done = read_state(bundle)?.terminal.ok_or(Error::NeedsRecovery)?;
+    Ok(done.outcome)
+}
+
+pub(crate) fn plan_eula_recovery(id: BundleId) -> Result<EulaRecoveryPlan> {
+    #[cfg(test)]
+    {
+        prepare_recovery(&lab_root()?, id, None, Hooks::default())
+    }
+    #[cfg(not(test))]
+    {
+        prepare_recovery(&lab_root()?, id, Hooks)
+    }
+}
+pub(super) fn prepare_recovery(
+    lab: &Path,
+    id: BundleId,
+    #[cfg(test)] probe: Option<TestProbe>,
+    hooks: Hooks,
+) -> Result<EulaRecoveryPlan> {
+    let bundle = Bundle::reopen(lab, id)?;
+    #[cfg(test)]
+    let guard = match probe {
+        Some(probe) => super::super::process::acquire_with_probe(&bundle.copy, probe)?,
+        None => super::super::acquire_voice_mutation_guard(&bundle.copy)?,
+    };
+    #[cfg(not(test))]
+    let guard = super::super::acquire_voice_mutation_guard(&bundle.copy)?;
+    Authority::Recovery(&guard).check(&bundle)?;
+    let state = read_state(&bundle)?;
+    let review_id = Uuid::new_v4();
+    let review = Review {
+        review_id,
+        digest: digest(&encode(&(
+            1,
+            "native_status_eula_recovery",
+            review_id,
+            bundle.manifest.id,
+            &state.digest,
+        ))?),
+        purpose: "native_status_eula_recovery",
+        bundle_id: bundle.manifest.id,
+        before: format!("{:?}", state.physical),
+        after: String::from_utf8_lossy(EULA_FALSE).into(),
+        details: vec![
+            bundle.copy.root().display().to_string(),
+            "Restaurar somente o original reconhecido; não iniciar processo nem liberar uso único"
+                .into(),
+        ],
+    };
+    Ok(EulaRecoveryPlan {
+        bundle,
+        guard,
+        review,
+        state_digest: state.digest,
+        deadline: Instant::now() + REVIEW_TTL,
+        hooks,
+    })
+}
+#[allow(dead_code)] // Explicit guarded recovery API, with no automatic caller.
+impl EulaRecoveryPlan {
+    pub(crate) fn review(&self) -> &Review {
+        &self.review
+    }
+    pub(crate) fn confirm(self, expected: &str) -> Result<EulaOutcome> {
+        approve(&self.review, self.deadline, expected)?;
+        Authority::Recovery(&self.guard).check(&self.bundle)?;
+        if read_state(&self.bundle)?.digest != self.state_digest {
+            return Err(Error::Changed);
+        }
+        approve(&self.review, self.deadline, expected)?;
+        restore(&self.bundle, Authority::Recovery(&self.guard), &self.hooks)
+    }
+    #[cfg(test)]
+    pub(super) fn expire_for_test(&mut self) {
+        self.deadline = Instant::now() - Duration::from_secs(1);
+    }
+    #[cfg(test)]
+    pub(super) fn test_paths(&self) -> TestPaths {
+        self.bundle.test_paths()
+    }
+}

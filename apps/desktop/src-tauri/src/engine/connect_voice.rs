@@ -15,6 +15,10 @@ use std::{
 };
 use uuid::Uuid;
 
+#[cfg(all(windows, feature = "connect-lab"))]
+#[path = "connect_dedicated.rs"]
+mod dedicated;
+
 const CONFIG: &str = "config/voicechat/voicechat-server.properties";
 const SVC_SHA256: &str = "972a01592f670aa57f2dc2e3587a656b798106037468c61e4bfb49eba7d6ae36";
 const SVC_BYTES: u64 = 5_369_475;
