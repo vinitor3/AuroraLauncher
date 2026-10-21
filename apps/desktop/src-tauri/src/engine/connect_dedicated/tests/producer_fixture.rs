@@ -36,7 +36,7 @@ pub(super) enum Action {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "camelCase", deny_unknown_fields)]
-enum Event {
+pub(super) enum Event {
     Ready { nonce: String, endpoint: SocketAddr },
     StatusObserved { pong_sent: bool },
     StopObserved { lines: usize, eof: bool },
@@ -318,9 +318,9 @@ fn write_frame(stream: &mut TcpStream, body: &[u8]) -> Result<(), &'static str> 
         .map_err(|_| "status_fixture_packet_write")
 }
 
-struct Notice {
-    event: Event,
-    forwarded: mpsc::SyncSender<()>,
+pub(super) struct Notice {
+    pub event: Event,
+    pub forwarded: mpsc::SyncSender<()>,
 }
 
 fn notice(
@@ -345,7 +345,7 @@ fn notice(
     }
 }
 
-fn status_session(
+pub(super) fn status_session(
     mut stream: TcpStream,
     mode: String,
     stop: Arc<AtomicBool>,

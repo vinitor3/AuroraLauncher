@@ -8,7 +8,7 @@ mod actual_resources;
 #[path = "tests/actual_voice_resources.rs"]
 mod actual_voice_resources;
 #[path = "tests/files.rs"]
-mod files;
+pub(super) mod files;
 #[path = "tests/fixture.rs"]
 mod fixture;
 #[path = "tests/hardening.rs"]
@@ -39,6 +39,12 @@ mod voice_eula;
 mod voice_factory;
 #[path = "tests/voice_fixture.rs"]
 mod voice_fixture;
+#[path = "tests/voice_pre_spawn.rs"]
+mod voice_pre_spawn;
+#[path = "tests/voice_producer_fixture.rs"]
+mod voice_producer_fixture;
+#[path = "tests/voice_runtime.rs"]
+mod voice_runtime;
 
 use fixture::{bytes, locked, slot, target, unlocked, Fixture};
 

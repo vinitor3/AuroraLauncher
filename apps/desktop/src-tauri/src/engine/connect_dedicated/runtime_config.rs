@@ -1,9 +1,5 @@
 //! Bounded runtime reads for the two compiled configuration paths. This module
 //! has no run/source, mutation guard, database, inventory or restore authority.
-// Experimental default-off foundation; the native source consumer arrives in
-// C1. Keep test lints enabled and reconsider this scope when that is integrated.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use super::{manifest::StoredVoiceProfileV2, recovery, FileIdentity};
 use crate::engine::recovery::RecoveryError;
 use sha2::{Digest, Sha256};

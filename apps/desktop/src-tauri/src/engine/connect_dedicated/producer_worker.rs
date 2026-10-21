@@ -236,7 +236,7 @@ impl Worker {
                 return Err(DedicatedFailure::Readiness);
             }
             self.hooks.at(ProducerPoint::BeforeReserve);
-            let job = match self.shared.reserve(false) {
+            let job = match self.shared.reserve(QueryKind::Readiness) {
                 Ok(job) => job,
                 Err(DedicatedError::Closed) if !self.shared.open() => return Ok(()),
                 Err(_) => return Err(DedicatedFailure::Source),

@@ -10,7 +10,7 @@ use std::{
 };
 use uuid::Uuid;
 
-pub(super) struct TestRoot {
+pub(in super::super) struct TestRoot {
     path: PathBuf,
     parent: PathBuf,
     canonical_path: PathBuf,
@@ -19,7 +19,7 @@ pub(super) struct TestRoot {
 }
 
 impl TestRoot {
-    pub(super) fn new() -> Self {
+    pub(in super::super) fn new() -> Self {
         // Production rejects device/UNC syntax before access. Keep the ordinary
         // absolute input spelling; canonical Windows paths often start with \\?\.
         let temporary = std::env::temp_dir();
@@ -40,7 +40,7 @@ impl TestRoot {
         }
     }
 
-    pub(super) fn path(&self) -> &Path {
+    pub(in super::super) fn path(&self) -> &Path {
         &self.path
     }
 
@@ -83,15 +83,15 @@ impl Drop for TestRoot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Entry {
+pub(in super::super) enum Entry {
     Directory,
     File { bytes: u64, sha256: String },
     Link,
 }
 
-pub(super) type Tree = BTreeMap<String, Entry>;
+pub(in super::super) type Tree = BTreeMap<String, Entry>;
 
-pub(super) fn tree(root: &Path) -> Tree {
+pub(in super::super) fn tree(root: &Path) -> Tree {
     fn walk(root: &Path, path: &Path, depth: usize, total: &mut u64, result: &mut Tree) {
         assert!(depth <= 32 && result.len() < 4096, "fixture_tree_limit");
         let metadata = fs::symlink_metadata(path).expect("fixture_metadata");
@@ -149,7 +149,7 @@ pub(super) fn tree(root: &Path) -> Tree {
 }
 
 #[track_caller]
-pub(super) fn assert_tree(root: &Path, expected: &Tree) {
+pub(in super::super) fn assert_tree(root: &Path, expected: &Tree) {
     let actual = tree(root);
     if &actual == expected {
         return;

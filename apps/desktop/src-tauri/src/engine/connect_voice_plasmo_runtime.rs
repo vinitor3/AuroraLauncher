@@ -1,9 +1,5 @@
 //! Pure validation of the closed Plasmo 2.1.17 runtime profile. No filesystem,
 //! mutation, announcement rendering or proof of a running voice service.
-// Experimental default-off foundation without a native source consumer until
-// C1. This exception is local to this new module and never applies to its tests.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use super::*;
 use serde::de::IgnoredAny;
 

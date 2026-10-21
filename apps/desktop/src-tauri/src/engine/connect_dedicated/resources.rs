@@ -274,6 +274,13 @@ pub(super) struct Resources {
     _directories: Vec<File>,
 }
 impl Resources {
+    pub(super) fn immutable_observations(&self) -> Vec<(String, PathBuf, Observation)> {
+        self.files
+            .iter()
+            .map(|pin| (pin.name.clone(), pin.path.clone(), pin.observation.clone()))
+            .collect()
+    }
+
     pub(super) fn java_executable(&self) -> Result<&Path> {
         self.files
             .iter()

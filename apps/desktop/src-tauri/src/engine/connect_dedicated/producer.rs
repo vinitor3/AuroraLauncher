@@ -14,6 +14,17 @@ use std::{
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+#[path = "producer_voice.rs"]
+mod voice;
+#[cfg(test)]
+pub(super) use voice::plan_voice_for_test;
+#[cfg_attr(not(test), allow(unused_imports))]
+// Private experimental API; no product caller yet.
+pub(crate) use voice::{
+    DedicatedVoiceSource, VoiceRuntimeAnnouncement, VoiceRuntimeBinding, VoiceRuntimeError,
+    VoiceRuntimeSample,
+};
+
 pub(super) const ENDPOINT: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 43001);
 pub(super) const PROTOCOL: i32 = 767;
@@ -142,6 +153,13 @@ impl Recipe {
             prepared.bundle.copy.root().to_path_buf(),
         )
     }
+    fn voice_production(prepared: &factory::PreparedStatus) -> Result<Self> {
+        prepared.bundle.manifest.voice_v2()?;
+        Self::production_paths(
+            &prepared.resources,
+            prepared.bundle.copy.root().to_path_buf(),
+        )
+    }
     // Kept private: executable selection still comes from verified Resources,
     // never from an argv/recipe/approval deserialized by a caller or test index.
     fn production_paths(resources: &resources::Resources, cwd: PathBuf) -> Result<Self> {
@@ -227,6 +245,7 @@ pub(super) struct ExecutionApproval {
     deadline: Instant,
     file_digest: String,
     file_review_id: Uuid,
+    expected_kind: manifest::ManifestKind,
 }
 impl ExecutionApproval {
     pub(super) fn check_fresh(&self) -> Result<()> {
@@ -241,6 +260,12 @@ impl ExecutionApproval {
         )?))
     }
     pub(super) fn check(&self, prepared: &factory::PreparedStatus) -> Result<()> {
+        prepared
+            .approved_files
+            .require_manifest_kind(&prepared.bundle.manifest)?;
+        if prepared.bundle.manifest.kind() != self.expected_kind {
+            return Err(Error::Identity);
+        }
         self.check_fresh()?;
         prepared.confirm_fresh(&self.file_digest)?;
         prepared.resources.recheck()?;
@@ -259,13 +284,35 @@ fn execution_digest_input(
     file_digest: &str,
     recipe: &Recipe,
 ) -> Result<Vec<u8>> {
-    encode(&(1, PURPOSE, review_id, manifest, file_digest, recipe))
+    match manifest.kind() {
+        manifest::ManifestKind::StatusV1 => {
+            encode(&(1, PURPOSE, review_id, manifest, file_digest, recipe))
+        }
+        manifest::ManifestKind::VoiceV2(_) => encode(&(
+            2,
+            "native_voice_execution_v2",
+            review_id,
+            manifest,
+            file_digest,
+            recipe,
+        )),
+    }
 }
 
 #[allow(dead_code)] // Explicit internal execution plan; no IPC or automatic caller.
 pub(crate) fn plan(prepared: factory::PreparedStatus) -> RunResult<DedicatedPlan> {
     prepared.bundle.manifest.status_v1()?;
     let recipe = Recipe::production(&prepared)?;
+    #[cfg(test)]
+    let hooks = Arc::new(TestHooks::default());
+    #[cfg(not(test))]
+    let hooks = ProducerHooks;
+    make_plan(prepared, recipe, hooks)
+}
+#[allow(dead_code)] // Separate closed V2 entry point, never a STATUS relabeling.
+pub(crate) fn plan_voice(prepared: factory::PreparedStatus) -> RunResult<DedicatedPlan> {
+    prepared.bundle.manifest.voice_v2()?;
+    let recipe = Recipe::voice_production(&prepared)?;
     #[cfg(test)]
     let hooks = Arc::new(TestHooks::default());
     #[cfg(not(test))]
@@ -283,24 +330,97 @@ fn make_plan(
     let deadline = prepared.approval_deadline();
     let file_digest = prepared.review().digest.clone();
     let file_review_id = prepared.review().review_id;
+    prepared
+        .approved_files
+        .require_manifest_kind(&prepared.bundle.manifest)?;
+    let expected_kind = prepared.bundle.manifest.kind();
     let mut approval = ExecutionApproval {
         review: Review {
             review_id: Uuid::new_v4(),
             digest: String::new(),
-            purpose: PURPOSE,
+            purpose: match expected_kind {
+                manifest::ManifestKind::StatusV1 => PURPOSE,
+                manifest::ManifestKind::VoiceV2(_) => "native_voice_execution_v2",
+            },
             bundle_id: prepared.bundle_id(),
-            before: "Cópia STATUS privada; EULA false; nenhum processo".into(),
-            after: "Executar dedicado STATUS767 próprio e restaurar EULA após recolher o processo"
-                .into(),
-            details: vec![
-                serde_json::to_string(&recipe).map_err(|_| Error::Identity)?,
-                "Sem mods/LOGIN/voz; observação não autoriza Host ou convites".into(),
-            ],
+            before: match expected_kind {
+                manifest::ManifestKind::StatusV1 => {
+                    "Cópia STATUS privada; EULA false; nenhum processo".into()
+                }
+                manifest::ManifestKind::VoiceV2(_) => {
+                    "Cópia de voz privada; EULA false; nenhum processo".into()
+                }
+            },
+            after: match expected_kind {
+                manifest::ManifestKind::StatusV1 => {
+                    "Executar dedicado STATUS767 próprio e restaurar EULA após recolher o processo"
+                        .into()
+                }
+                manifest::ManifestKind::VoiceV2(_) => {
+                    #[cfg(test)]
+                    if recipe.synthetic {
+                        "Executar fixture própria sem Java; observar STATUS/configuração/UDP; restaurar EULA após a completion original".into()
+                    } else {
+                        "Executar Java dedicado com perfil de voz privado; observar STATUS/configuração/UDP; restaurar EULA após a completion original".into()
+                    }
+                    #[cfg(not(test))]
+                    {
+                        "Executar Java dedicado com perfil de voz privado; observar STATUS/configuração/UDP; restaurar EULA após a completion original".into()
+                    }
+                }
+            },
+            details: {
+                let recipe_detail = serde_json::to_string(&recipe).map_err(|_| Error::Identity)?;
+                match expected_kind {
+                    manifest::ManifestKind::StatusV1 => vec![
+                        recipe_detail,
+                        "Sem mods/LOGIN/voz; observação não autoriza Host ou convites".into(),
+                    ],
+                    manifest::ManifestKind::VoiceV2(_) => {
+                        let mut details = vec![recipe_detail, "Observação limitada; binding IPv4 literal; anúncio padrão; sem áudio/Host/convites".into()];
+                        details.push(format!("Limites aprovados: lifetime {}ms; readiness {}ms; stop {}ms; stdout+stderr {} bytes; {} tentativas; heap máximo 1536MiB; prazo original da preparação sem renovação", recipe.limits.lifetime_ms, recipe.limits.readiness_ms, recipe.limits.stop_ms, recipe.limits.output_bytes, recipe.limits.attempts));
+                        // Execution presents immutable profile metadata from
+                        // the manifest; it must not inherit the file-only
+                        // EULA review's "no Java in this checkpoint" wording.
+                        let voice = prepared.bundle.manifest.voice_v2()?;
+                        details.push(match voice.profile {
+                            manifest::StoredVoiceProfileV2::Svc => {
+                                "Perfil: Simple Voice Chat 2.6.22".into()
+                            }
+                            manifest::StoredVoiceProfileV2::Plasmo => {
+                                "Perfil: Plasmo Voice 2.1.17; Fabric API 0.116.10+1.21.1".into()
+                            }
+                        });
+                        details.push(format!(
+                            "Runtime aprovado: Minecraft {}; Fabric {}; protocolo {}",
+                            voice.runtime.minecraft,
+                            voice.runtime.loader_version,
+                            voice.runtime.protocol
+                        ));
+                        details.push(format!(
+                            "Configuração inicial compilada: {}; {} bytes; SHA-256 {}",
+                            voice.profile.configuration_name(),
+                            voice.profile.configuration().len(),
+                            voice.profile.configuration_sha256()
+                        ));
+                        let initial = &voice.initial_voice_configuration.observation;
+                        details.push(format!(
+                            "Observação inicial: volume {}; índice {}; {} bytes; SHA-256 {}",
+                            initial.identity.volume,
+                            initial.identity.index,
+                            initial.bytes,
+                            initial.sha256
+                        ));
+                        details
+                    }
+                }
+            },
         },
         recipe,
         deadline,
         file_digest,
         file_review_id,
+        expected_kind,
     };
     approval.review.digest = approval.digest_for(&prepared)?;
     approval.check(&prepared)?;
@@ -329,10 +449,20 @@ impl DedicatedPlan {
         if self.hooks.fail_thread {
             return Err(DedicatedError::Thread);
         }
+        let native_nonce = Uuid::new_v4();
+        let voice_context = match self.prepared.bundle.manifest.kind() {
+            manifest::ManifestKind::StatusV1 => None,
+            manifest::ManifestKind::VoiceV2(_) => Some(
+                factory::ImmutableVoiceContext::from_prepared(&self.prepared, native_nonce)?,
+            ),
+        };
+        self.approval.check_fresh()?;
         let started = Instant::now();
         let (sender, receiver) = watch::channel(None);
         let child_cancel = cancel.child_token();
         let shared = Arc::new(Shared {
+            native_nonce,
+            voice_context,
             state: Mutex::new(State {
                 phase: DedicatedPhase::Starting,
                 reason: None,
@@ -432,7 +562,7 @@ impl DedicatedSource {
     /// One exact sample of this run. This supplies no Host admission authority.
     pub(crate) fn observe_tcp(&self) -> RunResult<()> {
         let shared = self.shared.upgrade().ok_or(DedicatedError::Closed)?;
-        let job = shared.reserve(true)?;
+        let job = shared.reserve(QueryKind::Tcp)?;
         shared.hooks.at(ProducerPoint::BeforeQuery);
         let result = job
             .observer
@@ -486,6 +616,8 @@ impl State {
     }
 }
 pub(super) struct Shared {
+    pub native_nonce: Uuid,
+    pub voice_context: Option<factory::ImmutableVoiceContext>,
     pub state: Mutex<State>,
     pub changed: Condvar,
     pub cancel: CancellationToken,
@@ -568,14 +700,22 @@ impl Shared {
         self.refresh(&mut state);
         state.reason.is_none()
     }
-    pub fn reserve(self: &Arc<Self>, require_ready: bool) -> RunResult<QueryJob> {
+    pub fn reserve(self: &Arc<Self>, kind: QueryKind) -> RunResult<QueryJob> {
         let mut state = self.lock();
         self.refresh(&mut state);
         if state.reason.is_some() {
             return Err(DedicatedError::Closed);
         }
-        if require_ready && state.phase != DedicatedPhase::Ready {
+        if kind != QueryKind::Readiness && state.phase != DedicatedPhase::Ready {
             return Err(DedicatedError::NotReady);
+        }
+        if kind == QueryKind::Voice
+            && !self
+                .voice_context
+                .as_ref()
+                .is_some_and(|context| context.native_nonce() == self.native_nonce)
+        {
+            return Err(DedicatedError::Preparation(Error::Identity));
         }
         if state.query {
             return Err(DedicatedError::Busy);
@@ -601,6 +741,12 @@ impl Shared {
         }
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum QueryKind {
+    Readiness,
+    Tcp,
+    Voice,
+}
 pub(super) struct QueryJob {
     pub observer: OwnedRunObserver,
     shared: Arc<Shared>,
@@ -625,6 +771,10 @@ pub(super) enum ProducerPoint {
     BeforeReady,
     BeforeRestore,
     BeforePublish,
+    VoiceBeforeReserve,
+    VoiceAfterConfigurationA,
+    VoiceAfterPositiveUdp,
+    VoiceBeforeFinalGate,
 }
 #[cfg(not(test))]
 #[derive(Clone)]

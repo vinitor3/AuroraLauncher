@@ -12,6 +12,10 @@ use crate::engine::{
     acquire_instance_mutation_lock, acquire_instance_recovery_lock, ContentUpdateError,
 };
 
+#[path = "factory_voice_context.rs"]
+mod voice_context;
+pub(super) use voice_context::ImmutableVoiceContext;
+
 fn lock(instance: &Instance) -> Result<InstanceMutationGuard> {
     acquire_instance_mutation_lock(instance).map_err(|e| {
         if matches!(e, ContentUpdateError::Busy) {

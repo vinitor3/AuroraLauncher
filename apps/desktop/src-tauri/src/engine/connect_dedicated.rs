@@ -61,6 +61,13 @@ pub(crate) fn plan_status_execution(
     prepared.bundle.manifest.status_v1()?;
     producer::plan(prepared)
 }
+#[allow(dead_code)] // Separate native voice execution review; no IPC caller.
+pub(crate) fn plan_voice_execution(
+    prepared: factory::PreparedStatus,
+) -> std::result::Result<producer::DedicatedPlan, producer::DedicatedError> {
+    prepared.bundle.manifest.voice_v2()?;
+    producer::plan_voice(prepared)
+}
 
 const REVIEW_TTL: Duration = Duration::from_secs(60);
 const MAX_JOURNAL: u64 = 32 * 1024;
