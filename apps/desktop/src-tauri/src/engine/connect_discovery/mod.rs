@@ -15,11 +15,25 @@ use std::{
 };
 
 #[cfg(all(windows, feature = "connect-lab"))]
+mod udp;
+#[cfg(all(windows, feature = "connect-lab"))]
 mod windows;
 #[cfg(all(windows, feature = "connect-lab"))]
 pub use windows::OwnedChildProof;
 #[cfg(all(test, windows, feature = "connect-lab"))]
 pub(crate) mod tests;
+
+/// Observes an exact UDP binding of the original owned child, without granting
+/// transport or proving a voice listener. The future native binding caller is
+/// separate; do not connect this helper to manual UDP merely to make it used.
+#[cfg(all(windows, feature = "connect-lab"))]
+#[allow(dead_code)] // Reserved internal API; no production caller in increment82.
+pub(crate) fn require_owned_udp_binding(
+    proof: &OwnedChildProof,
+    endpoint: SocketAddr,
+) -> Result<(), DiscoveryError> {
+    udp::require_owned_udp_binding(proof, endpoint)
+}
 
 #[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DiscoveryError {

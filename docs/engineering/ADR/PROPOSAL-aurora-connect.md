@@ -6,6 +6,10 @@ Referências internas: [especificação](../AURORA_CONNECT_SPEC.md), [dependênc
 
 ## Contexto e autoridade
 
+### Incremento82 — observar UDP do filho original sem adotar processo
+
+Consultar GetExtendedUdpTable OWNER_PID somente para endpoint literal loopback exato, com o mesmo handle/PID/criação antes/depois inclusive quando não há correspondência. Memória/linhas/tentativas limitadas, comprimento retornado separado da capacidade e tabela inteira validada antes de aceitar linha. [Contrato82](../../aurora-connect-owned-udp-binding.md). Sem inventário público, normalização wildcard/mapped, PID da interface, novo caller ou mudança na descobertaTCP existente. Os rótulos instância/run vêm do caller confiável; não constituem prova nova de cópia/Doctor. Consulta não comprova intenção de receber, mod, continuidade física ou áudio; não reativa81. Provas com filhos próprios, regressões e QA aprovados; supervisão de dedicado e leitura de configuração viva continuam em contratos separados.
+
 ### Incremento81 — retirar UDP sem revogar a conexão do jogo
 
 Adicionar API local aguardada por lease/serviço/revisão para negar permanentemente novas autorizações UDP e liberar todos os seus recursosHost. Registro estático e Work RAII cobrem setup, socket/permit, retorno e Completed; último drop precede conclusão. Gate de publicação/selo e última tentativa síncrona de I/O linearizam corridas sem await sob mutex. Desativação remove diretamente o recurso do mapa e conserva ownership depois de perder waiter, sem esperar controle do peer. Não alterar TCP, outros grants, buckets, clocks, consumo ou wire. [Contrato81](../../aurora-connect-udp-service-disable.md). Focais, regressões locais e QA aprovados; falhas intermediárias de retenção da fixture preservadas no task. Nenhum aviso remoto ou áudio por consequência; Guest pode manter ponte e bytes já enfileirados podem chegar.

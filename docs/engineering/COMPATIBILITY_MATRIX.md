@@ -2,6 +2,8 @@
 
 ## Aurora Connect V2 — evidências até 21/10/2026
 
+Incremento82: consulta interna de binding UDP do Child próprio no Windows. [Contrato82](../aurora-connect-owned-udp-binding.md). **PROTÓTIPO**,19 focais e514 regressão PASS; V4/V6 loopback com filhos de teste próprios. Não há Java/mod/áudio, produtor dedicado, GUI ou nova topologia. Nenhuma célula de Minecraft, Core/Skins, SVC ou Plasmo é promovida; nove pares preservados.
+
 Incremento81: desativação UDP independente por lease/serviço no Host, preservando TCP e outros participantes. [Contrato81](../aurora-connect-udp-service-disable.md). **PROTÓTIPO**, focais, regressões locais e revisão aprovados, bytes opacos e portas reais. Não comprova áudio SVC/Plasmo, Minecraft, GUI ou rede externa nem altera qualquer célula dos nove pares. Sem caller novo, configuração ou relay público.
 
 Incremento80: observação do caminho no painel e snapshots individuais/por participante, com fontes e autoridades originais. [Contrato80](../aurora-connect-desktop-path-observation.md). **PROTÓTIPO**, testes de transporte local, DTO/DOM e build não promovem GUI, mundo, Core/Skins, rede externa ou áudio. Não amplia a matriz nem habilita relay público; nove pares conservam seus gates.
