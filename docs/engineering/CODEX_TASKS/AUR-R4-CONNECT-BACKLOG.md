@@ -1,5 +1,7 @@
 # Aurora Connect — backlog incremental e homologação R4
 
+Retomada externa85(23/10): [registro separado](../../aurora-connect-external-invites-85.md) permite avançar parcialmente convites/TCP/robustez existentes: admissão/replay recusado(caso1), TCP1MiB/direção +revogaçãoQUIC ativa pósEOF e recusa posterior(caso3). Caso2falhou e120s do caso4 venceram antesadmissão; expiração ativa **PRECISA DE TESTE**. Sem novosIDs ou fechamento de UI/jogo/voz/conjunto. As provas nativas85D/E conservam atribuição própria.
+
 Checkpoint23/10/2026: [contrato86](../../aurora-connect-native-voice-host-binding.md) aprovado root/QA após85C1/D/E, base `dbca5b2`; implementação **NÃO IMPLEMENTADO / PRECISA DE TESTE**.86A0: binding nativo opaco e reserva/execução do mesmoQueryJob antes do dispatch, com prova de Busy/stop/completion do filho próprio. Não libera Host/convite.86A/B seguintes conservam origem, roster e clocks, retiram somenteUDP por81 e exigem bytes/owners/corridas reais. Continuação parcial dos IDs existentes003/005/006/007/008, sem renumerar nem fechar homologação de voz/GUI/redes.
 
 Data: 29/09/2026. Backlog canônico reconciliado; objetivos e testes permanecem completos. O inventário e a matriz abaixo registram a preparação documental original; o [task de implementação](../../task-aur-r4-connect.md) registra o estado e os comandos executados do laboratório. Não reclassificar capacidades anteriores como ausentes nem tratar critérios T-* como provas já produzidas.

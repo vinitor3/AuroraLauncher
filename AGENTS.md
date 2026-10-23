@@ -1,5 +1,7 @@
 # AGENTS.md — Aurora Smart Launcher
 
+Retomada externaConnect85 em23/10: ler `docs/aurora-connect-external-invites-85.md` antes de repetir. Convites assinados/admissão, replay recusado, TCP1MiB/direção e revogaçãoQUIC ativa pósEOF TCP passaram em casos separados;4tentativas e falhas preservadas. Lease120s antesadmissão não comprova expiração ativa. DiretoPARCIAL; sem UI/Minecraft/UDPaplicação/voz/relay novos. Nenhuma configuração pessoal/firewall/clock alterada, processos próprios encerrados e kitmanifest imutável. Não reatribuir essas provas a85D/E.
+
 Este arquivo é a referência operacional para agentes que trabalham neste repositório. Evidência tem precedência sobre intenção: código e testes executados > documentação atual > histórico > roadmap > inferência.
 
 ## Produto e estado

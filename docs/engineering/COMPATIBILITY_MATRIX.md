@@ -1,5 +1,7 @@
 # Compatibility Matrix
 
+Retomada externa85(23/10): [quatro tentativas separadas](../aurora-connect-external-invites-85.md) em outroPC/outra internet por relato do usuário. Convites assinados: admissão/replay recusado com contadorHost no caso1; TCP1MiB/direção e revogação da conexãoQUIC ativa apósEOF TCP no caso3, com recusa posterior/contador e cleanup. Caso2 probeTCP falhou sem causa provada; caso4 lease120s venceu antesadmissão. Expiração de sessão ativa **PRECISA DE TESTE**; direto **PARCIAL**, sem homologar UI/Minecraft/UDP de aplicação/voz/NAT/CGNAT/relay/estabilidade. Não altera ensaios85D/E ou novepares.
+
 Contrato86 aprovado23/10 sobre `dbca5b2`, depois dos ensaios nativos85D/E separados; implementação **NÃO IMPLEMENTADO / PRECISA DE TESTE**. Binding opaco e retirada terminalUDP por lease terão somente Windows + connect-lab + connect-voice-lab, desligadas por padrão.86A0 não abre transporte; provas86A/B, anúncio, autenticação/áudio, GUI e redes permanecem gates distintos. [Contrato](../aurora-connect-native-voice-host-binding.md). Não acrescenta alvo à matriz de nove pares.
 
 ## Aurora Connect V2 — evidências até 23/10/2026
