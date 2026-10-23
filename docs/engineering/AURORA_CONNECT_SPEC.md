@@ -1,5 +1,7 @@
 # Aurora Connect V2 — especificação canônica e escopo experimental
 
+Checkpoint23/10/2026: [contrato86](../aurora-connect-native-voice-host-binding.md) aprovado integralmente por root/QA sobre `dbca5b2`, após85C1/D/E. Autoriza somente incrementos Rust privados Windows/default-off do vínculo nativo e retirada terminalUDP por lease.86 ainda **NÃO IMPLEMENTADO / PRECISA DE TESTE**;86A0 começa pela reserva→execução do mesmo QueryJob84 e binding fraco do mesmoRun, sem Host/convite/UI.86A/86B exigem conjuntamente todas as provas do contrato, sem mudar preimagens antigas, limites ou anúncio.
+
 Reconciliação: 29/09/2026, base cumulativa alpha.14 em `5ac2f7e288e77fbb0d5c0d7adbe057f6f76c52a6`; Core 1.1.5 e Skins 0.3.1. O contrato experimental abaixo substitui as propostas anteriores nos pontos divergentes; produto, redes externas e mods sem evidência continuam **HIPÓTESE / PRECISA DE TESTE**. Não é anúncio de suporte. [Reconciliação](AURORA_CONNECT_REVIEW.md), [rastreabilidade](AURORA_CONNECT_TRACEABILITY.md), [execução e estado real](../task-aur-r4-connect.md), [roadmap](MASTER_ROADMAP.md), [ADR](ADR/PROPOSAL-aurora-connect.md), [tarefas e testes](CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md), [dependências/custos](AURORA_CONNECT_DEPENDENCIES.md).
 
 ## 1. Escopo e autoridade

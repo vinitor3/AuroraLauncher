@@ -1,5 +1,7 @@
 # Aurora Connect — backlog incremental e homologação R4
 
+Checkpoint23/10/2026: [contrato86](../../aurora-connect-native-voice-host-binding.md) aprovado root/QA após85C1/D/E, base `dbca5b2`; implementação **NÃO IMPLEMENTADO / PRECISA DE TESTE**.86A0: binding nativo opaco e reserva/execução do mesmoQueryJob antes do dispatch, com prova de Busy/stop/completion do filho próprio. Não libera Host/convite.86A/B seguintes conservam origem, roster e clocks, retiram somenteUDP por81 e exigem bytes/owners/corridas reais. Continuação parcial dos IDs existentes003/005/006/007/008, sem renumerar nem fechar homologação de voz/GUI/redes.
+
 Data: 29/09/2026. Backlog canônico reconciliado; objetivos e testes permanecem completos. O inventário e a matriz abaixo registram a preparação documental original; o [task de implementação](../../task-aur-r4-connect.md) registra o estado e os comandos executados do laboratório. Não reclassificar capacidades anteriores como ausentes nem tratar critérios T-* como provas já produzidas.
 
 Base atualizada: `6a107b87adc4882bd464909e22650185f862ea5e`, launcher `0.1.1-alpha.14`, Core `1.1.5`, Skins `0.3.1`. A base inclui recuperação manual e cópias de diagnóstico; não começar da base histórica `aurora-skins-runtime`. Reconfirmar HEAD, mudanças locais, versões e colisões de IDs ao iniciar implementação.

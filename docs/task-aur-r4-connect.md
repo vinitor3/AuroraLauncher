@@ -1,5 +1,9 @@
 # Aurora Connect — execução incremental local
 
+## Contrato86 — aprovado antes da implementação (23/10/2026)
+
+Root e QA independente aprovaram integralmente o draft `31f9ec542ca4ff1ffb4544569577b82ed04088e0a091e8fbd1a79f8f7fd8bb53` após85C1 (`7552695`) e85D/E (`dbca5b2`). Cópia byte-exata preservada em evidência privada `native-voice-86-reviewed-draft.md`, mesmo hash; canonicalização de estado/proveniência antes de Rust. Base efetiva `dbca5b251217f28a2f2177851e4238d35444598d`; outros checkouts preservados. [Contrato86](aurora-connect-native-voice-host-binding.md) fixa origem opaca, slot84, roster2–8, deadlines originais, monitor1s/janela2s, erros tipados, retiro81 e owners reais. Nenhuma implementação ou teste86 antecipado.86A0 será fundamento reserva→execução/binding sem Host, convite ou UI;86A/B completos permanecem pendentes. Default-off, interfaces/preimagens antigas, configurações pessoais, nove pares, Assistente e zero gasto preservados.
+
 Data: 29/09/2026. Branch: `codex/aur-r4-connect`. Estado durante a execução: **PROTÓTIPO**. Esta tarefa implementa e testa; não é continuação da restrição documental das tarefas anteriores. Evidências finais serão registradas abaixo depois dos comandos, nunca antecipadamente.
 
 ## Base, autoridade e preservação

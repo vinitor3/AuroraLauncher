@@ -1,5 +1,7 @@
 # Compatibility Matrix
 
+Contrato86 aprovado23/10 sobre `dbca5b2`, depois dos ensaios nativos85D/E separados; implementação **NÃO IMPLEMENTADO / PRECISA DE TESTE**. Binding opaco e retirada terminalUDP por lease terão somente Windows + connect-lab + connect-voice-lab, desligadas por padrão.86A0 não abre transporte; provas86A/B, anúncio, autenticação/áudio, GUI e redes permanecem gates distintos. [Contrato](../aurora-connect-native-voice-host-binding.md). Não acrescenta alvo à matriz de nove pares.
+
 ## Aurora Connect V2 — evidências até 23/10/2026
 
 85D/E: **PROTÓTIPO de dedicado nativo com configuração e binding UDP observados**, com ensaios separados Windowsx64/Minecraft1.21.1/Fabric0.16.14/JDK21.0.12.1. SVC2.6.22, quarta tentativa total/primeira corrigida:1 PASS66,15s; Plasmo2.1.17 + Fabric API0.116.10, primeira tentativa:1 PASS70,83s. Nova factory/cópia e duas revisões por perfil; STATUS767/pong, UDP85 Ipv4Literal do mesmo Child e configuração viva DefaultUnchanged. Completion original Requested/exit0/não forçada/reaped/readers, EULA com ID/bytes exatos restaurada, todos os postchecks verdadeiros e22/24 leituras READ/share0 exclusivas após completion com controle/fontes vivos; catálogo/recursos/origem preservados. Precisão§9 aprovada antes do fix acrescenta somente em VoiceV2 `-DbundlerRepoDir=.connect-run-temp` na posição5, em temp própria nova/fixada; V1 e catálogo fechado sem exceções.16 focais existentes e dez goldensV1 PASS; Clippy all/default/connect/fmt PASS. Dois novos opt-ins ignorados, sem pais ativos novos ou full reatribuído.
