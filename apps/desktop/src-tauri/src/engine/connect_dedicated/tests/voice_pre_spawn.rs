@@ -392,7 +392,7 @@ async fn properties_drift_keeps_both_voice_profiles_on_the_same_pre_and_post_mar
     .await;
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecipeView {
     executable: PathBuf,
@@ -405,7 +405,7 @@ struct RecipeView {
     limits: LimitsView,
     synthetic: bool,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct LimitsView {
     lifetime_ms: u64,
@@ -460,6 +460,28 @@ fn execution_review_binds_exact_tuple2_profile_manifest_files_and_unmodified_com
         assert_ne!(digest(&wrong_version), approval.review.digest);
         let recipe: RecipeView =
             serde_json::from_slice(&encode(&approval.recipe).unwrap()).unwrap();
+        // Prove that omitting only this argument changes the production
+        // review. Verify the test view's byte order before changing it.
+        let mut without_bundler: RecipeView =
+            serde_json::from_slice(&encode(&approval.recipe).unwrap()).unwrap();
+        assert_eq!(
+            encode(&without_bundler).unwrap(),
+            encode(&approval.recipe).unwrap()
+        );
+        assert_eq!(
+            without_bundler.args.remove(5),
+            "-DbundlerRepoDir=.connect-run-temp"
+        );
+        let missing_bundler_input = encode(&(
+            2,
+            "native_voice_execution_v2",
+            approval.review.review_id,
+            &prepared.bundle.manifest,
+            &file_digest,
+            &without_bundler,
+        ))
+        .unwrap();
+        assert_ne!(digest(&missing_bundler_input), approval.review.digest);
         assert_eq!(recipe.executable, fixture.fixture.jdk.join("bin/java.exe"));
         assert_eq!(recipe.cwd, paths.copy);
         assert_eq!(recipe.temp, recipe.cwd.join(".connect-run-temp"));
@@ -474,6 +496,7 @@ fn execution_review_binds_exact_tuple2_profile_manifest_files_and_unmodified_com
                 "-XX:-UsePerfData".into(),
                 "-Xms256M".into(),
                 "-Xmx1536M".into(),
+                "-DbundlerRepoDir=.connect-run-temp".into(),
                 "-Dfabric.gameJarPath=server.jar".into(),
                 "-cp".into(),
                 resources::status_classpath(),

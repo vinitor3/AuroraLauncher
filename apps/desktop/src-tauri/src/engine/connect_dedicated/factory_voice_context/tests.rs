@@ -351,6 +351,12 @@ fn installed_catalog_rejects_wrong_bytes_new_identity_links_and_extra_or_missing
             fs::write(&extra, b"extra").expect("context_extra_artifact");
             assert_eq!(context.validate_for_query(), Err(Error::Identity));
             fs::remove_file(extra).expect("context_extra_remove");
+            // A runtime-looking subdirectory is not an exemption to the
+            // immutable catalog. Bundler output belongs in run temp instead.
+            let extra_directory = context.copy.path.join(directory).join("com");
+            fs::create_dir(&extra_directory).expect("context_extra_directory");
+            assert_eq!(context.validate_for_query(), Err(Error::Identity));
+            fs::remove_dir(extra_directory).expect("context_empty_directory_remove");
         }
         let mut missing = ParkedPath::new(&artifact, &fixture.root);
         assert_eq!(context.validate_for_query(), Err(Error::Identity));

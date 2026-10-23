@@ -5,6 +5,8 @@ use std::sync::{atomic::Ordering, Arc};
 mod actual_producer;
 #[path = "tests/actual_resources.rs"]
 mod actual_resources;
+#[path = "tests/actual_voice_producer.rs"]
+mod actual_voice_producer;
 #[path = "tests/actual_voice_resources.rs"]
 mod actual_voice_resources;
 #[path = "tests/files.rs"]

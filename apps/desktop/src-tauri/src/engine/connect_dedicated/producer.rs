@@ -155,10 +155,18 @@ impl Recipe {
     }
     fn voice_production(prepared: &factory::PreparedStatus) -> Result<Self> {
         prepared.bundle.manifest.voice_v2()?;
-        Self::production_paths(
+        let mut recipe = Self::production_paths(
             &prepared.resources,
             prepared.bundle.copy.root().to_path_buf(),
-        )
+        )?;
+        // The pinned Minecraft bundler extracts its own libraries at boot.
+        // Keep that mutable output in the fresh, pinned run temp, preserving
+        // the exact immutable libraries catalog. V1's builder stays unchanged;
+        // this compiled V2-only argument is bound by the execution review.
+        recipe
+            .args
+            .insert(5, "-DbundlerRepoDir=.connect-run-temp".into());
+        Ok(recipe)
     }
     // Kept private: executable selection still comes from verified Resources,
     // never from an argv/recipe/approval deserialized by a caller or test index.
