@@ -14,15 +14,19 @@ use std::{
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+#[path = "producer_binding.rs"]
+mod binding;
 #[path = "producer_voice.rs"]
 mod voice;
+#[cfg_attr(not(test), allow(unused_imports))]
+pub(crate) use binding::NativeVoiceHostBinding;
 #[cfg(test)]
 pub(super) use voice::plan_voice_for_test;
 #[cfg_attr(not(test), allow(unused_imports))]
 // Private experimental API; no product caller yet.
 pub(crate) use voice::{
-    DedicatedVoiceSource, VoiceRuntimeAnnouncement, VoiceRuntimeBinding, VoiceRuntimeError,
-    VoiceRuntimeSample,
+    DedicatedVoiceSource, ReservedVoiceQuery, VoiceRuntimeAnnouncement, VoiceRuntimeBinding,
+    VoiceRuntimeError, VoiceRuntimeSample,
 };
 
 pub(super) const ENDPOINT: SocketAddr =
@@ -522,6 +526,11 @@ pub(crate) struct DedicatedObserver {
 pub(crate) struct DedicatedSource {
     shared: Weak<Shared>,
 }
+/// One already-reserved QueryJob84. Moving it to a worker does not reserve a
+/// second slot; dropping an undispatched token releases this same job.
+pub(crate) struct ReservedTcpQuery {
+    job: QueryJob,
+}
 #[derive(Clone)]
 pub(crate) struct DedicatedCompletion {
     receiver: watch::Receiver<Option<DedicatedReport>>,
@@ -569,10 +578,22 @@ impl DedicatedObserver {
 impl DedicatedSource {
     /// One exact sample of this run. This supplies no Host admission authority.
     pub(crate) fn observe_tcp(&self) -> RunResult<()> {
+        self.reserve_tcp()?.execute()
+    }
+    pub(crate) fn reserve_tcp(&self) -> RunResult<ReservedTcpQuery> {
         let shared = self.shared.upgrade().ok_or(DedicatedError::Closed)?;
-        let job = shared.reserve(QueryKind::Tcp)?;
+        Ok(ReservedTcpQuery {
+            job: shared.reserve(QueryKind::Tcp)?,
+        })
+    }
+}
+#[allow(dead_code)] // Private reserve/execute API; no caller dispatch in86A0.
+impl ReservedTcpQuery {
+    pub(crate) fn execute(self) -> RunResult<()> {
+        let shared = &self.job.shared;
         shared.hooks.at(ProducerPoint::BeforeQuery);
-        let result = job
+        let result = self
+            .job
             .observer
             .observe_tcp(ENDPOINT)
             .map_err(DedicatedError::Source);

@@ -14,6 +14,13 @@ pub(crate) struct DedicatedVoiceSource {
     shared: Weak<Shared>,
 }
 
+/// A consumable reservation of the original shared slot, including its final
+/// context identity. No clone, serde or observer-only completion shortcut.
+pub(crate) struct ReservedVoiceQuery {
+    job: QueryJob,
+    expected: Option<(Uuid, StoredVoiceProfileV2)>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum VoiceRuntimeError {
     Closed,
@@ -88,21 +95,39 @@ impl DedicatedRun {
 #[allow(dead_code)]
 impl DedicatedVoiceSource {
     pub(crate) fn observe(&self) -> std::result::Result<VoiceRuntimeSample, VoiceRuntimeError> {
+        self.reserve_voice()?.execute()
+    }
+    pub(crate) fn reserve_voice(
+        &self,
+    ) -> std::result::Result<ReservedVoiceQuery, VoiceRuntimeError> {
         let shared = self.shared.upgrade().ok_or(VoiceRuntimeError::Closed)?;
-        shared.hooks.at(ProducerPoint::VoiceBeforeReserve);
-        // QueryKind::Voice is handled inside the EXISTING common reserve body:
-        // context/Ready/deadline/seal then the same query bool and QueryJob84.
-        let job = shared
-            .reserve(QueryKind::Voice)
-            .map_err(VoiceRuntimeError::from)?;
-        let expected = shared
-            .voice_context
-            .as_ref()
-            .map(|context| (context.native_nonce(), context.profile()));
+        reserve_voice(&shared)
+    }
+}
+
+pub(super) fn reserve_voice(
+    shared: &Arc<Shared>,
+) -> std::result::Result<ReservedVoiceQuery, VoiceRuntimeError> {
+    shared.hooks.at(ProducerPoint::VoiceBeforeReserve);
+    // QueryKind::Voice still uses the existing reserve body and QueryJob84.
+    let job = shared
+        .reserve(QueryKind::Voice)
+        .map_err(VoiceRuntimeError::from)?;
+    let expected = shared
+        .voice_context
+        .as_ref()
+        .map(|context| (context.native_nonce(), context.profile()));
+    Ok(ReservedVoiceQuery { job, expected })
+}
+
+#[allow(dead_code)] // Private reserve/execute API; no caller dispatch in86A0.
+impl ReservedVoiceQuery {
+    pub(crate) fn execute(self) -> std::result::Result<VoiceRuntimeSample, VoiceRuntimeError> {
+        let shared = &self.job.shared;
         // Every reserved outcome, including a configuration/context/source
         // error, reaches the original final gate. The inner owns all temporary
         // context values and C0 reads, and drops them before returning here.
-        let result = observe_inner(&shared, &job.observer);
+        let result = observe_inner(shared, &self.job.observer);
         shared.hooks.at(ProducerPoint::VoiceBeforeFinalGate);
         let mut state = shared.lock();
         shared.refresh(&mut state);
@@ -111,8 +136,8 @@ impl DedicatedVoiceSource {
             .as_ref()
             .map(|context| (context.native_nonce(), context.profile()));
         if state.reason.is_some()
-            || expected.is_none()
-            || current != expected
+            || self.expected.is_none()
+            || current != self.expected
             || !current.is_some_and(|(nonce, _)| nonce == shared.native_nonce)
         {
             return Err(VoiceRuntimeError::Closed);
