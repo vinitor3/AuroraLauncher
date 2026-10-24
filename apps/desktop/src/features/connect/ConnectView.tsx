@@ -15,6 +15,7 @@ import { ConnectGameLaunchPanel } from "../connect-game-launch/ConnectGameLaunch
 import type { ReadyGameLaunchContext } from "../connect-game-launch/types";
 import { isControlledSourceRejection, provesNoSourceReservation, type HostSourceProfile } from "./host-source-types";
 import { pathObservationText } from "./path-observation-types";
+import { connectDeadlines, preparationExpired, remainingText, reviewExpired, sessionGuidance } from "./session-guidance";
 
 type Action = "prepareHost" | "prepareGuest" | "reviewHost" | "reviewGuest" | "confirm" | "export" | "probe" | "retryUdp" | "stop" | "refresh" | GroupAction;
 const actionText: Record<Action, string> = {
@@ -59,6 +60,7 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   const [udpRecoveryAwaitingSnapshot, setUdpRecoveryAwaitingSnapshot] = useState(false);
   const [sourcePreparationUncertain, setSourcePreparationUncertain] = useState(false);
   const [hostReviewUncertain, setHostReviewUncertain] = useState(false);
+  const [nowMs, setNowMs] = useState(Date.now);
   const epoch = useRef(0);
   const mounted = useRef(false);
   const pendingRef = useRef<Action | undefined>(undefined);
@@ -68,6 +70,22 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   const udpRetryContext = useRef<{ operationId: string; generation: number } | undefined>(undefined);
   const sourcePreparationAwaiting = useRef<SourcePreparationAwaiting | undefined>(undefined);
   const hostReviewAwaiting = useRef<{ operationId: string } | undefined>(undefined);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const preparationTimedOut = preparationExpired(snapshot, nowMs);
+  const reviewTimedOut = reviewExpired(snapshot, nowMs);
+  useEffect(() => { if (preparationTimedOut || reviewTimedOut) setAcknowledged(false); }, [preparationTimedOut, reviewTimedOut]);
+  useEffect(() => {
+    const expiry = snapshot?.sessionTiming?.admissionExpiresAtMs
+      ?? (snapshot?.phase === "hostListening" ? snapshot.expiresAtMs : null);
+    if (expiry !== null && expiry !== undefined && nowMs >= expiry) {
+      setExportedInvitation(""); exportedFor.current = undefined;
+    }
+  }, [nowMs, snapshot]);
 
   function acceptSnapshot(value: unknown, rejectionProof?: symbol) {
     const next = snapshotFrom(value);
@@ -314,6 +332,9 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   function review(event: FormEvent) {
     event.preventDefault();
     if (!operationId || !snapshot?.role || hostReviewAwaiting.current) return;
+    if (preparationExpired(snapshot, Date.now())) {
+      setNowMs(Date.now()); setAcknowledged(false); setError(connectError("connect_plan_expired")); return;
+    }
     setAcknowledged(false);
     if (snapshot.role === "host" && guestPublicId.trim().toLowerCase() === snapshot.preparation?.publicId.toLowerCase()) {
       setError(connectError("connect_invalid_request")); return;
@@ -342,6 +363,9 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   function confirm() {
     const reviewed = snapshot?.review;
     if (!reviewed || !acknowledged || reviewed.operationId !== operationId) return;
+    if (preparationExpired(snapshot, Date.now()) || reviewExpired(snapshot, Date.now())) {
+      setNowMs(Date.now()); setAcknowledged(false); setError(connectError("connect_plan_expired")); return;
+    }
     setAcknowledged(false);
     void perform("confirm", async current => {
       const value = await invoke<unknown>("connect_confirm", { operationId: reviewed.operationId, digest: reviewed.digest });
@@ -391,12 +415,15 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
     });
   }
   function exportInvitation() {
-    if (!operationId) return;
+    if (!operationId || !exportAllowed(Date.now())) return;
     void perform("export", async current => {
       const value = exportFrom(await invoke<unknown>("connect_export_invitation", { operationId }));
       if (!current()) return;
       if ((value.fragmentedUdp?.profile ?? value.sessionTiming?.profile) !== snapshot?.invitationProfile) throw new Error("Wrong export profile");
       if (snapshot?.sessionTiming && (!value.sessionTiming || !sameSessionTiming(snapshot.sessionTiming, value.sessionTiming))) throw new Error("Wrong export timing");
+      if (Date.now() >= value.expiresAtMs) {
+        setNowMs(Date.now()); setExportedInvitation(""); setError(connectError("connect_plan_expired")); return;
+      }
       exportedFor.current = operationId;
       setExportedInvitation(value.invitation);
       await copy(value.invitation, current);
@@ -410,8 +437,12 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   const reviewed = snapshot?.review;
   const canReview = !snapshot?.hostGroup && (snapshot?.phase === "hostPrepared" || snapshot?.phase === "guestPrepared");
   const canProbe = snapshot?.phase === "guestConnected";
-  const canExport = !snapshot?.hostGroup && snapshot?.role === "host" && snapshot.phase === "hostListening" && snapshot.transportState === "listening"
-    && (!snapshot.sessionTiming || Date.now() < snapshot.sessionTiming.admissionExpiresAtMs);
+  function exportAllowed(now: number) {
+    const expiresAtMs = snapshot?.sessionTiming?.admissionExpiresAtMs ?? snapshot?.expiresAtMs;
+    return !snapshot?.hostGroup && snapshot?.role === "host" && snapshot.phase === "hostListening" && snapshot.transportState === "listening"
+      && (expiresAtMs === null || expiresAtMs === undefined || now < expiresAtMs);
+  }
+  const canExport = exportAllowed(nowMs);
   const sessionUdpSelected = invitationProfile === SESSION_FRAGMENTED_PROFILE && Boolean(capabilities?.sessionFragmentedUdpInvitations);
   const sessionSelected = sessionUdpSelected || invitationProfile === "sessionGameTcp" && Boolean(capabilities?.sessionInvitations);
   const fragmentedSelected = sessionUdpSelected || invitationProfile === FRAGMENTED_PROFILE && Boolean(capabilities?.fragmentedUdpInvitations);
@@ -422,6 +453,9 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
     : snapshot?.invitationProfile ?? sourcePreparationAwaiting.current?.profile : groupSelected || sessionSelected || fragmentedSelected ? invitationProfile : undefined;
   const sessionDisplayed = displayedProfile === "sessionGameTcp" || displayedProfile === SESSION_FRAGMENTED_PROFILE;
   const fragmentedDisplayed = displayedProfile === FRAGMENTED_PROFILE || displayedProfile === SESSION_FRAGMENTED_PROFILE;
+  const guidance = sessionGuidance({ snapshot, selectedRole, capabilityAvailable: capabilities?.available === true, pending: busy,
+    uncertain: sourcePreparationUncertain || hostReviewUncertain, stale: Boolean(warning) || loading, nowMs });
+  const deadlines = connectDeadlines(snapshot);
 
   return <section className="connect-view" aria-labelledby="connect-title">
     <header className="connect-heading"><div><h2 id="connect-title">Aurora Connect</h2><p>Compartilhe um servidor autorizado ou use um convite recebido.</p></div><span className="connect-badge">Experimental</span></header>
@@ -431,6 +465,19 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
     {message && <p className="connect-message" role="status">{message}</p>}
     {!loading && capabilities && !capabilities.available && <p className="connect-warning">Este recurso está desligado nesta versão do launcher.</p>}
     {(capabilities?.available || snapshot) && <>
+      <section className="connect-guidance connect-card" aria-labelledby="connect-next-step-title">
+        <h3 id="connect-next-step-title">Próximo passo</h3>
+        <p className="connect-next-action">{guidance.action}</p><p>{guidance.detail}</p>
+        {capabilities?.available && <details><summary>Como combinar: um anfitrião e um convidado</summary>
+          <p><strong>Anfitrião:</strong> prepare, envie seu código público, receba o código do convidado, revise e autorize. Depois copie e envie o convite.</p>
+          <p><strong>Convidado:</strong> prepare com o código do anfitrião, envie seu próprio código, cole o convite recebido, revise e autorize. Depois copie o endereço do jogo para Conexão direta no Minecraft.</p>
+          <p>O launcher oferece esses controles aqui, sem comandos de terminal. A autorização e cada cópia dependem da sua ação.</p>
+        </details>}
+        {deadlines.length > 0 && <div className="connect-deadlines" aria-label="Prazos da última observação">
+          <dl>{deadlines.map(deadline => <div key={deadline.key}><dt>{!capabilities?.available && deadline.key === "review" ? "Revisão observada" : deadline.label}</dt><dd className={nowMs >= deadline.expiresAtMs ? "connect-deadline-expired" : undefined}>{remainingText(deadline.expiresAtMs, nowMs)}</dd></div>)}</dl>
+          <small>Contagem pelo relógio deste computador, a partir da última observação. Os horários locais continuam abaixo; o Connect confirma a validade e o encerramento.</small>
+        </div>}
+      </section>
       <p>{displayedProfile === "sessionGroup"
         ? "Um grupo fixo de dois a oito participantes, com convites e prazos individuais. O servidor deve permanecer aberto; o destino UDP é informado e autorizado separadamente."
         : fragmentedDisplayed && sessionDisplayed
@@ -524,11 +571,12 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
       {capabilities?.available && prepared && <section className="connect-card"><h3>Troque os códigos públicos</h3><p>{snapshot?.role === "host" ? "Envie seu código ao convidado e receba o código gerado por ele nesta tentativa." : "Envie seu código ao anfitrião e aguarde o convite destinado a esta tentativa."}</p>
         <div className="connect-output"><label htmlFor="connect-public-code">Seu código público</label><textarea id="connect-public-code" readOnly value={prepared.publicId} /><div><button className="secondary" type="button" onClick={() => { void copy(prepared.publicId); }}>Copiar meu código</button></div></div>
         <small>Preparação válida até {connectDate(prepared.expiresAtMs)}. Nenhuma chave privada é exibida.</small>
+        {preparationTimedOut && <p className="connect-warning">O prazo da preparação venceu. Encerre esta tentativa e prepare uma nova.</p>}
       </section>}
       {capabilities?.available && canReview && <form className="connect-card connect-form" onSubmit={review}>
-        {snapshot.role === "host" ? <label>Código público recebido do convidado<input required maxLength={64} value={guestPublicId} disabled={busy || hostReviewUncertain} onChange={event => { setGuestPublicId(event.target.value); setAcknowledged(false); }} autoComplete="off" spellCheck={false} /></label>
-          : <label>Convite recebido<textarea required maxLength={4096} value={invitation} disabled={busy} onChange={event => { setInvitation(event.target.value); setAcknowledged(false); }} autoComplete="off" spellCheck={false} /></label>}
-        <div><button type="submit" disabled={busy || hostReviewUncertain}>Revisar convite</button></div>
+        {snapshot.role === "host" ? <label>Código público recebido do convidado<input required maxLength={64} value={guestPublicId} disabled={busy || hostReviewUncertain || preparationTimedOut} onChange={event => { setGuestPublicId(event.target.value); setAcknowledged(false); }} autoComplete="off" spellCheck={false} /></label>
+          : <label>Convite recebido<textarea required maxLength={4096} value={invitation} disabled={busy || preparationTimedOut} onChange={event => { setInvitation(event.target.value); setAcknowledged(false); }} autoComplete="off" spellCheck={false} /></label>}
+        <div><button type="submit" disabled={busy || hostReviewUncertain || preparationTimedOut}>Revisar convite</button></div>
       </form>}
       {capabilities?.available && reviewed && snapshot?.phase === "reviewed" && <section className="connect-card connect-review" aria-labelledby="connect-review-title"><h3 id="connect-review-title">Revise antes de autorizar</h3>
         <dl><dt>Papel</dt><dd>{reviewed.role === "host" ? "Anfitrião" : "Convidado"}</dd><dt>Modo</dt><dd>{reviewed.mode === "loopback" ? "Neste computador" : reviewed.mode === "directIpv4" ? "IPv4 direto autorizado" : "IPv6 externo autorizado"}</dd>
@@ -543,10 +591,11 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
           <dt>Anfitrião</dt><dd><code>{reviewed.hostPublicId}</code></dd><dt>Convidado</dt><dd><code>{reviewed.guestPublicId}</code></dd></dl>
         <p>Uma única admissão. Encerrar ou perder esta conexão exige preparar um novo convite. Nenhum arquivo do jogo será alterado.</p>
         <details><summary>Identificadores da revisão</summary><p>Revisão: <code>{reviewed.digest}</code></p><p>Convite: <code>{reviewed.invitationDigest}</code></p></details>
-        <label className="connect-consent"><input type="checkbox" checked={acknowledged} disabled={busy} onChange={event => setAcknowledged(event.target.checked)} /><span>{reviewed.fragmentedUdp
+        {(preparationTimedOut || reviewTimedOut) && <p className="connect-warning">O prazo para autorizar venceu. Encerre esta tentativa e prepare uma nova.</p>}
+        <label className="connect-consent"><input type="checkbox" checked={acknowledged} disabled={busy || preparationTimedOut || reviewTimedOut} onChange={event => setAcknowledged(event.target.checked)} /><span>{reviewed.fragmentedUdp
           ? `Conferi o participante, os destinos TCP e UDP, o orçamento de retorno, a porta local e ${reviewed.sessionTiming ? "os dois prazos" : "o prazo"}; autorizo somente este transporte experimental.`
           : `Conferi o participante, o destino e ${reviewed.sessionTiming ? "os dois prazos" : "o prazo"} e autorizo esta conexão experimental.`}</span></label>
-        <div className="connect-actions"><button type="button" disabled={busy || !acknowledged} onClick={confirm}>Autorizar conexão</button><button className="secondary" type="button" disabled={pending === "stop"} onClick={stop}>Cancelar tentativa</button></div>
+        <div className="connect-actions"><button type="button" disabled={busy || !acknowledged || preparationTimedOut || reviewTimedOut} onClick={confirm}>Autorizar conexão</button><button className="secondary" type="button" disabled={pending === "stop"} onClick={stop}>Cancelar tentativa</button></div>
       </section>}
       {capabilities?.available && canExport && <section className="connect-card"><h3>Envie o convite ao participante</h3><p>Somente o convidado autorizado pode usar este convite. Envie também seu código público pelo canal combinado.</p><div><button type="button" disabled={busy} onClick={exportInvitation}>Copiar convite</button></div>
         {exportedInvitation && <label className="connect-output">Convite desta tentativa<textarea readOnly value={exportedInvitation} spellCheck={false} /></label>}

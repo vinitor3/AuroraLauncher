@@ -1,5 +1,11 @@
 # Aurora Connect no desktop — laboratório experimental
 
+ConsultaGUI24/10 posterior: [registro próprio](aurora-connect-ui-lab.md) com Minecraft1.21.1 real, botão Consultar servidor, protocolo767 correspondente/0de2 na tela, cópia de endereço e stop dos owners separados/EULA exata/rebind43001. Não confirma jogador no mundo, voz ou outroPC. A frase semSTATUS abaixo delimita somente os dois casos anteriores de echoTCP.
+
+24/10: [guia no executável e ensaioGUI local](aurora-connect-ui-lab.md) passaram Host eGuest nativos, com revisão/consentimento, transporte1MiB por direção e recursos liberados;254DOM combinados PASS. Nenhum STATUS/Minecraft/áudio/exterior por essa rodada; amigos/públicas/entrada sem convite manual seguem o [contrato social](aurora-connect-social-experience.md), ainda não implementado. O checkpoint23/10 abaixo registra somente a abertura inicial.
+
+EnsaioGUI separado23/10: [perfil e evidências](aurora-connect-ui-lab.md) acrescentam scripts de desenvolvimento/build sem bundle, identificador e armazenamento local próprios. Frontend/nativo e241DOM existentes PASS; janela real abriu com assets locais e chegou ao login. ControlesConnect/ponteGUI ainda não foram exercitados nesse checkpoint. Login permanece ação humana, sem adoção automática dos dados normais. Não libera produto, voz ou homologação por build.
+
 Este documento descreve o caller local46, descoberta48, sessão TCP56, TCP+UDP curto57 e sessão TCP+UDP62. O [task](task-aur-r4-connect.md) registra os comandos executados e seus resultados; instruções abaixo não constituem prova de execução gráfica. Todos os gates de [R4](engineering/MASTER_ROADMAP.md), nove pares Core/Skins, Assistente desktop e recovery/CAS/Doctor permanecem válidos.
 
 ## Perfil explícito de sessão TCP+UDP — incremento62

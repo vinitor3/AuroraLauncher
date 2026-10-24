@@ -1,5 +1,13 @@
 # Compatibility Matrix
 
+GUI/Minecraft24/10 — consulta separada contra servidor real1.21.1/Fabric0.16.14/JDK21.0.12.1, semmods/loopback/online-mode=false: botão Consulta no GuestTauri mostrou resposta767 correspondente e0de2; copy/stop/EULA exata/rebind43001 observados. [Evidência](../aurora-connect-ui-lab.md). Não homologa mundo/contas/Core/Skins/áudio/exterior; os dois casosTCPecho abaixo conservam sua ausência deMinecraft.
+
+24/10 — [86A0](../aurora-connect-native-voice-binding-86a0.md): somente Windows + ambas features default-off, processos próprios de fixtureTCP/STATUS/UDP reais dos dois perfis. Sete pais novos, seis regressões isoladas, lifecycleTCP e pai dos dez goldensV1 PASS; primeira regressão concorrente preservada. Não é nova execuçãoJava, ponteHost, anúncio ou áudio e não promove nenhuma célulaCore/Skins/SVC/Plasmo.
+
+GUI24/10 — [guia e TCP pela interface](../aurora-connect-ui-lab.md): Windowsx64/Tauri2.11.5, exe privado com connect-lab apenas. Host eGuestTauri passaram separadamente1MiB por direção/EOF e encerramento/liberação de recursos;254DOM combinados PASS. Nenhum novo STATUS/Minecraft/voz/externo/social por essa rodada ou promoção dos nove pares. Saída normal do aplicativo continua não comprovada.
+
+GUIConnect23/10: [perfil local separado](../aurora-connect-ui-lab.md), Windowsx64/Tauri2.11.5, opt-in connect-lab/sem voz/bundle. Frontend+nativoPASS e241DOM existentesPASS; janela com assets locais chegou ao login e WebView usou novo diretório. ControlesIPCConnect/jogo/doisPCs não exercitados por essa abertura, **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Não muda as nove combinaçõesCore/Skins, autenticação ou defaultoff.
+
 Retomada externa85(23/10): [quatro tentativas separadas](../aurora-connect-external-invites-85.md) em outroPC/outra internet por relato do usuário. Convites assinados: admissão/replay recusado com contadorHost no caso1; TCP1MiB/direção e revogação da conexãoQUIC ativa apósEOF TCP no caso3, com recusa posterior/contador e cleanup. Caso2 probeTCP falhou sem causa provada; caso4 lease120s venceu antesadmissão. Expiração de sessão ativa **PRECISA DE TESTE**; direto **PARCIAL**, sem homologar UI/Minecraft/UDP de aplicação/voz/NAT/CGNAT/relay/estabilidade. Não altera ensaios85D/E ou novepares.
 
 Contrato86 aprovado23/10 sobre `dbca5b2`, depois dos ensaios nativos85D/E separados; implementação **NÃO IMPLEMENTADO / PRECISA DE TESTE**. Binding opaco e retirada terminalUDP por lease terão somente Windows + connect-lab + connect-voice-lab, desligadas por padrão.86A0 não abre transporte; provas86A/B, anúncio, autenticação/áudio, GUI e redes permanecem gates distintos. [Contrato](../aurora-connect-native-voice-host-binding.md). Não acrescenta alvo à matriz de nove pares.

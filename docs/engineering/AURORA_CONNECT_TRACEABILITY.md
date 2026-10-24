@@ -20,6 +20,9 @@ Preparação41 de005/T-MC-02: [perfil e roteiro GUI](../aurora-connect-internet-
 
 | Requisito preservado | Contrato canônico | Tarefa | Prova exigida / limite |
 | --- | --- | --- | --- |
+| Refinamento explícito24/10: privadas/amigos/públicas, Entrar sem convite manual e pedidos por política | [Experiência social](../aurora-connect-social-experience.md); Spec §1/§8 | 005, 008 | Amigos aceitos/bloqueios, catálogo opt-in de sessões, autorização individual interna, regras/quotas e fluxo real; **NÃO IMPLEMENTADO / PRECISA DE TESTE**. Convites e grupo atuais não fecham este requisito. |
+| Refinamento explícito24/10: seleção automática da melhor conexão elegível observada | [Experiência social](../aurora-connect-social-experience.md); política de custo | 004, 008 | Capacidades/conectividade, medidas estáveis e histerese, direto prioritário, relay gratuito somente verificado; sem menor ping absoluto ou fallback pago implícito. **NÃO IMPLEMENTADO / PRECISA DE TESTE**. |
+| EvidênciaGUI24/10 separada de produto social | [Perfil/guia e ensaios](../aurora-connect-ui-lab.md) | 005, 008 | Dois papéisTauri TCP1MiB/direção e cleanup; consultaMinecraft767 real em rodada própria. Não comprova mundo/áudio/redes externas/social nem saída normal do aplicativo. |
 | REQ-V2-01: R0–R5, prioridades, gates, ownership e nove pares | Roadmap; AGENTS; revisão | Todas | T-INV-01, T-REG-01/02; não promover runtime por build |
 | REQ-V2-02: separar requisito, proposta, estática, execução e pendência | Revisão; task de execução | 001 e relatórios | Base/manifests/fonte/data; resultados só após comando executado |
 | REQ-V2-03: público, privado autorizado, dedicado e LAN; capacidades distintas | Spec §§1–3 | 005, 008 | T-MC-01..05; transporte não abre LAN nem comprova auto-join |

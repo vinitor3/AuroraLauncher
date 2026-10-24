@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite --port 1420 --strictPort",
     "build": "tsc -b && vite build",
+    "connect:lab:dev": "tauri dev --features connect-lab --config src-tauri/tauri.connect-lab.conf.json",
+    "connect:lab:build": "tauri build --debug --no-bundle --features connect-lab --config src-tauri/tauri.connect-lab.conf.json -- --offline --locked --jobs 2",
     "tauri": "tauri"
   },
   "dependencies": {

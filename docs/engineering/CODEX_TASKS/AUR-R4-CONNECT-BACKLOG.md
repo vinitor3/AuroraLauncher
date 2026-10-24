@@ -1,5 +1,13 @@
 # Aurora Connect — backlog incremental e homologação R4
 
+005/008, consultaGUI24/10: [Minecraft real pela ponte e botão do painel](../../aurora-connect-ui-lab.md) com STATUS767 correspondente/0de2, cópia e encerramento dos owners/EULA exata/rebind43001. Avanço parcial separado de echoTCP; mundo/voz/contas/nove pares/exterior/social seguem pendentes.
+
+Atualização24/10: [86A0](../../aurora-connect-native-voice-binding-86a0.md) implementado como **PROTÓTIPO** privado, sete pais novos PASS, regressões isoladas/lifecycle/goldens/fmt/Clippy PASS. Origem fraca e reserva antes de execução são fundamento; Host/revisão86/monitor/retirada terminal continuam pendentes, sem novoID ou fechamento de006/007/008.
+
+UI24/10: [guia incorporado e dois papéis reais](../../aurora-connect-ui-lab.md) com TCP1MiB/direção/EOF/recursos liberados em loopback;254DOM combinados PASS. Avanço parcial005/008, sem STATUS/jogo/áudio/exterior/social ou saída normal do aplicativo comprovados por essa rodada. O checkpoint23/10 abaixo é histórico.
+
+UI23/10: perfil isolado [GUI-lab](../../aurora-connect-ui-lab.md) implementado sem Rust/protocolo novo, buildfrontend/nativo e241DOM existentes PASS. Janela com assets locais chegou ao login; falta exercitar controlesTauri e jogo/doisPCs, com autenticação humana. Não aguardar86 para esse ensaioTCP já implementado nem confundir build/abertura com homologação. Estado **IMPLEMENTADO MAS NÃO HOMOLOGADO**, padrãooff/sem instalador/sem novosIDs.
+
 Retomada externa85(23/10): [registro separado](../../aurora-connect-external-invites-85.md) permite avançar parcialmente convites/TCP/robustez existentes: admissão/replay recusado(caso1), TCP1MiB/direção +revogaçãoQUIC ativa pósEOF e recusa posterior(caso3). Caso2falhou e120s do caso4 venceram antesadmissão; expiração ativa **PRECISA DE TESTE**. Sem novosIDs ou fechamento de UI/jogo/voz/conjunto. As provas nativas85D/E conservam atribuição própria.
 
 Checkpoint23/10/2026: [contrato86](../../aurora-connect-native-voice-host-binding.md) aprovado root/QA após85C1/D/E, base `dbca5b2`; implementação **NÃO IMPLEMENTADO / PRECISA DE TESTE**.86A0: binding nativo opaco e reserva/execução do mesmoQueryJob antes do dispatch, com prova de Busy/stop/completion do filho próprio. Não libera Host/convite.86A/B seguintes conservam origem, roster e clocks, retiram somenteUDP por81 e exigem bytes/owners/corridas reais. Continuação parcial dos IDs existentes003/005/006/007/008, sem renumerar nem fechar homologação de voz/GUI/redes.
@@ -278,6 +286,8 @@ A ordem é ajustável ao bloqueio real. É útil investigar APIs/endereço dos m
 
 ### AUR-R4-004 — Conectividade real e relay gratuito verificado
 
+Refinamento24/10/2026: seleção automática do melhor caminho observado elegível, com prioridade direta, medidas de latência/estabilidade, histerese e respeito a capacidades/custos; não prometer menor ping absoluto. Critérios pendentes no [contrato de experiência social](../../aurora-connect-social-experience.md). Não declarar implementada pela observação de caminhos existente, nem ativar relay público por consequência.
+
 | Campo | Contrato da tarefa |
 | --- | --- |
 | Objetivo | Medir caminhos reais entre redes e habilitar somente infraestrutura com uso/custo autorizado e observável. |
@@ -291,6 +301,8 @@ A ordem é ajustável ao bloqueio real. É útil investigar APIs/endereço dos m
 | Estado/evidência | **PARCIAL** no laboratório: provas diretas e fixture de relay próprio50 estão delimitadas no resumo e task. Traversal/NAT/CGNAT e relay público continuam **NÃO VERIFICADO**; nenhum operador público está habilitado. Referências oficiais são pesquisa, não homologação Aurora. |
 
 ### AUR-R4-005 — Minecraft, convites e estados reais no launcher
+
+Refinamento24/10/2026: [experiência social exigida](../../aurora-connect-social-experience.md) inclui amigos aceitos, sessões privadas/para amigos/públicas, **Entrar** sem convite manual conforme política e **Pedir para entrar** com aprovação quando exigida. Convites direcionados são opção para privadas/não amigos; emissão interna vinculada ao participante continua obrigatória para o transporte. Catálogo público opt-in lista sessões, nunca contas ou presença privada. Implementação social permanece **NÃO IMPLEMENTADO / PRECISA DE TESTE**, com regras positivas/negativas, privacidade, quotas e testes completos próprios; o painel experimental não fecha esse aceite. Manter IDs, dependências e gates existentes, incluindo004/008; não tornar voz condição para o próximo fluxoTCP/interface já autorizado.
 
 | Campo | Contrato da tarefa |
 | --- | --- |

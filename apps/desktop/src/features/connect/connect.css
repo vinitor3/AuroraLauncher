@@ -28,4 +28,15 @@
 .connect-view .connect-warning { color: #e2cfad; background: #a5894312; }
 .connect-view .connect-message { color: #d6c8ec; background: #9773b917; }
 .connect-status-summary { border-top: 1px solid #ffffff12; padding-top: .8rem; display: grid; gap: .35rem; }
+.connect-guidance { border-color: #c8a2fb70; background: #ad86db12; gap: .65rem; }
+.connect-view .connect-next-action { color: #f2e8ff; font-weight: 600; font-size: 1rem; }
+.connect-guidance details { color: #bfb4cb; font-size: .82rem; line-height: 1.6; }
+.connect-guidance summary { cursor: pointer; color: #dec6fa; }
+.connect-guidance details p { margin-top: .5rem; }
+.connect-deadlines { display: grid; gap: .5rem; border-top: 1px solid #ffffff18; padding-top: .7rem; }
+.connect-deadlines dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .65rem; margin: 0; }
+.connect-deadlines dl > div { display: grid; gap: .15rem; }
+.connect-deadlines dt { font-size: .75rem; }
+.connect-deadlines dd { font-variant-numeric: tabular-nums; font-size: .85rem; }
+.connect-deadlines .connect-deadline-expired { color: #efcf9f; }
 @media (max-width: 680px) { .connect-fields { grid-template-columns: 1fr; } .connect-review dl, .connect-status dl { grid-template-columns: 1fr; gap: .2rem; } .connect-view dd { margin-bottom: .55rem; } }

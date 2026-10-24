@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Aurora Connect Lab",
+  "identifier": "com.aurora.smartlauncher.connectlab",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Aurora Connect — teste isolado",
+        "width": 1240,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 620,
+        "resizable": true,
+        "decorations": false
+      }
+    ]
+  },
+  "bundle": {
+    "active": false
+  }
+}

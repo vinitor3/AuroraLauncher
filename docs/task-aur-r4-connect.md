@@ -1,5 +1,13 @@
 # Aurora Connect — execução incremental local
 
+## Ensaio gráfico isolado — build e primeira abertura (23/10/2026)
+
+Após confirmar que o caller/painel básico já existem e86 não bloqueiaTCP/interface, preparado perfil de teste com identificador `com.aurora.smartlauncher.connectlab`, nome/janela próprios e bundlefalse; dois scripts explícitos no package desktop. Configuração normal/versão/default features/matriz/dependências/lockfiles inalterados. [Contrato/evidênciaGUI](aurora-connect-ui-lab.md). QA independente conferiu JSON Merge Patch/Tauri2.11.5, CSP/ACLmain, storageRoaming/LocalData e ausência de adoção automática da raiz normal; o isolamento não é sandbox nem conta remota separada. Nenhum Rust alterado para esse perfil.
+
+Comandos executados: `npm --prefix apps/desktop run tauri -- build --help`, CLI2.11.4, confirmou opçõesconfig/debug/no-bundle e passagem ao Cargo; `node --test src/features/connect/ConnectView.smoke.mjs src/features/connect-game-launch/ReadyGameLaunch.smoke.mjs src/features/connect/account-transition.smoke.mjs` dentro desktop,241PASS/0falhas/0skip/6854,7195ms (`connect-ui-lab-dom.log`), testesDOM existentes/sintéticos; `npm --prefix apps/desktop run connect:lab:build`, equivalente `tauri build --debug --no-bundle --features connect-lab --config src-tauri/tauri.connect-lab.conf.json -- --offline --locked --jobs 2`, frontendtsc/Vite372módulos1,52s+nativo1m36s PASS/exit0/sem bundle. AvisochunkJavaScript>500kB preservado. Fontes congeladas duranteCargo e anterior exe mutável75de6ea8…ea2d preservado CreateNew antes. Nova cópia privada64688128B SHA28fcaba79dc7115af0b4363faf029af7aaff3a0e970ce62da7841b99dd03085b; planoSHA8b29503a8f0ae18c4115023ab55c519624b014d87bdf64e4a824493a0f41ec57, pasta privada `connect-ui-lab-3171cbf98d07428eaf99d62e4513ac04` contém `build.log` e `build-observed.json`. ConfiglabSHA76288304c9a7e80768dfe9b2f551c22d1eb02156aac2814477f2b4d7886939cd/packageSHA687502a6ad0e1458b9b4b7da576e7ac8ebc54ebe51a4dc45ea558b7733da9171. WebViewRuntime155.0.4283.62 assinadoValid observado por leitura, sem instalação/download.
+
+ComputerUse via skill local inicializada e somente a cópia pinada aberta. Janela única de teste chegou ao login normal, assets `http://tauri.localhost/`, novo diretório nativo/WebView e caminhoWebView próprio observados; sem captura de tela, leitura/digitação de credenciais ou login automatizado. RelatórioSHA9a16f1add6361ba7a03f74d928336d4b90ad505134bd4fb4281708d1a319c33a. ControlesConnect/ponte/Java não iniciados nessecheckpoint, sem prova deIPCConnect/encerramento ou homologação por abertura. Janela aberta aguardando login humano solicitado conforme skill; build-observed permanece snapshot anterior à abertura e não foi reescrito. UI/TCP/Minecraft/vozes continuam com resultados separados. EncerrarConnect/recursos e sair pela bandeja é rollback operacional quando houver sessão; dados novos e normais ficam preservados.
+
 ## Retomada externa85 — convites, TCP e revogação (23/10/2026)
 
 Quatro tentativas novas em outroPC/outra internet confirmados pelo usuário, mantendo kits/evidências anteriores. [Relatório completo com hashes e fontes](aurora-connect-external-invites-85.md). Host efetivo07f513a2…c172 e Guest237ea20c…32d0; manifesto do kit conserva host47b/testedTwoComputers=false como snapshot, sem reescrita. Relato remoto distingue-se dos contadores/echo/encerramento observados localmente. Tentativa1: admitted489ms, replay recusado616ms/denied0→1 e tentativa revogada recusada630ms/denied1→2 depois de a conexão já ter fechado; sem dadosTCP. Tentativa2: admitted479ms e probe_failed2131ms/0bytes, causa não estabelecida; idle120s é somente hipótese estática. Tentativa3: admitted560ms e TCP1MiB por direção PASS5724ms, corroborado pelo destino/echo; revogação comQUIC ativa depoisEOF TCP, fechamento remoto/rebind e nova tentativa recusada570ms/denied0→1. Não houve payloadTCP em curso durante a revogação. Tentativa4: lease120s venceu antes de admissão, host lease_expired/zero destinos/bytes e remoto expired_or_revoked; não comprova expiração de sessão ativa. Todos os host/echo próprios saíram0/rebind/sem força; convidados relataram cleanup nos casos1–3 e kit encerrado no4, sem atribuir exitOS remoto. Nenhum testeMinecraft/voz/UDP de aplicação nesta rodada, sem relay/gasto/firewall/relógio/configuração pessoal alterados. Expiração ativa, estabilidade, UI e conjunto continuam pendentes.
@@ -2475,3 +2483,99 @@ Cinco Rust finais: connect_dedicated/producer.rs, tests.rs, tests/actual_voice_p
 | Plasmo Voice |2.1.17 + FabricAPI0.116.10+1.21.1, mesmo recorte próprio comprovado: PROTÓTIPO; áudio e ponta a ponta continuam separados. |
 
 Nenhuma configuração pessoal, download, custo, firewall, relógio, push/deploy/publicação/release/instalador ou matriz nova. Rollback conserva features off e dados/journals pendentes para código compatível; mesma completion original, sem slots reconstruídos/PID adotado/restore automático de voz. Próximo trabalho nativo é o contrato86 de vínculo por serviço/participante, ainda draft não aprovado/não registrado neste fechamento. A retomada externa autorizada usa kit e sessão novos, com provas próprias. **O que você precisa fazer agora:** nenhuma intervenção para o fechamento e continuidade locais; instruções dos testes remotos são fornecidas separadamente quando o outro PC é necessário.
+
+### Guia incorporado e fluxoTCP local pela interface —24/10/2026
+
+Base de trabalho `208edc92df83183df56de1fc362196ec82836905`, branch `codex/aur-r4-connect`, na worktree de implementação. Mudanças locais anteriores foram preservadas, incluindo86A0 separado. O objetivo deste incremento foi tornar o painel experimental compreensível, incorporar o guia ao executável e exercer ambos os papéis com Tauri/transporte reais antes de nova coordenação entre computadores. Não é o produto social final: o requisito explícito de sessões privadas, para amigos, públicas e **Entrar/Pedir para entrar** está no [contrato social](aurora-connect-social-experience.md), sem implementação social declarada por consequência.
+
+O cartão **Próximo passo** orienta conforme capability/snapshot/fase reais e apresenta prazos originais, sem executar comandos, autorizar, copiar ou renovar tentativas automaticamente. Expiração impede ações vencidas também no clique; confirmação é limpa, exportação tardia expirada não é mostrada e o intervalo de apresentação é removido ao desmontar. Capability indisponível oferece observação/encerramento e não promete recuperar autorização por refresh de snapshot. Arquivos de código próprios: `apps/desktop/src/features/connect/{ConnectView.tsx,ConnectView.smoke.mjs,connect.css,session-guidance.ts}`; perfil de teste em `apps/desktop/package.json` e `apps/desktop/src-tauri/tauri.connect-lab.conf.json`. Documentos de domínio: [GUI isolada](aurora-connect-ui-lab.md) e [guia](aurora-connect-ui-guidance.md). Nenhum DTO/comando/protocolo/limite de transporte novo por este incremento.
+
+Validação sintética e compilação foram executadas separadamente do ensaio gráfico:
+
+| Comando realmente executado | Resultado e evidência |
+| --- | --- |
+| `node --test apps/desktop/src/features/connect/ConnectView.smoke.mjs` na raiz | Fechamento final **204PASS/0falhas/0ignorados**,3,070s,13 casos novos sobre191 anteriores; `desktop-ui-guidance-capability-full.log`. Uma falha inicial do seletorDOM foi preservada/corrigida e a revisão de capability acrescentou um único teste, sem duplicar contagens. |
+| `node node_modules/typescript/bin/tsc -p tsconfig.app.json --noEmit --incremental false` em `apps/desktop` | **PASS**,5,620s, sem escrever assets; `desktop-ui-guidance-capability-ts.log`. |
+| `node --test src/features/connect/ConnectView.smoke.mjs src/features/connect-game-launch/ReadyGameLaunch.smoke.mjs src/features/connect/account-transition.smoke.mjs` em `apps/desktop` | **254PASS/0falhas/0skip**,3742,3289ms; `desktop-ui-guidance-combined.log`. São os204 acima mais50 testes existentes dos outros arquivos, não254 novos. |
+| `npm --prefix apps/desktop run connect:lab:build` na raiz | **PASS**: Vite373módulos/1,54s e nativo `dev`21,21s, sem bundle/instalador e sem selecionar `connect-voice-lab`. |
+
+Freeze do guia: `.aurora/connect-validation/desktop-ui-guidance-capability-source-freeze.json`; freezes/logs anteriores permanecem como histórico. Revisão independente final do guia e helper não encontrou bloqueadores. O executável próprio novo `.aurora/connect-validation/connect-ui-guide-24/AuroraConnectLab.exe` tem **64692224B**, SHA256 `8a535bd65131ce93c2a1df9990a7b10067019ec05ec36dda8cddaad3a108ba2c`. Identificador `com.aurora.smartlauncher.connectlab`, dados locais separados do launcher normal, assets embarcados, defaultoff mantido no build normal. O perfil não é sandbox doWindows e não altera os efeitos remotos normais da conta. Nenhuma credencial foi digitada ou gravada no ensaio; a conta de teste já estava pronta.
+
+Computer Use exerceu os controles reais da janela **Aurora Connect — teste isolado**. Cada caso usou autoridade nova, convite original, revisão e confirmação explícitas, somente `game/tcp` em loopback e echo próprio limitado, sem servidorMinecraft:
+
+| Caso próprio | Prova observada |
+| --- | --- |
+|3 — interface anfitriã + agenteCLI convidado | Guia, revisão/aprovação do anfitrião e exportação do convite observados. Agente convidado admitido em74ms;1MiB enviado e1MiB recebido, byte71/0x47, EOF conferido; admissão refletida na interface.74ms é tempo de admissão, não RTT nem ganho de desempenho. |
+|4 — agenteCLI anfitrião + interface convidada | Convite original revisado, guia e aprovação explícita do convidado; transporte autenticado e caminho direto observados. Porta efêmeraTCP53190 veio da interface daquela tentativa.1MiB enviado e1MiB recebido, byte71/0x47 e EOF conferidos. Não usar essa porta como valor fixo de futuro teste. |
+
+Em ambos, **Encerrar Connect** foi observado até **Encerrado/Recursos liberados**. O agenteCLI próprio terminou exit0, recolhido, normal e sem força; echo fechado sem interrupção, probe fechado, plano temporário removido, watchdog não vencido e `clean=true`. Os três rebinds verdadeiros do helper são das portas fixas **UDP42000, TCP42010 e TCP43001**. A ponte realGUI do caso4 era **TCP53190**, cujo encerramento foi observado pelo estado nativo da interface, **sem rebind explícito de53190 registrado**. Não atribuir o rebind fixo42010 à porta efêmera nem alegar pós-verificação retrospectiva. Rebind doUDP de transporteQUIC não equivale a teste deUDP de aplicação. Relatórios privados CreateNew, sem convites/chaves, em `.aurora/connect-validation/connect-ui-guide-24`, preservados byte-exatos após esta precisão:
+
+- `gui-host-case3.json`: SHA256 `c0eb92530b34e7f7115a741e1409c7059b132456253be5ee252bb3b6abc5f4d1`.
+- `gui-guest-case4.json`: SHA256 `f5e217219dd4751249b6313ce0ff565e31443955942a8e8d0f8f87d0a59e2b0f`.
+
+As falhas privadas preparatórias1/2 continuam preservadas, sem reclassificação como PASS: primeiro helper não tinha `process` disponível antes de criar o agente; segundo agente estava indisponível ao revisar o convite, sem erro nativo causal observado. Correção de ambiente fechado do helper e observações compactas permitiram novas tentativas originais; não houve aumento/renovação de prazo para obter aprovação. Não atribuir essas falhas a NAT/CGNAT ou à configuração pessoal.
+
+Para abrir a cópia nova, o responsável encerrou forçadamente duas instâncias antigas próprias **depois de confirmar Connect fechado**. Essa ação não comprova a saída normal/cleanup do aplicativo. A nova janela permanece aberta, com Connect encerrado; somente os recursos das tentativas de transporte acima têm cleanup observado. Não registrar processo do launcher encerrado ou teste de saída normal como PASS.
+
+| Domínio | Estado por esta entregaGUI |
+| --- | --- |
+| TCP | **PROTÓTIPO**: ambos os papéisTauri transportaram1MiB/direção e EOF reais em loopback, com cleanup observado. |
+| UDP | TransporteQUIC/liberação observados; nenhumUDP de aplicação novo. Provas anteriores permanecem separadas. |
+| Conexão direta | Caminho local observado, sem novo teste de alcance externo/NAT/CGNAT ou seleção automática. |
+| Relay | Desligado; nenhum serviço, gasto, crédito, faturamento ou fallback pago. |
+| Minecraft | Nenhum STATUS, login/mundo/LAN/dois jogadores/Core/Skins executado nesta rodada; echo não é Minecraft. Ensaio pela interface permanece separado. |
+| Convites/interface | Guia incorporado e revisão/confirmação/admissão/bytes/encerramento reais locais de Host eGuest; **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Amigos/catálogo/pedidos/entrada automática são requisitos, **NÃO IMPLEMENTADO / PRECISA DE TESTE**. |
+| Simple Voice Chat | Nenhuma nova prova de anúncio/autenticação/áudio;85D preserva seu escopo próprio. |
+| Plasmo Voice | Nenhuma nova prova de anúncio/autenticação/áudio;85E preserva seu escopo próprio. |
+
+Rollback de código é revisão local do cartão e perfil experimental, mantendo build normal off. Operacionalmente, encerrar Connect, aguardar recursos liberados e usar a saída normal do aplicativo quando disponível; não apagar os dados de teste nem configurações pessoais. Nove pares, Assistente desktop, Recovery/CAS/Doctor, gates/fases e custo zero preservados; nenhum Java, configuração pessoal, firewall, relógio, push/deploy/publicação/release/instalador novo. **O que você precisa fazer agora:** nenhuma intervenção para continuar os incrementos locais autorizados; teste entre computadores e áudio humano são etapas próprias posteriores.
+
+### Incremento86A0 — binding original e reserva antes da execução
+
+24/10/2026, base `208edc9`: [implementação, comandos exatos e limites](aurora-connect-native-voice-binding-86a0.md). Cinco fontes congelados; binding opaco Weak derivado somente do RunVoiceV2 Ready original, tokens consumíveis do mesmo QueryJob84/slot, fontes síncronas preservadas. Não abre Host nem publica convite/voz; não altera recipes/preimagens, protocolos, DTOs, configuração pessoal ou proprietário do dedicado.
+
+Sete pais novos **7 PASS**,175,77s. Regressão85C1 inicial **2 PASS/4 falhas**,73,65s, com AddrInUse43001 seguido de três Ready deadlines durante ensaioGUI com echo na mesma porta; owner instantâneo não registrado e falha preservada. Após cleanup/rebind e janela exclusiva, mesmos seis pais **6 PASS**,150,11s, sem mudar Rust/porta/timeout. LifecycleTCP anterior **1 PASS**,4,91s; pai dos dez goldensV1 antigos **1 PASS**,0,07s; fmt e Clippy all/default/connect **PASS**. Não reatribuir full658 anterior nem consumir novamente prefixos de recovery. Root e QA independente revisam os mesmos bytes e registros antes do commit local.
+
+Resultado limitado a fundamento privado86A0.86A/B com revisão/Host/monitor/retirada terminalUDP e provas causais continuam pendentes; construtor/amostra positiva não autorizam encaminhamento. Novo ensaioGUI acima e Java85D/E têm escopos próprios; sem nova homologação TCP/UDP externa, Minecraft/mundo, SVC/Plasmo áudio ou nove pares. Rollback local revisado conserva lifecycle/completion/EULA originais; nenhuma intervenção humana é necessária para seguir o trabalho local.
+
+### ConsultaSTATUSMinecraft real pela interface convidada —24/10/2026
+
+Ensaio posterior separado dos casosGUI3/4 de echo, sem reatribuirMinecraft àquelas provasTCP. Mesmo executável do guia, SHA256 `8a535bd65131ce93c2a1df9990a7b10067019ec05ec36dda8cddaad3a108ba2c`, perfilisolado/conta de teste já pronta, nenhuma credencial digitada ou registrada. O objetivo foi verificar o botão de consulta e a projeção de disponibilidade do servidor com transporte e Minecraft reais no mesmo PC, mantendo mundo/voz como não verificados.
+
+O responsável leu o plano/diff e aprovou os hashes antes de executar. EULA e teste de servidor descartável já estavam autorizados pelo usuário; não foi necessária nova aceitação nem qualquer mudança em instância pessoal. Os quatro comandos reais, da raiz da worktree, foram:
+
+```powershell
+& 'C:/Program Files/nodejs/node.exe' apps/connect-runtime-tools/runtime.mjs plan 'C:/Program Files/Eclipse Adoptium/jdk-21.0.12.101-hotspot'
+& 'C:/Program Files/nodejs/node.exe' apps/connect-runtime-tools/runtime.mjs stage 'C:/Program Files/Eclipse Adoptium/jdk-21.0.12.101-hotspot' f6ab6d12656111a7fcea8d490c86b76535885e7278571e15de4610a4f31773c1 --user-accepted-minecraft-eula
+& 'C:/Program Files/nodejs/node.exe' apps/connect-runtime-tools/server.mjs run-plan 'C:/Program Files/Eclipse Adoptium/jdk-21.0.12.101-hotspot' prepared-ZlEyln
+& 'C:/Program Files/nodejs/node.exe' apps/connect-runtime-tools/server.mjs run 'C:/Program Files/Eclipse Adoptium/jdk-21.0.12.101-hotspot' prepared-ZlEyln f82c5bcfca6d69f5778f41abc78df92a9f13919e2c841caa27262d3113711bd7 --user-accepted-minecraft-eula
+```
+
+São registro da execução, não comandos para repetir o estágio consumido. O primeiro plano fixouSHA `f6ab6d12656111a7fcea8d490c86b76535885e7278571e15de4610a4f31773c1`; stage criou `prepared-ZlEyln`, nove artefatos/55582631B, sem Java/EULAtrue nessa preparação. A execução seguinte usou planoSHA `f82c5bcfca6d69f5778f41abc78df92a9f13919e2c841caa27262d3113711bd7`,300s originais, Minecraft1.21.1/Fabric0.16.14/JDK21.0.12.1, sem mods, loopback, `online-mode=false` e whitelist vazia. `server_ready` confirmou protocolo767/statusAndMatchingPong e bindloopback do mesmo Child próprio. Nenhum gate ou prazo foi ampliado para o teste.
+
+Helper próprio somenteHost, `.aurora/connect-validation/connect-ui-minecraft-24/ui-minecraft-status-host.mjs`, SHA256 `ea53cd59afbbd3743b745ea21f58882433d95a8eafa81777490d2f58cfd3fb83`, revisado sem bloqueadores. PlanoTCP fechadoSHA `e44babd5464375573f09b47cb22b97e248c54845621a90e934cc0677537b8561`, destino fixo127.0.0.1:43001, preparação60s/sessão600s originais, semUDP de aplicação/relay. Esse helper não gerenciaJava nem afirma rebind do destino de jogo; o executor de servidor conservou processo, EULA e encerramento próprios. Nenhum código do executável precisou mudar para essa consulta.
+
+Computer Use realizou no painel convidado real: preparar → revisar convite original → conferir/confirmar consentimento → autorizar → observar transporte autenticado e caminho direto → **Consultar servidor uma vez**. A interface mostrou **Servidor respondeu**, protocolo767 correspondente, população declarada0de2. Entrada no mundo permaneceu **Não verificada** e ambos os mods de voz desativados; nenhum jogador foi inferido deSTATUS. **Copiar endereço** mostrou sucesso. É prova do percurso de consultaSTATUS/pong e da projeçãoTauri/UI, sem login ou cliente gráficoMinecraft.
+
+**Encerrar Connect** foi observado até **Recursos liberados**. A ponteGUI efêmera observada nesta tentativa foi **TCP63224**; seu encerramento foi observado pelo estado nativo da interface, **sem rebind explícito de63224 registrado**. HostCLI próprio terminou exit0/recolhido/sem força, **UDP42000** admitiu rebind, plano temporário removido e `clean=true`, sem watchdog vencido. Depois, o responsável enviou `stop` pelo canal do executorJava e aguardou seu término real: `server_stopped`, `closed=true`, exit0, `forced=false`, `eulaRestored=true` e ownership do probe próprio confirmado. Postcheck **TCP43001** rebind **PASS**; esse resultado e o doUDP42000 são separados e não comprovam rebind da porta efêmeraGUI. Nova janela do launcher permanece aberta com Connect fechado; o ensaio não comprova saída normal do aplicativo. Relatórios imutáveis não foram reescritos nem receberam postcheck retrospectivo.
+
+O primeiro postcheck falhou **TEST_PROPERTIES_CHANGED**: o oráculo esperava bytes idênticos do arquivo de teste `server.properties` apósMinecraft executar. Inspeção posterior somente leitura qualificou a diferença:16 chaves originais, zero valores originais alterados,45 defaults acrescentados pelo próprio jogo, `testPropertiesByteExact=false`. Não se regravou o arquivo nem refez baseline para obter PASS; preservar a falha de expectativa e não declarar “properties inalteradas/byte-exatas”. EULA teve hash original exatamente restaurado. O marcador de execução permanece, impedindo reutilizar o estágio; arquivos gerados ficam somente nessa pasta própria, sem recuperação ou exclusão automática.
+
+Relatórios privados próprios em `.aurora/connect-validation/connect-ui-minecraft-24`, lidos e conferidos separadamente:
+
+- `gui-observed.json`, SHA256 `04737de6f392b32b9d10875c993665adcae8bc54882a4cfc21b06cdc102cbc1e`: build/helper/plano vinculados, revisão/consentimentoGUI, respostaSTATUS, cleanupHost e stopJava observados.
+- `postchecks.json`, SHA256 `fce35fd50fca9a3120d8abbd4fefc9303b4a613637cf16b9bf0081817655790d`: EULA exata, properties não byte-exatas/diferença qualificada, Java fechado exit0 sem força, marcador preservado e TCP43001 livre.
+
+Esses relatórios não contêm convites, chaves ou credenciais. Não constituem novas capacidades sociais, novo transporte ou autorização para reutilizar o plano/estágio. O [domínioGUI](aurora-connect-ui-lab.md) registra esta prova separada e conserva os casos3/4 somenteTCP.
+
+| Domínio | Resultado delimitado deste ensaio |
+| --- | --- |
+| TCP | ConsultaMinecraft real encaminhada pela ponte autenticada; conteúdo/1MiB dos casos3/4 permanece evidência independente. |
+| UDP | NenhumUDP de aplicação; liberação doUDPQUIC não promove áudio/datagramas dos mods. |
+| Direto/relay | Caminho direto local observado; relay desligado; nenhuma rede externa ou seleção automática nova. |
+| Minecraft | **PARCIAL**: servidor descartável real, STATUS767/pong projetados na interface, stop normal/EULA exata; mundo, contas mistas, dois jogadores e nove pares não homologados. |
+| Convites/interface | Preparação/revisão/consentimento/admissão/consulta/cópia/encerramento reais no painel convidado; amigos/público continuam requisito não implementado, não liberado porSTATUS. |
+| Simple Voice Chat | Não carregado nem testado; sem anúncio/autenticação/áudio novo. |
+| Plasmo Voice | Não carregado nem testado; sem anúncio/autenticação/áudio novo. |
+
+Nenhuma configuração pessoal, firewall, relógio, gasto, relaypúblico, push/deploy/publicação/release/instalador ou mudança de matriz. Rollback operacional desta tentativa já encerrou os proprietáriosHost/Java e preservou estágio/marcador/evidências; o launcher segue aberto semConnect ativo. Uma nova execução exige estágio e aprovações novos, não apagar marcador ou restaurar defaults do servidor por conveniência. Gates, Assistente e Recovery/CAS/Doctor permanecem. **O que você precisa fazer agora:** nenhuma intervenção para continuar o trabalho local autorizado; mundo, áudio humano e redes distintas conservam testes próprios.

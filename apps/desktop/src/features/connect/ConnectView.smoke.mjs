@@ -2855,3 +2855,238 @@ for (const kind of ["single", "group"]) {
     assert.doesNotMatch(container.textContent, /Caminho direto observado|Relay observado/);
   });
 }
+
+const nextStep = () => container.querySelector(".connect-guidance .connect-next-action")?.textContent;
+const guidanceText = () => container.querySelector(".connect-guidance")?.textContent;
+function guidanceClock(initial) {
+  const originalNow = Date.now, originalInterval = window.setInterval, originalClear = window.clearInterval;
+  let now = initial, callback, cleared = 0;
+  const handle = { syntheticGuidanceClock: true };
+  Date.now = () => now;
+  window.setInterval = (next, delay) => { assert.equal(delay, 1000); assert.equal(callback, undefined); callback = next; return handle; };
+  window.clearInterval = value => { assert.equal(value, handle); cleared += 1; };
+  return {
+    async tick(value) { now = value; assert.equal(typeof callback, "function"); await act(async () => callback()); },
+    get cleared() { return cleared; },
+    restore() { Date.now = originalNow; window.setInterval = originalInterval; window.clearInterval = originalClear; },
+  };
+}
+
+test("guidance host follows observed prepare review authorize and invitation exchange without automatic actions", async () => {
+  await render();
+  assert.equal(nextStep(), "Prepare o anfitrião.");
+  assert.match(guidanceText(), /envie seu código público, receba o código do convidado, revise e autorize/);
+  assert.equal(container.querySelector(".connect-deadlines"), null);
+  await submit();
+  assert.equal(nextStep(), "Troque os códigos públicos com o convidado.");
+  assert.equal(count("connect_review_host"), 0); assert.deepEqual(copied, []);
+  await click("Copiar meu código");
+  assert.equal(nextStep(), "Troque os códigos públicos com o convidado.", "Copying never invents native progress");
+  await submit();
+  assert.equal(nextStep(), "Confira a revisão e autorize a conexão.");
+  assert.equal(count("connect_confirm"), 0);
+  await checkConsent(); await click("Autorizar conexão");
+  assert.equal(nextStep(), "Copie e envie o convite ao convidado.");
+  assert.equal(count("connect_export_invitation"), 0);
+  await click("Copiar convite");
+  snapshot = { ...snapshot, generation: 2, transportState: "admitted" };
+  await click("Atualizar estado");
+  assert.equal(nextStep(), "Acompanhe o estado da conexão.");
+  assert.match(guidanceText(), /não confirma entrada no mundo/);
+  assert.equal(count("connect_export_invitation"), 1);
+});
+
+test("guidance guest requests its own code then the received invitation and only the observed game address", async () => {
+  await render(); await click("Convidado");
+  assert.equal(nextStep(), "Prepare o convidado.");
+  await submit();
+  assert.equal(nextStep(), "Envie seu código público ao anfitrião.");
+  assert.equal(container.querySelector("#connect-local-address"), null);
+  await click("Copiar meu código"); assert.deepEqual(copied, [guestId]);
+  await submit();
+  assert.equal(nextStep(), "Confira a revisão e autorize a conexão.");
+  assert.equal(count("connect_confirm"), 0);
+  await checkConsent(); await click("Autorizar conexão");
+  assert.equal(nextStep(), "Copie o endereço do jogo para o Minecraft.");
+  assert.match(guidanceText(), /Multiplayer → Conexão direta/);
+  assert.match(guidanceText(), /ainda não confirma entrada no mundo ou áudio/);
+  assert.equal(count("connect_probe_status"), 0);
+  await click("Copiar endereço do jogo"); assert.equal(copied.at(-1), snapshot.tcpAddress);
+});
+
+test("guidance pending confirmation can be cancelled and a late reply cannot guide the old invitation", async () => {
+  snapshot = { ...idle(), operationId, generation: 1, role: "host", phase: "reviewed", preparation, review };
+  const late = { ...snapshot, phase: "hostListening", transportState: "listening", preparation: null, review: null };
+  let finish;
+  handlers.set("connect_confirm", () => new Promise(resolve => { finish = resolve; }));
+  await render(); await checkConsent(); await click("Autorizar conexão");
+  assert.equal(nextStep(), "Aguarde a operação em andamento.");
+  await click("Cancelar tentativa");
+  assert.equal(nextStep(), "Prepare o anfitrião.");
+  await act(async () => finish(late));
+  assert.equal(nextStep(), "Prepare o anfitrião.");
+  assert.equal(count("connect_stop"), 1); assert.equal(count("connect_export_invitation"), 0);
+});
+
+test("guidance stale observation asks for refresh and retains identified stop", async () => {
+  sessionFixtures(); snapshot = activeSession("guest"); await render();
+  handlers.set("connect_snapshot", () => Promise.reject(new Error("synthetic lost observation")));
+  await click("Atualizar estado");
+  assert.equal(nextStep(), "Atualize o estado da tentativa.");
+  assert.doesNotMatch(container.querySelector(".connect-next-action").textContent, /Copie|autorize/);
+  assert.equal(button("Atualizar estado").disabled, false);
+  assert.equal(button("Encerrar Connect").disabled, false);
+  await click("Encerrar Connect"); assert.equal(count("connect_stop"), 1);
+});
+
+test("guidance lost host review stays uncertain and leaves refresh and cancellation available", async () => {
+  await render(); await submit();
+  handlers.set("connect_review_host", () => Promise.reject(new Error("synthetic lost review reply")));
+  await submit();
+  assert.equal(nextStep(), "Atualize o estado da tentativa.");
+  assert.equal(count("connect_review_host"), 1);
+  assert.equal(button("Revisar convite").disabled, true);
+  assert.equal(button("Atualizar estado").disabled, false);
+  assert.equal(button("Encerrar Connect").disabled, false);
+  await click("Atualizar estado");
+  assert.equal(nextStep(), "Atualize o estado da tentativa.", "An old prepared snapshot cannot prove that the review failed");
+  assert.equal(count("connect_review_host"), 1);
+  await click("Encerrar Connect"); assert.equal(count("connect_stop"), 1);
+});
+
+test("guidance distinct real deadlines tick without native dispatch and the timer is released on unmount", async () => {
+  const clock = guidanceClock(1800000000000);
+  try {
+    sessionFixtures(); snapshot = reviewedSession(); await render();
+    const deadline = name => [...container.querySelectorAll(".connect-deadlines dt")].find(el => el.textContent === name)?.nextElementSibling.textContent;
+    assert.equal(deadline("Preparação"), "Restam 1min 00s");
+    assert.equal(deadline("Revisão para autorizar"), "Restam 1min 00s");
+    assert.equal(deadline("Prazo para entrar"), "Restam 10min 00s");
+    assert.equal(deadline("Encerramento da sessão"), "Restam 1h 0min 00s");
+    const before = calls.length;
+    await clock.tick(1800000001000);
+    assert.equal(deadline("Preparação"), "Restam 0min 59s");
+    assert.equal(deadline("Prazo para entrar"), "Restam 9min 59s");
+    assert.equal(calls.length, before, "The presentation clock never invokes native commands");
+    await act(async () => root.unmount()); root = createRoot(container);
+    assert.equal(clock.cleared, 1);
+  } finally { clock.restore(); }
+});
+
+test("guidance preparation expiry blocks review at click before a UI tick and permits stop", async () => {
+  snapshot = { ...idle(), operationId, generation: 1, role: "host", phase: "hostPrepared", preparation, expiresAtMs: preparation.expiresAtMs };
+  await render();
+  const originalNow = Date.now;
+  try {
+    Date.now = () => preparation.expiresAtMs;
+    await submit();
+    assert.equal(count("connect_review_host"), 0);
+    assert.equal(button("Revisar convite").disabled, true);
+    assert.equal(nextStep(), "Encerre esta tentativa e prepare uma nova.");
+    assert.equal(button("Encerrar Connect").disabled, false);
+    await click("Encerrar Connect"); assert.equal(count("connect_stop"), 1);
+  } finally { Date.now = originalNow; }
+});
+
+test("guidance review expiry blocks confirmation at click before a UI tick and clears consent", async () => {
+  snapshot = { ...idle(), operationId, generation: 1, role: "host", phase: "reviewed", preparation, review };
+  await render(); await checkConsent();
+  const originalNow = Date.now;
+  try {
+    Date.now = () => review.expiresAtMs;
+    await click("Autorizar conexão");
+    assert.equal(count("connect_confirm"), 0);
+    assert.equal(container.querySelector(".connect-consent input").checked, false);
+    assert.equal(button("Autorizar conexão").disabled, true);
+    assert.equal(nextStep(), "Encerre esta tentativa e prepare uma nova.");
+    await click("Cancelar tentativa"); assert.equal(count("connect_stop"), 1);
+  } finally { Date.now = originalNow; }
+});
+
+test("guidance review timeout tick disables consent without dispatch and clock rollback cannot restore approval", async () => {
+  const clock = guidanceClock(review.expiresAtMs - 1000);
+  try {
+    snapshot = { ...idle(), operationId, generation: 1, role: "guest", phase: "reviewed", preparation: { ...preparation, publicId: guestId },
+      review: { ...review, role: "guest", gameTarget: null, localTcpBind: "127.0.0.1:0" } };
+    await render(); await checkConsent();
+    const before = calls.length;
+    await clock.tick(review.expiresAtMs);
+    assert.equal(nextStep(), "Encerre esta tentativa e prepare uma nova.");
+    assert.equal(container.querySelector(".connect-consent input").checked, false);
+    assert.equal(container.querySelector(".connect-consent input").disabled, true);
+    assert.equal(button("Autorizar conexão").disabled, true);
+    assert.equal(calls.length, before);
+    await clock.tick(review.expiresAtMs - 1000);
+    assert.equal(container.querySelector(".connect-consent input").checked, false);
+    assert.equal(button("Autorizar conexão").disabled, true);
+    await click("Cancelar tentativa"); assert.equal(count("connect_stop"), 1);
+  } finally { clock.restore(); }
+});
+
+test("guidance clock expiry removes invitation output without reexport or claiming admitted session ended", async () => {
+  const clock = guidanceClock(sessionTiming.admissionExpiresAtMs - 1000);
+  try {
+    sessionFixtures(); snapshot = activeSession(); await render(); await click("Copiar convite");
+    assert.match(container.querySelector("textarea").value, /session invitation/);
+    await clock.tick(sessionTiming.admissionExpiresAtMs);
+    assert.equal(nextStep(), "Atualize o estado da tentativa.");
+    assert.equal(container.querySelector("textarea"), null);
+    assert.equal([...container.querySelectorAll("button")].some(el => el.textContent === "Copiar convite"), false);
+    assert.equal(count("connect_export_invitation"), 1); assert.equal(count("connect_stop"), 0);
+    snapshot = { ...snapshot, generation: 2, transportState: "admitted" };
+    await click("Atualizar estado");
+    assert.equal(nextStep(), "Acompanhe o estado da conexão.");
+    assert.match(container.textContent, /Convite utilizado · conexão ativa/);
+  } finally { clock.restore(); }
+});
+
+test("guidance admission deadline crossing during export cannot publish or copy the expired reply", async () => {
+  sessionFixtures(); snapshot = activeSession();
+  const originalNow = Date.now;
+  let finish;
+  handlers.set("connect_export_invitation", () => new Promise(resolve => { finish = resolve; }));
+  try {
+    Date.now = () => sessionTiming.admissionExpiresAtMs - 1000;
+    await render(); await click("Copiar convite");
+    Date.now = () => sessionTiming.admissionExpiresAtMs;
+    await act(async () => finish(sessionExport));
+    assert.deepEqual(copied, []); assert.equal(container.querySelector("textarea"), null);
+    assert.equal(count("connect_export_invitation"), 1);
+    assert.equal(button("Encerrar Connect").disabled, false);
+  } finally { Date.now = originalNow; }
+});
+
+test("guidance group retains its existing review and participant controls", async () => {
+  groupFixtures(); snapshot = activeGroup(); await render();
+  assert.equal(nextStep(), "Siga a revisão e os controles deste perfil.");
+  assert.match(guidanceText(), /prazos próprios abaixo/);
+  assert.equal(count("connect_confirm_session_group_host"), 0);
+  assert.equal(button("Encerrar Connect").disabled, false);
+});
+
+test("guidance failed capability only offers observation and cleanup until the app is reopened", async () => {
+  snapshot = { ...idle(), operationId, generation: 1, role: "host", phase: "reviewed", preparation, review };
+  handlers.set("connect_capabilities", () => { throw new Error("capability unavailable"); });
+  await render();
+  const assertObservationOnly = () => {
+    assert.equal(nextStep(), "Acompanhe ou encerre a tentativa identificada.");
+    assert.match(guidanceText(), /disponibilidade do Connect não pôde ser confirmada/);
+    assert.match(guidanceText(), /Atualizar estado consulta somente a tentativa/);
+    assert.doesNotMatch(container.textContent, /autorizar|copiar|revise e autorize/i);
+    assert.equal(container.querySelector(".connect-guidance details"), null);
+    assert.equal(container.querySelector("form"), null);
+    assert.equal(container.querySelector(".connect-consent"), null);
+    assert.equal(button("Atualizar estado").disabled, false);
+    assert.equal(button("Encerrar Connect").disabled, false);
+  };
+  assertObservationOnly();
+  await click("Atualizar estado"); assertObservationOnly();
+  assert.equal(count("connect_capabilities"), 1, "Refreshing state never retries capability discovery");
+  assert.equal(count("connect_snapshot"), 2);
+  await click("Encerrar Connect");
+  assert.equal(nextStep(), "Reabra o aplicativo para verificar o Connect.");
+  assert.match(container.textContent, /Recursos liberados/);
+  assert.doesNotMatch(container.textContent, /autorizar|copiar|revise e autorize/i);
+  assert.deepEqual(copied, []);
+  assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot", "connect_snapshot", "connect_stop"]);
+});
