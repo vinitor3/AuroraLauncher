@@ -1,5 +1,7 @@
 # Compatibility Matrix
 
+24/10 — [Social87](../aurora-connect-social-87.md): **PROTÓTIPO** local Windows/Tauri/Firebase Emulators, com busca Aurora, amizade bilateral, bloqueios, presença e anúncios limitados. Interface real de navegador e executável usa contas descartáveis; não há backend social publicado nem ingresso automático. Não muda ou homologa Minecraft, Core/Skins, Simple Voice Chat, Plasmo Voice, TCP/UDP ou redes externas. [Resultados separados](../task-aur-r4-connect-social-87.md).
+
 GUI/Minecraft24/10 — consulta separada contra servidor real1.21.1/Fabric0.16.14/JDK21.0.12.1, semmods/loopback/online-mode=false: botão Consulta no GuestTauri mostrou resposta767 correspondente e0de2; copy/stop/EULA exata/rebind43001 observados. [Evidência](../aurora-connect-ui-lab.md). Não homologa mundo/contas/Core/Skins/áudio/exterior; os dois casosTCPecho abaixo conservam sua ausência deMinecraft.
 
 24/10 — [86A0](../aurora-connect-native-voice-binding-86a0.md): somente Windows + ambas features default-off, processos próprios de fixtureTCP/STATUS/UDP reais dos dois perfis. Sete pais novos, seis regressões isoladas, lifecycleTCP e pai dos dez goldensV1 PASS; primeira regressão concorrente preservada. Não é nova execuçãoJava, ponteHost, anúncio ou áudio e não promove nenhuma célulaCore/Skins/SVC/Plasmo.

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Aurora Social Lab",
+  "identifier": "com.aurora.smartlauncher.sociallab",
+  "build": { "beforeBuildCommand": "npm run social:build", "beforeDevCommand": "npm run social:dev", "devUrl": "http://localhost:1437" },
+  "app": {
+    "windows": [{ "label": "main", "title": "Aurora Social — teste local", "width": 1240, "height": 860, "minWidth": 960, "minHeight": 620, "resizable": true, "decorations": false }],
+    "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.modrinth.com https://media.forgecdn.net https://mediafilez.forgecdn.net; media-src 'self' blob: data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:1437 http://127.0.0.1:8187 http://127.0.0.1:9187" }
+  },
+  "bundle": { "active": false }
+}

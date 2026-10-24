@@ -1,0 +1,247 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { before, beforeEach, after, test } from "node:test";
+import { assertFails, assertSucceeds, initializeTestEnvironment } from "@firebase/rules-unit-testing";
+import { collection, doc, getDoc, getDocs, limit, query, setDoc, Timestamp, serverTimestamp, updateDoc, deleteDoc, disableNetwork, enableNetwork, writeBatch } from "firebase/firestore";
+
+const projectId = "demo-aurora-social-rules-v2";
+let env, createService;
+const desktopRequire = createRequire(new URL("../../apps/desktop/package.json", import.meta.url));
+const empty = { friends: [], incoming: [], outgoing: [], blocked: [], revision: 1, kind: "block", actor: "a", peer: "b", updatedAt: Timestamp.now() };
+const draft = { title: "Mundo Aurora", modpackName: "Meu Modpack", minecraftVersion: "1.21.1", loader: "Fabric", imageUrl: null,
+  players: 1, maxPlayers: 8, visibility: "public", joinPolicy: "open" };
+
+before(async () => {
+  const ts = desktopRequire("typescript");
+  const transpile = text => ts.transpileModule(text, {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+  const shared = `data:text/javascript;base64,${Buffer.from(transpile(await readFile(new URL("../../apps/desktop/src/shared/social.ts", import.meta.url),"utf8"))).toString("base64")}`;
+  const source = transpile(await readFile(new URL("../../apps/desktop/src/lib/socialFirebase.ts", import.meta.url),"utf8"))
+    .replace('"../shared/social"', JSON.stringify(shared))
+    .replace('"firebase/firestore"', JSON.stringify(import.meta.resolve("firebase/firestore")));
+  createService = (await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`)).createSocialFirebaseService;
+  env = await initializeTestEnvironment({ projectId, firestore: { host: "127.0.0.1", port: 8187, rules: await readFile(new URL("../firestore.rules", import.meta.url), "utf8") } });
+});
+beforeEach(async () => {
+  await env.clearFirestore();
+  await env.withSecurityRulesDisabled(async context => {
+    const db = context.firestore();
+    for (const uid of ["a", "b", "c", "d"]) {
+      await setDoc(doc(db, "users", uid), { uid, username: `User_${uid}`, usernameLower: `user_${uid}` });
+      await setDoc(doc(db, "usernames", `user_${uid}`), { uid, usernameLower: `user_${uid}` });
+      await setDoc(doc(db, "publicProfiles", uid), { uid, username: `User_${uid}`, avatarUrl: null });
+    }
+  });
+});
+after(async () => { await env?.cleanup(); });
+const dbFor = uid => env.authenticatedContext(uid).firestore();
+const service = uid => createService({ db: dbFor(uid), auth: { currentUser: { uid } } });
+async function friendship() { await service("a").requestFriend("b"); await service("b").respondFriend("a", "accept"); }
+async function ownId(uid) { return (await getDoc(doc(dbFor(uid), "socialOwners", uid))).data().sessionId; }
+
+test("SDK exact Aurora nick search and read-only empty snapshot; directory LIST denied", async () => {
+  assert.equal((await service("a").searchByNickname(" UsEr_B ")).nickname, "user_b");
+  assert.equal(await service("a").searchByNickname("UnknownNick"), null);
+  await assert.rejects(service("a").searchByNickname(""));
+  const snapshot = await service("a").snapshot();
+  assert.equal(snapshot.presenceSharing, "hidden"); assert.deepEqual(snapshot.friends, []);
+  assert.equal((await getDoc(doc(dbFor("a"), "socialState", "a"))).exists(), false);
+  for (const name of ["users", "usernames", "publicProfiles", "socialState", "socialSessions", "socialPresence"]) {
+    await assertFails(getDocs(query(collection(dbFor("a"), name), limit(20))));
+  }
+});
+test("SDK request/accept are reciprocal; peer graph never readable", async () => {
+  await service("a").requestFriend("b");
+  assert.equal((await service("b").snapshot()).incoming[0].nickname, "User_a");
+  await assertFails(getDoc(doc(dbFor("a"), "socialState", "b")));
+  await assert.rejects(service("a").respondFriend("b", "accept"));
+  await service("b").respondFriend("a", "accept");
+  assert.equal((await service("a").snapshot()).friends[0].uid, "b");
+  assert.equal((await service("b").snapshot()).friends[0].uid, "a");
+  assert.equal((await getDoc(doc(dbFor("a"), "socialRequests", "a", "peers", "b"))).exists(), false);
+  await service("a").removeFriend("b");
+  assert.deepEqual((await service("b").snapshot()).friends, []);
+});
+test("SDK decline, cancel and block clear both request containers without granting friendship", async () => {
+  await service("a").requestFriend("b"); await service("b").respondFriend("a", "decline");
+  assert.deepEqual((await service("a").snapshot()).outgoing, []);
+  await service("c").requestFriend("b"); await service("c").cancelRequest("b");
+  await service("d").requestFriend("b"); await service("b").block("d");
+  assert.deepEqual((await service("d").snapshot()).outgoing, []);
+  await assert.rejects(service("d").requestFriend("b"));
+  await service("b").unblock("d");
+  assert.deepEqual((await service("b").snapshot()).friends, []);
+});
+test("SDK friend-only presence and session disappear after reciprocal block; public metadata remains protected", async () => {
+  await friendship();
+  await service("a").setPresence({ sharing: "friends", modpackName: "Create" });
+  await service("a").publishSession({ ...draft, visibility: "friends" });
+  assert.equal((await service("b").snapshot()).friends[0].presence.modpackName, "Create");
+  const id = await ownId("a");
+  await assertFails(getDoc(doc(dbFor("c"), "socialSessions", id)));
+  await service("a").publishSession(draft);
+  assert.equal((await service("c").listPublicSessions()).items.length, 1);
+  await service("b").block("a");
+  await assertFails(getDoc(doc(dbFor("b"), "socialSessions", id)));
+  await assertFails(getDoc(doc(dbFor("b"), "socialPresence", "a")));
+  assert.deepEqual((await service("b").listPublicSessions()).items, []);
+  assert.equal((await service("c").listPublicSessions()).items.length, 1);
+});
+test("SDK public/private/close keeps one owner pointer and opaque index atomic", async () => {
+  await service("a").publishSession(draft); const id = await ownId("a");
+  const catalog = await getDocs(query(collection(dbFor("b"), "socialCatalog"), limit(20)));
+  assert.deepEqual(Object.keys(catalog.docs[0].data()).sort(), ["expiresAt", "schema"]);
+  await service("a").publishSession({ ...draft, visibility: "private" });
+  assert.equal(await ownId("a"), id);
+  assert.equal((await service("b").listPublicSessions()).items.length, 0);
+  await assertFails(getDoc(doc(dbFor("b"), "socialSessions", id)));
+  await service("a").closeSession();
+  assert.equal((await getDoc(doc(dbFor("a"), "socialOwners", "a"))).exists(), false);
+});
+test("rules reject one-sided friendship, self requests, forged actors, auth-only accounts and duplicate requests", async () => {
+  const db = dbFor("a");
+  await assertFails(setDoc(doc(db, "socialState", "a"), { ...empty, friends: ["b"], kind: "accept", updatedAt: serverTimestamp() }));
+  await assert.rejects(service("a").requestFriend("a"));
+  await assert.rejects(service("not-registered").requestFriend("a"));
+  await assert.rejects(service("not-registered").publishSession(draft));
+  await assert.rejects(service("not-registered").setPresence({ sharing: "friends", modpackName: "Fake" }));
+  await service("a").requestFriend("b");
+  await assert.rejects(service("a").requestFriend("b"));
+  await assertFails(updateDoc(doc(db, "socialState", "a"), { actor: "c", revision: 2, updatedAt: serverTimestamp() }));
+});
+test("expired request cannot be accepted and can be declined to free bounded slot", async () => {
+  await service("a").requestFriend("b");
+  await env.withSecurityRulesDisabled(async c => updateDoc(doc(c.firestore(), "socialRequests", "a", "peers", "b"), { expiresAt: Timestamp.fromMillis(1) }));
+  await assert.rejects(service("b").respondFriend("a", "accept"));
+  await service("b").respondFriend("a", "decline");
+  assert.equal((await service("a").snapshot()).outgoing.length, 0);
+});
+test("rate and ten pending slots are server enforced", async () => {
+  await service("a").requestFriend("b");
+  await assert.rejects(service("a").requestFriend("c"));
+  await env.withSecurityRulesDisabled(async c => {
+    await setDoc(doc(c.firestore(), "socialState", "c"), { ...empty, incoming: Array.from({ length: 10 }, (_, i) => `u${i}`) });
+  });
+  await assert.rejects(service("d").requestFriend("c"));
+});
+test("public LIST requires bound; projections reject credentials, arbitrary artwork, forged owner and standalone index", async () => {
+  await service("a").publishSession(draft); const id = await ownId("a"); const db = dbFor("a");
+  await assertFails(getDocs(collection(db, "socialCatalog")));
+  await assertFails(getDocs(query(collection(db, "socialCatalog"), limit(21))));
+  await assertFails(updateDoc(doc(db, "socialSessions", id), { endpoint: "127.0.0.1:43001" }));
+  await assertFails(updateDoc(doc(db, "socialSessions", id), { imageUrl: "https://evil.test/a.png" }));
+  await assertFails(updateDoc(doc(dbFor("b"), "socialSessions", id), { hostUid: "b" }));
+  await assertFails(setDoc(doc(db, "socialCatalog", "00000000-0000-4000-8000-000000000009"), { schema: 1, expiresAt: Timestamp.fromMillis(Date.now()+10000) }));
+  const anonymous = env.unauthenticatedContext().firestore();
+  await assertFails(getDocs(query(collection(anonymous, "socialCatalog"), limit(20))));
+});
+test("SDK bounded catalog paginates mixed expired/blocked entries without leaking or auto filling", async () => {
+  await env.withSecurityRulesDisabled(async c => {
+    const db = c.firestore();
+    for (let i=0;i<21;i++) {
+      const id = `00000000-0000-4000-8000-${String(i).padStart(12,"0")}`, host = `host${i}`;
+      const expiry = Timestamp.fromMillis(Date.now()+(i===0?-1000:100000));
+      await setDoc(doc(db,"socialCatalog",id),{schema:1,expiresAt:expiry});
+      await setDoc(doc(db,"socialOwners",host),{sessionId:id,visibility:"public"});
+      await setDoc(doc(db,"socialSessions",id),{...draft,visibility:i===2?"private":"public",schema:1,hostUid:host,expiresAt:expiry});
+      if (i===1) await setDoc(doc(db,"socialState",host),{...empty,blocked:["a"]});
+    }
+  });
+  const first = await service("a").listPublicSessions();
+  assert.equal(first.items.length,17); assert.ok(first.nextCursor);
+  const second = await service("a").listPublicSessions(first.nextCursor);
+  assert.equal(second.items.length,1); assert.equal(second.nextCursor,null);
+});
+test("auth changes and automatic join remain fail closed", async () => {
+  const auth = { currentUser: { uid: "a" } }; const s = createService({db:dbFor("a"),auth});
+  assert.equal(s.capabilities.join,false);
+  await assert.rejects(s.prepareJoin("anything"),/Nenhuma conexão/);
+  auth.currentUser = { uid:"b" };
+  await assert.rejects(s.requestFriend("c"),/conta mudou/);
+});
+test("accepted-friend and block quotas reject 101st entry without changing reciprocal state", async () => {
+  await service("b").requestFriend("a");
+  await env.withSecurityRulesDisabled(async c => {
+    await updateDoc(doc(c.firestore(),"socialState","a"),{friends:Array.from({length:100},(_,i)=>`friend${i}`)});
+  });
+  await assert.rejects(service("a").respondFriend("b","accept"));
+  assert.deepEqual((await getDoc(doc(dbFor("b"),"socialState","b"))).data().outgoing,["a"]);
+  await env.withSecurityRulesDisabled(async c => {
+    await updateDoc(doc(c.firestore(),"socialState","a"),{blocked:Array.from({length:100},(_,i)=>`blocked${i}`)});
+  });
+  await assert.rejects(service("a").block("c"));
+  assert.equal((await getDoc(doc(dbFor("c"),"socialState","c"))).exists(),false);
+});
+test("expired presence and sessions cannot be projected fresh; owner can explicitly close", async () => {
+  await friendship(); await service("a").publishSession(draft);
+  await service("a").setPresence({sharing:"friends",modpackName:"Create"});
+  const id=await ownId("a");
+  await env.withSecurityRulesDisabled(async c => {
+    for(const [name,key] of [["socialSessions",id],["socialCatalog",id],["socialPresence","a"]])
+      await updateDoc(doc(c.firestore(),name,key),{expiresAt:Timestamp.fromMillis(1)});
+  });
+  const snapshot=await service("b").snapshot();
+  assert.equal(snapshot.friends[0].presence,null);assert.equal(snapshot.friends[0].session,null);
+  assert.deepEqual((await service("b").listPublicSessions()).items,[]);
+  await service("a").closeSession();
+});
+test("raw writes cannot orphan published index, change request expiry, or inject unrenderable session text", async () => {
+  await service("a").publishSession(draft); const id=await ownId("a"),db=dbFor("a");
+  await assertFails(deleteDoc(doc(db,"socialOwners","a")));
+  await assertFails(deleteDoc(doc(db,"socialSessions",id)));
+  await assertFails(deleteDoc(doc(db,"socialCatalog",id)));
+  await assertFails(updateDoc(doc(db,"socialSessions",id),{title:"\nInjected"}));
+  await assertFails(updateDoc(doc(db,"socialSessions",id),{title:"   "}));
+  await service("a").requestFriend("b");
+  await assertFails(updateDoc(doc(db,"socialRequests","a","peers","b"),{expiresAt:Timestamp.fromMillis(Date.now()+999999999)}));
+});
+test("offline SDK cannot reuse previously permitted public projection after a block", async () => {
+  await service("a").publishSession(draft);
+  const db=dbFor("b"), reader=createService({db,auth:{currentUser:{uid:"b"}}});
+  assert.equal((await reader.listPublicSessions()).items.length,1);
+  await service("a").block("b");
+  await disableNetwork(db);
+  try { await assert.rejects(reader.listPublicSessions()); }
+  finally { await enableNetwork(db); }
+  assert.deepEqual((await reader.listPublicSessions()).items,[]);
+});
+test("paired accept rejects extra unrelated friendship and third-party request reads", async () => {
+  await service("a").requestFriend("b");
+  const a=(await getDoc(doc(dbFor("a"),"socialState","a"))).data();
+  const b=(await getDoc(doc(dbFor("b"),"socialState","b"))).data();
+  const db=dbFor("b"),batch=writeBatch(db);
+  batch.set(doc(db,"socialState","a"),{...a,friends:["b"],outgoing:[],revision:a.revision+1,kind:"accept",actor:"b",peer:"b",updatedAt:serverTimestamp()});
+  batch.set(doc(db,"socialState","b"),{...b,friends:["a","c"],incoming:[],revision:b.revision+1,kind:"accept",actor:"b",peer:"a",updatedAt:serverTimestamp()});
+  batch.delete(doc(db,"socialRequests","a","peers","b"));
+  await assertFails(batch.commit());
+  await assertFails(getDoc(doc(dbFor("c"),"socialRequests","a","peers","b")));
+  await service("b").respondFriend("a","accept");
+});
+test("a committed block prevents a concurrent acceptance from retaining friendship", async () => {
+  await service("a").requestFriend("b");
+  const [blockResult,acceptResult]=await Promise.allSettled([service("a").block("b"),service("b").respondFriend("a","accept")]);
+  // An aborted transaction is an explicit failed action, not a successful block.
+  // A second explicit action resolves that case; the adapter itself never retries.
+  if(blockResult.status==="rejected") await service("a").block("b");
+  assert.ok(["fulfilled","rejected"].includes(acceptResult.status));
+  assert.deepEqual((await service("a").snapshot()).friends,[]);
+  assert.deepEqual((await service("b").snapshot()).friends,[]);
+  assert.equal((await service("a").snapshot()).blocked[0].uid,"b");
+  await assert.rejects(service("b").respondFriend("a","accept"));
+});
+test("Auth-only identities cannot enumerate the public index or read known public session metadata", async () => {
+  await service("a").publishSession(draft);
+  const id=await ownId("a"),authOnly=dbFor("auth-only-no-aurora-profile");
+  await assertFails(getDocs(query(collection(authOnly,"socialCatalog"),limit(20))));
+  await assertFails(getDoc(doc(authOnly,"socialCatalog",id)));
+  await assertFails(getDoc(doc(authOnly,"socialSessions",id)));
+  // A profile with no matching immutable nickname registry is also insufficient.
+  await env.withSecurityRulesDisabled(async context => {
+    await setDoc(doc(context.firestore(),"users","auth-only-no-aurora-profile"),{
+      uid:"auth-only-no-aurora-profile",usernameLower:"unregistered_nick",
+    });
+  });
+  await assertFails(getDocs(query(collection(authOnly,"socialCatalog"),limit(20))));
+  await assertFails(getDoc(doc(authOnly,"socialSessions",id)));
+  assert.equal((await service("b").listPublicSessions()).items[0].id,id);
+});

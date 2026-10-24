@@ -1,12 +1,22 @@
 # Aurora Connect — amigos, sessões públicas e entrada simples
 
-Requisito explícito confirmado pelo usuário em 24/10/2026. Estado das capacidades sociais descritas aqui: **NÃO IMPLEMENTADO / PRECISA DE TESTE**. Este documento refina a experiência de R4; não declara que o painel experimental, o serviço de amigos, o catálogo público ou a seleção automática já estão disponíveis.
+Requisito explícito confirmado e detalhado pelo usuário em 24/10/2026. O [incremento87](aurora-connect-social-87.md) implementa **PROTÓTIPO** local de amigos, busca de nick Aurora, presença opcional e anúncios públicos/para amigos, com SDK/regras em emuladores e interface. Essas capacidades continuam **IMPLEMENTADO MAS NÃO HOMOLOGADO** para publicação e desligadas no build normal. **Entrar sem copiar convite**, backend de autorização social do transporte e seleção automática de caminho continuam **NÃO IMPLEMENTADO / PRECISA DE TESTE**. Este documento define a experiência final de R4; não promove o laboratório à liberação pública.
+
+O registro87 separa a GUI original, a subrodada de capa Modrinth no executável e a correção posterior do hot reload do preview. Os seis testes causais dessa correção não reatribuem a GUI anterior ao preview novo; testes locais de dados sociais também não significam isolamento de todas as consultas nativas de rede do launcher.
 
 Autoridade: [especificação Connect](engineering/AURORA_CONNECT_SPEC.md), [roadmap](engineering/MASTER_ROADMAP.md), tarefas existentes [AUR-R4-004/005/008](engineering/CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md), [política de dependências/custos](engineering/AURORA_CONNECT_DEPENDENCIES.md) e [prompt consolidado](engineering/CODEX_PROMPTS/AUR-R4-CONNECT-V2.md). Permanecem todas as fases, prioridades, gates e os nove pares Core/Skins; não há Companion/HUD ou ampliação da matriz.
 
 ## Experiência exigida
 
 O fluxo final deve se parecer com uma lista de amigos e sessões de jogo: ver a disponibilidade autorizada, escolher **Entrar** ou **Pedir para entrar**, conectar e receber um resultado claro. O usuário não precisa copiar chaves, endereço, JSON ou aprovação do laboratório no fluxo normal suportado. A troca manual atual é ferramenta de desenvolvimento, não o desenho final da experiência social.
+
+Detalhamento visual e funcional solicitado pelo usuário, a partir das referências anexadas:
+
+- A pessoa pesquisada precisa ter conta no **Aurora Launcher**. Buscar pelo nick do Aurora, sem procurar/adicionar jogadores Minecraft/Mojang só porque usam o mesmo nome. A primeira implementação faz busca exata autenticada pelo nick completo, sem enumeração global; ampliação futura da busca exige preservar privacidade e limites.
+- A lista de amigos precisa apresentar pedidos recebidos/enviados, aceitação, cancelamento/recusa, remoção e bloqueio. No lugar de uma indicação genérica de “Disponível”, a presença autorizada pode mostrar o nome do modpack em execução no Aurora, com expiração e estado desconhecido/oculto quando não houver evidência atual. Presença não prova jogador dentro do mundo.
+- As sessões compartilhadas com a comunidade devem aparecer em **lista ou grade de cartões médios**, com foto/capa permitida do modpack/servidor, título, nome do modpack, versão do Minecraft, quantidade de participantes e somente informações úteis adicionais, como loader e política de ingresso. Não acrescentar contadores de votos, publicidade, IP para copiar ou estatísticas sem fonte apenas por existirem na referência visual.
+- O anfitrião escolhe no Aurora se o mundo/sessão fica privado, para amigos ou público. O anúncio só é exposto conforme essa escolha; abrir descoberta não altera automaticamente o servidor do jogo. No produto final, **Entrar** obtém a autorização interna e conecta sem exigir troca manual de convite; **Pedir para entrar** é reservado à política que exige aprovação.
+- Imagem, título, nick e metadados são conteúdo não confiável. O catálogo não concede carregamento de URLs arbitrárias, execução de HTML, acesso a perfis privados ou autoridade sobre o transporte. Chat e importação de contatos não estão implícitos na comparação com a Steam.
 
 O anfitrião escolhe explicitamente a visibilidade e a política de ingresso da sessão. Criar uma sessão começa privado; torná-la disponível a amigos ou ao público exige ação clara do responsável. Abrir uma sessão não altera sozinho o servidor Minecraft, whitelist, autenticação, modpack ou configurações pessoais.
 
@@ -66,6 +76,6 @@ Este refinamento pertence aos IDs existentes: **004** seleção/conectividade, *
 | Falha de direto/relay | Usa somente alternativa permitida comprovada ou informa falta de caminho; indisponibilidade/quota não ativa cobrança nem muda permissões. |
 | Fluxo completo | Interface real entre dois computadores/redes distintas, dois jogadores, encerramento/queda e recursos liberados; fixtures locais continuam evidência separada. |
 
-São critérios **PRECISA DE TESTE**, não resultados executados nesta atualização documental. TCP, UDP, Minecraft, Simple Voice Chat, Plasmo Voice, sincronização por manifesto e homologação dos nove pares continuam avaliados separadamente.
+Esses são critérios de liberação **PRECISA DE TESTE**. O [domínio87](aurora-connect-social-87.md) registra os resultados locais já executados de relações, regras, anúncios e interface, e suas limitações; a autorização/entrada social automática e a liberação remota não estão demonstradas por eles. TCP, UDP, Minecraft, Simple Voice Chat, Plasmo Voice, sincronização por manifesto e homologação dos nove pares continuam avaliados separadamente.
 
 Rollback desta atualização remove somente o refinamento documental revisado; não modifica regras remotas, contas, configuração pessoal, executável ou transporte. A implementação futura deve oferecer desligamento independente das entradas sociais e revogação/cleanup, preservando os contratos de segurança e os caminhos já comprovados.

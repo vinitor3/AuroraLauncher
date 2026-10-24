@@ -620,6 +620,10 @@ h2 { margin-bottom: .35rem; font-size: 1.18rem; letter-spacing: -.025em; }
 .workspace.active-connect .section-instances, .workspace.active-connect .section-discover,
 .workspace.active-connect .section-java, .workspace.active-connect .section-appearance,
 .workspace.active-connect .side-stack { display: none; }
+.workspace.active-social .workspace-grid { grid-template-columns: minmax(0, 1fr); }
+.workspace.active-social .section-instances, .workspace.active-social .section-discover,
+.workspace.active-social .section-java, .workspace.active-social .section-appearance,
+.workspace.active-social .side-stack { display: none; }
 
 footer { display: flex; justify-content: space-between; gap: 1rem; margin-top: auto; padding: 1rem .1rem .05rem; color: #968da8; font-size: .72rem; }
 code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

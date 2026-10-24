@@ -52,7 +52,8 @@ service cloud.firestore {
     }
 
     match /publicProfiles/{uid} {
-      allow read: if signedIn();
+      allow get: if signedIn();
+      allow list: if false;
       allow create: if signedIn()
         && request.auth.uid == uid
         && request.resource.data.uid == uid
@@ -87,7 +88,8 @@ service cloud.firestore {
     }
 
     match /usernames/{usernameLower} {
-      allow read: if signedIn();
+      allow get: if signedIn();
+      allow list: if false;
       allow create: if signedIn()
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.keys().hasAll(['uid', 'usernameLower', 'createdAt'])
@@ -97,6 +99,184 @@ service cloud.firestore {
         && request.resource.data.createdAt == request.time
         && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.usernameLower == usernameLower;
       allow update, delete: if false;
+    }
+
+    // Social state is private. Reciprocal writes use transforms, never peer graph reads.
+    function socialUid(uid) { return uid is string && uid.matches('^[A-Za-z0-9_-]{1,128}$'); }
+    function socialAccount(uid) {
+      let profile = get(/databases/$(database)/documents/users/$(uid)).data;
+      return profile.uid == uid && profile.usernameLower.matches('^[a-z0-9_]{3,16}$')
+        && get(/databases/$(database)/documents/usernames/$(profile.usernameLower)).data.uid == uid;
+    }
+    function socialState(uid) {
+      return get(/databases/$(database)/documents/socialState/$(uid)).data;
+    }
+    function socialAfter(uid) { return getAfter(/databases/$(database)/documents/socialState/$(uid)).data; }
+    function socialHas(uid, field, peer) { return exists(/databases/$(database)/documents/socialState/$(uid)) && peer in socialState(uid)[field]; }
+    function socialBlocked(a, b) { return socialHas(a, 'blocked', b) || socialHas(b, 'blocked', a); }
+    function socialFriends(a, b) { return socialHas(a, 'friends', b) && socialHas(b, 'friends', a) && !socialBlocked(a, b); }
+    function socialLists(d, f, i, o, b) {
+      return d.friends == f && d.incoming == i && d.outgoing == o && d.blocked == b;
+    }
+    function socialShape(d) {
+      return d.keys().hasAll(['friends','incoming','outgoing','blocked','revision','kind','actor','peer','updatedAt'])
+        && d.keys().hasOnly(['friends','incoming','outgoing','blocked','revision','kind','actor','peer','updatedAt'])
+        && d.friends is list && d.friends.size() <= 100 && d.friends.toSet().size() == d.friends.size()
+        && d.incoming is list && d.incoming.size() <= 10 && d.incoming.toSet().size() == d.incoming.size()
+        && d.outgoing is list && d.outgoing.size() <= 10 && d.outgoing.toSet().size() == d.outgoing.size()
+        && d.blocked is list && d.blocked.size() <= 100 && d.blocked.toSet().size() == d.blocked.size()
+        && d.revision is int && d.updatedAt == request.time
+        && socialUid(d.actor) && socialUid(d.peer);
+    }
+    function socialTransition(uid, d, old) {
+      let p = d.peer;
+      let own = uid == request.auth.uid;
+      return (d.kind == 'request' && !socialBlocked(uid, p) && !(p in old.friends) && !(p in old.incoming) && !(p in old.outgoing)
+          && ((own && socialLists(d, old.friends, old.incoming, old.outgoing.concat([p]), old.blocked))
+            || (!own && socialLists(d, old.friends, old.incoming.concat([p]), old.outgoing, old.blocked))))
+        || (d.kind == 'accept' && !socialBlocked(uid, p) && !(p in old.friends)
+          && ((own && p in old.incoming && get(/databases/$(database)/documents/socialRequests/$(p)/peers/$(uid)).data.expiresAt > request.time)
+            || (!own && p in old.outgoing && get(/databases/$(database)/documents/socialRequests/$(uid)/peers/$(p)).data.expiresAt > request.time))
+          && socialLists(d, old.friends.concat([p]), old.incoming.removeAll([p]), old.outgoing.removeAll([p]), old.blocked))
+        || (d.kind == 'decline' && ((own && p in old.incoming) || (!own && p in old.outgoing))
+          && socialLists(d, old.friends, old.incoming.removeAll([p]), old.outgoing.removeAll([p]), old.blocked))
+        || (d.kind == 'cancel' && ((own && p in old.outgoing) || (!own && p in old.incoming))
+          && socialLists(d, old.friends, old.incoming.removeAll([p]), old.outgoing.removeAll([p]), old.blocked))
+        || (d.kind == 'remove' && p in old.friends && socialLists(d, old.friends.removeAll([p]), old.incoming, old.outgoing, old.blocked))
+        || (d.kind == 'block' && ((!own && socialLists(d, old.friends.removeAll([p]), old.incoming.removeAll([p]), old.outgoing.removeAll([p]), old.blocked))
+          || (own && !(p in old.blocked) && socialLists(d, old.friends.removeAll([p]), old.incoming.removeAll([p]), old.outgoing.removeAll([p]), old.blocked.concat([p])))));
+    }
+    function socialBlank() { return {'friends': [], 'incoming': [], 'outgoing': [], 'blocked': [], 'revision': 0}; }
+    function socialPair(uid, d, old, otherOld) {
+      let other = socialAfter(d.peer);
+      return uid != d.peer && (request.auth.uid == uid || request.auth.uid == d.peer)
+        && d.actor == request.auth.uid && other.actor == d.actor && other.kind == d.kind && other.peer == uid
+        && other.revision == otherOld.revision + 1 && other.updatedAt == request.time
+        && (d.kind != 'request' && d.kind != 'block' || (socialAccount(uid) && socialAccount(d.peer)))
+        && socialTransition(uid, d, old)
+        && (d.kind != 'request' || (getAfter(/databases/$(database)/documents/socialThrottle/$(request.auth.uid)).data.at == request.time
+          && ((uid == request.auth.uid && getAfter(/databases/$(database)/documents/socialRequests/$(uid)/peers/$(d.peer)).data.createdAt == request.time)
+            || (uid != request.auth.uid && getAfter(/databases/$(database)/documents/socialRequests/$(d.peer)/peers/$(uid)).data.createdAt == request.time))))
+        && (d.kind == 'request' || (!existsAfter(/databases/$(database)/documents/socialRequests/$(uid)/peers/$(d.peer))
+          && !existsAfter(/databases/$(database)/documents/socialRequests/$(d.peer)/peers/$(uid))));
+    }
+    function socialPaired(uid, d, old) {
+      return (exists(/databases/$(database)/documents/socialState/$(d.peer)) && socialPair(uid, d, old, socialState(d.peer)))
+        || (!exists(/databases/$(database)/documents/socialState/$(d.peer)) && socialPair(uid, d, old, socialBlank()));
+    }
+    match /socialState/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, delete: if false;
+      allow create: if signedIn() && socialUid(uid) && socialShape(request.resource.data)
+        && request.resource.data.revision == 1 && socialPaired(uid, request.resource.data, socialBlank());
+      allow update: if signedIn() && socialUid(uid) && socialShape(request.resource.data)
+        && request.resource.data.revision == resource.data.revision + 1
+        && (socialPaired(uid, request.resource.data, resource.data)
+          || (request.auth.uid == uid && request.resource.data.actor == uid && request.resource.data.kind == 'unblock'
+            && request.resource.data.peer in resource.data.blocked
+            && socialLists(request.resource.data, resource.data.friends, resource.data.incoming,
+              resource.data.outgoing, resource.data.blocked.removeAll([request.resource.data.peer]))));
+    }
+    match /socialThrottle/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, delete: if false;
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['at']) && request.resource.data.at == request.time
+        && (!exists(/databases/$(database)/documents/socialThrottle/$(uid)) || request.time >= resource.data.at + duration.value(2, 's'));
+    }
+    match /socialRequests/{sender}/peers/{receiver} {
+      allow get: if signedIn() && request.auth.uid in [sender, receiver];
+      allow list: if false;
+      allow create: if signedIn() && request.auth.uid == sender && sender != receiver
+        && request.resource.data.keys().hasOnly(['createdAt','expiresAt'])
+        && request.resource.data.createdAt == request.time && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time && request.resource.data.expiresAt <= request.time + duration.value(7,'d')
+        && socialAfter(sender).kind == 'request' && socialAfter(sender).peer == receiver && socialAfter(sender).updatedAt == request.time
+        && socialAfter(receiver).kind == 'request' && socialAfter(receiver).peer == sender && socialAfter(receiver).updatedAt == request.time;
+      allow update: if false;
+      allow delete: if signedIn() && request.auth.uid in [sender, receiver]
+        && socialAfter(sender).actor == request.auth.uid && socialAfter(sender).updatedAt == request.time
+        && !(receiver in socialAfter(sender).outgoing) && !(sender in socialAfter(receiver).incoming);
+    }
+    function socialImage(value) {
+      return value == null || (value is string && value.size() <= 512
+        && value.matches('^https://(cdn[.]modrinth[.]com|media[.]forgecdn[.]net|mediafilez[.]forgecdn[.]net)/[A-Za-z0-9_./%+-]+[.](png|jpg|jpeg|webp)$'));
+    }
+    function socialSessionId(id) { return id.matches('^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'); }
+    function socialText(value, maximum) {
+      return value is string && value.size() >= 1 && value.size() <= maximum
+        && value.matches('^[^\\x00-\\x1f\\x7f]+$') && !value.matches('^ +$');
+    }
+    function socialSessionShape(d) {
+      return d.keys().hasAll(['schema','hostUid','title','modpackName','minecraftVersion','loader','imageUrl','players','maxPlayers','visibility','joinPolicy','expiresAt'])
+        && d.keys().hasOnly(['schema','hostUid','title','modpackName','minecraftVersion','loader','imageUrl','players','maxPlayers','visibility','joinPolicy','expiresAt'])
+        && d.schema == 1 && d.hostUid == request.auth.uid && socialAccount(request.auth.uid)
+        && socialText(d.title, 64) && socialText(d.modpackName, 64)
+        && socialText(d.minecraftVersion, 24) && socialText(d.loader, 24)
+        && socialImage(d.imageUrl) && d.players is int && d.maxPlayers is int
+        && d.players >= 0 && d.maxPlayers >= 1 && d.maxPlayers <= 100 && d.players <= d.maxPlayers
+        && d.visibility in ['private','friends','public'] && d.joinPolicy in ['open','approval']
+        && d.expiresAt is timestamp && d.expiresAt > request.time && d.expiresAt <= request.time + duration.value(300, 's');
+    }
+    function socialOwnerAfter(uid) { return getAfter(/databases/$(database)/documents/socialOwners/$(uid)).data; }
+    function socialVisibleSession(id, d) {
+      return get(/databases/$(database)/documents/socialOwners/$(d.hostUid)).data.sessionId == id
+        && (request.auth.uid == d.hostUid || (d.expiresAt > request.time && !socialBlocked(request.auth.uid, d.hostUid)
+          && (d.visibility == 'public' || (d.visibility == 'friends' && socialFriends(request.auth.uid, d.hostUid)))));
+    }
+    match /socialOwners/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || (resource.data.visibility != 'private' && socialFriends(request.auth.uid, uid)));
+      allow list: if false;
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['sessionId','visibility'])
+        && socialSessionId(request.resource.data.sessionId)
+        && (!exists(/databases/$(database)/documents/socialOwners/$(uid)) || resource.data.sessionId == request.resource.data.sessionId)
+        && getAfter(/databases/$(database)/documents/socialSessions/$(request.resource.data.sessionId)).data.hostUid == uid
+        && getAfter(/databases/$(database)/documents/socialSessions/$(request.resource.data.sessionId)).data.visibility == request.resource.data.visibility;
+      allow delete: if signedIn() && request.auth.uid == uid
+        && !existsAfter(/databases/$(database)/documents/socialSessions/$(resource.data.sessionId))
+        && !existsAfter(/databases/$(database)/documents/socialCatalog/$(resource.data.sessionId));
+    }
+    match /socialSessions/{id} {
+      allow list: if false;
+      allow get: if signedIn() && socialAccount(request.auth.uid) && socialVisibleSession(id, resource.data);
+      allow create, update: if signedIn() && socialSessionId(id) && socialSessionShape(request.resource.data)
+        && (!exists(/databases/$(database)/documents/socialSessions/$(id)) || resource.data.hostUid == request.auth.uid)
+        && socialOwnerAfter(request.auth.uid).sessionId == id
+        && socialOwnerAfter(request.auth.uid).visibility == request.resource.data.visibility
+        && ((request.resource.data.visibility == 'public' && getAfter(/databases/$(database)/documents/socialCatalog/$(id)).data.expiresAt == request.resource.data.expiresAt)
+          || (request.resource.data.visibility != 'public' && !existsAfter(/databases/$(database)/documents/socialCatalog/$(id))));
+      allow delete: if signedIn() && resource.data.hostUid == request.auth.uid
+        && !existsAfter(/databases/$(database)/documents/socialCatalog/$(id))
+        && !existsAfter(/databases/$(database)/documents/socialOwners/$(request.auth.uid));
+    }
+    // Enumeration contains opaque opt-in ids and expiry only; each projection has its own server authorization.
+    match /socialCatalog/{id} {
+      allow get: if signedIn() && socialAccount(request.auth.uid);
+      allow list: if signedIn() && socialAccount(request.auth.uid) && request.query.limit != null && request.query.limit <= 20;
+      allow create, update: if signedIn() && socialSessionId(id)
+        && request.resource.data.keys().hasOnly(['schema','expiresAt']) && request.resource.data.schema == 1
+        && getAfter(/databases/$(database)/documents/socialSessions/$(id)).data.hostUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/socialSessions/$(id)).data.visibility == 'public'
+        && getAfter(/databases/$(database)/documents/socialSessions/$(id)).data.expiresAt == request.resource.data.expiresAt
+        && socialOwnerAfter(request.auth.uid).sessionId == id;
+      allow delete: if signedIn() && get(/databases/$(database)/documents/socialSessions/$(id)).data.hostUid == request.auth.uid
+        && (!existsAfter(/databases/$(database)/documents/socialSessions/$(id))
+          || getAfter(/databases/$(database)/documents/socialSessions/$(id)).data.visibility != 'public');
+    }
+    match /socialPresence/{uid} {
+      allow list: if false;
+      allow get: if signedIn() && (request.auth.uid == uid || (resource.data.sharing == 'friends'
+        && resource.data.expiresAt > request.time && socialFriends(request.auth.uid, uid)));
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && socialAccount(uid)
+        && request.resource.data.keys().hasAll(['sharing','modpackName','updatedAt','expiresAt'])
+        && request.resource.data.keys().hasOnly(['sharing','modpackName','updatedAt','expiresAt'])
+        && request.resource.data.sharing in ['hidden','friends']
+        && (request.resource.data.modpackName == null || (request.resource.data.modpackName is string && request.resource.data.modpackName.size() <= 64))
+        && request.resource.data.updatedAt == request.time && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time && request.resource.data.expiresAt <= request.time + duration.value(120,'s');
+      allow delete: if signedIn() && request.auth.uid == uid;
     }
   }
 }

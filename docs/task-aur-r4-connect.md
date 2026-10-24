@@ -1,5 +1,9 @@
 # Aurora Connect — execução incremental local
 
+## Social87 — amigos e catálogo no laboratório (24/10/2026)
+
+Novo trabalho social detalhado em [tarefa87](task-aur-r4-connect-social-87.md), [domínio87](aurora-connect-social-87.md) e [ADR-029](engineering/ADR/ADR-029-connect-social-local.md). Implementa dados/regras/SDK e interface reais, exercitados localmente com contas descartáveis. Não confundir esse resultado com backend publicado, ingresso social automático, novos testes de transporte ou homologação de jogo/voz. Requisitos visuais e sem convite manual permanecem em [experiência social](aurora-connect-social-experience.md).
+
 ## Ensaio gráfico isolado — build e primeira abertura (23/10/2026)
 
 Após confirmar que o caller/painel básico já existem e86 não bloqueiaTCP/interface, preparado perfil de teste com identificador `com.aurora.smartlauncher.connectlab`, nome/janela próprios e bundlefalse; dois scripts explícitos no package desktop. Configuração normal/versão/default features/matriz/dependências/lockfiles inalterados. [Contrato/evidênciaGUI](aurora-connect-ui-lab.md). QA independente conferiu JSON Merge Patch/Tauri2.11.5, CSP/ACLmain, storageRoaming/LocalData e ausência de adoção automática da raiz normal; o isolamento não é sandbox nem conta remota separada. Nenhum Rust alterado para esse perfil.

@@ -11,6 +11,7 @@ import { guardSessionProfile, startSessionStartup, type SessionStartupState } fr
 import { browserLauncherAuthScope, prepareLauncherServices } from "./lib/launcherAuthScope";
 import {
   bundledFirebaseConfig,
+  socialLabBuild,
   createFirebaseServices,
   clearRemoteSkinLibrary,
   loadAuroraProfile,
@@ -49,6 +50,8 @@ import { DoctorView } from "./features/doctor/DoctorView";
 import { RecoveryView } from "./features/recovery/RecoveryView";
 import { DiagnosticLabView } from "./features/diagnostic-lab/DiagnosticLabView";
 import { ConnectView } from "./features/connect/ConnectView";
+import { SocialView } from "./features/social/SocialView";
+import { createSocialFirebaseService } from "./lib/socialFirebase";
 import { createAccountTransition, stopConnectForAccountTransition } from "./features/connect/account-transition";
 import { VoiceAnnouncementProvider, useVoiceAnnouncement, withVoiceAnnouncementLogout } from "./features/voice-announcement/VoiceAnnouncementProvider";
 import { capabilitiesFrom } from "./features/connect/types";
@@ -209,7 +212,7 @@ type ContentArtworkMigration = {
   fallback?: ContentArtworkEntry;
 };
 type LoaderChoice = "fabric" | "forge";
-type LauncherSection = "instances" | "discover" | "appearance" | "java" | "connect";
+type LauncherSection = "instances" | "discover" | "appearance" | "java" | "connect" | "social";
 type CatalogSource = "modrinth" | "curseforge";
 type LaunchSummary = {
   processId: number;
@@ -1066,7 +1069,9 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const skinOwnerRef = useRef("");
   const libraryLoadGeneration = useRef(0);
   const [instanceFilter, setInstanceFilter] = useState("");
-  const [activeSection, setActiveSection] = useState<LauncherSection>("instances");
+  const [activeSection, setActiveSection] = useState<LauncherSection>(socialLabBuild ? "social" : "instances");
+  const socialService = useMemo(() => socialLabBuild && profile && services.auth.currentUser?.uid === profile.uid
+    ? createSocialFirebaseService(services) : null, [services, profile?.uid, services.auth.currentUser?.uid]);
   const [connectVisited, setConnectVisited] = useState(false);
   useEffect(() => { if (activeSection === "connect") setConnectVisited(true); }, [activeSection]);
   const [connectAvailable, setConnectAvailable] = useState(false);
@@ -3545,6 +3550,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     appearance: "Guarda-roupa",
     java: "Java & engine",
     connect: "Aurora Connect · experimental",
+    social: "Amigos e comunidade",
   };
   const selectedContentFiles = contentType === "mod"
     ? instanceContent.mods
@@ -3622,6 +3628,11 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
             onClick={() => setActiveSection("connect")}
             type="button"
           ><span aria-hidden="true">⇄</span>Connect · experimental</button>}
+          {socialLabBuild && <button
+            aria-current={activeSection === "social" ? "page" : undefined}
+            className={activeSection === "social" ? "nav-item active" : "nav-item"}
+            onClick={() => setActiveSection("social")} type="button"
+          ><span aria-hidden="true">◉</span>Amigos e comunidade</button>}
         </nav>
         <div className="sidebar-bottom">
           <button className={assistantOpen ? "compact sidebar-action" : "secondary compact sidebar-action"} onClick={() => setAssistantOpen((current) => !current)} type="button">Assistente</button>
@@ -3642,6 +3653,8 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         </aside>}
         <section className="workspace-grid">
           <div className="workspace-main">
+        {socialService && activeSection === "social" && !signingOut && <div className="section-social"><p className="eyebrow">TESTE LOCAL · CONTAS DESCARTÁVEIS · SEM PUBLICAÇÃO NA COMUNIDADE REAL</p><SocialView key={profile.uid} service={socialService} accountId={profile.uid} nickname={profile.username}
+          currentModpack={runningInstances.length === 1 ? instances.find(item => item.id === runningInstances[0].instanceId)?.displayName || runningInstances[0].instanceId : undefined} /></div>}
         {connectAvailable && (connectVisited || activeSection === "connect") && <div className="section-connect" hidden={activeSection !== "connect"} inert={signingOut || activeSection !== "connect"}><ConnectView launchContext={connectLaunchContext} /></div>}
         <article className="panel instances section-instances">
           <div className="panel-heading">

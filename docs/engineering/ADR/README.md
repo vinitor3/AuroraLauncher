@@ -4,6 +4,7 @@ Decisão experimental no caminho existente: [Aurora Connect V2](PROPOSAL-aurora-
 
 | ADR | Decisão | Estado |
 | --- | --- | --- |
+| [029](ADR-029-connect-social-local.md) | Relações Aurora privadas e catálogo opaco com projeções autorizadas, emuladores e UI social default-off | PROTÓTIPO local; ingresso social pendente |
 | [001](ADR-001-prism-reference.md) | Prism como referência, não componente | Aceita |
 | [002](ADR-002-firebase-functions.md) | Deprecar Firebase Functions | Proposta |
 | [003](ADR-003-identity-appearance-storage.md) | Firebase identidade + storage de aparência limitado | Aceita com revisão |

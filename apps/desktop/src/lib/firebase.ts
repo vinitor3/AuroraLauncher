@@ -1,6 +1,6 @@
 import { initializeApp, type FirebaseApp } from "firebase/app";
-import { browserLocalPersistence, browserSessionPersistence, createUserWithEmailAndPassword, deleteUser, indexedDBLocalPersistence, initializeAuth, inMemoryPersistence, onAuthStateChanged, signInWithEmailAndPassword, signOut, type Auth, type User } from "firebase/auth";
-import { deleteField, doc, getDoc, getFirestore, runTransaction, serverTimestamp, setDoc, updateDoc, type Firestore } from "firebase/firestore";
+import { browserLocalPersistence, browserSessionPersistence, connectAuthEmulator, createUserWithEmailAndPassword, deleteUser, indexedDBLocalPersistence, initializeAuth, inMemoryPersistence, onAuthStateChanged, signInWithEmailAndPassword, signOut, type Auth, type User } from "firebase/auth";
+import { connectFirestoreEmulator, deleteField, doc, getDoc, getFirestore, runTransaction, serverTimestamp, setDoc, updateDoc, type Firestore } from "firebase/firestore";
 import { getDownloadURL, getStorage, ref, uploadBytes, type FirebaseStorage } from "firebase/storage";
 import { validateLauncherAuthScope, type LauncherAuthScope } from "./launcherAuthScope";
 
@@ -20,9 +20,17 @@ const bundledWorkerUrl = import.meta.env.VITE_AURORA_API_URL?.trim();
 const officialFirebaseProjectId = "auroralauncher";
 const bundledFirebaseProjectId = import.meta.env.VITE_FIREBASE_PROJECT_ID?.trim() || officialFirebaseProjectId;
 
+// This build mode is an isolated, local-only integration harness. It cannot
+// enable the unpublished social rules on the real Aurora project.
+export const socialLabBuild = import.meta.env.MODE === "social-lab";
+
 // Estes valores identificam o aplicativo Web no Firebase e são públicos por
 // definição. Nunca inclua aqui chaves de conta de serviço ou tokens privados.
-export const bundledFirebaseConfig: FirebasePublicConfig = {
+export const bundledFirebaseConfig: FirebasePublicConfig = socialLabBuild ? {
+  apiKey: "demo-aurora-social", authDomain: "localhost", projectId: "demo-aurora-social",
+  storageBucket: "demo-aurora-social.invalid", messagingSenderId: "000000000000",
+  appId: "demo-aurora-social",
+} : {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY?.trim() || "AIzaSyD4Sn9JkU0CGGz77Mj71QNwvYiFHPM-dvk",
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN?.trim() || "auroralauncher.firebaseapp.com",
   projectId: bundledFirebaseProjectId,
@@ -41,11 +49,15 @@ export type AuroraSkinFavorite = {
 };
 
 export function createFirebaseServices(config: FirebasePublicConfig, authScope: LauncherAuthScope): FirebaseServices {
+  if (socialLabBuild && config.projectId !== "demo-aurora-social") {
+    throw new Error("Este executável de teste aceita somente o emulador social local.");
+  }
   const scope = validateLauncherAuthScope(authScope);
   // Old saved public configs predate workerUrl. Restore this build's matching
   // endpoint without sending another Firebase project's tokens to that Worker.
-  const resolvedConfig = { ...config, workerUrl: config.workerUrl?.trim()
-    || (config.projectId === bundledFirebaseConfig.projectId ? bundledFirebaseConfig.workerUrl : undefined) };
+  const resolvedConfig = socialLabBuild ? { ...bundledFirebaseConfig, workerUrl: undefined }
+    : { ...config, workerUrl: config.workerUrl?.trim()
+      || (config.projectId === bundledFirebaseConfig.projectId ? bundledFirebaseConfig.workerUrl : undefined) };
   // Keep the primary app name and persistence hierarchy so existing remembered
   // accounts migrate normally. Additional windows never touch that storage key.
   const appName = `aurora-${resolvedConfig.projectId}${scope.persistent ? "" : `-session-${scope.id}`}`;
@@ -53,12 +65,17 @@ export function createFirebaseServices(config: FirebasePublicConfig, authScope: 
   const auth = initializeAuth(app, { persistence: scope.persistent
     ? [indexedDBLocalPersistence, browserLocalPersistence, browserSessionPersistence, inMemoryPersistence]
     : [browserSessionPersistence, inMemoryPersistence] });
+  const db = getFirestore(app);
+  if (socialLabBuild) {
+    connectAuthEmulator(auth, "http://127.0.0.1:9187", { disableWarnings: true });
+    connectFirestoreEmulator(db, "127.0.0.1", 8187);
+  }
   return {
     config: resolvedConfig,
     app,
     auth,
     authScope: scope,
-    db: getFirestore(app),
+    db,
     storage: getStorage(app),
   };
 }

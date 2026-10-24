@@ -1,0 +1,13 @@
+.social-preview { width: min(1220px, calc(100% - 3rem)); margin: 1.5rem auto; display: grid; gap: 1.1rem; }
+.social-preview-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; padding: 1rem 0 1.3rem; border-bottom: 1px solid #ffffff15; }
+.social-preview-bar strong { font-size: .95rem; color: #e3d0f8; }
+.social-preview-bar p { margin: .3rem 0 0; color: #a99dbb; font-size: .75rem; }
+.social-preview-account { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .7rem; color: #b7a9c8; font-size: .78rem; }
+.social-preview-account strong { color: #e8d5ff; }
+.social-preview-account button { font-size: .75rem; }
+.social-preview-login { display: grid; gap: 1.1rem; width: min(100%, 600px); margin: 5rem auto; padding: 2rem; border: 1px solid #c6a8ff25; border-radius: 18px; background: #ffffff04; }
+.social-preview-login h1 { line-height: 1.15; font-size: 2rem; }
+.social-preview-login p, .social-preview-login small { margin: 0; color: #b6a8c7; font-size: .85rem; line-height: 1.65; }
+.social-preview-login .eyebrow { color: #d5b7f2; font-size: .65rem; }
+.social-preview-login .social-actions button { flex: 1; }
+@media (max-width: 600px) { .social-preview { width: calc(100% - 1.5rem); margin: .75rem auto; } .social-preview-login { padding: 1.3rem; margin: 2rem auto; } }
