@@ -13,13 +13,15 @@ use std::{
 const SESSION: &str = "ed35a732-2839-4a18-9740-73ed5ecff11b";
 const DIGEST: &str = "4444444444444444444444444444444444444444444444444444444444444444";
 struct Process {
+    authority: lab::SecretKey,
     child: Child,
     output: mpsc::Receiver<Value>,
     reader: Option<thread::JoinHandle<()>>,
 }
 impl Process {
     fn start(role: &str, source: Option<&str>) -> Self {
-        let pin = lab::generate_key().public().to_string();
+        let authority = lab::generate_key();
+        let pin = authority.public().to_string();
         let mut args = vec![role.to_owned(), pin];
         if let Some(source) = source {
             args.push(source.to_owned());
@@ -50,6 +52,7 @@ impl Process {
             }
         });
         Self {
+            authority,
             child,
             output,
             reader: Some(reader),
@@ -105,10 +108,53 @@ fn challenge(identity: &Value, role: &str) -> Value {
         "publicKey":identity["publicKey"],"sessionId":SESSION,"sessionDigest":DIGEST,"issuedAtUnixMs":lab::unix_millis(),
         "expiresAtUnixMs":identity["preparedExpiresAtUnixMs"].as_u64().unwrap()-1})
 }
-fn guest_expect() -> Value {
+fn old_guest_expect() -> Value {
     json!({"expect":{"hostAccountId":"local_host","hostPublicKey":lab::generate_key().public().to_string(),
         "hostOperationId":"ed35a732-2839-4a18-9740-73ed5ecff11a","hostGeneration":1,"policyId":"11".repeat(32),
         "policyDigest":"22".repeat(32),"sessionDigest":DIGEST}})
+}
+fn guest_context(process: &Process) -> Value {
+    guest_context_for(process, 9_000)
+}
+fn guest_context_for(process: &Process, lifetime_ms: u64) -> Value {
+    let now = lab::unix_millis();
+    let body = json!({"schemaVersion":1,"purpose":"socialJoinContext","issuerInstance":"33".repeat(32),
+        "recipientAccountId":"local_guest","sessionId":SESSION,"sessionDigest":DIGEST,
+        "hostAccountId":"local_host","hostPublicKey":lab::generate_key().public().to_string(),
+        "hostOperationId":"ed35a732-2839-4a18-9740-73ed5ecff11a","hostGeneration":1,
+        "policyId":"11".repeat(32),"policyDigest":"22".repeat(32),"issuedAtUnixMs":now,"expiresAtUnixMs":now+lifetime_ms});
+    let mut bytes = b"aurora/connect/social-join-context/v1\0".to_vec();
+    for field in [
+        "schemaVersion",
+        "purpose",
+        "issuerInstance",
+        "recipientAccountId",
+        "sessionId",
+        "sessionDigest",
+        "hostAccountId",
+        "hostPublicKey",
+        "hostOperationId",
+        "hostGeneration",
+        "policyId",
+        "policyDigest",
+        "issuedAtUnixMs",
+        "expiresAtUnixMs",
+    ] {
+        let value = body[field]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| body[field].to_string());
+        bytes.extend_from_slice(&(value.len() as u16).to_be_bytes());
+        bytes.extend_from_slice(value.as_bytes());
+    }
+    let signature: String = process
+        .authority
+        .sign(&bytes)
+        .to_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    json!({"context":{"body":body,"signature":signature}})
 }
 #[test]
 fn social_client_stop_and_eof_before_transport_finish_without_forced_cleanup() {
@@ -191,17 +237,60 @@ fn social_client_wrong_approval_and_changed_account_do_not_create_transport() {
 fn social_client_guest_freezes_expectation_before_proof_and_can_stop_after_proof() {
     let mut child = Process::start("guest", None);
     let identity = child.next();
-    child.line(&guest_expect().to_string());
+    child.line(&guest_context(&child).to_string());
     child.line(&challenge(&identity, "guest").to_string());
     lab::SocialKeyBindingProof::parse(&child.next().to_string()).unwrap();
     child.line("stop");
     child.stopped("guest");
     let mut changed = Process::start("guest", None);
     let identity = changed.next();
-    changed.line(&guest_expect().to_string());
+    changed.line(&guest_context(&changed).to_string());
     let mut value = challenge(&identity, "guest");
     value["sessionDigest"] = json!("55".repeat(32));
     changed.line(&value.to_string());
     assert_eq!(changed.next()["code"], "challenge_context");
     changed.exit(1);
+}
+
+#[test]
+fn social_client_rejects_raw_expectation_and_untrusted_or_changed_context_before_proof() {
+    let mut raw = Process::start("guest", None);
+    raw.next();
+    raw.line(&old_guest_expect().to_string());
+    assert_eq!(raw.next()["code"], "invalid_packet");
+    raw.exit(1);
+    for wrong_pin in [false, true] {
+        let mut child = Process::start("guest", None);
+        child.next();
+        let mut context = guest_context(&child);
+        if wrong_pin {
+            context["context"]["signature"] = json!("11".repeat(64));
+        } else {
+            context["context"]["body"]["recipientAccountId"] = json!("other");
+        }
+        child.line(&context.to_string());
+        assert_eq!(child.next()["code"], "invalid_join_context");
+        child.exit(1);
+    }
+}
+
+#[test]
+fn social_client_context_expiry_closes_idle_challenge_and_grant_waits_without_transport() {
+    for after_proof in [false, true] {
+        let mut child = Process::start("guest", None);
+        let identity = child.next();
+        child.line(&guest_context_for(&child, 1_000).to_string());
+        if after_proof {
+            child.line(&challenge(&identity, "guest").to_string());
+            lab::SocialKeyBindingProof::parse(&child.next().to_string()).unwrap();
+        }
+        // Keep stdin open and send no next command. Native expiry must close
+        // its own preparation instead of waiting for parent EOF or a grant.
+        let stopped = child.next();
+        assert_eq!(stopped["event"], "social_guest_stopped");
+        assert_eq!(stopped["reason"], "join_context_expired");
+        assert_eq!(stopped["cleanup"], true);
+        assert_eq!(stopped["rebound"], true);
+        child.exit(0);
+    }
 }

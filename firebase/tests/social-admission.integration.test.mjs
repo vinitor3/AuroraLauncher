@@ -109,9 +109,9 @@ async function socketAt(address) {
   try { await deadline(new Promise((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); }), 4_000, "TCP_CONNECT_TIMEOUT"); return socket; }
   catch (error) { socket.destroy(); throw error; }
 }
-async function tcpRoundtrip(address) {
+async function tcpRoundtrip(address, length = 1_048_576) {
   const socket = await socketAt(address);
-  const payload = Buffer.alloc(1_048_576); for (let index = 0; index < payload.length; index++) payload[index] = index % 251;
+  const payload = Buffer.alloc(length); for (let index = 0; index < payload.length; index++) payload[index] = index % 251;
   let count = 0;
   const done = new Promise((resolve, reject) => {
     socket.on("data", bytes => { if (!bytes.equals(payload.subarray(count, count + bytes.length))) reject(new Error("TCP_ECHO_MISMATCH")); count += bytes.length; });
@@ -128,7 +128,7 @@ async function rebind(address) {
 
 // The scenarios below exercise the actual HTTP authority and native transport,
 // never treating an announcement or a fabricated receipt as an authorization.
-test("88B real local social admission, TCP and active withdrawal", { skip: !enabled, timeout: 180_000 }, async t => {
+test("88C resolved social context, real native TCP and active withdrawal", { skip: !enabled, timeout: 180_000 }, async t => {
   const binary = process.env.AURORA_SOCIAL_ADMISSION_RUST_CLI;
   assert.ok(binary && isAbsolute(binary), "reviewed absolute native binary path required");
   assert.ok((await stat(binary)).isFile());
@@ -141,11 +141,11 @@ test("88B real local social admission, TCP and active withdrawal", { skip: !enab
       lab = await startSocialBindingLab({ enabled: true, port: 0, admission: true });
       assert.ok(/^[0-9a-f]{64}$/.test(lab.admissionPublicKey), "authority pin comes from owned server, never a received grant");
       host = await account(factory); guest = await account(factory); source = await echo();
-      if (visibility === "friends") {
+      if (visibility === "friends" && withdrawal !== "not_friend_context") {
         await host.service.requestFriend(guest.uid);
         await guest.service.respondFriend(host.uid, "accept");
       }
-      await host.service.publishSession({ title: "Native social fixture", modpackName: "Local 88B", minecraftVersion: "1.21.1", loader: "Fabric",
+      await host.service.publishSession({ title: "Native social fixture", modpackName: "Local 88C", minecraftVersion: "1.21.1", loader: "Fabric",
         imageUrl: null, players: 1, maxPlayers: 2, visibility, joinPolicy: "open" });
       const sessionId = (await getDocFromServer(doc(host.db, "socialOwners", host.uid))).data().sessionId;
       const post = async (path, who, body) => {
@@ -180,13 +180,29 @@ test("88B real local social admission, TCP and active withdrawal", { skip: !enab
       const registration = await post("/v1/social/host/register", host, { proof: hostProof, policySigned: approved.policy });
       assert.equal(registration.status, 200, registration.body.code ?? "host registration denied");
       assert.equal(registration.body.policyDigest, review.digest, "service registered another policy");
+      if (withdrawal === "blocked_before_context") await host.service.block(guest.uid);
+      // The guest knows only the selected opaque session, its own account, and
+      // the authority pin from the owned local server. It must not learn its
+      // expected host/policy by inspecting the host process or a later grant.
+      const resolution = await post("/v1/social/context", guest, { sessionId });
+      if (["blocked_before_context", "not_friend_context"].includes(withdrawal)) {
+        assert.equal(resolution.status, 403);
+        assert.equal(resolution.body.code, "context_unavailable");
+        assert.deepEqual(Object.keys(resolution.body).sort(), ["code"]);
+        assert.equal(source.received, 0); assert.equal(source.connections, 0);
+        return;
+      }
+      assert.equal(resolution.status, 200, resolution.body.code ?? "context denied");
+      assert.deepEqual(Object.keys(resolution.body).sort(), ["body", "signature"]);
+      assert.deepEqual(Object.keys(resolution.body.body).sort(), ["schemaVersion", "purpose", "issuerInstance", "recipientAccountId", "sessionId", "sessionDigest", "hostAccountId", "hostPublicKey", "hostOperationId", "hostGeneration", "policyId", "policyDigest", "issuedAtUnixMs", "expiresAtUnixMs"].sort());
+      assert.equal(resolution.body.body.recipientAccountId, guest.uid);
+      assert.equal(resolution.body.body.sessionId, sessionId);
       guestChild = await client(binary, ["guest", lab.admissionPublicKey, sessionId, guest.uid]);
       const guestIdentity = await guestChild.next(); assert.equal(guestIdentity.event, "social_identity");
-      guestChild.send({ expect: { hostAccountId: host.uid, hostPublicKey: hostIdentity.publicKey, hostOperationId: hostIdentity.operationId,
-        hostGeneration: hostIdentity.generation, policyId: registration.body.policyId, policyDigest: review.digest, sessionDigest: review.policy.sessionDigest } });
+      guestChild.send({ context: resolution.body });
       const guestProof = await challenge(guest, guestChild, guestIdentity, "guest");
       if (withdrawal === "blocked_before_join") await host.service.block(guest.uid);
-      const admission = await post("/v1/social/join", guest, { proof: guestProof, policyId: registration.body.policyId });
+      const admission = await post("/v1/social/join", guest, { proof: guestProof, policyId: resolution.body.body.policyId });
       if (withdrawal === "blocked_before_join") {
         assert.equal(admission.status, 403, "current block must deny admission");
         assert.equal(source.received, 0, "denied peer reached game source");
@@ -213,10 +229,21 @@ test("88B real local social admission, TCP and active withdrawal", { skip: !enab
       const connected = await guestChild.next(); assert.equal(connected.event, "social_guest_ready"); bridgeAddress = connected.tcp;
       await tcpRoundtrip(bridgeAddress);
       assert.ok(source.received >= 1_048_576, "real source did not receive complete payload");
+      let postContextExpiryBytesEachDirection = 0;
+      if (withdrawal === "active_block") {
+        const remaining = resolution.body.body.expiresAtUnixMs - Date.now();
+        assert.ok(remaining >= 0 && remaining <= 10_000, "context must have been current at admission");
+        await delay(remaining + 100);
+        assert.ok(Date.now() >= resolution.body.body.expiresAtUnixMs, "context must now be expired");
+        assert.equal(monitorFailure, undefined, "continuity must remain healthy past context expiry");
+        postContextExpiryBytesEachDirection = 65_536;
+        await tcpRoundtrip(bridgeAddress, postContextExpiryBytesEachDirection);
+      }
       activeSocket = await socketAt(bridgeAddress);
       let activeEcho = 0;
       activeSocket.on("data", bytes => { activeEcho += bytes.length; });
       const lostTcp = new Promise(resolve => { activeSocket.once("end", resolve); activeSocket.once("error", resolve); activeSocket.once("close", resolve); });
+      const closedActive = new Promise(resolve => activeSocket.once("close", resolve));
       pulse = setInterval(() => { if (!activeSocket.destroyed && activeSocket.writable) activeSocket.write(Buffer.alloc(256, 7)); }, 50);
       await delay(220); assert.ok(activeEcho > 0, "active stream was not healthy before withdrawal");
       const withdrawalAt = performance.now();
@@ -225,6 +252,11 @@ test("88B real local social admission, TCP and active withdrawal", { skip: !enab
       else throw new Error("UNKNOWN_WITHDRAWAL_CASE");
       await deadline(lostTcp, 7_000, "ACTIVE_TCP_NOT_WITHDRAWN");
       const withdrawalMs = Math.round(performance.now() - withdrawalAt);
+      // The native side has already withdrawn the stream. Finish the fixture's
+      // half-open TCP endpoint now, before asking whether its peer port can be
+      // rebound; retaining it until finally creates a circular cleanup wait.
+      clearInterval(pulse); pulse = undefined;
+      activeSocket.destroy(); await deadline(closedActive, 2_000, "ACTIVE_CLIENT_NOT_CLOSED"); activeSocket = undefined;
       monitoring = false; await deadline(monitor, 9_000, "CONTINUITY_WORKER_NOT_STOPPED");
       assert.equal(monitorFailure, withdrawal === "active_block" ? "session_not_authorized" : "authority_unavailable", "withdrawal must have the expected cause");
       assert.ok(Date.now() < grant.body.sessionExpiresAtUnixMs - 5_000, "ordinary session expiry cannot stand in for active withdrawal");
@@ -234,11 +266,11 @@ test("88B real local social admission, TCP and active withdrawal", { skip: !enab
       assert.equal(hostStopped.cleanup, true); assert.equal(hostStopped.rebound, true);
       const guestStopped = await guestChild.next(); assert.equal(guestStopped.event, "social_guest_stopped");
       assert.equal(guestStopped.reason, "connection_closed");
-      assert.equal(guestStopped.cleanup, true); assert.equal(guestStopped.rebound, true);
+      assert.equal(guestStopped.cleanup, true, JSON.stringify(guestStopped)); assert.equal(guestStopped.rebound, true);
       assert.equal((await hostChild.closed()).code, 0); assert.equal((await guestChild.closed()).code, 0);
       await rebind(bridgeAddress);
-      t.diagnostic(JSON.stringify({ event: "social_admission_observed", visibility, withdrawal, tcpBytesEachDirection: 1_048_576,
-        withdrawalMs, elapsedMs: Math.round(performance.now() - started), realNativeProcesses: 2, relay: false, minecraft: "not_tested", voice: "not_tested" }));
+      t.diagnostic(JSON.stringify({ event: "social_admission_observed", visibility, withdrawal, contextResolvedBySession: true, tcpBytesEachDirection: 1_048_576,
+        postContextExpiryBytesEachDirection, withdrawalMs, elapsedMs: Math.round(performance.now() - started), realNativeProcesses: 2, relay: false, minecraft: "not_tested", voice: "not_tested" }));
     } catch (error) { primaryError = error; throw error; }
     finally {
       monitoring = false; clearInterval(pulse); activeSocket?.destroy();
@@ -252,4 +284,6 @@ test("88B real local social admission, TCP and active withdrawal", { skip: !enab
   await t.test("public session: native TCP and block withdraw active stream", () => scenario("public", "active_block"));
   await t.test("friends session: real friendship, native TCP and backend loss fails closed", () => scenario("friends", "backend_lost"));
   await t.test("block after key proof before join prevents reaching game source", () => scenario("public", "blocked_before_join"));
+  await t.test("block before context hides policy and never reaches game source", () => scenario("public", "blocked_before_context"));
+  await t.test("nonfriend cannot resolve a friends-only host context", () => scenario("friends", "not_friend_context"));
 });

@@ -14,6 +14,7 @@ const SAFE: u64 = 9_007_199_254_740_991;
 const POLICY_DOMAIN: &str = "aurora/connect/social-host-policy/v1\0";
 const GRANT_DOMAIN: &str = "aurora/connect/social-admission/v1\0";
 const LEASE_DOMAIN: &str = "aurora/connect/social-continuity/v1\0";
+const CONTEXT_DOMAIN: &str = "aurora/connect/social-join-context/v1\0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SocialAdmissionError {
@@ -298,11 +299,12 @@ impl SignedSocialHostPolicy {
     }
 }
 
-/// This expectation is supplied by the trusted runner before any grant, never
-/// learned from an admission response or replaced during the operation.
+// Older fixture shape retained only by unit tests. No public raw-expectation
+// constructor or transport acceptance API survives the authenticated context.
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SocialGuestExpectation {
+struct SocialGuestExpectation {
     host_account_id: String,
     host_public_key: String,
     host_operation_id: String,
@@ -311,8 +313,9 @@ pub struct SocialGuestExpectation {
     policy_digest: String,
     session_digest: String,
 }
+#[cfg(test)]
 impl SocialGuestExpectation {
-    pub fn parse(text: &str) -> Result<Self> {
+    fn parse(text: &str) -> Result<Self> {
         let v: Self = parse(text)?;
         v.validate()?;
         Ok(v)
@@ -330,8 +333,151 @@ impl SocialGuestExpectation {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct JoinContextBody {
+    schema_version: u8,
+    purpose: String,
+    issuer_instance: String,
+    recipient_account_id: String,
+    session_id: String,
+    session_digest: String,
+    host_account_id: String,
+    host_public_key: String,
+    host_operation_id: String,
+    host_generation: u64,
+    policy_id: String,
+    policy_digest: String,
+    issued_at_unix_ms: u64,
+    expires_at_unix_ms: u64,
+}
+impl JoinContextBody {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != 1
+            || self.purpose != "socialJoinContext"
+            || !is_hex(&self.issuer_instance)
+            || !uid(&self.recipient_account_id)
+            || !uuid(&self.session_id)
+            || !is_hex(&self.session_digest)
+            || !uid(&self.host_account_id)
+            || self.recipient_account_id == self.host_account_id
+            || !public(&self.host_public_key)
+            || !uuid(&self.host_operation_id)
+            || !integer(self.host_generation)
+            || !is_hex(&self.policy_id)
+            || !is_hex(&self.policy_digest)
+            || !integer(self.issued_at_unix_ms)
+            || !integer(self.expires_at_unix_ms)
+            || self.expires_at_unix_ms <= self.issued_at_unix_ms
+            || self.expires_at_unix_ms - self.issued_at_unix_ms > 10_000
+        {
+            return Err(SocialAdmissionError::Invalid);
+        }
+        Ok(())
+    }
+    fn bytes(&self) -> Vec<u8> {
+        preimage(
+            CONTEXT_DOMAIN,
+            &[
+                self.schema_version.to_string(),
+                self.purpose.clone(),
+                self.issuer_instance.clone(),
+                self.recipient_account_id.clone(),
+                self.session_id.clone(),
+                self.session_digest.clone(),
+                self.host_account_id.clone(),
+                self.host_public_key.clone(),
+                self.host_operation_id.clone(),
+                self.host_generation.to_string(),
+                self.policy_id.clone(),
+                self.policy_digest.clone(),
+                self.issued_at_unix_ms.to_string(),
+                self.expires_at_unix_ms.to_string(),
+            ],
+        )
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JoinContextEnvelope {
+    body: JoinContextBody,
+    signature: String,
+}
+
+/// Authenticated discovery only. Own account/session and the authority pin
+/// must originate outside the received object. Clone keeps its original clock.
+#[derive(Debug, Clone)]
+pub struct VerifiedSocialJoinContext {
+    body: JoinContextBody,
+    pin: EndpointId,
+    deadline: Instant,
+}
+impl VerifiedSocialJoinContext {
+    pub fn verify(
+        text: &str,
+        pin: EndpointId,
+        recipient_account_id: &str,
+        session_id: &str,
+        prepared_deadline: Instant,
+    ) -> Result<Self> {
+        let at = Instant::now();
+        let now = unix_millis();
+        if !uid(recipient_account_id) || !uuid(session_id) {
+            return Err(SocialAdmissionError::Context);
+        }
+        let envelope: JoinContextEnvelope = parse(text)?;
+        let body = envelope.body;
+        body.validate()?;
+        verify_signature(pin, &body.bytes(), &envelope.signature)?;
+        if body.recipient_account_id != recipient_account_id || body.session_id != session_id {
+            return Err(SocialAdmissionError::Context);
+        }
+        let deadline = deadline(at, now, body.expires_at_unix_ms, prepared_deadline)?;
+        let value = Self {
+            body,
+            pin,
+            deadline,
+        };
+        value.check_current()?;
+        Ok(value)
+    }
+    pub fn check_current(&self) -> Result<()> {
+        self.check_at(unix_millis(), Instant::now())
+    }
+    fn check_at(&self, wall: u64, monotonic: Instant) -> Result<()> {
+        if wall < self.body.issued_at_unix_ms
+            || wall >= self.body.expires_at_unix_ms
+            || monotonic >= self.deadline
+        {
+            Err(SocialAdmissionError::Expired)
+        } else {
+            Ok(())
+        }
+    }
+    pub fn check_challenge(&self, challenge: &SocialKeyChallenge) -> Result<()> {
+        self.check_current()?;
+        challenge
+            .validate()
+            .map_err(|_| SocialAdmissionError::Expired)?;
+        if challenge.role() != SocialKeyRole::Guest
+            || challenge.issuer_instance() != self.body.issuer_instance
+            || challenge.account_id() != self.body.recipient_account_id
+            || challenge.session_id() != self.body.session_id
+            || challenge.session_digest() != self.body.session_digest
+        {
+            return Err(SocialAdmissionError::Context);
+        }
+        Ok(())
+    }
     pub fn session_digest(&self) -> &str {
-        &self.session_digest
+        &self.body.session_digest
+    }
+    /// Only preparation/ingress waits use this cap. It is never a replacement
+    /// for the accepted grant's independent session deadline.
+    pub fn ingress_deadline(&self) -> Instant {
+        self.deadline
     }
 }
 
@@ -510,10 +656,14 @@ impl VerifiedSocialGrant {
         text: &str,
         pin: EndpointId,
         challenge: &SocialKeyChallenge,
-        expected: &SocialGuestExpectation,
+        context: &VerifiedSocialJoinContext,
         prepared_deadline: Instant,
     ) -> Result<Self> {
-        expected.validate()?;
+        context.check_challenge(challenge)?;
+        if context.pin != pin {
+            return Err(SocialAdmissionError::Context);
+        }
+        let expected = &context.body;
         let value = Self::verified(text, pin, challenge, prepared_deadline)?;
         let b = &value.body;
         if challenge.role() != SocialKeyRole::Guest
@@ -531,6 +681,7 @@ impl VerifiedSocialGrant {
         {
             return Err(SocialAdmissionError::Context);
         }
+        context.check_current()?;
         Ok(value)
     }
     pub fn check_admission(&self) -> Result<()> {
@@ -792,6 +943,40 @@ mod tests {
             })
             .unwrap()
         }
+        fn encoded_context(&self, body: &JoinContextBody) -> String {
+            serde_json::to_string(&JoinContextEnvelope {
+                body: body.clone(),
+                signature: hex(&self.authority.sign(&body.bytes()).to_bytes()),
+            })
+            .unwrap()
+        }
+        fn context(&self, expected: &SocialGuestExpectation) -> VerifiedSocialJoinContext {
+            let now = unix_millis();
+            let body = JoinContextBody {
+                schema_version: 1,
+                purpose: "socialJoinContext".into(),
+                issuer_instance: self.hc.issuer_instance().into(),
+                recipient_account_id: self.gc.account_id().into(),
+                session_id: self.hc.session_id().into(),
+                session_digest: expected.session_digest.clone(),
+                host_account_id: expected.host_account_id.clone(),
+                host_public_key: expected.host_public_key.clone(),
+                host_operation_id: expected.host_operation_id.clone(),
+                host_generation: expected.host_generation,
+                policy_id: expected.policy_id.clone(),
+                policy_digest: expected.policy_digest.clone(),
+                issued_at_unix_ms: now,
+                expires_at_unix_ms: now + 9_000,
+            };
+            VerifiedSocialJoinContext::verify(
+                &self.encoded_context(&body),
+                self.authority.public(),
+                self.gc.account_id(),
+                self.hc.session_id(),
+                self.cap,
+            )
+            .unwrap()
+        }
         fn verify_host(&self, encoded: &str) -> Result<VerifiedSocialGrant> {
             VerifiedSocialGrant::for_host(
                 encoded,
@@ -886,7 +1071,7 @@ mod tests {
             &encoded,
             f.authority.public(),
             &f.gc,
-            &f.expected,
+            &f.context(&f.expected),
             f.cap,
         )
         .unwrap();
@@ -915,7 +1100,7 @@ mod tests {
                     &encoded,
                     f.authority.public(),
                     &f.gc,
-                    &expected,
+                    &f.context(&expected),
                     f.cap
                 )
                 .is_err(),
@@ -927,7 +1112,7 @@ mod tests {
                 &encoded,
                 f.authority.public(),
                 &f.hc,
-                &f.expected,
+                &f.context(&f.expected),
                 f.cap
             )
             .is_err()
@@ -999,7 +1184,7 @@ mod tests {
                 &f.encoded(&wrong),
                 f.authority.public(),
                 &f.gc,
-                &f.expected,
+                &f.context(&f.expected),
                 f.cap
             )
             .is_err()
@@ -1100,5 +1285,214 @@ mod tests {
         let mut short = grant.clone();
         short.body.session_expires_at_unix_ms = unix_millis() + 500;
         assert!(SocialContinuity::start(&f.lease(1, unix_millis() + 1000), &short).is_err());
+    }
+
+    #[test]
+    fn social_join_context_requires_independent_pin_recipient_and_selected_session() {
+        let f = Fixture::new();
+        let context = f.context(&f.expected);
+        let encoded = f.encoded_context(&context.body);
+        let verify = |pin, account: &str, session: &str| {
+            VerifiedSocialJoinContext::verify(&encoded, pin, account, session, f.cap)
+        };
+        verify(f.authority.public(), f.gc.account_id(), f.gc.session_id()).unwrap();
+        assert!(
+            verify(
+                crate::generate_key().public(),
+                f.gc.account_id(),
+                f.gc.session_id()
+            )
+            .is_err()
+        );
+        assert!(verify(f.authority.public(), "other", f.gc.session_id()).is_err());
+        assert!(
+            verify(
+                f.authority.public(),
+                f.gc.account_id(),
+                "ed35a732-2839-4a18-9740-73ed5ecff11c"
+            )
+            .is_err()
+        );
+        context.check_challenge(&f.gc).unwrap();
+        assert!(context.check_challenge(&f.hc).is_err());
+        for (field, value) in [
+            ("issuerInstance", json!("55".repeat(32))),
+            ("sessionDigest", json!("66".repeat(32))),
+            ("accountId", json!("other")),
+            ("sessionId", json!("ed35a732-2839-4a18-9740-73ed5ecff11c")),
+        ] {
+            let mut raw = serde_json::to_value(&f.gc).unwrap();
+            raw[field] = value;
+            let wrong = SocialKeyChallenge::parse(&raw.to_string()).unwrap();
+            assert!(context.check_challenge(&wrong).is_err(), "{field}");
+        }
+    }
+    #[test]
+    fn social_join_context_all_fields_are_signed_and_schema_is_closed() {
+        let f = Fixture::new();
+        let context = f.context(&f.expected);
+        let original: Value = serde_json::from_str(&f.encoded_context(&context.body)).unwrap();
+        for (field, value) in [
+            ("schemaVersion", json!(2)),
+            ("purpose", json!("socialAdmission")),
+            ("issuerInstance", json!("55".repeat(32))),
+            ("recipientAccountId", json!("other")),
+            ("sessionId", json!("ed35a732-2839-4a18-9740-73ed5ecff11c")),
+            ("sessionDigest", json!("55".repeat(32))),
+            ("hostAccountId", json!("other")),
+            (
+                "hostPublicKey",
+                json!(crate::generate_key().public().to_string()),
+            ),
+            (
+                "hostOperationId",
+                json!("ed35a732-2839-4a18-9740-73ed5ecff11c"),
+            ),
+            ("hostGeneration", json!(2)),
+            ("policyId", json!("55".repeat(32))),
+            ("policyDigest", json!("55".repeat(32))),
+            ("issuedAtUnixMs", json!(context.body.issued_at_unix_ms - 1)),
+            (
+                "expiresAtUnixMs",
+                json!(context.body.expires_at_unix_ms - 1),
+            ),
+        ] {
+            let mut changed = original.clone();
+            changed["body"][field] = value;
+            assert!(
+                VerifiedSocialJoinContext::verify(
+                    &changed.to_string(),
+                    f.authority.public(),
+                    f.gc.account_id(),
+                    f.gc.session_id(),
+                    f.cap
+                )
+                .is_err(),
+                "{field}"
+            );
+        }
+        let mut extra = original.clone();
+        extra["body"]["source"] = json!("127.0.0.1:43001");
+        assert!(
+            VerifiedSocialJoinContext::verify(
+                &extra.to_string(),
+                f.authority.public(),
+                f.gc.account_id(),
+                f.gc.session_id(),
+                f.cap
+            )
+            .is_err()
+        );
+        let mut wrong = original;
+        wrong["signature"] = json!(hex(&f
+            .authority
+            .sign(b"aurora/connect/social-admission/v1\0")
+            .to_bytes()));
+        assert!(
+            VerifiedSocialJoinContext::verify(
+                &wrong.to_string(),
+                f.authority.public(),
+                f.gc.account_id(),
+                f.gc.session_id(),
+                f.cap
+            )
+            .is_err()
+        );
+        assert!(
+            VerifiedSocialJoinContext::verify(
+                &" ".repeat(MAX_SOCIAL_ADMISSION_BYTES + 1),
+                f.authority.public(),
+                f.gc.account_id(),
+                f.gc.session_id(),
+                f.cap
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn social_join_context_original_clocks_do_not_renew_or_shorten_an_admitted_session() {
+        let f = Fixture::new();
+        let context = f.context(&f.expected);
+        assert_eq!(
+            context.check_at(context.body.issued_at_unix_ms - 1, Instant::now()),
+            Err(SocialAdmissionError::Expired)
+        );
+        assert_eq!(
+            context.check_at(context.body.expires_at_unix_ms, Instant::now()),
+            Err(SocialAdmissionError::Expired)
+        );
+        assert_eq!(
+            context
+                .clone()
+                .check_at(context.body.issued_at_unix_ms, context.deadline),
+            Err(SocialAdmissionError::Expired)
+        );
+        assert!(
+            VerifiedSocialJoinContext::verify(
+                &f.encoded_context(&context.body),
+                f.authority.public(),
+                f.gc.account_id(),
+                f.gc.session_id(),
+                Instant::now()
+            )
+            .is_err()
+        );
+        let grant = VerifiedSocialGrant::for_guest(
+            &f.encoded(&f.grant),
+            f.authority.public(),
+            &f.gc,
+            &context,
+            f.cap,
+        )
+        .unwrap();
+        assert!(grant.session_deadline > context.deadline);
+        let mut expired = context.clone();
+        expired.deadline = Instant::now();
+        assert!(expired.check_current().is_err());
+        assert!(
+            VerifiedSocialGrant::for_guest(
+                &f.encoded(&f.grant),
+                f.authority.public(),
+                &f.gc,
+                &expired,
+                f.cap
+            )
+            .is_err()
+        );
+        grant.check_session().unwrap(); // Discovery expiry never becomes a new session authority.
+    }
+    #[test]
+    fn social_join_context_rejects_future_expired_and_out_of_bounds_signed_objects() {
+        let f = Fixture::new();
+        let context = f.context(&f.expected);
+        for case in 0..6 {
+            let mut body = context.body.clone();
+            let now = unix_millis();
+            match case {
+                0 => {
+                    body.issued_at_unix_ms = now + 1_000;
+                    body.expires_at_unix_ms = now + 2_000;
+                }
+                1 => {
+                    body.issued_at_unix_ms = now - 2_000;
+                    body.expires_at_unix_ms = now - 1_000;
+                }
+                2 => body.expires_at_unix_ms = body.issued_at_unix_ms + 10_001,
+                3 => body.host_account_id = body.recipient_account_id.clone(),
+                4 => body.host_generation = SAFE + 1,
+                _ => body.issued_at_unix_ms = 0,
+            }
+            assert!(
+                VerifiedSocialJoinContext::verify(
+                    &f.encoded_context(&body),
+                    f.authority.public(),
+                    f.gc.account_id(),
+                    f.gc.session_id(),
+                    f.cap
+                )
+                .is_err(),
+                "{case}"
+            );
+        }
     }
 }

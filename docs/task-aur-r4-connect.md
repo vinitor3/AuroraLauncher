@@ -1,5 +1,9 @@
 # Aurora Connect — execução incremental local
 
+## Social88C — contexto de ingresso resolvido por sessão (25/10/2026)
+
+[Tarefa88C](task-aur-r4-connect-social-88c.md) e [ADR-032](engineering/ADR/ADR-032-social-join-context.md) eliminam a expectativa anfitriã construída pelo runner: o cliente recebe contexto assinado após autenticação e leitura autorizada atuais. Conta/sessão/pin independentes, prazo curto de ingresso separado da sessão ativa, recusa de bloqueados/não amigos e TCP real exercitados. A primeira falha de cleanup permanece registrada; encerramento da extremidade da fixture e confirmação limitada de liberação foram ajustados e retestados. Entrar gráfico, bootstrap/sinalização/worker nativo social e produção continuam pendentes.
+
 ## Social88B — autorização e transporte locais (25/10/2026)
 
 [Tarefa88B](task-aur-r4-connect-social-88b.md), [domínio88B](aurora-connect-social-admission-88b.md) e [ADR-031](engineering/ADR/ADR-031-social-local-admission.md) registram consentimento próprio do anfitrião, consumo da prova88A, grant/continuidade assinados e dois clientes nativos retendo suas chaves até TLS. Runner sem cópia manual; TCP1MiB/direção em public/friends, retirada ativa e bloqueio antes de join passaram com serviço/SDK reais locais. Não confundir o pipeline CLI com botão Entrar integrado, conta de produção, jogo, áudio ou nova rede externa. Recursos e limites permanecem experimentais.

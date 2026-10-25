@@ -8,9 +8,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 export const HOST_POLICY_DOMAIN = "aurora/connect/social-host-policy/v1\0";
 export const SOCIAL_ADMISSION_DOMAIN = "aurora/connect/social-admission/v1\0";
 export const SOCIAL_CONTINUITY_DOMAIN = "aurora/connect/social-continuity/v1\0";
+export const SOCIAL_JOIN_CONTEXT_DOMAIN = "aurora/connect/social-join-context/v1\0";
 const policyKeys = ["schemaVersion", "purpose", "issuerInstance", "policyId", "accountId", "operationId", "generation", "publicKey", "sessionId", "sessionDigest", "visibility", "joinPolicy", "serviceId", "protocol", "sourceDigest", "maxGuests", "issuedAtUnixMs", "expiresAtUnixMs"] as const;
 const grantKeys = ["schemaVersion", "purpose", "issuerInstance", "grantId", "policyId", "policyDigest", "sessionId", "sessionDigest", "hostAccountId", "hostPublicKey", "hostOperationId", "hostGeneration", "guestAccountId", "guestPublicKey", "guestOperationId", "guestGeneration", "issuedAtUnixMs", "admissionExpiresAtUnixMs", "sessionExpiresAtUnixMs"] as const;
 const leaseKeys = ["schemaVersion", "purpose", "issuerInstance", "grantId", "policyDigest", "sequence", "issuedAtUnixMs", "expiresAtUnixMs"] as const;
+const contextKeys = ["schemaVersion", "purpose", "issuerInstance", "recipientAccountId", "sessionId", "sessionDigest", "hostAccountId", "hostPublicKey", "hostOperationId", "hostGeneration", "policyId", "policyDigest", "issuedAtUnixMs", "expiresAtUnixMs"] as const;
 export type HostSocialPolicy = {
   schemaVersion: 1; purpose: "hostSocialSession"; issuerInstance: string; policyId: string; accountId: string; operationId: string; generation: number;
   publicKey: string; sessionId: string; sessionDigest: string; visibility: "public" | "friends"; joinPolicy: "open"; serviceId: "game"; protocol: "tcp";
@@ -22,6 +24,8 @@ export type SocialAdmissionGrant = {
   issuedAtUnixMs: number; admissionExpiresAtUnixMs: number; sessionExpiresAtUnixMs: number;
 };
 export type SocialContinuityLease = { schemaVersion: 1; purpose: "socialContinuity"; issuerInstance: string; grantId: string; policyDigest: string; sequence: number; issuedAtUnixMs: number; expiresAtUnixMs: number };
+export type SocialJoinContext = { schemaVersion: 1; purpose: "socialJoinContext"; issuerInstance: string; recipientAccountId: string; sessionId: string; sessionDigest: string;
+  hostAccountId: string; hostPublicKey: string; hostOperationId: string; hostGeneration: number; policyId: string; policyDigest: string; issuedAtUnixMs: number; expiresAtUnixMs: number };
 export type SocialSigned<T> = { body: T; signature: string };
 function fail(code: string): never { throw new SocialBindingError(code); }
 const positive = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
@@ -67,9 +71,20 @@ export function validateSocialContinuityLease(input: unknown): SocialContinuityL
     || input.expiresAtUnixMs <= input.issuedAtUnixMs || input.expiresAtUnixMs - input.issuedAtUnixMs > 3_000) fail("invalid_lease");
   return ordered(input, leaseKeys);
 }
+export function validateSocialJoinContext(input: unknown): SocialJoinContext {
+  exact(input, contextKeys);
+  if (input.schemaVersion !== 1 || input.purpose !== "socialJoinContext" || !matches(HEX, input.issuerInstance)
+    || !matches(UID, input.recipientAccountId) || !matches(UUID, input.sessionId) || !matches(HEX, input.sessionDigest)
+    || !matches(UID, input.hostAccountId) || input.hostAccountId === input.recipientAccountId || !matches(HEX, input.hostPublicKey)
+    || !matches(UUID, input.hostOperationId) || !positive(input.hostGeneration) || !matches(HEX, input.policyId) || !matches(HEX, input.policyDigest)
+    || !positive(input.issuedAtUnixMs) || !positive(input.expiresAtUnixMs) || input.expiresAtUnixMs <= input.issuedAtUnixMs
+    || input.expiresAtUnixMs - input.issuedAtUnixMs > 10_000) fail("invalid_context");
+  return ordered(input, contextKeys);
+}
 export const hostSocialPolicyPreimage = (input: unknown) => canonical(HOST_POLICY_DOMAIN, validateHostSocialPolicy(input), policyKeys);
 export const socialAdmissionPreimage = (input: unknown) => canonical(SOCIAL_ADMISSION_DOMAIN, validateSocialAdmissionGrant(input), grantKeys);
 export const socialContinuityPreimage = (input: unknown) => canonical(SOCIAL_CONTINUITY_DOMAIN, validateSocialContinuityLease(input), leaseKeys);
+export const socialJoinContextPreimage = (input: unknown) => canonical(SOCIAL_JOIN_CONTEXT_DOMAIN, validateSocialJoinContext(input), contextKeys);
 const hex = (bytes: Uint8Array) => Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
 const unhex = (text: string) => Uint8Array.from(text.match(/../g)!, byte => Number.parseInt(byte, 16));
 export const hostSocialPolicyDigest = async (input: unknown) => hex(new Uint8Array(await crypto.subtle.digest("SHA-256", hostSocialPolicyPreimage(input))));
@@ -152,6 +167,39 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
   }
   return {
     admissionPublicKey, issuerInstance,
+    async resolveContext(request: Request, input: unknown): Promise<SocialSigned<SocialJoinContext>> {
+      attempt(); exact(input, ["sessionId"]); if (!matches(UUID, input.sessionId)) fail("invalid_request");
+      // Authentication and the caller-authorized projection precede any lookup of this session's policy.
+      const uid = await bounded(request, signal => dependencies.trustedAuthenticate(request, signal));
+      if (!matches(UID, uid)) fail("unauthenticated"); accountAttempt(uid);
+      const observed = { wall: clock.wall(), mono: clock.monotonic() };
+      try {
+        const session = normalizeSocialBindingSession(await bounded(request, signal => dependencies.readSession({ accountId: uid, request }, input.sessionId as string, signal)));
+        if (session.id !== input.sessionId || session.hostUid === uid || (session.visibility !== "public" && session.visibility !== "friends")
+          || session.joinPolicy !== "open" || session.expiresAtMs <= clock.wall()) fail("context_unavailable");
+        const digest = await socialBindingSessionDigest(session);
+        const candidates = Array.from(policies.values()).filter(value => value.body.sessionId === session.id && value.body.accountId === session.hostUid && value.state === "open");
+        if (candidates.length !== 1) fail("context_unavailable");
+        const policy = candidates[0];
+        if (policy.body.sessionDigest !== digest || policy.body.visibility !== session.visibility) fail("context_unavailable");
+        const deadline = Math.min(policy.deadline, observed.mono + 10_000);
+        const expires = Math.min(policy.body.expiresAtUnixMs, session.expiresAtMs, observed.wall + Math.floor(deadline - observed.mono));
+        const currentContext = () => {
+          current(policy, request);
+          if (policies.get(policy.body.policyId) !== policy || policy.state !== "open" || clock.monotonic() >= deadline
+            || clock.wall() < observed.wall || clock.wall() >= expires) fail("context_unavailable");
+        };
+        currentContext();
+        const body = validateSocialJoinContext({ schemaVersion: 1, purpose: "socialJoinContext", issuerInstance, recipientAccountId: uid,
+          sessionId: session.id, sessionDigest: digest, hostAccountId: policy.body.accountId, hostPublicKey: policy.body.publicKey,
+          hostOperationId: policy.body.operationId, hostGeneration: policy.body.generation, policyId: policy.body.policyId, policyDigest: policy.digest,
+          issuedAtUnixMs: observed.wall, expiresAtUnixMs: expires });
+        const result = await sign(body, socialJoinContextPreimage(body)); currentContext(); return result;
+      } catch (error) {
+        if (error instanceof SocialBindingError && ["unauthenticated", "rate_limited", "authority_busy", "binding_cancelled", "backend_timeout", "backend_unavailable"].includes(error.code)) throw error;
+        return fail("context_unavailable");
+      }
+    },
     async registerHost(request: Request, input: unknown) {
       attempt(); exact(input, ["proof", "policySigned"]); const signed = signedPolicy(input.policySigned), body = signed.body;
       if (body.issuerInstance !== issuerInstance || policies.has(body.policyId)) fail("policy_unavailable");

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createSocialBindingAuthority, socialKeyProofPreimage, SocialBindingError } from "./connectSocialBinding.ts";
 import { createSocialAdmissionAuthority, hostSocialPolicyDigest, hostSocialPolicyPreimage, socialAdmissionPreimage, socialContinuityPreimage,
-  validateHostSocialPolicy, validateSocialAdmissionGrant, validateSocialContinuityLease } from "./connectSocialAdmission.ts";
+  socialJoinContextPreimage, validateHostSocialPolicy, validateSocialAdmissionGrant, validateSocialContinuityLease, validateSocialJoinContext } from "./connectSocialAdmission.ts";
 import type { SocialBindingSession } from "./connectSocialBinding.ts";
 
 const req = (uid = "guest", signal?: AbortSignal) => new Request("http://127.0.0.1/local", { signal, headers: { Authorization: `Bearer fixture-${uid}` } });
@@ -212,4 +212,115 @@ test("256 continuity checks per process minute are bounded across different gran
   f.advance(250);
   await assert.rejects(f.authority.continuity(req(pairs[0].guest.uid), { grantId: pairs[0].packet.grant.body.grantId }), code("rate_limited"));
   assert.equal(f.authority.inspect().terminalGrants, 1);
+});
+test("context signs current public/friends policy for the authenticated recipient, never an ingress grant", async () => {
+  for (const visibility of ["public", "friends"] as const) {
+    const f = await fixture(); f.session.visibility = visibility;
+    const { host, policy } = await f.register(); const before = f.authority.inspect(); const guest = await f.prepared(); const pending = f.binding.inspect().pending;
+    const context = await f.authority.resolveContext(req(), { sessionId: f.session.id });
+    assert.equal(context.body.recipientAccountId, "guest"); assert.equal(context.body.hostAccountId, "host");
+    assert.equal(context.body.hostPublicKey, host.proof.challenge.publicKey); assert.equal(context.body.hostOperationId, host.proof.challenge.operationId);
+    assert.equal(context.body.policyDigest, policy.policyDigest); assert.equal(context.body.policyId, policy.policyId);
+    assert.equal(context.body.expiresAtUnixMs - context.body.issuedAtUnixMs, 10_000);
+    assert.equal(await verify(f.authority.admissionPublicKey, context, socialJoinContextPreimage(context.body)), true);
+    assert.deepEqual(f.authority.inspect(), before); assert.equal(f.binding.inspect().pending, pending);
+    assert.equal("sourceDigest" in context.body || "token" in context.body || "invitation" in context.body, false);
+    assert.equal((await f.authority.join(req(), { proof: guest.proof, policyId: policy.policyId })).grant.body.guestAccountId, "guest");
+  }
+});
+test("context authenticates and reads authorized session even when policy is absent", async () => {
+  const f = await fixture(); const before = f.readCount();
+  await assert.rejects(f.authority.resolveContext(new Request("http://127.0.0.1"), { sessionId: f.session.id }), code("unauthenticated"));
+  assert.equal(f.readCount(), before);
+  await assert.rejects(f.authority.resolveContext(req(), { sessionId: f.session.id }), code("context_unavailable"));
+  assert.equal(f.readCount(), before + 1);
+  await assert.rejects(f.authority.resolveContext(req(), { sessionId: crypto.randomUUID() }), code("context_unavailable"));
+  assert.equal(f.readCount(), before + 2);
+});
+test("context hides blocked/private/changed/own/missing/reserved policy differences", async () => {
+  for (const kind of ["blocked", "private", "changed", "own", "missing", "reserved"]) {
+    const f = await fixture(); const { policy } = await f.register();
+    if (kind === "blocked") f.block(); if (kind === "private") f.session.visibility = "private";
+    if (kind === "changed") f.session.title = "Changed"; if (kind === "missing") f.sessions.delete(f.session.id);
+    if (kind === "reserved") { const guest = await f.prepared(); await f.authority.join(req(), { proof: guest.proof, policyId: policy.policyId }); }
+    await assert.rejects(f.authority.resolveContext(req(kind === "own" ? "host" : "guest"), { sessionId: f.session.id }), code("context_unavailable"));
+  }
+});
+test("returned context cannot be altered or forwarded to another account without invalidating signature", async () => {
+  const f = await fixture(); await f.register(); const context = await f.authority.resolveContext(req(), { sessionId: f.session.id });
+  for (const extension of [{ recipientAccountId: "other" }, { hostPublicKey: "b".repeat(64) }, { sessionId: crypto.randomUUID() }, { policyId: "c".repeat(64) }]) {
+    assert.equal(await verify(f.authority.admissionPublicKey, context, socialJoinContextPreimage({ ...context.body, ...extension })), false);
+  }
+  const original = context.body.hostPublicKey; context.body.hostPublicKey = "d".repeat(64);
+  const next = await f.authority.resolveContext(req(), { sessionId: f.session.id }); assert.equal(next.body.hostPublicKey, original);
+});
+test("context input chooses only session ID, never recipient, issuer, URL or backend pin", async () => {
+  const f = await fixture();
+  for (const extension of [{ recipientAccountId: "host" }, { issuerInstance: "a".repeat(64) }, { backend: "http://evil.test" }, { publicKey: "b".repeat(64) }]) {
+    await assert.rejects(f.authority.resolveContext(req(), { sessionId: f.session.id, ...extension }), code("invalid_shape"));
+  }
+  await assert.rejects(f.authority.resolveContext(req(), { sessionId: "../../users" }), code("invalid_request"));
+});
+test("context codec rejects extra fields, wrong recipient, unsafe generation and excessive validity", async () => {
+  const f = await fixture(); await f.register(); const { body } = await f.authority.resolveContext(req(), { sessionId: f.session.id });
+  assert.deepEqual(socialJoinContextPreimage(body), socialJoinContextPreimage(Object.fromEntries(Object.entries(body).reverse())));
+  assert.throws(() => validateSocialJoinContext({ ...body, token: "not-allowed" }), code("invalid_shape"));
+  for (const extension of [{ recipientAccountId: body.hostAccountId }, { purpose: ["socialJoinContext"] }, { hostGeneration: Number.MAX_SAFE_INTEGER + 1 },
+    { expiresAtUnixMs: body.issuedAtUnixMs + 10_001 }, { expiresAtUnixMs: body.issuedAtUnixMs }]) {
+    assert.throws(() => validateSocialJoinContext({ ...body, ...extension }), code("invalid_context"));
+  }
+});
+test("context freshness starts before read and is never reanchored by backend latency", async () => {
+  const f = await fixture(); await f.register(); f.onRead(async () => { f.advance(10_001); });
+  await assert.rejects(f.authority.resolveContext(req(), { sessionId: f.session.id }), code("context_unavailable"));
+  const g = await fixture(); await g.register(); g.onRead(async () => { g.advance(4_000); });
+  const { body } = await g.authority.resolveContext(req(), { sessionId: g.session.id });
+  assert.equal(body.issuedAtUnixMs, 1_800_000_000_000); assert.equal(body.expiresAtUnixMs, 1_800_000_010_000);
+});
+test("context expiry honors original monotonic policy after an in-range civil rollback", async () => {
+  const f = await fixture(); const host = await f.prepared("host", "host"); f.advance(20_000); f.wallOnly(-10_000);
+  await f.authority.registerHost(req("host"), { proof: host.proof, policySigned: host.policySigned }); f.advance(34_000);
+  const { body } = await f.authority.resolveContext(req(), { sessionId: f.session.id });
+  assert.equal(body.expiresAtUnixMs - body.issuedAtUnixMs, 1_000); // Only one original monotonic second remains.
+  f.advance(1_000); await assert.rejects(f.authority.resolveContext(req(), { sessionId: f.session.id }), code("context_unavailable"));
+});
+test("context read racing an admitted guest cannot publish the now-reserved policy", async () => {
+  const f = await fixture(); const { policy } = await f.register(); const guest = await f.prepared(); const nextRead = f.readCount() + 1;
+  let release!: () => void, entered!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; }), waiting = new Promise<void>(resolve => { entered = resolve; });
+  f.onRead(async count => { if (count === nextRead) { entered(); await hold; } });
+  const result = f.authority.resolveContext(req("other"), { sessionId: f.session.id });
+  const denied = assert.rejects(result, code("context_unavailable")); await waiting;
+  await f.authority.join(req(), { proof: guest.proof, policyId: policy.policyId }); release(); await denied;
+});
+test("context cancellation prevents publication and leaves host policy open", async () => {
+  const f = await fixture(); await f.register(); const controller = new AbortController(); f.onRead(async () => { controller.abort(); });
+  await assert.rejects(f.authority.resolveContext(req("guest", controller.signal), { sessionId: f.session.id }), code("binding_cancelled"));
+  f.onRead(async () => {}); assert.ok((await f.authority.resolveContext(req(), { sessionId: f.session.id })).signature);
+  assert.equal(f.authority.inspect().grants, 0);
+});
+test("an earlier context cannot bypass a later block when joining", async () => {
+  const f = await fixture(); await f.register(); const context = await f.authority.resolveContext(req(), { sessionId: f.session.id }); const guest = await f.prepared(); f.block();
+  await assert.rejects(f.authority.join(req(), { proof: guest.proof, policyId: context.body.policyId }), code("session_not_authorized"));
+  assert.equal(f.authority.inspect().grants, 0);
+});
+test("context resolver uses existing account and pre-auth global entry limits", async () => {
+  const f = await fixture(); await f.register(); for (let i = 0; i < 256; i++) await f.authority.resolveContext(req(), { sessionId: f.session.id });
+  await assert.rejects(f.authority.resolveContext(req(), { sessionId: f.session.id }), code("rate_limited"));
+  const g = await fixture(); for (let i = 0; i < 512; i++) await assert.rejects(g.authority.resolveContext(req(), {}), code("invalid_shape"));
+  await assert.rejects(g.authority.resolveContext(req(), { sessionId: g.session.id }), code("rate_limited"));
+});
+test("context signing racing a slot reservation rechecks the original policy before publication", async () => {
+  const f = await fixture(); const { policy } = await f.register(); const guest = await f.prepared();
+  const original = crypto.subtle.sign; let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; }), reached = new Promise<void>(resolve => { entered = resolve; });
+  crypto.subtle.sign = (async (algorithm, key, data) => {
+    const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    if (new TextDecoder().decode(bytes).startsWith("aurora/connect/social-join-context/v1\0")) { entered(); await held; }
+    return original.call(crypto.subtle, algorithm, key, data);
+  }) as typeof crypto.subtle.sign;
+  try {
+    const denied = assert.rejects(f.authority.resolveContext(req("other"), { sessionId: f.session.id }), code("context_unavailable"));
+    await reached; await f.authority.join(req(), { proof: guest.proof, policyId: policy.policyId }); release(); await denied;
+  } finally { release(); crypto.subtle.sign = original; }
 });

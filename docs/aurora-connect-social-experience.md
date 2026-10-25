@@ -8,6 +8,8 @@ O registro87 separa a GUI original, a subrodada de capa Modrinth no executável 
 
 25/10 — [88B](aurora-connect-social-admission-88b.md) implementa essas três etapas em harness local de uma vaga, com assinatura de política/grant/continuidade, contas e regras reais do emulador. Sessões public/friends transferiram TCP e encerraram acesso após bloqueio/perda de backend. Isso ainda exige integração gráfica no owner nativo existente, sem promover o runner a produto ou usar a autorização manual de laboratório automaticamente.
 
+25/10 — [88C](task-aur-r4-connect-social-88c.md) permite ao convidado resolver o contexto autenticado somente pelo identificador da sessão; o runner não fornece mais a expectativa anfitriã crua. Contexto é assinado e restrito à conta/sessão escolhidas, sem endereço público no catálogo. Cinco cenários locais passaram até TCP, inclusive continuidade depois do prazo de entrada. Ainda faltam bootstrap confiável, entrega de objetos host↔guest e execução no mesmo ConnectManager antes de ligar Entrar; a UI não recebe URL/pin arbitrários nem um lifecycle paralelo.
+
 Autoridade: [especificação Connect](engineering/AURORA_CONNECT_SPEC.md), [roadmap](engineering/MASTER_ROADMAP.md), tarefas existentes [AUR-R4-004/005/008](engineering/CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md), [política de dependências/custos](engineering/AURORA_CONNECT_DEPENDENCIES.md) e [prompt consolidado](engineering/CODEX_PROMPTS/AUR-R4-CONNECT-V2.md). Permanecem todas as fases, prioridades, gates e os nove pares Core/Skins; não há Companion/HUD ou ampliação da matriz.
 
 ## Experiência exigida

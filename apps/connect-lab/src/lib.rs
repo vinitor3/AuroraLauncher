@@ -45,7 +45,7 @@ pub use session_invitation::{
 };
 pub use social_admission::{
     MAX_SOCIAL_ADMISSION_BYTES, SignedSocialHostPolicy, SocialAdmissionError, SocialContinuity,
-    SocialGuestExpectation, SocialHostPolicy, VerifiedSocialGrant, social_source_digest,
+    SocialHostPolicy, VerifiedSocialGrant, VerifiedSocialJoinContext, social_source_digest,
 };
 pub use social_key_binding::{
     MAX_SOCIAL_KEY_CHALLENGE_BYTES, MAX_SOCIAL_KEY_CHALLENGE_MILLIS, MAX_SOCIAL_KEY_PROOF_BYTES,

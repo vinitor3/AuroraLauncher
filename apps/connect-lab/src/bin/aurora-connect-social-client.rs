@@ -1,11 +1,11 @@
 //! Explicit two-process local fixture. Pins/context come from its trusted
 //! parent runner; no renderer configuration, account token, or password input.
 use aurora_connect_lab as lab;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    io::{BufRead, Read, Write},
-    net::{SocketAddr, UdpSocket},
+    io::{BufRead, ErrorKind, Read, Write},
+    net::{SocketAddr, TcpListener, UdpSocket},
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
@@ -139,8 +139,8 @@ fn operation_id() -> String {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ExpectPacket {
-    expect: Value,
+struct ContextPacket {
+    context: Value,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -166,7 +166,29 @@ struct Context {
     challenge: lab::SocialKeyChallenge,
     deadline: Instant,
     source: Option<SocketAddr>,
-    expected: Option<lab::SocialGuestExpectation>,
+    expected: Option<lab::VerifiedSocialJoinContext>,
+}
+async fn preparation_line(
+    input: &mut Input,
+    deadline: Instant,
+    context: Option<&lab::VerifiedSocialJoinContext>,
+) -> Result<String> {
+    let deadline = context.map_or(deadline, |context| deadline.min(context.ingress_deadline()));
+    let line = input.next(deadline).await.map_err(|error| {
+        if error == "preparation_expired"
+            && context.is_some_and(|context| context.check_current().is_err())
+        {
+            "join_context_expired"
+        } else {
+            error
+        }
+    })?;
+    if let Some(context) = context {
+        context
+            .check_current()
+            .map_err(|_| "join_context_expired")?;
+    }
+    Ok(line)
 }
 async fn prepare(input: &mut Input) -> Result<Context> {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -199,14 +221,22 @@ async fn prepare(input: &mut Input) -> Result<Context> {
     let expected = if host {
         None
     } else {
-        let packet: ExpectPacket = parse(&input.next(deadline).await?)?;
+        let packet: ContextPacket = parse(&input.next(deadline).await?)?;
         Some(
-            lab::SocialGuestExpectation::parse(&packet.expect.to_string())
-                .map_err(|_| "invalid_expectation")?,
+            lab::VerifiedSocialJoinContext::verify(
+                &packet.context.to_string(),
+                pin,
+                account,
+                session,
+                deadline,
+            )
+            .map_err(|_| "invalid_join_context")?,
         )
     };
-    let challenge = lab::SocialKeyChallenge::parse(&input.next(deadline).await?)
-        .map_err(|_| "invalid_challenge")?;
+    let challenge = lab::SocialKeyChallenge::parse(
+        &preparation_line(input, deadline, expected.as_ref()).await?,
+    )
+    .map_err(|_| "invalid_challenge")?;
     if challenge.role().as_str() != role
         || challenge.operation_id() != operation
         || challenge.generation() != 1
@@ -221,7 +251,17 @@ async fn prepare(input: &mut Input) -> Result<Context> {
     {
         return Err("challenge_context");
     }
+    if let Some(expected) = &expected {
+        expected
+            .check_challenge(&challenge)
+            .map_err(|_| "join_context_expired_or_changed")?;
+    }
     let proof = challenge.sign(&key).map_err(|_| "proof_rejected")?;
+    if let Some(expected) = &expected {
+        expected
+            .check_current()
+            .map_err(|_| "join_context_expired")?;
+    }
     event(serde_json::to_value(proof).map_err(|_| "proof_encoding")?)?;
     Ok(Context {
         key,
@@ -238,8 +278,110 @@ fn limits() -> lab::Limits {
         ..lab::Limits::default()
     }
 }
-fn sockets_free(sockets: Vec<SocketAddr>) -> bool {
-    sockets.into_iter().all(|s| UdpSocket::bind(s).is_ok())
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReleaseObservation {
+    udp_rebound: bool,
+    tcp_rebound: Option<bool>,
+    udp_errors: Vec<Option<i32>>,
+    tcp_error: Option<i32>,
+    #[serde(skip)]
+    retryable: bool,
+}
+impl ReleaseObservation {
+    fn released(&self) -> bool {
+        self.udp_rebound && self.tcp_rebound.unwrap_or(true)
+    }
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReleaseReport {
+    released: bool,
+    timed_out: bool,
+    attempts: u32,
+    elapsed_ms: u128,
+    initial: ReleaseObservation,
+    final_observation: ReleaseObservation,
+}
+fn probe_release(sockets: &[SocketAddr], tcp: Option<SocketAddr>) -> ReleaseObservation {
+    let mut udp = Vec::with_capacity(sockets.len());
+    let mut udp_errors = Vec::with_capacity(sockets.len());
+    let mut retryable = true;
+    for &address in sockets {
+        match UdpSocket::bind(address) {
+            Ok(socket) => {
+                udp.push(socket);
+                udp_errors.push(None);
+            }
+            Err(error) => {
+                retryable &= error.kind() == ErrorKind::AddrInUse;
+                udp_errors.push(error.raw_os_error());
+            }
+        }
+    }
+    // Retain every successful bind until the entire UDP + TCP cycle has been
+    // observed. No socket option, replacement port or transport is enabled.
+    let tcp = tcp.map(TcpListener::bind);
+    let tcp_error = tcp
+        .as_ref()
+        .and_then(|result| result.as_ref().err())
+        .and_then(std::io::Error::raw_os_error);
+    if let Some(Err(error)) = &tcp {
+        retryable &= error.kind() == ErrorKind::AddrInUse;
+    }
+    let observation = ReleaseObservation {
+        udp_rebound: udp.len() == sockets.len(),
+        tcp_rebound: tcp.as_ref().map(std::result::Result::is_ok),
+        udp_errors,
+        tcp_error,
+        retryable,
+    };
+    drop(tcp);
+    drop(udp);
+    observation
+}
+async fn observe_release(
+    sockets: &[SocketAddr],
+    tcp: Option<SocketAddr>,
+    budget: Duration,
+) -> ReleaseReport {
+    let started = Instant::now();
+    let deadline = started + budget;
+    let initial = probe_release(sockets, tcp);
+    let mut current = initial.clone();
+    let mut attempts = 1;
+    loop {
+        let now = Instant::now();
+        if current.released() || !current.retryable || now >= deadline {
+            return ReleaseReport {
+                released: current.released() && now < deadline,
+                timed_out: now >= deadline,
+                attempts,
+                elapsed_ms: started.elapsed().as_millis(),
+                initial,
+                final_observation: current,
+            };
+        }
+        tokio::time::sleep_until(deadline.min(now + Duration::from_millis(20)).into()).await;
+        if Instant::now() >= deadline {
+            return ReleaseReport {
+                released: false,
+                timed_out: true,
+                attempts,
+                elapsed_ms: started.elapsed().as_millis(),
+                initial,
+                final_observation: current,
+            };
+        }
+        current = probe_release(sockets, tcp);
+        attempts += 1;
+    }
+}
+async fn released_after_cleanup(sockets: &[SocketAddr], tcp: Option<SocketAddr>) -> ReleaseReport {
+    // The first integration failure lacked per-socket diagnostics; this is not
+    // an attribution of its cause. Observe bounded OS release only AFTER the
+    // owned workers are reaped and their sockets dropped. Never retry admission.
+    observe_release(sockets, tcp, Duration::from_secs(1)).await
 }
 async fn host(input: &mut Input, context: Context) -> Result<()> {
     let source = context.source.ok_or("invalid_source")?;
@@ -363,10 +505,11 @@ async fn host(input: &mut Input, context: Context) -> Result<()> {
     let sockets = host.bound_sockets();
     host.shutdown().await;
     drop(host);
-    let rebound = sockets_free(sockets);
+    let release = released_after_cleanup(&sockets, None).await;
+    let rebound = release.released;
     event(
         json!({"event":"social_host_stopped","reason":reason,"cleanup":rebound,"rebound":rebound,"admitted":admitted,
-        "sequence":continuity.sequence(),"cleanupElapsedMs":close_started.elapsed().as_millis()}),
+        "sequence":continuity.sequence(),"cleanupElapsedMs":close_started.elapsed().as_millis(),"release":release}),
     )?;
     if !rebound {
         return Err("cleanup_failed");
@@ -377,8 +520,9 @@ async fn host(input: &mut Input, context: Context) -> Result<()> {
     Ok(())
 }
 async fn guest(input: &mut Input, context: Context) -> Result<()> {
-    let packet: GuestPacket = parse(&input.next(context.deadline).await?)?;
     let expected = context.expected.as_ref().ok_or("missing_expectation")?;
+    let packet: GuestPacket =
+        parse(&preparation_line(input, context.deadline, Some(expected)).await?)?;
     let grant = lab::VerifiedSocialGrant::for_guest(
         &packet.grant.to_string(),
         context.pin,
@@ -404,6 +548,9 @@ async fn guest(input: &mut Input, context: Context) -> Result<()> {
     }
     grant.check_admission().map_err(|_| "admission_expired")?;
     continuity.check().map_err(|_| "continuity_expired")?;
+    expected
+        .check_current()
+        .map_err(|_| "join_context_expired")?;
     // Keep ownership of a pending dial through cancellation; do not drop the
     // future that owns its Endpoint. A late success is closed before publishing.
     let connecting = lab::Guest::connect_invited_session(context.key, &invitation, limits());
@@ -412,7 +559,8 @@ async fn guest(input: &mut Input, context: Context) -> Result<()> {
     let mut tick = tokio::time::interval(Duration::from_millis(20));
     let result = loop {
         tokio::select! {biased;
-            _=tick.tick()=>if continuity.check().is_err(){interrupted=Some("continuity_expired");break connecting.as_mut().await;},
+            _=tick.tick()=>if expected.check_current().is_err(){interrupted=Some("join_context_expired");break connecting.as_mut().await;}
+                else if continuity.check().is_err(){interrupted=Some("continuity_expired");break connecting.as_mut().await;},
             _=tokio::signal::ctrl_c()=>{interrupted=Some("cancelled");break connecting.as_mut().await;},
             line=input.rx.recv()=>{interrupted=Some(match line{Some(Ok(line))if line=="stop"=>"stop",None=>"eof",_=>"invalid_input"});break connecting.as_mut().await;},
             result=&mut connecting=>break result,
@@ -423,12 +571,26 @@ async fn guest(input: &mut Input, context: Context) -> Result<()> {
         Err(_) => return Err("guest_connect_failed"),
     };
     let sockets = guest.bound_sockets();
-    if interrupted.is_some() || continuity.check().is_err() || grant.check_session().is_err() {
+    if interrupted.is_some()
+        || expected.check_current().is_err()
+        || continuity.check().is_err()
+        || grant.check_session().is_err()
+    {
+        let reason = interrupted.unwrap_or_else(|| {
+            if expected.check_current().is_err() {
+                "join_context_expired"
+            } else if continuity.check().is_err() {
+                "continuity_expired"
+            } else {
+                "session_expired"
+            }
+        });
         guest.shutdown().await;
         drop(guest);
-        let rebound = sockets_free(sockets);
+        let release = released_after_cleanup(&sockets, None).await;
+        let rebound = release.released;
         event(
-            json!({"event":"social_guest_stopped","reason":interrupted.unwrap_or("continuity_expired"),"cleanup":rebound,"rebound":rebound}),
+            json!({"event":"social_guest_stopped","reason":reason,"cleanup":rebound,"rebound":rebound,"release":release}),
         )?;
         return if !rebound {
             Err("cleanup_failed")
@@ -451,7 +613,9 @@ async fn guest(input: &mut Input, context: Context) -> Result<()> {
     };
     let tcp = bridge.local_addr();
     let mut failure = None;
-    let reason = if continuity.check().is_err() {
+    let reason = if expected.check_current().is_err() {
+        "join_context_expired"
+    } else if continuity.check().is_err() {
         "continuity_expired"
     } else if grant.check_session().is_err() {
         "session_expired"
@@ -481,9 +645,13 @@ async fn guest(input: &mut Input, context: Context) -> Result<()> {
     bridge.shutdown().await;
     drop(bridge);
     drop(guest);
-    let rebound = sockets_free(sockets) && std::net::TcpListener::bind(tcp).is_ok();
+    let release = released_after_cleanup(&sockets, Some(tcp)).await;
+    let udp_rebound = release.final_observation.udp_rebound;
+    let tcp_rebound = release.final_observation.tcp_rebound.unwrap_or(false);
+    let tcp_rebind_error = release.final_observation.tcp_error;
+    let rebound = release.released;
     event(
-        json!({"event":"social_guest_stopped","reason":reason,"cleanup":rebound,"rebound":rebound,"cleanupElapsedMs":close_started.elapsed().as_millis()}),
+        json!({"event":"social_guest_stopped","reason":reason,"cleanup":rebound,"rebound":rebound,"udpRebound":udp_rebound,"tcpRebound":tcp_rebound,"tcpRebindError":tcp_rebind_error,"cleanupElapsedMs":close_started.elapsed().as_millis(),"release":release}),
     )?;
     if !rebound {
         return Err("cleanup_failed");
@@ -508,7 +676,7 @@ async fn main() {
     if let Err(code) = result {
         if matches!(
             code,
-            "stopped" | "input_eof" | "cancelled" | "preparation_expired"
+            "stopped" | "input_eof" | "cancelled" | "preparation_expired" | "join_context_expired"
         ) {
             let name = if role.as_deref() == Some("host") {
                 "social_host_stopped"
@@ -525,5 +693,61 @@ async fn main() {
             let _ = event(json!({"event":"social_failed","code":code}));
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn retained_real_sockets_must_both_release_before_success() {
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+        let udp_address = udp.local_addr().unwrap();
+        let tcp_address = tcp.local_addr().unwrap();
+        let owner = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(75)).await;
+            drop(udp);
+            drop(tcp);
+        });
+        let release = observe_release(
+            &[udp_address],
+            Some(tcp_address),
+            Duration::from_millis(500),
+        )
+        .await;
+        owner.await.unwrap();
+        assert!(release.released, "{release:?}");
+        assert!(!release.timed_out);
+        assert!(!release.initial.udp_rebound);
+        assert_eq!(release.initial.tcp_rebound, Some(false));
+        assert!(release.initial.udp_errors[0].is_some());
+        assert!(release.initial.tcp_error.is_some());
+        assert!(release.final_observation.released());
+        assert!(release.attempts > 1);
+        assert!(release.elapsed_ms >= 75);
+    }
+
+    #[tokio::test]
+    async fn retained_real_socket_past_original_deadline_remains_failure() {
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let udp_address = udp.local_addr().unwrap();
+        let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+        let tcp_address = tcp.local_addr().unwrap();
+        drop(tcp);
+        let release =
+            observe_release(&[udp_address], Some(tcp_address), Duration::from_millis(80)).await;
+        assert!(!release.released, "{release:?}");
+        assert!(release.timed_out);
+        assert!(!release.initial.udp_rebound);
+        assert_eq!(release.initial.tcp_rebound, Some(true));
+        assert!(!release.final_observation.udp_rebound);
+        assert_eq!(release.final_observation.tcp_rebound, Some(true));
+        assert!(release.final_observation.udp_errors[0].is_some());
+        assert!(release.attempts > 1);
+        assert!(release.elapsed_ms >= 80);
+        drop(udp);
+        assert!(probe_release(&[udp_address], Some(tcp_address)).released());
     }
 }

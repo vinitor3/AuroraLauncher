@@ -4,6 +4,7 @@ Decisão experimental no caminho existente: [Aurora Connect V2](PROPOSAL-aurora-
 
 | ADR | Decisão | Estado |
 | --- | --- | --- |
+| [032](ADR-032-social-join-context.md) | Contexto social assinado resolvido pela sessão, destinatário e política atuais antes de ingresso | PROTÓTIPO local testado; integração gráfica/produção pendentes |
 | [031](ADR-031-social-local-admission.md) | Consentimento host, grant social separado e continuidade assinada, dois clientes TCP locais | PROTÓTIPO local testado; integração gráfica/produção pendentes |
 | [030](ADR-030-social-account-key-binding.md) | Prova Ed25519 entre conta autenticada, chave RAM e preparo original, sem autorização de transporte | PROTÓTIPO local testado; ingresso social pendente |
 | [029](ADR-029-connect-social-local.md) | Relações Aurora privadas e catálogo opaco com projeções autorizadas, emuladores e UI social default-off | PROTÓTIPO local; ingresso social pendente |
