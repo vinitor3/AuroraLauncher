@@ -1,5 +1,9 @@
 # Aurora Connect — execução incremental local
 
+## Social88B — autorização e transporte locais (25/10/2026)
+
+[Tarefa88B](task-aur-r4-connect-social-88b.md), [domínio88B](aurora-connect-social-admission-88b.md) e [ADR-031](engineering/ADR/ADR-031-social-local-admission.md) registram consentimento próprio do anfitrião, consumo da prova88A, grant/continuidade assinados e dois clientes nativos retendo suas chaves até TLS. Runner sem cópia manual; TCP1MiB/direção em public/friends, retirada ativa e bloqueio antes de join passaram com serviço/SDK reais locais. Não confundir o pipeline CLI com botão Entrar integrado, conta de produção, jogo, áudio ou nova rede externa. Recursos e limites permanecem experimentais.
+
 ## Social88A — prova de conta e chave (25/10/2026)
 
 [Tarefa88A](task-aur-r4-connect-social-88a.md), [domínio88A](aurora-connect-social-key-binding-88a.md) e [ADR-030](engineering/ADR/ADR-030-social-account-key-binding.md) registram novo código nativo, autoridade local, assinaturas e consumo único. Integração real com contas descartáveis/Firestore/CLI Rust, sem transporte, e regressões de interface executadas. O recibo não substitui autorização; política de hospedagem, admissão social e revogação ativa ainda precedem o botão Entrar. Nenhuma regra ou serviço foi publicado e nenhuma evidência anterior é reatribuída.

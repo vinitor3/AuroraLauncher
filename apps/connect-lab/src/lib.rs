@@ -12,6 +12,7 @@ mod model;
 mod path_observation;
 mod plan;
 mod session_invitation;
+mod social_admission;
 mod social_key_binding;
 mod transport;
 mod wire;
@@ -41,6 +42,10 @@ pub use plan::{MAX_PLAN_BYTES, PlanError, ValidatedPlan, load_fragmented_plan, l
 pub use session_invitation::{
     MAX_ADMISSION_LIFETIME, MAX_SESSION_INVITATION_BYTES, MAX_SESSION_LIFETIME, SessionDeadlines,
     SessionInvitation,
+};
+pub use social_admission::{
+    MAX_SOCIAL_ADMISSION_BYTES, SignedSocialHostPolicy, SocialAdmissionError, SocialContinuity,
+    SocialGuestExpectation, SocialHostPolicy, VerifiedSocialGrant, social_source_digest,
 };
 pub use social_key_binding::{
     MAX_SOCIAL_KEY_CHALLENGE_BYTES, MAX_SOCIAL_KEY_CHALLENGE_MILLIS, MAX_SOCIAL_KEY_PROOF_BYTES,

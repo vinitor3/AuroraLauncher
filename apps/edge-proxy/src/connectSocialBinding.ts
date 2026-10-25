@@ -152,6 +152,34 @@ export function createSocialBindingAuthority(dependencies: SocialBindingDependen
     const wall = clock.wall();
     if (clock.monotonic() >= record.deadline || wall < record.issuedAt || wall >= record.expiresAt) fail("challenge_expired");
   }
+  async function verifyProofInternal(request: Request, raw: unknown) {
+    globalAttempt(); const proof = proofValue(raw);
+    const record = pending.get(proof.challenge.challengeId);
+    if (!record || record.state !== "pending" || proof.challenge.issuerInstance !== issuerInstance) fail("challenge_unavailable");
+    // Claim before the first await: concurrent attempts can never use the same challenge twice.
+    record.state = "verifying";
+    try {
+      current(record, request);
+      if (JSON.stringify(record.challenge) !== JSON.stringify(proof.challenge)) fail("challenge_mismatch");
+      const who = await principal(request);
+      if (who.accountId !== record.accountId) fail("account_mismatch");
+      current(record, request);
+      const key = await crypto.subtle.importKey("raw", fromHex(proof.challenge.publicKey), "Ed25519", false, ["verify"]);
+      if (!await crypto.subtle.verify("Ed25519", key, fromHex(proof.signature), socialKeyProofPreimage(proof.challenge))) fail("invalid_signature");
+      current(record, request);
+      const session = await sessionFor(who, proof.challenge.sessionId, proof.challenge.role);
+      if (await socialBindingSessionDigest(session) !== proof.challenge.sessionDigest) fail("session_changed");
+      current(record, request);
+      if (receipts.size >= 128) fail("authority_busy");
+      const receipt: SocialBindingReceipt = { bindingId: crypto.randomUUID(), accountId: who.accountId, publicKey: proof.challenge.publicKey,
+        operationId: proof.challenge.operationId, generation: proof.challenge.generation,
+        sessionId: proof.challenge.sessionId, sessionDigest: proof.challenge.sessionDigest, role: proof.challenge.role,
+        expiresAtUnixMs: proof.challenge.expiresAtUnixMs, transportAuthorized: false };
+      receipts.set(receipt.bindingId, { receipt, deadline: record.deadline, issuedAt: record.issuedAt });
+      return { receipt: { ...receipt }, originalDeadlineMonotonic: record.deadline };
+    } catch (error) { if (error instanceof SocialBindingError) throw error; return fail("invalid_proof"); }
+    finally { pending.delete(proof.challenge.challengeId); }
+  }
   return {
     issuerInstance,
     async challenge(request: Request, raw: unknown): Promise<SocialKeyChallenge> {
@@ -181,33 +209,10 @@ export function createSocialBindingAuthority(dependencies: SocialBindingDependen
       } catch (error) { pending.delete(id); throw error; }
     },
     async prove(request: Request, raw: unknown): Promise<SocialBindingReceipt> {
-      globalAttempt(); const proof = proofValue(raw);
-      const record = pending.get(proof.challenge.challengeId);
-      if (!record || record.state !== "pending" || proof.challenge.issuerInstance !== issuerInstance) fail("challenge_unavailable");
-      // Claim before the first await: concurrent attempts can never use the same challenge twice.
-      record.state = "verifying";
-      try {
-        current(record, request);
-        if (JSON.stringify(record.challenge) !== JSON.stringify(proof.challenge)) fail("challenge_mismatch");
-        const who = await principal(request);
-        if (who.accountId !== record.accountId) fail("account_mismatch");
-        current(record, request);
-        const key = await crypto.subtle.importKey("raw", fromHex(proof.challenge.publicKey), "Ed25519", false, ["verify"]);
-        if (!await crypto.subtle.verify("Ed25519", key, fromHex(proof.signature), socialKeyProofPreimage(proof.challenge))) fail("invalid_signature");
-        current(record, request);
-        const session = await sessionFor(who, proof.challenge.sessionId, proof.challenge.role);
-        if (await socialBindingSessionDigest(session) !== proof.challenge.sessionDigest) fail("session_changed");
-        current(record, request);
-        if (receipts.size >= 128) fail("authority_busy");
-        const receipt: SocialBindingReceipt = { bindingId: crypto.randomUUID(), accountId: who.accountId, publicKey: proof.challenge.publicKey,
-          operationId: proof.challenge.operationId, generation: proof.challenge.generation,
-          sessionId: proof.challenge.sessionId, sessionDigest: proof.challenge.sessionDigest, role: proof.challenge.role,
-          expiresAtUnixMs: proof.challenge.expiresAtUnixMs, transportAuthorized: false };
-        receipts.set(receipt.bindingId, { receipt, deadline: record.deadline, issuedAt: record.issuedAt });
-        return { ...receipt };
-      } catch (error) { if (error instanceof SocialBindingError) throw error; fail("invalid_proof"); }
-      finally { pending.delete(proof.challenge.challengeId); }
+      return (await verifyProofInternal(request, raw)).receipt;
     },
+    /** Internal same-process handoff only: never serialize this monotonic clock to HTTP or accept it from a caller. */
+    proveRetained(request: Request, raw: unknown) { return verifyProofInternal(request, raw); },
     /** Aggregate diagnostics only; never exposes challenges, account ids, tokens or receipt contents. */
     inspect() { prune(); return { pending: pending.size, receipts: receipts.size, accountRateWindows: rates.size, transportAuthorized: false as const }; },
   };

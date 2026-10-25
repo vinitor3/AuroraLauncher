@@ -2,6 +2,7 @@
 import http from "node:http";
 import { pathToFileURL } from "node:url";
 import { createSocialBindingAuthority, normalizeSocialBindingSession, SocialBindingError } from "../../apps/edge-proxy/src/connectSocialBinding.ts";
+import { createSocialAdmissionAuthority } from "../../apps/edge-proxy/src/connectSocialAdmission.ts";
 
 const PROJECT = "demo-aurora-social";
 const AUTH = "http://127.0.0.1:9187/identitytoolkit.googleapis.com/v1/accounts:lookup?key=demo-aurora-social";
@@ -79,18 +80,23 @@ export function createLocalEmulatorBindingDependencies() {
   };
 }
 
-async function requestBody(request) {
+async function requestBody(request, maximum) {
   if (request.headers["content-type"] !== "application/json" || request.headers["content-encoding"] !== undefined) fail("invalid_request");
   const length = request.headers["content-length"];
-  if (length !== undefined && (!/^\d+$/.test(length) || Number(length) > 4_096)) fail("request_too_large");
+  if (length !== undefined && (!/^\d+$/.test(length) || Number(length) > maximum)) fail("request_too_large");
   const chunks = []; let bytes = 0;
-  for await (const chunk of request) { bytes += chunk.length; if (bytes > 4_096) fail("request_too_large"); chunks.push(chunk); }
+  for await (const chunk of request) { bytes += chunk.length; if (bytes > maximum) fail("request_too_large"); chunks.push(chunk); }
   try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks))); }
   catch { fail("invalid_request"); }
 }
-export async function startSocialBindingLab({ enabled = false, port = 42_888 } = {}) {
+export async function startSocialBindingLab({ enabled = false, port = 42_888, admission = false } = {}) {
   if (enabled !== true || ![0, 42_888].includes(port)) throw new Error("SOCIAL_BINDING_LAB_OPT_IN_REQUIRED");
-  const authority = createSocialBindingAuthority(createLocalEmulatorBindingDependencies());
+  if (typeof admission !== "boolean") throw new Error("SOCIAL_ADMISSION_LAB_OPT_IN_REQUIRED");
+  const dependencies = createLocalEmulatorBindingDependencies();
+  const authority = createSocialBindingAuthority(dependencies);
+  const admissionAuthority = admission ? await createSocialAdmissionAuthority(authority, dependencies) : null;
+  const keyRoutes = ["/v1/social/key/challenge", "/v1/social/key/proof"];
+  const admissionRoutes = ["/v1/social/host/register", "/v1/social/join", "/v1/social/continuity"];
   let origin;
   const server = http.createServer(async (req, res) => {
     const cancellation = new AbortController();
@@ -100,10 +106,18 @@ export async function startSocialBindingLab({ enabled = false, port = 42_888 } =
     try {
       // Reject browser cross-origin callers/DNS rebinding; no wildcard CORS and no arbitrary upstream/project.
       if (!origin || req.headers.host !== new URL(origin).host || req.headers.origin !== undefined || req.method !== "POST"
-          || !["/v1/social/key/challenge", "/v1/social/key/proof"].includes(req.url)) fail("invalid_request");
-      const body = await requestBody(req);
+          || !(keyRoutes.includes(req.url) || (admissionAuthority && admissionRoutes.includes(req.url)))) fail("invalid_request");
+      const body = await requestBody(req, keyRoutes.includes(req.url) ? 4_096 : 8_192);
       const request = new Request(origin + req.url, { method: "POST", signal: cancellation.signal, headers: { Authorization: req.headers.authorization ?? "" } });
-      const output = req.url.endsWith("/challenge") ? await authority.challenge(request, body) : await authority.prove(request, body);
+      let output;
+      switch (req.url) {
+        case "/v1/social/key/challenge": output = await authority.challenge(request, body); break;
+        case "/v1/social/key/proof": output = await authority.prove(request, body); break;
+        case "/v1/social/host/register": output = await admissionAuthority.registerHost(request, body); break;
+        case "/v1/social/join": output = await admissionAuthority.join(request, body); break;
+        case "/v1/social/continuity": output = await admissionAuthority.continuity(request, body); break;
+        default: fail("invalid_request");
+      }
       reply(200, output);
     } catch (error) {
       const code = error instanceof SocialBindingError ? error.code : "lab_unavailable";
@@ -115,11 +129,14 @@ export async function startSocialBindingLab({ enabled = false, port = 42_888 } =
   server.requestTimeout = 10_000; server.headersTimeout = 5_000; server.setTimeout(10_000, socket => socket.destroy());
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolve); });
   origin = `http://127.0.0.1:${server.address().port}`;
-  return { origin, inspect: () => authority.inspect(), async close() { server.closeIdleConnections(); const stopped = new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); server.closeAllConnections(); await stopped; } };
+  // These pins are provisioned directly to the runner that created this object, never through a renderer-selected URL.
+  return { origin, issuerInstance: authority.issuerInstance, admissionPublicKey: admissionAuthority?.admissionPublicKey,
+    inspect: () => authority.inspect(), inspectAdmission: () => admissionAuthority?.inspect(),
+    async close() { server.closeIdleConnections(); const stopped = new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); server.closeAllConnections(); await stopped; } };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (process.argv.length !== 2 || process.env.AURORA_SOCIAL_BINDING_LAB !== "1") throw new Error("SOCIAL_BINDING_LAB_OPT_IN_REQUIRED");
-  const lab = await startSocialBindingLab({ enabled: true });
+  const lab = await startSocialBindingLab({ enabled: true, admission: process.env.AURORA_SOCIAL_ADMISSION_LAB === "1" });
   console.log(JSON.stringify({ event: "social_binding_lab_ready", origin: lab.origin, localAuthEmulator: true, transportAuthorized: false }));
   let stopping = false;
   const stop = async () => { if (stopping) return; stopping = true; await lab.close(); console.log(JSON.stringify({ event: "social_binding_lab_stopped" })); };

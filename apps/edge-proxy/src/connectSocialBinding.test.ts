@@ -180,3 +180,11 @@ test("cancellation propagates to backend and prevents proof receipt after client
   await assert.rejects(f.authority.prove(proofRequest, await f.sign(challenge)), code("binding_cancelled"));
   assert.equal(f.authority.inspect().receipts, 0);
 });
+test("internal retained verification transfers original monotonic cap without exposing it in HTTP receipt", async () => {
+  const f = await fixture(); const challenge = await f.authority.challenge(request(), f.input);
+  f.advance(10_000); f.wallOnly(-5_000);
+  const proof = await f.sign(challenge), retained = await f.authority.proveRetained(request(), proof);
+  assert.equal(retained.originalDeadlineMonotonic, 60_100);
+  assert.equal(Object.hasOwn(retained.receipt, "originalDeadlineMonotonic"), false);
+  await assert.rejects(f.authority.prove(request(), proof), code("challenge_unavailable"));
+});
