@@ -18,6 +18,29 @@ fn owner(window: &WebviewWindow) -> Result<&str, &'static str> {
     Ok(window.label())
 }
 
+/// Typed possession proof only; no approval, receipt, or transport side effect.
+#[tauri::command]
+pub fn connect_prove_social_key_binding(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    operation_id: String,
+    challenge_json: String,
+) -> Result<serde_json::Value, &'static str> {
+    let owner = owner(&window)?;
+    #[cfg(feature = "connect-lab")]
+    {
+        let proof = manager
+            .prove_social_key_binding(owner, &operation_id, &challenge_json)
+            .map_err(|error| error.code())?;
+        serde_json::to_value(proof).map_err(|_| "connect_internal")
+    }
+    #[cfg(not(feature = "connect-lab"))]
+    {
+        let _ = (owner, manager, operation_id, challenge_json);
+        Err("connect_disabled")
+    }
+}
+
 #[tauri::command]
 pub async fn connect_prepare_ready_game_launch(
     window: WebviewWindow,

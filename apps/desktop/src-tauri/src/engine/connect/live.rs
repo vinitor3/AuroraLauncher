@@ -61,6 +61,8 @@ mod session_group_tests;
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod session_tests;
+#[path = "social_key_binding.rs"]
+mod social_key_binding;
 #[cfg(test)]
 #[path = "stop_completion_tests.rs"]
 mod stop_completion_tests;
@@ -135,6 +137,7 @@ struct Attempt {
     draft: Option<Draft>,
     reviewed: Option<Reviewed>,
     prepared_deadline: Instant,
+    social_key_proof_emitted: bool,
     cancel: CancellationToken,
     worker: Option<JoinHandle<()>>,
     export: Option<InvitationExport>,
@@ -502,6 +505,7 @@ impl Manager {
             draft: Some(draft),
             reviewed: None,
             prepared_deadline: Instant::now() + Duration::from_secs(60),
+            social_key_proof_emitted: false,
             cancel: CancellationToken::new(),
             worker: None,
             export: None,

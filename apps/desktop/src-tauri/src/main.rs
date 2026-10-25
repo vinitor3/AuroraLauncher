@@ -132,6 +132,7 @@ fn main() {
             voice_announcement_commands::voice_announcement_confirm_close,
             voice_announcement_commands::voice_announcement_finish_close,
             connect_commands::connect_capabilities,
+            connect_commands::connect_prove_social_key_binding,
             connect_commands::connect_discover_instance,
             connect_commands::connect_review_discovered,
             connect_commands::connect_confirm_discovered_status,

@@ -217,6 +217,7 @@ mod enabled {
                 draft: None,
                 reviewed: None,
                 prepared_deadline: at + Duration::from_secs(60),
+                social_key_proof_emitted: false,
                 cancel: CancellationToken::new(),
                 worker: None,
                 export: None,

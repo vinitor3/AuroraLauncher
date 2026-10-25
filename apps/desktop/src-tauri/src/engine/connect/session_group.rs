@@ -279,6 +279,7 @@ impl Manager {
             draft: None,
             reviewed: None,
             prepared_deadline: at + Duration::from_secs(600),
+            social_key_proof_emitted: false,
             cancel: CancellationToken::new(),
             worker: None,
             export: None,

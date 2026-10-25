@@ -1,5 +1,9 @@
 # Aurora Connect — execução incremental local
 
+## Social88A — prova de conta e chave (25/10/2026)
+
+[Tarefa88A](task-aur-r4-connect-social-88a.md), [domínio88A](aurora-connect-social-key-binding-88a.md) e [ADR-030](engineering/ADR/ADR-030-social-account-key-binding.md) registram novo código nativo, autoridade local, assinaturas e consumo único. Integração real com contas descartáveis/Firestore/CLI Rust, sem transporte, e regressões de interface executadas. O recibo não substitui autorização; política de hospedagem, admissão social e revogação ativa ainda precedem o botão Entrar. Nenhuma regra ou serviço foi publicado e nenhuma evidência anterior é reatribuída.
+
 ## Social87 — amigos e catálogo no laboratório (24/10/2026)
 
 Novo trabalho social detalhado em [tarefa87](task-aur-r4-connect-social-87.md), [domínio87](aurora-connect-social-87.md) e [ADR-029](engineering/ADR/ADR-029-connect-social-local.md). Implementa dados/regras/SDK e interface reais, exercitados localmente com contas descartáveis. Não confundir esse resultado com backend publicado, ingresso social automático, novos testes de transporte ou homologação de jogo/voz. Requisitos visuais e sem convite manual permanecem em [experiência social](aurora-connect-social-experience.md).

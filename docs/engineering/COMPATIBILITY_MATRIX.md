@@ -1,5 +1,7 @@
 # Compatibility Matrix
 
+25/10 — [Social88A](../aurora-connect-social-key-binding-88a.md): **PROTÓTIPO** de prova conta/chave em Windows, Auth/Firestore Emulator e signer Rust reais. Cadastro, bloqueio/restrição, assinatura, consumo único e prazo exercitados; método pertence ao preparo original do ConnectManager. Nenhum novo socket de jogo é aberto por essa prova. TCP/UDP, direto, relay, Minecraft, SVC, Plasmo, GUI social e os nove pares mantêm as evidências anteriores, sem nova homologação. **Entrar permanece pendente**. [Comandos/resultados](../task-aur-r4-connect-social-88a.md).
+
 24/10 — [Social87](../aurora-connect-social-87.md): **PROTÓTIPO** local Windows/Tauri/Firebase Emulators, com busca Aurora, amizade bilateral, bloqueios, presença e anúncios limitados. Interface real de navegador e executável usa contas descartáveis; não há backend social publicado nem ingresso automático. Não muda ou homologa Minecraft, Core/Skins, Simple Voice Chat, Plasmo Voice, TCP/UDP ou redes externas. [Resultados separados](../task-aur-r4-connect-social-87.md).
 
 GUI/Minecraft24/10 — consulta separada contra servidor real1.21.1/Fabric0.16.14/JDK21.0.12.1, semmods/loopback/online-mode=false: botão Consulta no GuestTauri mostrou resposta767 correspondente e0de2; copy/stop/EULA exata/rebind43001 observados. [Evidência](../aurora-connect-ui-lab.md). Não homologa mundo/contas/Core/Skins/áudio/exterior; os dois casosTCPecho abaixo conservam sua ausência deMinecraft.

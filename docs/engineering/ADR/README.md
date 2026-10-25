@@ -4,6 +4,7 @@ Decisão experimental no caminho existente: [Aurora Connect V2](PROPOSAL-aurora-
 
 | ADR | Decisão | Estado |
 | --- | --- | --- |
+| [030](ADR-030-social-account-key-binding.md) | Prova Ed25519 entre conta autenticada, chave RAM e preparo original, sem autorização de transporte | PROTÓTIPO local testado; ingresso social pendente |
 | [029](ADR-029-connect-social-local.md) | Relações Aurora privadas e catálogo opaco com projeções autorizadas, emuladores e UI social default-off | PROTÓTIPO local; ingresso social pendente |
 | [001](ADR-001-prism-reference.md) | Prism como referência, não componente | Aceita |
 | [002](ADR-002-firebase-functions.md) | Deprecar Firebase Functions | Proposta |

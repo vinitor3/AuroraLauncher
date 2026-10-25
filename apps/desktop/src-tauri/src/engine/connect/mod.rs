@@ -10,6 +10,8 @@ mod ready_game_profile;
 pub use ready_game_profile::*;
 #[cfg(feature = "connect-lab")]
 mod ready_game_backend;
+#[cfg(feature = "connect-lab")]
+pub use aurora_connect_lab::SocialKeyBindingProof;
 pub use fragmented_profile::{
     FragmentedGuestState, FragmentedHostRequest, FragmentedUdpCapabilities, FragmentedUdpContract,
     FragmentedUdpReview, SessionFragmentedDiscoveredHostRequest, SessionFragmentedHostRequest,
@@ -370,6 +372,17 @@ pub struct ConnectManager {
     live: live::Manager,
 }
 impl ConnectManager {
+    /// Possession proof only. It neither accepts a social admission nor starts transport.
+    #[cfg(feature = "connect-lab")]
+    pub fn prove_social_key_binding(
+        &self,
+        owner: &str,
+        operation_id: &str,
+        challenge_json: &str,
+    ) -> Result<SocialKeyBindingProof, ConnectError> {
+        self.live
+            .prove_social_key_binding(owner, operation_id, challenge_json)
+    }
     pub fn retry_session_udp(
         &self,
         owner: &str,

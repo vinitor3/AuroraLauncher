@@ -1,5 +1,7 @@
 # Aurora Connect — backlog incremental e homologação R4
 
+005/008 — [Social88A](../../aurora-connect-social-key-binding-88a.md), 25/10: prova real limitada entre cadastro Aurora, chave nativa e preparo original, com autoridade local e revalidação de bloqueios/visibilidade. Subetapa implementada e testada localmente; não autoriza transporte nem fecha os IDs. Política de hospedagem revisada, admissão social, revogação ativa, integração de **Entrar** e publicação continuam pendentes. [Execução](../../task-aur-r4-connect-social-88a.md).
+
 005/008 — [Social87](../../aurora-connect-social-87.md), 24/10: implementação local real de busca por nick Aurora, amizade/pedidos/bloqueios, presença opcional e catálogo de anúncios públicos/amigos, com projeções protegidas e UI. **PROTÓTIPO**, default normal off, emuladores apenas. Publicação remota, proteção global de frequência/custos, vínculo conta↔chave e **Entrar automático** continuam pendentes; anúncio não é permissão do transporte. Não fecha 005/008 nem cria novos IDs. [Tarefa/evidências](../../task-aur-r4-connect-social-87.md).
 
 005/008, consultaGUI24/10: [Minecraft real pela ponte e botão do painel](../../aurora-connect-ui-lab.md) com STATUS767 correspondente/0de2, cópia e encerramento dos owners/EULA exata/rebind43001. Avanço parcial separado de echoTCP; mundo/voz/contas/nove pares/exterior/social seguem pendentes.

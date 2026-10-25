@@ -4,6 +4,8 @@ Requisito explícito confirmado e detalhado pelo usuário em 24/10/2026. O [incr
 
 O registro87 separa a GUI original, a subrodada de capa Modrinth no executável e a correção posterior do hot reload do preview. Os seis testes causais dessa correção não reatribuem a GUI anterior ao preview novo; testes locais de dados sociais também não significam isolamento de todas as consultas nativas de rede do launcher.
 
+25/10 — [88A](aurora-connect-social-key-binding-88a.md) acrescenta a prova de posse da chave vinculada à conta e ao preparo original, testada com serviços locais reais. É uma subetapa do backend social; não habilita Entrar nem autoriza transporte. A política de hospedagem, admissão e revogação ativa continuam necessárias e a experiência final abaixo permanece obrigatória.
+
 Autoridade: [especificação Connect](engineering/AURORA_CONNECT_SPEC.md), [roadmap](engineering/MASTER_ROADMAP.md), tarefas existentes [AUR-R4-004/005/008](engineering/CODEX_TASKS/AUR-R4-CONNECT-BACKLOG.md), [política de dependências/custos](engineering/AURORA_CONNECT_DEPENDENCIES.md) e [prompt consolidado](engineering/CODEX_PROMPTS/AUR-R4-CONNECT-V2.md). Permanecem todas as fases, prioridades, gates e os nove pares Core/Skins; não há Companion/HUD ou ampliação da matriz.
 
 ## Experiência exigida
