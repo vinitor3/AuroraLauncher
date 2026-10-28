@@ -1,6 +1,8 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useThemes } from "../themes/ThemeProvider";
+import { DEFAULT_THEME, themeVariables } from "../themes/model";
 
 function WindowTitlebar() {
   const [maximized, setMaximized] = useState(false);
@@ -76,6 +78,8 @@ function WindowTitlebar() {
 }
 
 export function DesktopWindow({ children }: { children: ReactNode }) {
+  const { theme } = useThemes();
   if (!isTauri()) return <>{children}</>;
-  return <div className="desktop-window"><WindowTitlebar />{children}</div>;
+  const custom = theme.id !== DEFAULT_THEME.id;
+  return <div className={`desktop-window${custom ? " desktop-window-themed" : ""}`} style={custom ? themeVariables(theme) : undefined}><WindowTitlebar />{children}</div>;
 }

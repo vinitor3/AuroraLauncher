@@ -8,7 +8,7 @@ Status: IMPLEMENTADO MAS NÃO HOMOLOGADO.
 
 O Aurora apenas interpreta dados locais. Nenhuma geração por IA, HTML, CSS, JavaScript, URLs remotas, comandos ou plugins são aceitos no tema. Um campo JSON inclui apresentação e recursos embutidos; anexos locais são convertidos nesse formato. Temas salvos, exportação, associação opcional à seleção de uma instância/modpack, vídeo silencioso e efeitos internos suaves (aurora, água e cerejeira). Prévia de 10 segundos sem confirmação restaura o padrão. Falha/crash deixa marcador e a próxima inicialização usa o padrão, preservando a biblioteca. Encerramento normal preserva o tema confirmado.
 
-Documento v1 (todos os campos obrigatórios, objetos fechados):
+Contrato inicial v1 abaixo, registrado na primeira wave. A ampliação posterior documentada no final adiciona campos opcionais na entrada, normalizados por defaults; `model.ts` e `themes.rs` são o contrato atual.
 
 ```ts
 type NavId = "instances" | "discover" | "appearance" | "java";
@@ -54,3 +54,30 @@ Validação executada em 28/10/2026:
 - Launcher nativo de desenvolvimento aberto no Windows e tela Personalização observada, com sessão existente carregada. A janela é intitulada **Aurora — Teste de personalização**. O launcher instalado e os JARs não foram substituídos.
 
 Homologação de mídias reais/codec, desempenho de GPU fraca, pausa efetiva ao minimizar/bandeja e avaliação visual do usuário: PRECISA DE TESTE. Nenhum instalador/release foi gerado. O servidor Vite e `tauri dev --no-watch` permanecem em execução para o teste solicitado; a configuração de título/beforeDevCommand está somente em `.aurora/theme-dev.json`, ignorada pelo Git.
+
+## Ampliação — editor visual, moldura, cursor, GIF e integração de features
+
+Base desta wave: `ffc37cc` na mesma branch/worktree. Versões de launcher/Core/Skins preservadas. Estado: IMPLEMENTADO MAS NÃO HOMOLOGADO.
+
+- Editor Visual e Código comentado compartilham o rascunho. JSONC aceita comentários de linha/bloco; código gerado explica os campos em português. Entrada inválida permanece no modo código. Trocar modelo/tema exige descartar explicitamente alterações. Código com base64 é gerado sob demanda, evitando cópias de vídeo/GIF durante cada movimento de slider ou arraste.
+- Arrastar navegação e regiões de cabeçalho/decoração/conteúdo, alternar lado/largura do menu e lado do Core, posicionar até seis textos/imagens na área decorativa. Há botões, teclado e campos alternativos ao arraste. Reordenação real do DOM preserva estado dos controles. Novas imagens decorativas possuem importador próprio.
+- Moldura e barra superior: cores, altura, borda, raio e margem; não modifica o sistema operacional. Controles de janela conservam ações, áreas de clique e contraste. Cursor do sistema/pixel/círculo/mira, cor/tamanho e rastro limitado a oito pontos. Recuperação, editor e autenticação ficam protegidos.
+- GIFs preservados somente no fundo; parsers independentes limitam bytes/quadros/duração/pixels/estrutura. Canvas controlado aguarda tracks.ready, fecha VideoFrame, cancela preparação ao desmontar e pausa/fecha decoder ao ocultar. Preload valida primeiro/último quadro e contagem, com timeout. WebView sem ImageDecoder recebe erro orientando MP4/WebM. Não confundir preferência de decode até960px com limite garantido; entrada continua Full HD.
+- `ThemeSurface` e `docs/theme-integration.md`, exigidos por AGENTS.md, orientam novas telas a consumir tokens com fallback. Java/JVM/RAM/Connect não entram no documento visual. Alterar IDs exige migração, parser nativo/frontend, editor/comentários e testes no mesmo incremento.
+
+Defaults/limites novos: window.titlebarColor `#171224`, titlebarText `#f8f6ff`, frameColor `#0b0812`, altura44[36–64], borda1[0–3], raio20[0–24], margem16[0–24]; sidebarWidth240[180–300], statusSide right, sectionOrder header/decorations/content (permutação), decorationHeight160[80–400]; transition fade e transitionMs300[100–700]; decoração x/y50[0–100], width30[8–100]%, height64[24–160], fontSize20[12–56]. Cursor system, `#f2efff`,24[16–40], trail none. GIF24MiB,240frames,60s por ciclo após mínimo40ms/quadro, Full HD e160 milhões de pixels de telas de quadros. Novos campos ausentes/objetos window/cursor parciais recebem defaults; objetos continuam fechados.
+
+Evidências executadas em 28/10/2026:
+
+- Build desktop CONCLUÍDO; aviso de bundle Vite grande (aprox.1,76MB) permanece.
+- 22 testes do modelo, smoke do editor visual, smoke da ordem DOM, smoke do provider (prazo real10s) e10 regressões do Assistente: CONCLUÍDO.
+- ThemeMotion.smoke:10 cenários mais suíte,11 testes reportados; preparação assíncrona, falha em quadro final, watchdog, cancelamento durante tracks.ready/decode, pausa/ocultação, fechamento de recursos e cursor/rastro: CONCLUÍDO.
+- Cargo test completo:221 passaram,5 opt-in ignorados. Primeira tentativa encontrou executável de desenvolvimento em uso no Windows; encerrado somente o processo desta worktree e repetido com êxito. Instalado oficial preservado. Cargo fmt --check e clippy all-targets -D warnings: CONCLUÍDO.
+- Testes nativos focados:31 passaram, incluindo verificação opcional dos quatro GIFs fornecidos localmente. Maior referência1440×810,131quadros,23.080.215bytes e6.040ms efetivos. Os quatro temas de exemplo foram preparados apenas em `.aurora/theme-examples/*.jsonc` (ignorado), sem distribuir mídia no Git.
+- QA independente comparou130 casos dos scanners JSONC e377 casos de GIF entre TypeScript/Rust, sem divergências. Corrigidos surrogates isolados, igualdade de mapas serializados, contraste com fundo claro, layout em menu largo, glass criando containing block para modais, readiness/cancelamento do decoder, transparência do GIF e duração zero de vídeo.
+- QA de navegador: importação de GIF original, salvar, prévia e confirmação; canvas renderizou quadros. Launcher nativo de desenvolvimento reaberto com tela de Personalização e importação JSONC do tema de cerejeiras observadas. O teste visual final, variações de codecs/GPUs e pausa real de bandeja permanecem PRECISA DE TESTE.
+- Na janela nativa, **Jardim de cerejeiras animado** foi salvo na biblioteca persistente e a prévia produziu o diálogo protegido de dez segundos. Sem confirmação, a aparência retornou ao padrão; o tema permaneceu salvo. Janela **Aurora — Teste de personalização** deixada aberta em Personalização para o usuário, com os quatro arquivos de exemplo adicionais em `.aurora/theme-examples`. A prévia descartável do navegador foi fechada.
+
+Coordenação solicitada pelo usuário: criado o chat **Aprimorar Java e engine do Aurora** (`01a18358-9675-72a1-a5d9-38eae491547f`), com worktree separada e separação de configurações funcionais versus apresentação. O chat **Implementar Aurora Connect** recebeu instruções de compatibilidade/cumulatividade e de não sobrescrever a worktree de temas. Nenhuma integração automática de branches paralelas nem release nesta wave.
+
+O chat Connect confirmou registro do contrato em seu commit `ee304aa`; sua integração aguarda a entrega de temas. A task Java/engine iniciou auditoria própria e confirmou memória fixa de4GiB como lacuna inicial. Essas entregas permanecem independentes desta branch.

@@ -16,6 +16,7 @@ const MAX_LIBRARY_BYTES: u64 = 96 * 1024 * 1024;
 const MAX_THEMES: usize = 32;
 const MAX_IMAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_VIDEO_BYTES: usize = 20 * 1024 * 1024;
+const MAX_GIF_BYTES: usize = 24 * 1024 * 1024;
 const MAX_ASSET_BYTES: usize = 24 * 1024 * 1024;
 const PREVIEW_DURATION: Duration = Duration::from_secs(10);
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -41,6 +42,10 @@ pub struct AuroraTheme {
     id: String,
     name: String,
     colors: ThemeColors,
+    #[serde(default)]
+    window: ThemeWindow,
+    #[serde(default)]
+    cursor: ThemeCursor,
     typography: ThemeTypography,
     layout: ThemeLayout,
     effects: ThemeEffects,
@@ -60,6 +65,68 @@ struct ThemeColors {
     accent: String,
     accent_text: String,
     border: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+struct ThemeWindow {
+    titlebar_color: String,
+    titlebar_text: String,
+    frame_color: String,
+    titlebar_height: f64,
+    border_width: f64,
+    outer_radius: f64,
+    content_inset: f64,
+}
+
+impl Default for ThemeWindow {
+    fn default() -> Self {
+        Self {
+            titlebar_color: "#171224".into(),
+            titlebar_text: "#f8f6ff".into(),
+            frame_color: "#0b0812".into(),
+            titlebar_height: 44.0,
+            border_width: 1.0,
+            outer_radius: 20.0,
+            content_inset: 16.0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+struct ThemeCursor {
+    style: CursorStyle,
+    color: String,
+    size: f64,
+    trail: CursorTrail,
+}
+
+impl Default for ThemeCursor {
+    fn default() -> Self {
+        Self {
+            style: CursorStyle::System,
+            color: "#f2efff".into(),
+            size: 24.0,
+            trail: CursorTrail::None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum CursorStyle {
+    System,
+    Pixel,
+    Ring,
+    Crosshair,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum CursorTrail {
+    None,
+    Sparkle,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -85,6 +152,31 @@ struct ThemeLayout {
     density: Density,
     nav_order: Vec<NavId>,
     radius: f64,
+    #[serde(default = "default_sidebar_width")]
+    sidebar_width: f64,
+    #[serde(default = "default_status_side")]
+    status_side: Sidebar,
+    #[serde(default = "default_section_order")]
+    section_order: Vec<SectionId>,
+    #[serde(default = "default_decoration_height")]
+    decoration_height: f64,
+}
+
+fn default_sidebar_width() -> f64 {
+    240.0
+}
+fn default_status_side() -> Sidebar {
+    Sidebar::Right
+}
+fn default_section_order() -> Vec<SectionId> {
+    vec![
+        SectionId::Header,
+        SectionId::Decorations,
+        SectionId::Content,
+    ]
+}
+fn default_decoration_height() -> f64 {
+    160.0
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -110,13 +202,39 @@ enum NavId {
     Java,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+enum SectionId {
+    Header,
+    Decorations,
+    Content,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ThemeEffects {
     background: BackgroundEffect,
     intensity: f64,
     speed: f64,
     glass: f64,
+    #[serde(default)]
+    transition: ThemeTransition,
+    #[serde(default = "default_transition_ms")]
+    transition_ms: f64,
+}
+
+fn default_transition_ms() -> f64 {
+    300.0
+}
+
+#[derive(Clone, Default, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum ThemeTransition {
+    #[default]
+    Fade,
+    Slide,
+    Zoom,
+    None,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -139,6 +257,8 @@ struct ThemeAsset {
 enum AssetMime {
     #[serde(rename = "image/png")]
     Png,
+    #[serde(rename = "image/gif")]
+    Gif,
     #[serde(rename = "video/mp4")]
     Mp4,
     #[serde(rename = "video/webm")]
@@ -164,7 +284,7 @@ struct ThemeIcons {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ThemeDecoration {
     #[serde(rename = "type")]
     kind: DecorationKind,
@@ -172,6 +292,29 @@ struct ThemeDecoration {
     #[serde(deserialize_with = "nullable_string")]
     asset: NullableString,
     align: DecorationAlign,
+    #[serde(default = "default_decoration_position")]
+    x: f64,
+    #[serde(default = "default_decoration_position")]
+    y: f64,
+    #[serde(default = "default_decoration_width")]
+    width: f64,
+    #[serde(default = "default_element_height")]
+    height: f64,
+    #[serde(default = "default_decoration_font_size")]
+    font_size: f64,
+}
+
+fn default_decoration_position() -> f64 {
+    50.0
+}
+fn default_decoration_width() -> f64 {
+    30.0
+}
+fn default_element_height() -> f64 {
+    64.0
+}
+fn default_decoration_font_size() -> f64 {
+    20.0
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -352,6 +495,171 @@ fn validate_png(bytes: &[u8]) -> bool {
     false
 }
 
+#[derive(Debug, PartialEq)]
+struct GifMetadata {
+    width: u16,
+    height: u16,
+    frames: u32,
+    duration_ms: u32,
+}
+
+struct GifReader<'a> {
+    bytes: &'a [u8],
+    cursor: usize,
+}
+
+impl<'a> GifReader<'a> {
+    fn take(&mut self, length: usize) -> Option<&'a [u8]> {
+        let end = self.cursor.checked_add(length)?;
+        let result = self.bytes.get(self.cursor..end)?;
+        self.cursor = end;
+        Some(result)
+    }
+
+    fn byte(&mut self) -> Option<u8> {
+        Some(self.take(1)?[0])
+    }
+
+    fn sub_blocks(&mut self) -> Option<usize> {
+        let mut total = 0usize;
+        loop {
+            let length = usize::from(self.byte()?);
+            if length == 0 {
+                return Some(total);
+            }
+            self.take(length)?;
+            total += length;
+        }
+    }
+}
+
+fn gif_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+}
+
+// Validate the finite GIF container and its resource budget without decompressing
+// LZW, allocating frame canvases, or interpreting extensions as application code.
+// Actual pixel decoding is performed by the renderer before its preview starts.
+fn inspect_gif(bytes: &[u8]) -> Option<GifMetadata> {
+    if bytes.len() > MAX_GIF_BYTES {
+        return None;
+    }
+    let mut reader = GifReader { bytes, cursor: 0 };
+    let header = reader.take(13)?;
+    if !matches!(&header[..6], b"GIF87a" | b"GIF89a") {
+        return None;
+    }
+    let width = gif_u16(header, 6);
+    let height = gif_u16(header, 8);
+    let pixels = u64::from(width) * u64::from(height);
+    if width == 0 || height == 0 || width > 1920 || height > 1080 || pixels > 2_073_600 {
+        return None;
+    }
+    let global_colors = if header[10] & 0x80 != 0 {
+        1usize << ((header[10] & 7) + 1)
+    } else {
+        0
+    };
+    if global_colors != 0 {
+        if usize::from(header[11]) >= global_colors {
+            return None;
+        }
+        reader.take(3 * global_colors)?;
+    }
+    let mut frames = 0u32;
+    let mut duration_ms = 0u32;
+    let mut graphic_control: Option<(u16, Option<u8>)> = None;
+    loop {
+        match reader.byte()? {
+            0x3b => {
+                return if frames > 0 && graphic_control.is_none() && reader.cursor == bytes.len() {
+                    Some(GifMetadata {
+                        width,
+                        height,
+                        frames,
+                        duration_ms,
+                    })
+                } else {
+                    None
+                };
+            }
+            0x2c => {
+                let image = reader.take(9)?;
+                let left = u32::from(gif_u16(image, 0));
+                let top = u32::from(gif_u16(image, 2));
+                let image_width = u32::from(gif_u16(image, 4));
+                let image_height = u32::from(gif_u16(image, 6));
+                if image_width == 0
+                    || image_height == 0
+                    || left + image_width > u32::from(width)
+                    || top + image_height > u32::from(height)
+                    || image[8] & 0x18 != 0
+                {
+                    return None;
+                }
+                let colors = if image[8] & 0x80 != 0 {
+                    let count = 1usize << ((image[8] & 7) + 1);
+                    reader.take(3 * count)?;
+                    count
+                } else {
+                    global_colors
+                };
+                let (delay_cs, transparent) = graphic_control.take().unwrap_or((0, None));
+                if colors == 0 || transparent.is_some_and(|index| usize::from(index) >= colors) {
+                    return None;
+                }
+                if !(2..=8).contains(&reader.byte()?) || reader.sub_blocks()? == 0 {
+                    return None;
+                }
+                frames += 1;
+                duration_ms += (u32::from(delay_cs) * 10).max(40);
+                if frames > 240 || pixels * u64::from(frames) > 160_000_000 || duration_ms > 60_000
+                {
+                    return None;
+                }
+            }
+            0x21 => match reader.byte()? {
+                0xf9 => {
+                    if graphic_control.is_some() {
+                        return None;
+                    }
+                    let control = reader.take(6)?;
+                    if control[0] != 4
+                        || control[5] != 0
+                        || control[1] & 0xe2 != 0
+                        || (control[1] >> 2) & 7 > 3
+                    {
+                        return None;
+                    }
+                    graphic_control = Some((
+                        gif_u16(control, 2),
+                        (control[1] & 1 != 0).then_some(control[4]),
+                    ));
+                }
+                0xfe => {
+                    reader.sub_blocks()?;
+                }
+                0xff => {
+                    if reader.byte()? != 11 {
+                        return None;
+                    }
+                    if !matches!(reader.take(11)?, b"NETSCAPE2.0" | b"ANIMEXTS1.0") {
+                        return None;
+                    }
+                    let looping = reader.take(5)?;
+                    if looping[0] != 3 || looping[1] != 1 || looping[4] != 0 {
+                        return None;
+                    }
+                }
+                // Plain text can render outside the bounded image descriptors;
+                // unknown extensions have no place in this appearance format.
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+}
+
 fn validate_mp4(bytes: &[u8]) -> bool {
     if bytes.len() < 16 || &bytes[4..8] != b"ftyp" {
         return false;
@@ -433,12 +741,124 @@ fn ebml_number(bytes: &[u8], identifier: bool) -> Option<(u64, usize)> {
     Some((value, length))
 }
 
+fn strip_jsonc(json: &str) -> Result<Vec<u8>, String> {
+    let mut output = json.as_bytes().to_vec();
+    let mut cursor = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    while cursor < output.len() {
+        let byte = output[cursor];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            cursor += 1;
+            continue;
+        }
+        if byte == b'"' {
+            in_string = true;
+            cursor += 1;
+            continue;
+        }
+        if byte == b'/' && output.get(cursor + 1) == Some(&b'/') {
+            while cursor < output.len() && !matches!(output[cursor], b'\r' | b'\n') {
+                output[cursor] = b' ';
+                cursor += 1;
+            }
+            continue;
+        }
+        if byte == b'/' && output.get(cursor + 1) == Some(&b'*') {
+            output[cursor] = b' ';
+            output[cursor + 1] = b' ';
+            cursor += 2;
+            let mut closed = false;
+            while cursor < output.len() {
+                if output[cursor] == b'*' && output.get(cursor + 1) == Some(&b'/') {
+                    output[cursor] = b' ';
+                    output[cursor + 1] = b' ';
+                    cursor += 2;
+                    closed = true;
+                    break;
+                }
+                if !matches!(output[cursor], b'\r' | b'\n') {
+                    output[cursor] = b' ';
+                }
+                cursor += 1;
+            }
+            if !closed {
+                return Err("O comentário /* */ do tema não foi fechado.".into());
+            }
+            continue;
+        }
+        cursor += 1;
+    }
+    if in_string {
+        return Err(THEME_ERROR.into());
+    }
+    Ok(output)
+}
+
+fn validate_json_budget(bytes: &[u8]) -> Result<(), String> {
+    let mut stack = Vec::with_capacity(8);
+    let mut containers = 0usize;
+    let mut separators = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for byte in bytes {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if *byte == b'\\' {
+                escaped = true;
+            } else if *byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match *byte {
+            b'"' => in_string = true,
+            b'{' | b'[' => {
+                containers += 1;
+                stack.push(*byte);
+                if stack.len() > 8 || containers > 128 {
+                    return Err("O tema excede o limite permitido de complexidade do JSON.".into());
+                }
+            }
+            b'}' | b']' => {
+                let expected = if *byte == b'}' { b'{' } else { b'[' };
+                if stack.pop() != Some(expected) {
+                    return Err(THEME_ERROR.into());
+                }
+            }
+            b',' | b':' => {
+                separators += 1;
+                if separators > 1024 {
+                    return Err("O tema excede o limite permitido de complexidade do JSON.".into());
+                }
+            }
+            _ => {}
+        }
+    }
+    if in_string || !stack.is_empty() {
+        return Err(THEME_ERROR.into());
+    }
+    Ok(())
+}
+
 impl AuroraTheme {
     fn parse(json: &str) -> Result<Self, String> {
         if json.len() > MAX_JSON_BYTES {
             return Err("O JSON do tema excede o limite de 34 MiB.".into());
         }
-        let theme: Self = serde_json::from_str(json).map_err(|_| THEME_ERROR.to_owned())?;
+        // Input is always data: strip only comments, with whitespace preserving
+        // token boundaries. Bound its structure before any JSON allocation.
+        let json = strip_jsonc(json)?;
+        validate_json_budget(&json)?;
+        let theme: Self = serde_json::from_slice(&json).map_err(|_| THEME_ERROR.to_owned())?;
         theme.validate()?;
         Ok(theme)
     }
@@ -457,16 +877,36 @@ impl AuroraTheme {
                 &colors.accent,
                 &colors.accent_text,
                 &colors.border,
+                &self.window.titlebar_color,
+                &self.window.titlebar_text,
+                &self.window.frame_color,
+                &self.cursor.color,
             ]
             .iter()
             .any(|color| luminance(color).is_none())
             || !bounded(self.typography.scale, 0.9, 1.15)
             || !bounded(self.layout.radius, 0.0, 24.0)
+            || !bounded(self.window.titlebar_height, 36.0, 64.0)
+            || !bounded(self.window.border_width, 0.0, 3.0)
+            || !bounded(self.window.outer_radius, 0.0, 24.0)
+            || !bounded(self.window.content_inset, 0.0, 24.0)
+            || !bounded(self.cursor.size, 16.0, 40.0)
+            || !bounded(self.layout.sidebar_width, 180.0, 300.0)
+            || !bounded(self.layout.decoration_height, 80.0, 400.0)
+            || self.layout.section_order.len() != 3
+            || self
+                .layout
+                .section_order
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != 3
             || self.layout.nav_order.len() != 4
             || self.layout.nav_order.iter().collect::<BTreeSet<_>>().len() != 4
             || !bounded(self.effects.intensity, 0.0, 1.0)
             || !bounded(self.effects.speed, 0.25, 2.0)
             || !bounded(self.effects.glass, 0.0, 16.0)
+            || !bounded(self.effects.transition_ms, 100.0, 700.0)
             || self.assets.len() > 4
             || self.decorations.len() > 6
         {
@@ -474,18 +914,20 @@ impl AuroraTheme {
         }
         if contrast(&colors.text, &colors.panel).unwrap_or_default() < 4.5
             || contrast(&colors.accent_text, &colors.accent).unwrap_or_default() < 4.5
+            || contrast(&self.window.titlebar_text, &self.window.titlebar_color).unwrap_or_default()
+                < 4.5
         {
-            return Err("O contraste entre texto/painel e texto de destaque/cor de destaque deve ser de pelo menos 4,5:1.".into());
+            return Err("O contraste entre texto/painel, texto de destaque/cor de destaque e texto/barra de título deve ser de pelo menos 4,5:1.".into());
         }
         let mut total_bytes = 0;
         for (id, asset) in &self.assets {
             if !checked_id(id) {
                 return Err(THEME_ERROR.into());
             }
-            let maximum = if asset.mime == AssetMime::Png {
-                MAX_IMAGE_BYTES
-            } else {
-                MAX_VIDEO_BYTES
+            let maximum = match asset.mime {
+                AssetMime::Png => MAX_IMAGE_BYTES,
+                AssetMime::Gif => MAX_GIF_BYTES,
+                AssetMime::Mp4 | AssetMime::Webm => MAX_VIDEO_BYTES,
             };
             if asset.data.len() > maximum.div_ceil(3) * 4 {
                 return Err("Um recurso visual excede seu limite de tamanho.".into());
@@ -498,11 +940,12 @@ impl AuroraTheme {
                 || total_bytes > MAX_ASSET_BYTES
                 || !match asset.mime {
                     AssetMime::Png => validate_png(&bytes),
+                    AssetMime::Gif => inspect_gif(&bytes).is_some(),
                     AssetMime::Mp4 => validate_mp4(&bytes),
                     AssetMime::Webm => validate_webm(&bytes),
                 }
             {
-                return Err("Recurso visual inválido: use PNG até 2 MiB/4096 px/8 milhões de pixels, MP4 ou WebM até 20 MiB e no máximo 24 MiB de recursos por tema.".into());
+                return Err("Recurso visual inválido: use PNG até 2 MiB, GIF de fundo até 24 MiB/1920×1080/240 quadros/60 s, MP4 ou WebM até 20 MiB e no máximo 24 MiB de recursos por tema.".into());
             }
         }
         let image_exists = |id: &str| {
@@ -546,6 +989,11 @@ impl AuroraTheme {
         }
         for decoration in &self.decorations {
             if !text_in_bounds(&decoration.text, 160, false)
+                || !bounded(decoration.x, 0.0, 100.0)
+                || !bounded(decoration.y, 0.0, 100.0)
+                || !bounded(decoration.width, 8.0, 100.0)
+                || !bounded(decoration.height, 24.0, 160.0)
+                || !bounded(decoration.font_size, 12.0, 56.0)
                 || match decoration.kind {
                     DecorationKind::Text => decoration.asset.0.is_some(),
                     DecorationKind::Image => {
@@ -1213,12 +1661,30 @@ mod tests {
         include_bytes!("../icons/32x32.png").to_vec()
     }
 
+    fn gif(width: u16, height: u16, delays: &[u16]) -> Vec<u8> {
+        let mut bytes = b"GIF89a".to_vec();
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
+        bytes.extend_from_slice(&[0x80, 0, 0, 0, 0, 0, 255, 255, 255]);
+        for delay in delays {
+            bytes.extend_from_slice(&[0x21, 0xf9, 4, 0]);
+            bytes.extend_from_slice(&delay.to_le_bytes());
+            bytes.extend_from_slice(&[0, 0]);
+            // A real 1×1 frame, using the global two-color palette and LZW.
+            bytes.extend_from_slice(&[0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0]);
+        }
+        bytes.push(0x3b);
+        bytes
+    }
+
     #[test]
     fn schema_is_closed_at_every_object_and_null_fields_are_required() {
         AuroraTheme::parse(&document().to_string()).unwrap();
         for path in [
             "",
             "/colors",
+            "/window",
+            "/cursor",
             "/typography",
             "/layout",
             "/effects",
@@ -1226,7 +1692,7 @@ mod tests {
             "/icons",
             "/decorations/0",
         ] {
-            let mut value = document();
+            let mut value = serde_json::to_value(theme()).unwrap();
             value
                 .pointer_mut(path)
                 .unwrap()
@@ -1395,6 +1861,414 @@ mod tests {
         let mut overflow = image;
         overflow[33..37].copy_from_slice(&u32::MAX.to_be_bytes());
         assert!(!validate_png(&overflow));
+    }
+
+    #[test]
+    fn legacy_v1_themes_and_libraries_receive_all_new_defaults() {
+        let legacy = theme();
+        assert_eq!(legacy.schema_version, 1);
+        assert_eq!(legacy.window, ThemeWindow::default());
+        assert_eq!(legacy.cursor, ThemeCursor::default());
+        assert_eq!(legacy.layout.sidebar_width, 240.0);
+        assert_eq!(legacy.layout.status_side, Sidebar::Right);
+        assert_eq!(legacy.layout.section_order, default_section_order());
+        assert_eq!(legacy.layout.decoration_height, 160.0);
+        assert_eq!(legacy.effects.transition, ThemeTransition::Fade);
+        assert_eq!(legacy.effects.transition_ms, 300.0);
+        let decoration = &legacy.decorations[0];
+        assert_eq!(
+            (
+                decoration.x,
+                decoration.y,
+                decoration.width,
+                decoration.height,
+                decoration.font_size
+            ),
+            (50.0, 50.0, 30.0, 64.0, 20.0)
+        );
+        let canonical = serde_json::to_value(&legacy).unwrap();
+        assert_eq!(canonical["window"]["titlebarHeight"], 44.0);
+        assert_eq!(canonical["cursor"]["style"], "system");
+        assert_eq!(canonical["cursor"]["color"], "#f2efff");
+        assert_eq!(canonical["cursor"]["size"], 24.0);
+        assert_eq!(canonical["cursor"]["trail"], "none");
+        assert_eq!(canonical["decorations"][0]["fontSize"], 20.0);
+        assert_eq!(AuroraTheme::parse(&canonical.to_string()).unwrap(), legacy);
+
+        let fixture = Fixture::new();
+        fs::create_dir_all(&fixture.0).unwrap();
+        let old_library = json!({"schemaVersion":1,"themes":[document()],"selectedThemeId":"test-theme","bindings":{},"automatic":false});
+        fs::write(fixture.0.join("library.json"), old_library.to_string()).unwrap();
+        let mut runtime = fixture.open(Instant::now());
+        assert_eq!(runtime.library.themes[0].window, ThemeWindow::default());
+        assert_eq!(
+            runtime.library.selected_theme_id.as_deref(),
+            Some("test-theme")
+        );
+        runtime.shutdown().unwrap();
+    }
+
+    #[test]
+    fn partial_window_fields_default_without_allowing_unknown_keys_or_nulls() {
+        let mut value = document();
+        value["window"] = json!({"borderWidth": 3});
+        let parsed = AuroraTheme::parse(&value.to_string()).unwrap();
+        assert_eq!(parsed.window.border_width, 3.0);
+        assert_eq!(parsed.window.titlebar_color, "#171224");
+        assert_eq!(parsed.window.titlebar_text, "#f8f6ff");
+        assert_eq!(parsed.window.frame_color, "#0b0812");
+        assert_eq!(parsed.window.content_inset, 16.0);
+        for bad in [
+            Value::Null,
+            json!({"titlebarHeight":null}),
+            json!({"script":"alert(1)"}),
+            json!({"__proto__":{}}),
+        ] {
+            value["window"] = bad;
+            assert!(AuroraTheme::parse(&value.to_string()).is_err());
+        }
+    }
+
+    #[test]
+    fn extended_geometry_effects_and_titlebar_contrast_are_bounded() {
+        let canonical = serde_json::to_value(theme()).unwrap();
+        for (path, minimum, maximum) in [
+            ("/window/titlebarHeight", 36.0, 64.0),
+            ("/window/borderWidth", 0.0, 3.0),
+            ("/window/outerRadius", 0.0, 24.0),
+            ("/window/contentInset", 0.0, 24.0),
+            ("/layout/sidebarWidth", 180.0, 300.0),
+            ("/layout/decorationHeight", 80.0, 400.0),
+            ("/effects/transitionMs", 100.0, 700.0),
+            ("/decorations/0/x", 0.0, 100.0),
+            ("/decorations/0/y", 0.0, 100.0),
+            ("/decorations/0/width", 8.0, 100.0),
+            ("/decorations/0/height", 24.0, 160.0),
+            ("/decorations/0/fontSize", 12.0, 56.0),
+        ] {
+            for boundary in [minimum, maximum] {
+                let mut value = canonical.clone();
+                *value.pointer_mut(path).unwrap() = json!(boundary);
+                AuroraTheme::parse(&value.to_string()).unwrap();
+            }
+            for bad in [
+                json!(minimum - 0.01),
+                json!(maximum + 0.01),
+                Value::Null,
+                json!("url(https://example.invalid)"),
+            ] {
+                let mut value = canonical.clone();
+                *value.pointer_mut(path).unwrap() = bad;
+                assert!(
+                    AuroraTheme::parse(&value.to_string()).is_err(),
+                    "accepted invalid {path}"
+                );
+            }
+        }
+        for (path, bad) in [
+            (
+                "/window/titlebarColor",
+                json!("url(https://example.invalid)"),
+            ),
+            ("/window/frameColor", json!("transparent")),
+            ("/window/titlebarText", json!("#171224")),
+            ("/layout/statusSide", json!("top")),
+            (
+                "/layout/sectionOrder",
+                json!(["header", "content", "content"]),
+            ),
+            ("/layout/sectionOrder", json!(["content", "header"])),
+            ("/effects/transition", json!("custom-script")),
+        ] {
+            let mut value = canonical.clone();
+            *value.pointer_mut(path).unwrap() = bad;
+            assert!(
+                AuroraTheme::parse(&value.to_string()).is_err(),
+                "accepted invalid {path}"
+            );
+        }
+        for transition in ["fade", "slide", "zoom", "none"] {
+            let mut value = canonical.clone();
+            value["effects"]["transition"] = json!(transition);
+            value["layout"]["sectionOrder"] = json!(["content", "decorations", "header"]);
+            value["layout"]["statusSide"] = json!("left");
+            AuroraTheme::parse(&value.to_string()).unwrap();
+        }
+    }
+
+    #[test]
+    fn jsonc_comments_preserve_string_escapes_unicode_and_token_boundaries() {
+        let mut value = with_asset("image/png", &png());
+        value["name"] = json!("Canal // https://x /*texto*/");
+        value["decorations"][0]["text"] = json!("Aspas \" // intactas /* e \\ unicode 🌸");
+        let plain = value.to_string();
+        let commented = format!(
+            "// Tema Aurora 🌸\r\n/* {} */\n{} // fim",
+            "[ { : , ".repeat(2000),
+            plain.replace("\"schemaVersion\":1", "\"schemaVersion\":/* versão */1")
+        );
+        assert_eq!(
+            AuroraTheme::parse(&commented).unwrap(),
+            AuroraTheme::parse(&plain).unwrap()
+        );
+        let cleaned = strip_jsonc("1/*não concatenar*/2\r\n//linha\r\n").unwrap();
+        let cleaned = String::from_utf8(cleaned).unwrap();
+        assert!(cleaned.starts_with("1 "));
+        assert!(cleaned.ends_with("\r\n       \r\n"));
+        for bad in [
+            plain.replace("\"schemaVersion\":1", "\"schemaVersion\":1/*x*/0"),
+            plain.replace("null", "nu/*x*/ll"),
+            plain.replace("\"schemaVersion\"", "\"schema\"/*x*/\"Version\""),
+            format!("{plain} /* sem fim"),
+            format!("{plain} /*/"),
+            format!("{plain};alert(1)"),
+        ] {
+            assert!(AuroraTheme::parse(&bad).is_err());
+        }
+    }
+
+    #[test]
+    fn jsonc_budget_is_checked_before_parse_and_ignores_only_string_content() {
+        let deep = format!("{}0{}", "[".repeat(9), "]".repeat(9));
+        assert!(validate_json_budget(deep.as_bytes()).is_err());
+        let containers = format!("[{}]", vec!["{}"; 128].join(","));
+        assert!(validate_json_budget(containers.as_bytes()).is_err());
+        let separators = format!("[{}]", vec!["0"; 1026].join(","));
+        assert!(validate_json_budget(separators.as_bytes()).is_err());
+        let strings = format!(
+            "{{\"text\":{}}}",
+            serde_json::to_string(&"[{,:]}\\\"".repeat(5000)).unwrap()
+        );
+        validate_json_budget(strings.as_bytes()).unwrap();
+        let too_big_comment = format!("/*{}*/{}", " ".repeat(MAX_JSON_BYTES), document());
+        assert!(AuroraTheme::parse(&too_big_comment)
+            .unwrap_err()
+            .contains("34 MiB"));
+        for invalid in [
+            b"{]".as_slice(),
+            b"[}".as_slice(),
+            b"{\"x\":\"unterminated".as_slice(),
+        ] {
+            assert!(validate_json_budget(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn cursor_defaults_partial_fields_and_all_trusted_styles_are_bounded() {
+        let mut value = document();
+        value["cursor"] = json!({"style":"ring"});
+        let parsed = AuroraTheme::parse(&value.to_string()).unwrap();
+        assert_eq!(parsed.cursor.style, CursorStyle::Ring);
+        assert_eq!(parsed.cursor.color, "#f2efff");
+        assert_eq!(parsed.cursor.size, 24.0);
+        assert_eq!(parsed.cursor.trail, CursorTrail::None);
+        for style in ["system", "pixel", "ring", "crosshair"] {
+            for size in [16, 40] {
+                value["cursor"] =
+                    json!({"style":style,"color":"#abcdef","size":size,"trail":"sparkle"});
+                AuroraTheme::parse(&value.to_string()).unwrap();
+            }
+        }
+        for invalid in [
+            Value::Null,
+            json!({"style":"url(https://example.invalid/cursor.cur)"}),
+            json!({"style":null}),
+            json!({"color":"url(x)"}),
+            json!({"size":15.9}),
+            json!({"size":40.1}),
+            json!({"size":null}),
+            json!({"trail":"javascript"}),
+            json!({"onClick":"launch"}),
+            json!({"__proto__":{}}),
+        ] {
+            value["cursor"] = invalid;
+            assert!(AuroraTheme::parse(&value.to_string()).is_err());
+        }
+    }
+
+    #[test]
+    fn gif_accepts_bounded_backgrounds_but_never_icons_logos_or_decorations() {
+        let bytes = gif(1920, 1080, &[10, 20]);
+        assert_eq!(
+            inspect_gif(&bytes),
+            Some(GifMetadata {
+                width: 1920,
+                height: 1080,
+                frames: 2,
+                duration_ms: 300
+            })
+        );
+        let mut value = with_asset("image/gif", &bytes);
+        AuroraTheme::parse(&value.to_string()).unwrap();
+        value["media"]["logo"] = json!("sample");
+        assert!(AuroraTheme::parse(&value.to_string()).is_err());
+        value["media"]["logo"] = Value::Null;
+        value["icons"]["java"] = json!("asset:sample");
+        assert!(AuroraTheme::parse(&value.to_string()).is_err());
+        value["icons"]["java"] = json!("default");
+        value["decorations"][0]["type"] = json!("image");
+        value["decorations"][0]["asset"] = json!("sample");
+        assert!(AuroraTheme::parse(&value.to_string()).is_err());
+        assert!(AuroraTheme::parse(&with_asset("image/png", &bytes).to_string()).is_err());
+        assert!(AuroraTheme::parse(&with_asset("image/gif", &png()).to_string()).is_err());
+        let mut version87 = gif(1, 1, &[0]);
+        version87[..6].copy_from_slice(b"GIF87a");
+        assert_eq!(inspect_gif(&version87).unwrap().duration_ms, 40);
+    }
+
+    #[test]
+    fn gif_limits_canvas_frames_aggregate_pixels_duration_and_empty_streams() {
+        for (width, height, delays) in [
+            (0, 1, vec![0]),
+            (1, 0, vec![0]),
+            (1921, 1080, vec![0]),
+            (1920, 1081, vec![0]),
+            (1, 1, vec![0; 241]),
+            (1440, 810, vec![0; 138]),
+            (1, 1, vec![6001]),
+            (1, 1, vec![]),
+        ] {
+            assert!(inspect_gif(&gif(width, height, &delays)).is_none());
+        }
+        assert!(inspect_gif(&gif(1440, 810, &[0; 137])).is_some());
+        assert_eq!(
+            inspect_gif(&gif(1, 1, &[1; 240])).unwrap().duration_ms,
+            9600
+        );
+        assert_eq!(inspect_gif(&gif(1, 1, &[6000])).unwrap().duration_ms, 60000);
+        let mut oversized = gif(1, 1, &[0]);
+        oversized.resize(MAX_GIF_BYTES + 1, 0);
+        assert!(inspect_gif(&oversized).is_none());
+    }
+
+    #[test]
+    fn gif_rejects_truncation_outside_images_palettes_lzw_and_reserved_controls() {
+        let valid = gif(1, 1, &[0]);
+        for end in 0..valid.len() {
+            assert!(
+                inspect_gif(&valid[..end]).is_none(),
+                "accepted truncation at {end}"
+            );
+        }
+        for (offset, bad) in [
+            (0, b'X'),
+            (11, 2),
+            (19, 0x22),
+            (21, 3),
+            (22, 2),
+            (22, 0xe0),
+            (22, 0x10),
+            (26, 1),
+            (28, 1),
+            (32, 0),
+            (36, 0x08),
+            (36, 0x10),
+            (37, 1),
+            (37, 9),
+            (38, 255),
+        ] {
+            let mut bytes = valid.clone();
+            bytes[offset] = bad;
+            assert!(
+                inspect_gif(&bytes).is_none(),
+                "accepted invalid byte {offset}"
+            );
+        }
+        let mut transparent = valid.clone();
+        transparent[22] = 1;
+        transparent[25] = 2;
+        assert!(inspect_gif(&transparent).is_none());
+        let mut no_palette = valid.clone();
+        no_palette[10] = 0;
+        no_palette.drain(13..19);
+        assert!(inspect_gif(&no_palette).is_none());
+        // A local palette can replace the missing global table.
+        no_palette[30] = 0x80;
+        no_palette.splice(31..31, [0, 0, 0, 255, 255, 255]);
+        assert!(inspect_gif(&no_palette).is_some());
+        let mut empty_data = valid.clone();
+        empty_data[38] = 0;
+        empty_data.drain(39..42);
+        assert!(inspect_gif(&empty_data).is_none());
+        let mut trailing = valid.clone();
+        trailing.push(0);
+        assert!(inspect_gif(&trailing).is_none());
+        let mut duplicate_control = valid.clone();
+        duplicate_control.splice(27..27, valid[19..27].iter().copied());
+        assert!(inspect_gif(&duplicate_control).is_none());
+        let mut pending_control = valid.clone();
+        pending_control.splice(
+            valid.len() - 1..valid.len() - 1,
+            valid[19..27].iter().copied(),
+        );
+        assert!(inspect_gif(&pending_control).is_none());
+    }
+
+    #[test]
+    fn gif_extensions_are_finite_noninteractive_and_allow_only_known_looping_records() {
+        let original = gif(1, 1, &[0]);
+        let extension = |payload: &[u8]| {
+            let mut bytes = original.clone();
+            bytes.splice(19..19, payload.iter().copied());
+            bytes
+        };
+        for application in [b"NETSCAPE2.0", b"ANIMEXTS1.0"] {
+            let mut payload = vec![0x21, 0xff, 11];
+            payload.extend_from_slice(application);
+            payload.extend_from_slice(&[3, 1, 0, 0, 0]);
+            assert!(inspect_gif(&extension(&payload)).is_some());
+            payload[2] = 10;
+            assert!(inspect_gif(&extension(&payload)).is_none());
+        }
+        assert!(inspect_gif(&extension(b"\x21\xfe\x08alert(1)\0")).is_some());
+        for payload in [
+            b"\x21\x01\0".as_slice(),
+            b"\x21\xff\x0bJAVASCRIPT!\x03\x01\0\0\0".as_slice(),
+            b"\x21\xff\x0bNETSCAPE2.0\x03\x02\0\0\0".as_slice(),
+            b"\x21\xee\0".as_slice(),
+        ] {
+            assert!(inspect_gif(&extension(payload)).is_none());
+        }
+        let mut no_delay = original.clone();
+        no_delay.drain(19..27);
+        assert_eq!(inspect_gif(&no_delay).unwrap().duration_ms, 40);
+    }
+
+    #[test]
+    fn user_provided_gifs_match_native_metadata_and_theme_budgets_when_available() {
+        let Some(directory) = std::env::var_os("AURORA_TEST_THEME_GIFS_DIR") else {
+            return;
+        };
+        let directory = PathBuf::from(directory);
+        let cases = [
+            ("e5a17eb79c5472b5fea8ab36282f3696.gif", 500, 387, 19, 760),
+            ("cherry-blossom-minecraft.gif", 498, 281, 44, 2200),
+            ("4e9851eedd0e229bf4a9fb4c85207b93.gif", 540, 304, 75, 4990),
+            ("6222e36c080b8ea33d9319b788af0f7c.gif", 1440, 810, 131, 6040),
+        ];
+        for (index, (name, width, height, frames, duration_ms)) in cases.into_iter().enumerate() {
+            let bytes = fs::read(directory.join(name)).unwrap();
+            let metadata = inspect_gif(&bytes).expect("provided GIF rejected");
+            assert_eq!(
+                metadata,
+                GifMetadata {
+                    width,
+                    height,
+                    frames,
+                    duration_ms
+                }
+            );
+            AuroraTheme::parse(&with_asset("image/gif", &bytes).to_string()).unwrap();
+            println!(
+                "GIF {}: {}×{}, {} frames, {} ms, {} bytes: accepted",
+                index + 1,
+                width,
+                height,
+                frames,
+                duration_ms,
+                bytes.len()
+            );
+        }
     }
 
     #[test]

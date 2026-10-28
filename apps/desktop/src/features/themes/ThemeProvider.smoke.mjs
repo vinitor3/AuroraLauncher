@@ -21,10 +21,10 @@ test("preview, binding context, confirmation and ten-second rollback use the act
   };
   try {
     // Transpile a fresh copy to keep this test independent of build artifacts.
-    for (const file of ["model.ts", "transport.ts", "ThemeProvider.tsx"]) {
+    for (const file of ["model.ts", "gif.ts", "transport.ts", "ThemeProvider.tsx"]) {
       let source = await readFile(new URL(file, import.meta.url), "utf8");
       source = source.replace(/^import ["']\.\/[^"']+\.css["'];?\r?\n/gm, "")
-        .replace(/from ["']\.\/(model|transport)["']/g, (_, name) => `from './${name}.mjs'`);
+        .replace(/from ["']\.\/(model|gif|transport)["']/g, (_, name) => `from './${name}.mjs'`);
       const compiled = ts.transpileModule(source, {
         compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX },
       });

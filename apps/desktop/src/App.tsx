@@ -10,6 +10,8 @@ import { StartupScreen } from "./features/auth/StartupScreen";
 import { useThemes } from "./features/themes/ThemeProvider";
 import { ThemeManager } from "./features/themes/ThemeManager";
 import { ThemeScene, ThemeDecorations } from "./features/themes/ThemeScene";
+import { ThemeWorkspace } from "./features/themes/ThemeWorkspace";
+import { ThemeCursor, themeCursorValue } from "./features/themes/ThemeCursor";
 import { ThemeLogo, ThemeNavIcon } from "./features/themes/ThemeIcon";
 import { DEFAULT_THEME, themeVariables } from "./features/themes/model";
 import { guardSessionProfile, startSessionStartup, type SessionStartupState } from "./lib/sessionStartup";
@@ -3489,8 +3491,11 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   return (
     <>
     <div className={themes.theme.id === DEFAULT_THEME.id ? "launcher-theme-root" : "launcher-theme-root aurora-themed"}
-      data-sidebar={themes.theme.layout.sidebar} style={themeVariables(themes.theme)}>
+      data-sidebar={themes.theme.layout.sidebar} data-status-side={themes.theme.layout.statusSide}
+      data-custom-cursor={themes.theme.cursor.style !== "system" ? "true" : "false"}
+      style={{ ...themeVariables(themes.theme), cursor: themeCursorValue(themes.theme.cursor) }}>
     {themes.theme.id !== DEFAULT_THEME.id && <ThemeScene theme={themes.theme} onError={themes.mediaFailed} />}
+    {themes.theme.id !== DEFAULT_THEME.id && <ThemeCursor theme={themes.theme} />}
     <main className="shell app-shell">
       <aside className="app-sidebar">
         <div className="brand-lockup">
@@ -3526,15 +3531,19 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           <button className="text-button sidebar-action" onClick={() => logoutAuroraUser(services)} type="button">Sair da conta</button>
         </div>
       </aside>
-      <section className={`workspace active-${activeSection}`}>
-        <header className="workspace-header">
+      <ThemeWorkspace theme={themes.theme} editing={themesOpen} className={`workspace active-${activeSection}`}
+        header={<header className="workspace-header">
           <div>
             <p className="eyebrow">AURORA SMART LAUNCHER · {profile.username}</p>
             <h1>{themesOpen ? "Personalização" : sectionTitles[activeSection]}</h1>
           </div>
           <button className="secondary compact" aria-pressed={themesOpen} type="button" onClick={() => setThemesOpen((open) => !open)}>{themesOpen ? "Voltar ao launcher" : "Personalização"}</button>
-        </header>
-        <ThemeDecorations theme={themes.theme} onError={themes.mediaFailed} />
+        </header>}
+        decorations={<ThemeDecorations theme={themes.theme} onError={themes.mediaFailed} />}
+        footer={<footer>
+          <span>{status?.ready ? "Engine pronta" : "Carregando engine"}</span>
+          <code>{status?.dataDirectory ?? "Localizando dados…"}</code>
+        </footer>}>
         {themesOpen && <ThemeManager library={themes.library} instances={instances.map((item) => ({ id: item.id, name: item.displayName || item.id }))}
           selectedInstanceId={targetInstance} busy={themes.busy} error={themes.error} onSave={themes.save} onPreview={themes.preview}
           onDelete={themes.remove} onReset={themes.reset} onAutomatic={themes.automatic} onUnbind={themes.unbind} />}
@@ -4009,11 +4018,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           )}
         </aside>
         </section>
-        <footer>
-          <span>{status?.ready ? "Engine pronta" : "Carregando engine"}</span>
-          <code>{status?.dataDirectory ?? "Localizando dados…"}</code>
-        </footer>
-      </section>
+      </ThemeWorkspace>
       {downloadProgress && (
         <aside className="download-toast" aria-live="polite">
           <header className="download-toast-header">

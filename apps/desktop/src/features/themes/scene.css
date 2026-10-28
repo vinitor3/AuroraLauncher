@@ -1,4 +1,7 @@
-.theme-scene { position: fixed; z-index: 0; inset: var(--window-titlebar-height, 0px) 0 0; overflow: hidden; pointer-events: none; user-select: none; background: var(--theme-background, #090714); animation: theme-scene-enter .36s ease-out both; }
+.theme-scene { position: fixed; z-index: 0; inset: calc(var(--window-titlebar-height, 0px) + var(--theme-content-inset, 0px)) var(--theme-content-inset, 0px) var(--theme-content-inset, 0px); overflow: hidden; border-radius: var(--theme-outer-radius, 0px); pointer-events: none; user-select: none; background: var(--theme-background, #090714); animation: theme-scene-enter var(--theme-transition-duration, 300ms) ease-out both; }
+.theme-scene[data-transition="none"] { animation: none; }
+.theme-scene[data-transition="slide"] { animation-name: theme-scene-slide; }
+.theme-scene[data-transition="zoom"] { animation-name: theme-scene-zoom; }
 .theme-scene *, .theme-scene *::before, .theme-scene *::after { pointer-events: none !important; }
 .theme-background-media, .theme-landscape, .theme-scene-effect, .theme-scene-vignette { position: absolute; inset: 0; width: 100%; height: 100%; }
 .theme-background-media { object-fit: cover; opacity: .68; }
@@ -16,15 +19,17 @@
 .theme-petals > i { position: absolute; top: -8%; width: 10px; height: 15px; border-radius: 90% 15% 90% 25%; background: var(--theme-accent); opacity: .45; transform: rotate(20deg); animation: theme-petal-fall calc((27s + var(--petal-index) * 1.5s) / var(--theme-speed, 1)) linear infinite; }
 .theme-petals > i:nth-child(3n) { width: 6px; height: 10px; opacity: .25; }
 .theme-petals > i:nth-child(2n) { background: var(--theme-text); opacity: .2; }
-.theme-decorations { display: grid; gap: .65rem; min-width: 0; margin-top: 1rem; padding: .8rem; border: 1px solid var(--theme-border); border-radius: var(--theme-radius); color: var(--theme-muted); background: color-mix(in srgb, var(--theme-panel) 78%, transparent); }
-.theme-decoration { display: flex; align-items: center; gap: .7rem; min-width: 0; font: 500 .72rem/1.4 var(--theme-font, system-ui); letter-spacing: .025em; }
+.theme-decorations { position: relative; flex-shrink: 0; min-width: 0; margin-block: .75rem; overflow: hidden; outline: 1px solid var(--theme-border); border-radius: var(--theme-radius); color: var(--theme-text); background: var(--theme-panel); isolation: isolate; }
+.theme-decoration { position: absolute; display: flex; align-items: center; min-width: 0; overflow: hidden; font: 500 20px/1.3 var(--theme-font, system-ui); letter-spacing: .025em; pointer-events: none; }
 .theme-decoration-left { justify-content: flex-start; text-align: left; }
 .theme-decoration-center { justify-content: center; text-align: center; }
 .theme-decoration-right { justify-content: flex-end; text-align: right; }
-.theme-decoration img { width: auto; max-width: min(100%, 220px); height: 52px; object-fit: contain; }
-.theme-decoration span { max-width: 640px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.theme-decoration img { max-width: 100%; width: auto; height: 100%; object-fit: contain; }
+.theme-decoration span { max-width: 100%; overflow: hidden; overflow-wrap: anywhere; }
 .theme-scene[data-paused="true"], .theme-scene[data-paused="true"] *, .theme-scene[data-paused="true"] *::before, .theme-scene[data-paused="true"] *::after { animation-play-state: paused !important; }
 @keyframes theme-scene-enter { from { opacity: 0; } to { opacity: 1; } }
+@keyframes theme-scene-slide { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes theme-scene-zoom { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: scale(1); } }
 @keyframes theme-aurora-drift { from { transform: translate3d(-3%, -4%, 0) skewX(-8deg) scaleY(.9); } to { transform: translate3d(5%, 7%, 0) skewX(8deg) scaleY(1.2); } }
 @keyframes theme-water-drift { from { transform: translateX(-9px) scaleX(.98); opacity: .22; } to { transform: translateX(9px) scaleX(1.02); opacity: .45; } }
 @keyframes theme-water-ring { 0% { transform: scale(.8); opacity: .06; } 55% { opacity: .18; } 100% { transform: scale(1.3); opacity: .02; } }

@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createPortal } from "react-dom";
 import { DEFAULT_THEME, parseTheme, type AuroraTheme, type ThemeLibrary, type ThemePreview } from "./model";
 import { themeCommand } from "./transport";
+import { validateThemeGif } from "./gif";
 import "./shell.css";
 
 const EMPTY: ThemeLibrary = { themes: [], selectedThemeId: null, bindings: {}, automatic: false, recovered: false, persistent: false };
@@ -26,6 +27,7 @@ function publicError(error: unknown) {
 async function preloadTheme(theme: AuroraTheme) {
   // Check all bundled media before starting the ten-second native deadline.
   for (const asset of Object.values(theme.assets)) {
+    if (asset.mime === "image/gif") { await validateThemeGif(asset); continue; }
     const binary = atob(asset.data);
     const bytes = new Uint8Array(binary.length);
     for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
@@ -53,7 +55,7 @@ async function preloadTheme(theme: AuroraTheme) {
           element.preload = "auto";
           element.onloadedmetadata = () => {
             if (element.videoWidth < 1 || element.videoHeight < 1 || element.videoWidth > 1920 || element.videoHeight > 1080
-              || element.videoWidth * element.videoHeight > 2_073_600 || !Number.isFinite(element.duration) || element.duration > 180) {
+              || element.videoWidth * element.videoHeight > 2_073_600 || !Number.isFinite(element.duration) || element.duration <= 0 || element.duration > 180) {
               finish(new Error("Use um vídeo de até 1920×1080 e três minutos, com duração definida."));
             }
           };
@@ -86,8 +88,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // Native snapshots include media bytes. Reuse unchanged documents so a
   // confirmation or association toggle cannot restart/decode a large video.
   const acceptLibrary = useCallback((next: ThemeLibrary, changedId?: string) => {
-    setLibrary((current) => ({ ...next, themes: next.themes.map((item) => item.id !== changedId
-      ? current.themes.find((saved) => saved.id === item.id) ?? item : item) }));
+    setLibrary((current) => ({ ...next, themes: next.themes.map((item) => {
+      const saved = item.id !== changedId ? current.themes.find((theme) => theme.id === item.id) : undefined;
+      const candidate = saved ?? item;
+      // Also tolerate a running older dev host while the WebView hot-reloads.
+      return candidate.window && candidate.cursor ? candidate : parseTheme(JSON.stringify(candidate));
+    }) }));
   }, []);
 
   const applyReset = useCallback((next: ThemeLibrary) => {

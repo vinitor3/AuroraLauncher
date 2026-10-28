@@ -48,6 +48,16 @@
 .theme-manager-empty > strong { font-size: .86rem; }
 .theme-manager-empty p { margin: 0; color: #a99fbb; font-size: .75rem; }
 .theme-manager-editor { gap: .85rem; }
+.theme-manager-mode { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; border-top: 1px solid #ffffff12; border-bottom: 1px solid #ffffff12; padding: .75rem 0; }
+.theme-manager-mode button { min-height: 2.25rem; border: 1px solid #ffffff1c; border-radius: 8px; padding: .45rem .8rem; color: #bcafce; background: #ffffff04; font-size: .78rem; }
+.theme-manager-mode button.is-selected { border-color: #d8b5ff62; color: #f2e6ff; background: #b488e52b; }
+.theme-manager-mode > span { margin-left: auto; color: #b19dc9; font-size: .66rem; }
+.theme-manager-code-panel { display: grid; gap: .65rem; }
+.theme-manager-replace { display: grid; gap: .5rem; border: 1px solid #e0b3ff52; border-radius: 10px; padding: .85rem; color: #efddff; background: #2c1c3c; }
+.theme-manager-replace > strong { font-size: .8rem; }
+.theme-manager-replace p { margin: 0; color: #c9b6da; font-size: .73rem; }
+.theme-manager-replace > div { display: flex; flex-wrap: wrap; gap: .45rem; }
+.theme-manager-save-actions { justify-content: flex-end; }
 .theme-manager-examples { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
 .theme-manager-examples > span { margin-right: .3rem; color: #a99fbb; font-size: .72rem; }
 .theme-manager-examples .compact { font-size: .7rem; }

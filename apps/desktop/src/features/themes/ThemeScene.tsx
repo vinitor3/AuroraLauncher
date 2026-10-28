@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { AuroraTheme } from "./model";
+import { ThemeGif } from "./ThemeGif";
 import "./scene.css";
 
 // Fixed artwork coordinates; theme documents can choose colors, never SVG markup.
@@ -73,7 +74,7 @@ function Landscape({ kind, id }: { kind: AuroraTheme["effects"]["background"]; i
 function SceneContent({ theme, onError }: { theme: AuroraTheme; onError?: (message: string) => void }) {
   const id = useId().replaceAll(":", "");
   const paused = useMotionPaused();
-  const resources = useEmbeddedResources(theme, theme.media.background ? [theme.media.background] : [], onError);
+  const resources = useEmbeddedResources(theme, theme.media.background && theme.assets[theme.media.background].mime !== "image/gif" ? [theme.media.background] : [], onError);
   const video = useRef<HTMLVideoElement>(null);
   const background = theme.media.background ? theme.assets[theme.media.background] : null;
   const source = theme.media.background ? resources[theme.media.background] : null;
@@ -84,7 +85,8 @@ function SceneContent({ theme, onError }: { theme: AuroraTheme; onError?: (messa
     if (paused) element.pause();
     else void element.play().catch(() => { /* A codec/autoplay restriction leaves a still background. */ });
   }, [paused, source]);
-  return <div className={`theme-scene theme-scene-${theme.effects.background}`} data-paused={paused ? "true" : "false"} aria-hidden="true">
+  return <div className={`theme-scene theme-scene-${theme.effects.background}`} data-transition={theme.effects.transition} data-paused={paused ? "true" : "false"} aria-hidden="true">
+    {background?.mime === "image/gif" && <ThemeGif asset={background} paused={paused} onError={onError} />}
     {source && background && (background.mime === "image/png"
       ? <img className="theme-background-media" src={source} alt="" onError={fail} />
       : <video ref={video} className="theme-background-media" src={source} muted loop playsInline preload="auto" onError={fail} />)}
@@ -97,7 +99,11 @@ function SceneContent({ theme, onError }: { theme: AuroraTheme; onError?: (messa
 export function ThemeDecorations({ theme, onError }: { theme: AuroraTheme; onError?: (message: string) => void }) {
   const resources = useEmbeddedResources(theme, theme.decorations.flatMap((entry) => entry.type === "image" && entry.asset ? [entry.asset] : []), onError);
   if (theme.decorations.length === 0) return null;
-  return <div className="theme-decorations" aria-label="Elementos visuais do tema">{theme.decorations.map((decoration, i) => <div key={i} className={`theme-decoration theme-decoration-${decoration.align}`}>
+  return <div className="theme-decorations" style={{ height: theme.layout.decorationHeight }} aria-label="Elementos visuais do tema">{theme.decorations.map((decoration, i) => <div key={i} className={`theme-decoration theme-decoration-${decoration.align}`} style={{
+    left: `${(100 - decoration.width) * decoration.x / 100}%`,
+    top: `${(theme.layout.decorationHeight - Math.min(decoration.height, theme.layout.decorationHeight)) * decoration.y / 100}px`,
+    width: `${decoration.width}%`, height: Math.min(decoration.height, theme.layout.decorationHeight), fontSize: decoration.fontSize,
+  }}>
     {decoration.type === "image" && decoration.asset && resources[decoration.asset] ? <img src={resources[decoration.asset]} alt={decoration.text} onError={() => onError?.("Não foi possível abrir uma imagem deste tema.")} /> : null}
     {decoration.type === "text" && decoration.text && <span>{decoration.text}</span>}
   </div>)}</div>;

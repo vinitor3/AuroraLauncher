@@ -2,7 +2,7 @@
 
 ## Temas declarativos do launcher — 28/10/2026
 
-Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Base `dc2ec5a`, launcher alpha.13, Core 1.1.5 e Skins 0.3.1 preservados. Personalização local por JSON, biblioteca, associação à seleção de instância/modpack, efeitos internos e vídeo silencioso. Prévia nativa de dez segundos, restauração e recuperação após interrupção. Não altera a matriz Minecraft/loader/Java, Worker, autenticação ou permissões Tauri. Reprodução de codecs reais, pausa ao minimizar/bandeja e desempenho de GPU: **PRECISA DE TESTE**. Evidências em [task-launcher-themes.md](../task-launcher-themes.md); decisão em [ADR-027](ADR/ADR-027-declarative-launcher-themes.md).
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Base inicial `dc2ec5a`, ampliação sobre `ffc37cc`; launcher alpha.13, Core 1.1.5 e Skins 0.3.1 preservados. Personalização local por JSONC comentado e editor visual arrastável, moldura/barra superior, cursor, biblioteca, associação à seleção de instância/modpack, GIF controlado, efeitos internos e vídeo silencioso. Prévia nativa de dez segundos, restauração e recuperação após interrupção. Contrato cumulativo de novas telas em [theme-integration.md](../theme-integration.md). Não altera a matriz Minecraft/loader/Java, Worker, autenticação ou permissões Tauri. Codecs reais, pausa efetiva ao minimizar/bandeja e desempenho de GPU: **PRECISA DE TESTE**. Evidências em [task-launcher-themes.md](../task-launcher-themes.md); decisão em [ADR-027](ADR/ADR-027-declarative-launcher-themes.md).
 
 ## Failover Gemini no Worker — 29/09/2026
 
