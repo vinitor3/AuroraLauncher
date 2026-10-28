@@ -25,5 +25,6 @@
 | [024](ADR-024-doctor-gemini-guidance.md) | Explicar o Doctor por consulta Gemini opcional com contrato reduzido e passos manuais permitidos | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 | [025](ADR-025-confirmed-local-ai-tools.md) | Compartilhar Gemini e broker local de ações estreitas com revisão, confirmação, histórico canônico e restauração | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 | [026](ADR-026-bounded-gemini-failover.md) | Limitar failover de chaves Gemini e oferecer Flash-Lite opcional dentro do prazo e orçamento compartilhados | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+| [027](ADR-027-declarative-launcher-themes.md) | Interpretar temas locais sem código executável, com associação por instância e recuperação nativa | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 
 Estados mudam somente por novo ADR que substitua o anterior ou por revisão explícita deste arquivo.
