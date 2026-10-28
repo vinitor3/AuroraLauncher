@@ -3090,3 +3090,15 @@ test("guidance failed capability only offers observation and cleanup until the a
   assert.deepEqual(copied, []);
   assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot", "connect_snapshot", "connect_stop"]);
 });
+
+test("social session cannot expose manual confirmation exports probes or preparation in laboratory panel", async () => {
+  snapshot = { ...idle(), operationId, generation: 1, role: "host", phase: "hostListening", transportState: "listening", cleanupState: "pending",
+    social: { sessionId: "11111111-2222-4333-8444-555555555555", role: "host", stage: "waitingGuest", digest: null, gameTarget: "127.0.0.1:43001", visibility: "public", expiresAtMs: Date.now() + 60_000 } };
+  await render();
+  assert.equal(container.querySelector("form"), null); assert.equal(container.querySelector("textarea"), null);
+  assert.match(container.textContent, /Amigos e comunidade/);
+  assert.deepEqual([...container.querySelectorAll("button")].map(element => element.textContent), ["Atualizar estado", "Encerrar Connect"]);
+  await click("Encerrar Connect");
+  assert.match(container.textContent, /Recursos da conexão liberados/);
+  for (const command of ["connect_confirm", "connect_export_invitation", "connect_probe_status", "connect_prepare_host"]) assert.equal(count(command), 0);
+});

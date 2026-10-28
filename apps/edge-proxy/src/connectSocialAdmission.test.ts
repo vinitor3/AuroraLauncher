@@ -44,6 +44,126 @@ async function verify(keyHex: string, signed: { signature: string }, bytes: Uint
   return crypto.subtle.verify("Ed25519", key, Buffer.from(signed.signature, "hex"), bytes);
 }
 
+test("89 identity comes only from authentication and carries no transport capability", async () => {
+  const f = await fixture();
+  assert.deepEqual(await f.authority.identity(req(), {}), { accountId: "guest", issuerInstance: f.authority.issuerInstance });
+  assert.equal(f.readCount(), 0);
+  await assert.rejects(f.authority.identity(req(), { accountId: "host" }), code("invalid_shape"));
+  await assert.rejects(f.authority.identity(new Request("http://127.0.0.1/local"), {}), code("unauthenticated"));
+});
+test("89 authenticated mailbox transports original grant and latest lease without minting authority", async () => {
+  const f = await fixture(); const { policy } = await f.register();
+  assert.deepEqual(await f.authority.hostPoll(req("host"), { policyId: policy.policyId }), { state: "waiting" });
+  const guest = await f.prepared(); const packet = await f.authority.join(req(), { proof: guest.proof, policyId: policy.policyId });
+  const admission = await f.authority.hostPoll(req("host"), { policyId: policy.policyId });
+  assert.equal(admission.state, "admitted"); if (admission.state !== "admitted") assert.fail();
+  assert.deepEqual(admission.grant, packet.grant); assert.deepEqual(admission.lease, packet.lease);
+  const grantId = packet.grant.body.grantId;
+  assert.deepEqual(await f.authority.guestReceive(req(), { grantId }), { state: "waiting" });
+  // The broker treats this bounded string as opaque; only native verification can make it a transport invitation.
+  assert.deepEqual(await f.authority.hostPublish(req("host"), { grantId, invitation: "untrusted-test-envelope" }), { accepted: true });
+  assert.deepEqual(await f.authority.guestReceive(req(), { grantId }), { state: "ready", invitation: "untrusted-test-envelope", lease: packet.lease });
+  f.advance(750); const lease = await f.authority.continuity(req(), { grantId });
+  const next = await f.authority.hostPoll(req("host"), { policyId: policy.policyId });
+  assert.equal(next.state, "admitted"); if (next.state !== "admitted") assert.fail();
+  assert.deepEqual(next.lease, lease); assert.deepEqual(next.grant, packet.grant);
+  // Polls preserve the original lease and its deadline, even with repeated successful host reads.
+  f.advance(2_000); await f.authority.hostPoll(req("host"), { policyId: policy.policyId });
+  f.advance(1_000); await assert.rejects(f.authority.hostPoll(req("host"), { policyId: policy.policyId }), code("continuity_expired"));
+  await assert.rejects(f.authority.guestReceive(req(), { grantId }), code("policy_expired"));
+});
+test("89 another account cannot discover, publish, read or stop another pair", async () => {
+  const f = await fixture(); const { policy, packet } = await f.pair(); const grantId = packet.grant.body.grantId;
+  for (const [method, args] of [
+    ["hostPoll", { policyId: policy.policyId }], ["hostPublish", { grantId, invitation: "opaque" }],
+    ["guestReceive", { grantId }], ["hostStop", { policyId: policy.policyId }], ["guestStop", { grantId }],
+  ] as const) await assert.rejects(f.authority[method](req("third"), args), code("broker_unavailable"));
+  await assert.rejects(f.authority.hostPoll(req("third"), { policyId: "0".repeat(64) }), code("broker_unavailable"));
+  await assert.rejects(f.authority.guestReceive(new Request("http://127.0.0.1/local"), { grantId }), code("unauthenticated"));
+  assert.equal(f.authority.inspect().terminalGrants, 0);
+  assert.equal((await f.authority.hostPoll(req("host"), { policyId: policy.policyId })).state, "admitted");
+});
+test("89 late first host poll retains original sequence-one lease independently of newer continuity", async () => {
+  const f = await fixture(); const { policy, packet } = await f.pair();
+  f.advance(750); const renewed = await f.authority.continuity(req(), { grantId: packet.grant.body.grantId });
+  const first = await f.authority.hostPoll(req("host"), { policyId: policy.policyId }); if (first.state !== "admitted") assert.fail();
+  assert.deepEqual(first.initialLease, packet.lease); assert.equal(first.initialLease.body.sequence, 1);
+  assert.deepEqual(first.lease, renewed); assert.equal(first.lease.body.sequence, 2);
+  const expiry = packet.lease.body.expiresAtUnixMs;
+  first.initialLease.body.expiresAtUnixMs += 5_000;
+  const second = await f.authority.hostPoll(req("host"), { policyId: policy.policyId }); if (second.state !== "admitted") assert.fail();
+  assert.equal(second.initialLease.body.expiresAtUnixMs, expiry);
+});
+test("89 publishing is single use under concurrent sends and does not allow replacement", async () => {
+  const f = await fixture(); const { packet } = await f.pair(); const grantId = packet.grant.body.grantId;
+  const results = await Promise.allSettled(["first", "second"].map(invitation => f.authority.hostPublish(req("host"), { grantId, invitation })));
+  assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter(result => result.status === "rejected" && code("invitation_already_published")(result.reason)).length, 1);
+  const received = await f.authority.guestReceive(req(), { grantId }); assert.equal(received.state, "ready");
+  if (received.state !== "ready") assert.fail(); assert.ok(["first", "second"].includes(received.invitation));
+  await assert.rejects(f.authority.hostPublish(req("host"), { grantId, invitation: received.invitation }), code("invitation_already_published"));
+});
+test("89 mailbox publication and reception recheck permissions after asynchronous reads", async () => {
+  for (const method of ["hostPublish", "guestReceive", "hostPoll"] as const) {
+    const f = await fixture(); const { policy, packet } = await f.pair(); const grantId = packet.grant.body.grantId;
+    if (method === "guestReceive") await f.authority.hostPublish(req("host"), { grantId, invitation: "opaque" });
+    f.onRead(async () => { f.session.title = "changed while read was pending"; });
+    const args = method === "hostPoll" ? { policyId: policy.policyId } : method === "hostPublish" ? { grantId, invitation: "opaque" } : { grantId };
+    await assert.rejects(f.authority[method](req(method === "guestReceive" ? "guest" : "host"), args), code("session_changed"));
+    assert.equal(f.authority.inspect().terminalGrants, 1);
+  }
+});
+test("89 stopping either participant is idempotent, terminal and races out pending delivery", async () => {
+  for (const role of ["host", "guest"] as const) {
+    const f = await fixture(); const { policy, packet } = await f.pair(); const grantId = packet.grant.body.grantId;
+    const stop = () => role === "host" ? f.authority.hostStop(req("host"), { policyId: policy.policyId }) : f.authority.guestStop(req(), { grantId });
+    f.onRead(async () => { await stop(); });
+    await assert.rejects(f.authority.hostPublish(req("host"), { grantId, invitation: "opaque" }), code("policy_expired"));
+    assert.deepEqual(await stop(), { stopped: true }); assert.deepEqual(await stop(), { stopped: true });
+    await assert.rejects(f.authority.continuity(req(), { grantId }));
+  }
+});
+test("89 blocked guest or removed host registration cannot retrieve retained envelopes", async () => {
+  for (const role of ["host", "guest"] as const) {
+    const f = await fixture(); const { policy, packet } = await f.pair(); const grantId = packet.grant.body.grantId;
+    await f.authority.hostPublish(req("host"), { grantId, invitation: "opaque" }); f.block(role);
+    await assert.rejects(role === "host" ? f.authority.hostPoll(req("host"), { policyId: policy.policyId }) : f.authority.guestReceive(req(), { grantId }), code("session_not_authorized"));
+    assert.equal(f.authority.inspect().terminalGrants, 1);
+  }
+});
+test("89 mailbox respects admission monotonic deadline without shortening admitted continuity", async () => {
+  const f = await fixture(); const { policy, packet } = await f.pair(); const grantId = packet.grant.body.grantId;
+  await f.authority.hostPublish(req("host"), { grantId, invitation: "opaque" });
+  for (let i = 0; i < 10; i++) { f.advance(750); f.monoOnly(250); await f.authority.continuity(req(), { grantId }); }
+  // Civil time advances more slowly; admitted continuity remains valid but admission cannot gain those 2.5 seconds.
+  assert.equal((await f.authority.hostPoll(req("host"), { policyId: policy.policyId })).state, "admitted");
+  await assert.rejects(f.authority.guestReceive(req(), { grantId }), code("admission_expired"));
+  assert.equal(f.authority.inspect().terminalGrants, 1);
+  await assert.rejects(f.authority.hostPoll(req("host"), { policyId: policy.policyId }));
+});
+test("89 mailbox copies cannot mutate retained grant or lease and input stays bounded", async () => {
+  const f = await fixture(); const { policy, packet } = await f.pair(); const grantId = packet.grant.body.grantId;
+  const poll = await f.authority.hostPoll(req("host"), { policyId: policy.policyId }); if (poll.state !== "admitted") assert.fail();
+  poll.grant.body.guestAccountId = "other"; poll.lease.body.expiresAtUnixMs += 60_000;
+  const again = await f.authority.hostPoll(req("host"), { policyId: policy.policyId }); if (again.state !== "admitted") assert.fail();
+  assert.deepEqual(again.grant, packet.grant); assert.deepEqual(again.lease, packet.lease);
+  await assert.rejects(f.authority.hostPublish(req("host"), { grantId, invitation: "x".repeat(8_193) }), code("request_too_large"));
+  await assert.rejects(f.authority.guestReceive(req(), { grantId, accountId: "guest" }), code("invalid_shape"));
+  assert.equal(f.authority.inspect().terminalGrants, 0);
+});
+test("89 published input is frozen before authentication and a delayed read cannot publish after expiry", async () => {
+  const f = await fixture(); const { packet } = await f.pair(); const grantId = packet.grant.body.grantId;
+  const input = { grantId, invitation: "original" };
+  const publishing = f.authority.hostPublish(req("host"), input); input.invitation = "x".repeat(10_000);
+  await publishing;
+  const received = await f.authority.guestReceive(req(), { grantId }); if (received.state !== "ready") assert.fail();
+  assert.equal(received.invitation, "original");
+  const g = await fixture(); const { packet: other } = await g.pair();
+  g.onRead(async () => { g.advance(3_001); });
+  await assert.rejects(g.authority.hostPublish(req("host"), { grantId: other.grant.body.grantId, invitation: "stale" }), code("continuity_expired"));
+  assert.equal(g.authority.inspect().terminalGrants, 1);
+});
+
 test("real host consent and both 88A keys produce separately signed bound grant and first lease", async () => {
   const f = await fixture(); const { host, guest, policy, packet } = await f.pair();
   assert.equal(packet.grant.body.hostPublicKey, host.proof.challenge.publicKey); assert.equal(packet.grant.body.guestPublicKey, guest.proof.challenge.publicKey);

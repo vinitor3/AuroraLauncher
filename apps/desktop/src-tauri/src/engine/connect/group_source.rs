@@ -160,6 +160,7 @@ impl Manager {
         });
         let cancel = CancellationToken::new();
         state.attempt = Some(Attempt {
+            social: None,
             owner: owner.into(),
             snapshot: snapshot.clone(),
             draft: None,

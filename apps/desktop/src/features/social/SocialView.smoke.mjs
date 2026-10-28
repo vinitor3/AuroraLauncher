@@ -273,3 +273,89 @@ test("acceptance checks the request deadline at click time even before a timer r
   Date.now = () => fixedNow + 1000; await click("Aceitar");
   assert.equal(count("respondFriend"), 0); assert.match(container.textContent, /Este pedido expirou/);
 });
+
+function connection(snapshot) {
+  const controller = {};
+  for (const name of ["prepareHost", "confirmHost", "stop", "refresh"]) controller[name] = async (...args) => { calls.push({ name: `connect:${name}`, args }); };
+  return { state: { available: true, pending: false, error: "", snapshot }, controller };
+}
+function connectionSnapshot(stage = "hostReview", role = "host") {
+  return { operationId: "own-operation", generation: 2, phase: stage === "connected" ? "guestConnected" : "reviewed", role,
+    cleanupState: "pending", tcpAddress: role === "guest" && stage === "connected" ? "127.0.0.1:42010" : null,
+    social: { sessionId: baseSession.id, role, stage, digest: role === "host" ? "a".repeat(64) : null,
+      gameTarget: role === "host" ? "127.0.0.1:43001" : null, visibility: role === "host" ? "public" : null, expiresAtMs: fixedNow + 60_000 } };
+}
+test("public Enter invokes selected session only; rendering does not create transport", async () => {
+  service.capabilities.join = true; handlers.prepareJoin = () => undefined; page.items = [baseSession];
+  await render({ connection: connection() }); assert.equal(count("prepareJoin"), 0);
+  await click("Entrar"); assert.deepEqual(calls.find(call => call.name === "prepareJoin").args, [baseSession.id]);
+  assert.equal(count("connect:confirmHost"), 0);
+});
+test("friend Enter invokes selected open session without a copied invitation", async () => {
+  service.capabilities.join = true; handlers.prepareJoin = () => undefined;
+  state.friends = [{ ...person, presence: null, session: { ...baseSession, visibility: "friends" } }];
+  await render({ connection: connection() }); await click("Entrar");
+  assert.deepEqual(calls.find(call => call.name === "prepareJoin").args, [baseSession.id]);
+  assert.equal(container.querySelector("textarea"), null);
+});
+test("approval-only and self-owned cards stay disabled after join capability enables", async () => {
+  service.capabilities.join = true; page.items = [{ ...baseSession, joinPolicy: "approval" }, { ...baseSession, id: "own", hostUid: "owner-uid" }];
+  await render({ connection: connection() }); assert.equal(button("Pedir para entrar").disabled, true); assert.equal(button("Entrar").disabled, true);
+  assert.equal(count("prepareJoin"), 0);
+});
+test("host preparation requires an eligible own advert and never auto-approves", async () => {
+  state.ownSession = { ...baseSession, hostUid: "owner-uid" };
+  await render({ connection: connection() }); assert.equal(count("connect:prepareHost"), 0);
+  await click("Preparar meu servidor"); assert.deepEqual(calls.find(call => call.name === "connect:prepareHost").args, [baseSession.id, "public"]);
+  assert.equal(count("connect:confirmHost"), 0);
+});
+test("host review shows fixed source scope deadline and starts with consent unchecked", async () => {
+  await render({ connection: connection(connectionSnapshot()) });
+  assert.match(container.textContent, /127\.0\.0\.1:43001/); assert.match(container.textContent, /60 segundos/);
+  assert.match(container.textContent, /com uma vaga/); assert.equal(button("Compartilhar agora").disabled, true);
+  assert.equal(count("connect:confirmHost"), 0);
+});
+test("host explicit consent permits confirm and resets when the reviewed digest changes", async () => {
+  const snapshot = connectionSnapshot(), control = connection(snapshot); await render({ connection: control });
+  const checkbox = container.querySelector('.social-connection input[type="checkbox"]'); assert.ok(checkbox);
+  await act(async () => { checkbox.checked = true; checkbox.dispatchEvent(new window.Event("click", { bubbles: true })); });
+  assert.equal(button("Compartilhar agora").disabled, false); await click("Compartilhar agora"); assert.equal(count("connect:confirmHost"), 1);
+  await render({ connection: connection({ ...snapshot, social: { ...snapshot.social, digest: "b".repeat(64) } }) });
+  assert.equal(button("Compartilhar agora").disabled, true);
+});
+test("active native reservation disables new joins and retains Disconnect during credential wait", async () => {
+  service.capabilities.join = true; page.items = [baseSession]; const control = connection(connectionSnapshot("reserved", "guest")); control.state.pending = true;
+  await render({ connection: control }); assert.equal(button("Entrar").disabled, true); assert.equal(button("Desconectar").disabled, false);
+  await click("Desconectar"); assert.equal(count("connect:stop"), 1);
+});
+test("connected projection shows loopback address and distinguishes game world from transport", async () => {
+  await render({ connection: connection(connectionSnapshot("connected", "guest")) });
+  assert.equal(container.querySelector("#social-local-address").value, "127.0.0.1:42010");
+  assert.match(container.textContent, /Entrada no mundo e disponibilidade do jogo ainda não verificadas/);
+  await click("Copiar endereço"); assert.match(container.textContent, /Selecione e copie/);
+});
+test("closed projection only claims resource release when native cleanup is complete", async () => {
+  const snapshot = connectionSnapshot("closed", "guest"); snapshot.phase = "closed"; snapshot.cleanupState = "pending";
+  await render({ connection: connection(snapshot) }); assert.doesNotMatch(container.textContent, /Recursos da conexão liberados/);
+  await render({ connection: connection({ ...snapshot, cleanupState: "complete" }) }); assert.match(container.textContent, /Recursos da conexão liberados/);
+});
+test("closing native phase takes precedence over retained connected or host-review presentation", async () => {
+  const snapshot = connectionSnapshot("connected", "guest"); snapshot.phase = "closing";
+  await render({ connection: connection(snapshot) }); assert.match(container.textContent, /Desconectando/);
+  assert.doesNotMatch(container.textContent, /A conexão foi autenticada/); assert.equal(container.querySelector("#social-local-address"), null);
+  await render({ connection: connection({ ...connectionSnapshot(), phase: "closing" }) });
+  assert.equal(button("Compartilhar agora").disabled, true);
+});
+for (const enabled of [false, true]) {
+  test(`publication result explains separate host activation with social connection ${enabled ? "available" : "unavailable"}`, async () => {
+    await render({ connection: enabled ? connection() : undefined });
+    const fields = container.querySelectorAll(".social-publish .social-fields input");
+    await edit(fields[0], "Meu mundo"); await edit(fields[1], "Meu modpack"); await edit(fields[2], "1.21.1");
+    await submit(".social-publish form");
+    assert.equal(count("publishSession"), 1);
+    assert.equal(count("connect:prepareHost"), 0); assert.equal(count("connect:confirmHost"), 0);
+    if (enabled) assert.match(container.textContent, /Anúncio atualizado\. Use Preparar meu servidor para ativar o compartilhamento\./);
+    else assert.match(container.textContent, /Anúncio atualizado\. O compartilhamento do servidor ainda não foi ativado\./);
+    assert.doesNotMatch(container.textContent, /A conexão automática continua separada/);
+  });
+}

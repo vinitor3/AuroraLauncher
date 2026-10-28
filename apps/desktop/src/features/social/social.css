@@ -92,3 +92,7 @@
 @media (max-width: 1020px) { .social-layout { grid-template-columns: 250px minmax(0, 1fr); } .social-catalog { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .social-layout { grid-template-columns: 1fr; } .social-friends { order: 0; } .social-community { order: 1; } .social-catalog { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); } .social-fields { grid-template-columns: 1fr; } }
 @media (max-width: 480px) { .social-catalog[data-layout="list"] .social-session { grid-template-columns: 72px minmax(0, 1fr); } .social-catalog[data-layout="list"] .social-session-art { width: 72px; } .social-catalog[data-layout="list"] .social-session-footer { grid-column: 1 / -1; flex-direction: row; padding-top: 0; } }
+.social-connection { border: 1px solid var(--border, #ffffff20); border-radius: 16px; padding: 18px; margin-bottom: 20px; background: #101c2a60; }
+.social-connection p { color: var(--muted, #a8b4c6); }
+.social-connect-address { display: grid; gap: 8px; margin-top: 14px; }
+.social-connect-address input { width: 100%; }

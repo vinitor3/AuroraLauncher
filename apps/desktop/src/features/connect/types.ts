@@ -7,6 +7,7 @@ import { groupCapabilityFrom, groupSnapshotFieldsFrom, pendingGroupSourceFieldsF
 import { readyGameCapabilityFrom, type ReadyGameLaunchCapability } from "../connect-game-launch/types";
 import { pendingHostSourceFieldsFrom, type PendingHostSource } from "./host-source-types";
 import { snapshotPathObservationFrom, type PathObservation } from "./path-observation-types";
+import { socialConnectProjectionFrom, type SocialConnectProjection } from "../social/connect-types";
 
 export type ConnectMode = "loopback" | "externalIpv6" | "directIpv4";
 export type ConnectRole = "host" | "guest";
@@ -49,6 +50,7 @@ export type ConnectSnapshot = {
   hostGroup?: HostGroup;
   pendingGroupSource?: PendingGroupSource;
   pendingHostSource?: PendingHostSource;
+  social?: SocialConnectProjection;
 } & Partial<FragmentedGuestUdp>;
 export type ConnectPreparation = { operationId: string; generation: number; publicId: string; expiresAtMs: number; invitationProfile?: ConnectInvitationProfile };
 export type ConnectReview = {
@@ -182,6 +184,16 @@ export function snapshotFrom(value: unknown): ConnectSnapshot {
     || !invitationProfile(value.invitationProfile)
     || !["notStarted", "pending", "complete", "failed"].includes(value.cleanupState as string)) return invalid();
   snapshotPathObservationFrom(value);
+  if (value.social !== undefined) {
+    const social = socialConnectProjectionFrom(value.social);
+    if (value.role !== social.role || value.operationId === null || value.phase === "idle"
+      || value.preparation !== null || value.review !== null || value.statusSummary !== null
+      || value.invitationProfile !== undefined || value.sessionTiming !== undefined
+      || value.hostGroup !== undefined || value.pendingGroupSource !== undefined || value.pendingHostSource !== undefined) return invalid();
+    noFragmentedFields(value);
+    if (value.tcpAddress !== null && !(typeof value.tcpAddress === "string" && /^127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(value.tcpAddress) && Number(value.tcpAddress.split(":")[1]) <= 65535)) return invalid();
+    return value as ConnectSnapshot;
+  }
   if (value.pendingHostSource !== undefined) {
     pendingHostSourceFieldsFrom(value);
     return value as ConnectSnapshot;

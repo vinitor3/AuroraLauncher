@@ -61,6 +61,8 @@ mod session_group_tests;
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod session_tests;
+#[path = "social.rs"]
+mod social;
 #[path = "social_key_binding.rs"]
 mod social_key_binding;
 #[cfg(test)]
@@ -132,6 +134,7 @@ struct Reviewed {
     review_deadline: Instant,
 }
 struct Attempt {
+    social: Option<social::Control>,
     owner: String,
     snapshot: ConnectSnapshot,
     draft: Option<Draft>,
@@ -162,6 +165,7 @@ struct Attempt {
 }
 #[derive(Default)]
 struct State {
+    social_epoch: u64,
     attempt: Option<Attempt>,
     generation: u64,
     shutting_down: bool,
@@ -169,6 +173,7 @@ struct State {
 #[derive(Default)]
 pub(super) struct Manager {
     state: Arc<Mutex<State>>,
+    social_authority: Option<SocialLabAuthority>,
 }
 impl Drop for Manager {
     fn drop(&mut self) {
@@ -255,6 +260,10 @@ fn expire_pending(a: &mut Attempt) {
     expire_pending_at(a, lab::unix_millis());
 }
 fn expire_pending_at(a: &mut Attempt, now_unix: u64) {
+    if a.social.is_some() {
+        social::expire(a);
+        return;
+    }
     if a.snapshot.phase == "hostPreparing" {
         if a.host_source.is_some() {
             host_source::expire_pending(a, now_unix);
@@ -339,7 +348,9 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
         udp_recovery::clear(a);
         a.snapshot.phase = if error.is_some() { "failed" } else { "closed" };
         a.snapshot.transport_state = "closed";
-        a.snapshot.cleanup_state = if ready_game::finished(a)
+        a.snapshot.cleanup_state = if error == Some(ConnectError::CleanupFailed) {
+            "failed"
+        } else if ready_game::finished(a)
             && group_source::finished(a)
             && host_source::finished(a)
             && host_review::finished(a)
@@ -354,6 +365,11 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
             udp.close();
         }
         a.snapshot.error_code = error.map(ConnectError::code);
+        if let Some(social) = &mut a.snapshot.social {
+            social.stage = if error.is_some() { "failed" } else { "closed" };
+            social.digest = None;
+        }
+        social::clear(a);
         a.export = None;
         a.host = None;
         a.guest_source = None;
@@ -500,6 +516,7 @@ impl Manager {
             snapshot.udp = Some(FragmentedGuestState::default());
         }
         state.attempt = Some(Attempt {
+            social: None,
             owner: owner.into(),
             snapshot,
             draft: Some(draft),
@@ -1164,6 +1181,7 @@ impl Manager {
             let mut state = lock(&self.state)?;
             let a = selected(&mut state, owner, id)?;
             a.cancel.cancel();
+            social::clear(a);
             path_projection::clear(a);
             udp_recovery::clear(a);
             ready_game::cancel(a);

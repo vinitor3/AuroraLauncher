@@ -180,137 +180,59 @@ const idle = () => ({ available: false, operationId: null, generation: 0, role: 
 const active = () => ({ ...idle(), available: true, operationId: "synthetic", generation: 4, role: "guest", phase: "guestConnected", transportState: "authenticated", cleanupState: "pending" });
 const stopped = () => ({ ...active(), generation: 5, phase: "closed", transportState: "closed", cleanupState: "complete" });
 
-test("cold WebView ready waits for retained native operation without Java or voice commands", async () => {
+test("cold WebView ready waits for native epoch fence and cleanup without Java or voice commands", async () => {
   const cleanup = deferred(), calls = [];
-  const f = fixture(() => stopConnectForAccountTransition(async (command, args) => {
-    calls.push([command, args]);
-    if (command === "connect_snapshot") return active();
-    assert.equal(command, "connect_stop");
-    return cleanup.promise;
-  }));
-  f.controller.accept(ready("NEW_ACCOUNT"));
-  const waiting = f.controller.retry();
-  await tick();
+  const f = fixture(() => stopConnectForAccountTransition(async (command, args) => { calls.push([command, args]); return cleanup.promise; }));
+  f.controller.accept(ready("NEW_ACCOUNT")); const waiting = f.controller.retry(); await tick();
   assert.deepEqual(f.published, [{ phase: "loading" }]);
-  assert.deepEqual(calls, [["connect_snapshot", undefined], ["connect_stop", { operationId: "synthetic" }]]);
+  assert.deepEqual(calls, [["connect_account_transition_stop", undefined]]);
   cleanup.resolve(stopped()); await waiting;
   assert.deepEqual(f.published.at(-1), ready("NEW_ACCOUNT"));
-  assert.deepEqual(f.events.slice(-2), [["publish", ready("NEW_ACCOUNT")], ["barrier", "idle"]]);
 });
-
-test("cold signed-out state also crosses one default-off idle observation", async () => {
+test("cold signed-out and default-off idle still invalidate native account epoch once", async () => {
   const calls = [];
   const f = fixture(() => stopConnectForAccountTransition(async command => { calls.push(command); return idle(); }));
-  f.controller.accept({ phase: "signed-out" });
-  assert.deepEqual(f.published, [{ phase: "loading" }]);
-  await f.controller.retry();
-  assert.deepEqual(f.published.at(-1), { phase: "signed-out" });
-  f.controller.accept({ phase: "loading" }); f.controller.accept(ready("A"));
-  await tick();
-  assert.deepEqual(calls, ["connect_snapshot"]);
-  assert.deepEqual(f.published.at(-1), ready("A"));
+  f.controller.accept({ phase: "signed-out" }); await f.controller.retry();
+  f.controller.accept({ phase: "loading" }); f.controller.accept(ready("A")); await tick();
+  assert.deepEqual(calls, ["connect_account_transition_stop"]); assert.deepEqual(f.published.at(-1), ready("A"));
 });
-
-test("default-off idle snapshot needs no capability or stop request", async () => {
+test("cleanup response is enforced even if capability availability is false", async () => {
   const calls = [];
-  await stopConnectForAccountTransition(async command => { calls.push(command); return idle(); });
-  assert.deepEqual(calls, ["connect_snapshot"]);
+  await stopConnectForAccountTransition(async command => { calls.push(command); return { ...stopped(), available: false }; });
+  assert.deepEqual(calls, ["connect_account_transition_stop"]);
 });
-
-test("existing operation is stopped even when availability is false", async () => {
-  const calls = [];
-  await stopConnectForAccountTransition(async (command, args) => {
-    calls.push([command, args]);
-    return command === "connect_snapshot" ? { ...active(), available: false } : stopped();
-  });
-  assert.deepEqual(calls, [["connect_snapshot", undefined], ["connect_stop", { operationId: "synthetic" }]]);
-});
-
-test("snapshot rejection or malformed native output cannot bypass cleanup", async () => {
-  for (const invalid of [null, {}, { ...idle(), cleanupState: "pending" }, { ...idle(), phase: "failed", cleanupState: "complete" }]) {
+test("epoch fence rejection, malformed or active response cannot bypass cleanup", async () => {
+  for (const invalid of [null, {}, active(), { ...idle(), cleanupState: "pending" }, { ...idle(), phase: "failed", cleanupState: "complete" }, { ...stopped(), cleanupState: "failed" }, { ...stopped(), cleanupState: "pending" }, { ...stopped(), operationId: null }]) {
     await assert.rejects(stopConnectForAccountTransition(async () => invalid));
   }
   await assert.rejects(stopConnectForAccountTransition(async () => { throw new Error("fixture"); }));
+  await stopConnectForAccountTransition(async () => ({ ...stopped(), phase: "failed" }));
 });
-
-test("stop must prove matching operation, non-regressing generation and terminal complete cleanup", async () => {
-  for (const invalid of [
-    { ...stopped(), cleanupState: "pending" }, { ...stopped(), cleanupState: "failed" },
-    { ...stopped(), operationId: "other" }, { ...stopped(), operationId: null },
-    { ...stopped(), generation: 3 }, { ...stopped(), phase: "guestConnected" },
-  ]) {
-    await assert.rejects(stopConnectForAccountTransition(async command => command === "connect_snapshot" ? active() : invalid));
-  }
-  await stopConnectForAccountTransition(async command => command === "connect_snapshot" ? active() : { ...stopped(), phase: "failed" });
-});
-
-test("lost stop response keeps account blocked until an explicit retry observes completed cleanup", async () => {
-  let lost = true, snapshots = 0, stops = 0;
+test("lost epoch-fence response blocks account until explicit retry proves completed cleanup", async () => {
+  let lost = true, calls = 0;
   const f = fixture(() => stopConnectForAccountTransition(async command => {
-    if (command === "connect_snapshot") { snapshots++; return lost ? active() : stopped(); }
-    assert.equal(command, "connect_stop"); stops++;
+    assert.equal(command, "connect_account_transition_stop"); calls++;
     if (lost) { lost = false; throw new Error("lost response"); }
     return stopped();
   }));
   f.controller.accept(ready("A")); f.controller.accept(ready("B")); await f.controller.retry();
-  assert.equal(f.published.at(-1).phase, "loading");
-  assert.equal(f.barriers.at(-1), "blocked");
-  await f.controller.retry();
-  assert.deepEqual(f.published.at(-1), ready("B"));
-  assert.equal(snapshots, 2); assert.equal(stops, 2);
+  assert.equal(f.published.at(-1).phase, "loading"); assert.equal(f.barriers.at(-1), "blocked");
+  await f.controller.retry(); assert.deepEqual(f.published.at(-1), ready("B")); assert.equal(calls, 2);
 });
-
 for (const profile of ["legacy", "sessionGameTcp", "sessionFragmentedGameUdp"]) {
-  test(`account transition waits for single source ${profile} reserved before its preparation reply`, async () => {
-    const pending = { ...idle(), available: true, operationId: "11111111-2222-4333-8444-555555555555", generation: 1,
-      role: "host", phase: "hostPreparing", cleanupState: "pending", expiresAtMs: 1800000060000,
-      pendingHostSource: { kind: "ownedGameTcp", mode: "loopback", profile },
-      ...(profile === "legacy" ? {} : { invitationProfile: profile }) };
-    const { pendingHostSource: _marker, ...base } = pending;
+  test("account transition waits for retained " + profile + " source/review cleanup under epoch fence", async () => {
     const cleanup = deferred(), calls = [];
-    const f = await establishedFixture(() => stopConnectForAccountTransition(async (command, args) => {
-      calls.push([command, args]);
-      if (command === "connect_snapshot") return pending;
-      assert.equal(command, "connect_stop");
-      return cleanup.promise;
-    }));
+    const f = await establishedFixture(() => stopConnectForAccountTransition(async command => { calls.push(command); return cleanup.promise; }));
     f.controller.accept(ready("B")); const waiting = f.controller.retry(); await tick();
-    assert.deepEqual(f.published.at(-1), { phase: "loading" });
-    assert.deepEqual(calls, [["connect_snapshot", undefined], ["connect_stop", { operationId: pending.operationId }]]);
-    cleanup.resolve({ ...base, generation: 2, phase: "closed", transportState: "closed", expiresAtMs: null, cleanupState: "complete" });
-    await waiting;
-    assert.deepEqual(f.published.at(-1), ready("B"));
-    assert.equal(calls.length, 2);
+    assert.deepEqual(f.published.at(-1), { phase: "loading" }); assert.deepEqual(calls, ["connect_account_transition_stop"]);
+    cleanup.resolve(stopped()); await waiting; assert.deepEqual(f.published.at(-1), ready("B"));
   });
 }
-
-test("account cleanup refuses a terminal single source while its blocking worker is still pending", async () => {
-  const value = { ...stopped(), operationId: "11111111-2222-4333-8444-555555555555", role: "host", phase: "failed", cleanupState: "pending" };
-  await assert.rejects(stopConnectForAccountTransition(async () => value), /connect_account_cleanup_incomplete/);
+test("social cleanup uses the same account fence and only publishes after worker release", async () => {
+  const cleanup = deferred();
+  const f = await establishedFixture(() => stopConnectForAccountTransition(async command => { assert.equal(command, "connect_account_transition_stop"); return cleanup.promise; }));
+  f.controller.accept(ready("B")); const waiting = f.controller.retry(); await tick();
+  assert.deepEqual(f.published.at(-1), { phase: "loading" });
+  cleanup.resolve({ ...stopped(), social: { sessionId: "11111111-2222-4333-8444-555555555555", role: "guest", stage: "closed", digest: null, gameTarget: null, visibility: null, expiresAtMs: null } });
+  await waiting; assert.deepEqual(f.published.at(-1), ready("B"));
 });
-
-for (const profile of ["legacy", "sessionGameTcp", "sessionFragmentedGameUdp"]) {
-  test(`account transition waits for retained ${profile} review even while its public phase remains hostPrepared`, async () => {
-    const operationId = "11111111-2222-4333-8444-555555555555";
-    const invitationProfile = profile === "legacy" ? {} : { invitationProfile: profile };
-    const prepared = { ...idle(), available: true, operationId, generation: 2, role: "host", phase: "hostPrepared",
-      preparation: { operationId, generation: 2, publicId: "a".repeat(64), expiresAtMs: 1800000060000, ...invitationProfile },
-      ...invitationProfile };
-    const cleanup = deferred(), calls = [];
-    const f = await establishedFixture(() => stopConnectForAccountTransition(async (command, args) => {
-      calls.push([command, args]);
-      if (command === "connect_snapshot") return prepared;
-      assert.equal(command, "connect_stop");
-      return cleanup.promise;
-    }));
-    f.controller.accept(ready("B")); const waiting = f.controller.retry(); await tick();
-    assert.deepEqual(f.published.at(-1), { phase: "loading" });
-    assert.deepEqual(f.barriers, ["closing"]);
-    assert.deepEqual(calls, [["connect_snapshot", undefined], ["connect_stop", { operationId }]]);
-    cleanup.resolve({ ...prepared, generation: 4, phase: "closed", transportState: "closed", preparation: null, cleanupState: "complete" });
-    await waiting;
-    assert.deepEqual(f.published.at(-1), ready("B"));
-    assert.deepEqual(f.barriers, ["closing", "idle"]);
-    assert.equal(calls.length, 2);
-  });
-}

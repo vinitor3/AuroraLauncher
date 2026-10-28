@@ -51,6 +51,7 @@ import { RecoveryView } from "./features/recovery/RecoveryView";
 import { DiagnosticLabView } from "./features/diagnostic-lab/DiagnosticLabView";
 import { ConnectView } from "./features/connect/ConnectView";
 import { SocialView } from "./features/social/SocialView";
+import { createSocialConnectController, emptySocialConnectState, type SocialConnectController, type SocialConnectState } from "./features/social/connect-controller";
 import { createSocialFirebaseService } from "./lib/socialFirebase";
 import { createAccountTransition, stopConnectForAccountTransition } from "./features/connect/account-transition";
 import { VoiceAnnouncementProvider, useVoiceAnnouncement, withVoiceAnnouncementLogout } from "./features/voice-announcement/VoiceAnnouncementProvider";
@@ -977,11 +978,14 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [sessionRetry, setSessionRetry] = useState(0);
   const sessionController = useRef<ReturnType<typeof startSessionStartup> | undefined>(undefined);
   const [connectAccountBarrier, setConnectAccountBarrier] = useState<"idle" | "closing" | "blocked">("idle");
+  const socialConnectOwner = useRef<SocialConnectController | undefined>(undefined);
+  const [socialConnectRetry, setSocialConnectRetry] = useState(0);
+  const [socialConnectState, setSocialConnectState] = useState<{ accountId: string; value: SocialConnectState }>({ accountId: "", value: emptySocialConnectState() });
   const accountTransition = useRef<ReturnType<typeof createAccountTransition<AuroraUserProfile>> | undefined>(undefined);
   if (!accountTransition.current) {
     accountTransition.current = createAccountTransition<AuroraUserProfile>({
       publish: (state) => { setSessionStartup(state); setProfile(state.profile); },
-      closeConnect: async () => { if (isTauri()) await stopConnectForAccountTransition(invoke); },
+      closeConnect: async () => { socialConnectOwner.current?.invalidate(); if (isTauri()) await stopConnectForAccountTransition(invoke); },
       onBarrier: setConnectAccountBarrier,
     });
   }
@@ -1070,8 +1074,33 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const libraryLoadGeneration = useRef(0);
   const [instanceFilter, setInstanceFilter] = useState("");
   const [activeSection, setActiveSection] = useState<LauncherSection>(socialLabBuild ? "social" : "instances");
-  const socialService = useMemo(() => socialLabBuild && profile && services.auth.currentUser?.uid === profile.uid
+  const baseSocialService = useMemo(() => socialLabBuild && profile && services.auth.currentUser?.uid === profile.uid
     ? createSocialFirebaseService(services) : null, [services, profile?.uid, services.auth.currentUser?.uid]);
+  useEffect(() => {
+    const user = services.auth.currentUser, accountId = profile?.uid;
+    setSocialConnectState({ accountId: accountId ?? "", value: emptySocialConnectState() });
+    if (!socialLabBuild || !isTauri() || !accountId || user?.uid !== accountId || connectAccountBarrier !== "idle") return;
+    const controller = createSocialConnectController({ accountId, user, currentUser: () => services.auth.currentUser, invoke,
+      publish: value => setSocialConnectState({ accountId, value }) });
+    socialConnectOwner.current = controller;
+    void controller.start();
+    return () => { controller.invalidate(); if (socialConnectOwner.current === controller) socialConnectOwner.current = undefined; };
+  }, [services, profile?.uid, connectAccountBarrier, socialConnectRetry]);
+  const socialConnection = profile && socialConnectState.accountId === profile.uid && socialConnectOwner.current
+    ? { state: socialConnectState.value, controller: socialConnectOwner.current } : undefined;
+  const socialService = useMemo(() => {
+    if (!baseSocialService) return null;
+    const controller = socialConnectOwner.current, user = services.auth.currentUser;
+    return { ...baseSocialService,
+      capabilities: { ...baseSocialService.capabilities, join: !!controller && socialConnectState.accountId === profile?.uid && socialConnectState.value.available },
+      prepareJoin: async (sessionId: string) => {
+        // A detached card must never redirect its action to a later account's
+        // controller, including a new login under the same public UID.
+        if (!controller || socialConnectOwner.current !== controller || services.auth.currentUser !== user) throw { code: "signed_out" };
+        await controller.join(sessionId);
+      },
+    };
+  }, [baseSocialService, services, profile?.uid, socialConnectState.accountId, socialConnectState.value.available]);
   const [connectVisited, setConnectVisited] = useState(false);
   useEffect(() => { if (activeSection === "connect") setConnectVisited(true); }, [activeSection]);
   const [connectAvailable, setConnectAvailable] = useState(false);
@@ -1089,6 +1118,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   async function signOutWithConnectCleanup() {
     if (signOutPending.current) return;
     signOutPending.current = true;
+    socialConnectOwner.current?.invalidate();
     setSigningOut(true);
     try {
       await withVoiceAnnouncementLogout(voice, async () => {
@@ -1099,6 +1129,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       });
     } catch {
       const message = "Não foi possível concluir a saída. Confira a conexão e o anúncio de voz antes de tentar novamente.";
+      setSocialConnectRetry(value => value + 1);
       setNotice(message);
       if (sessionStartup.phase === "error") setSessionStartup({ phase: "error", error: message });
     } finally {
@@ -3654,6 +3685,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         <section className="workspace-grid">
           <div className="workspace-main">
         {socialService && activeSection === "social" && !signingOut && <div className="section-social"><p className="eyebrow">TESTE LOCAL · CONTAS DESCARTÁVEIS · SEM PUBLICAÇÃO NA COMUNIDADE REAL</p><SocialView key={profile.uid} service={socialService} accountId={profile.uid} nickname={profile.username}
+          connection={socialConnection}
           currentModpack={runningInstances.length === 1 ? instances.find(item => item.id === runningInstances[0].instanceId)?.displayName || runningInstances[0].instanceId : undefined} /></div>}
         {connectAvailable && (connectVisited || activeSection === "connect") && <div className="section-connect" hidden={activeSection !== "connect"} inert={signingOut || activeSection !== "connect"}><ConnectView launchContext={connectLaunchContext} /></div>}
         <article className="panel instances section-instances">

@@ -105,8 +105,10 @@ async function bounded<T>(request: Request, work: (signal: AbortSignal) => Promi
   finally { clearTimeout(timer); if (abort) request.signal.removeEventListener("abort", abort); controller.abort(); }
 }
 type PolicyState = { body: HostSocialPolicy; digest: string; deadline: number; state: "registering" | "open" | "reserved" | "terminal" };
-type GrantState = { body: SocialAdmissionGrant; policy: PolicyState; deadline: number; terminal: boolean; busy: boolean; sequence: number;
-  lastLease?: SocialContinuityLease; leaseDeadline: number; attempts: number[] };
+type GrantState = { body: SocialAdmissionGrant; policy: PolicyState; deadline: number; admissionDeadline: number; terminal: boolean; busy: boolean; sequence: number;
+  lastLease?: SocialContinuityLease; leaseDeadline: number; attempts: number[];
+  signedGrant?: SocialSigned<SocialAdmissionGrant>; initialLease?: SocialSigned<SocialContinuityLease>;
+  signedLease?: SocialSigned<SocialContinuityLease>; invitation?: string; publishing?: boolean };
 
 export async function createSocialAdmissionAuthority(binding: ReturnType<typeof createSocialBindingAuthority>, dependencies: SocialBindingDependencies) {
   const clock = dependencies.clock ?? { wall: () => Date.now(), monotonic: () => performance.now() };
@@ -148,6 +150,29 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
   async function sign<T extends object>(body: T, preimage: Uint8Array<ArrayBuffer>): Promise<SocialSigned<T>> {
     return { body: { ...body }, signature: hex(new Uint8Array(await crypto.subtle.sign("Ed25519", keys.privateKey, preimage))) };
   }
+  const copySigned = <T extends object>(value: SocialSigned<T>): SocialSigned<T> => ({ body: { ...value.body }, signature: value.signature });
+  async function authenticated(request: Request): Promise<string> {
+    const uid = await bounded(request, signal => dependencies.trustedAuthenticate(request, signal));
+    if (!matches(UID, uid)) fail("unauthenticated"); accountAttempt(uid); return uid;
+  }
+  function stopPolicy(policy: PolicyState) {
+    policy.state = "terminal";
+    for (const grant of grants.values()) if (grant.policy === policy) {
+      grant.terminal = true; grant.invitation = undefined; grant.signedLease = undefined; grant.initialLease = undefined;
+    }
+  }
+  async function ownedPolicy(request: Request, id: string): Promise<PolicyState> {
+    const uid = await authenticated(request);
+    const policy = policies.get(id);
+    if (!policy || policy.body.accountId !== uid) fail("broker_unavailable");
+    return policy;
+  }
+  async function ownedGrant(request: Request, id: string, role: "host" | "guest"): Promise<GrantState> {
+    const uid = await authenticated(request);
+    const grant = grants.get(id);
+    if (!grant || (role === "host" ? grant.body.hostAccountId : grant.body.guestAccountId) !== uid) fail("broker_unavailable");
+    return grant;
+  }
   async function lease(grant: GrantState, request: Request, observed: { wall: number; mono: number }, first = false) {
     live(grant, request, !first);
     const previous = grant.lastLease;
@@ -160,6 +185,7 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
     live(grant, request, !first); recent();
     if (grant.lastLease !== previous) fail("grant_terminal");
     grant.sequence = body.sequence; grant.lastLease = body; grant.leaseDeadline = Math.min(grant.deadline, mono + body.expiresAtUnixMs - now);
+    grant.signedLease = copySigned(result);
     return result;
   }
   function matching(receipt: SocialBindingReceipt, policy: HostSocialPolicy) {
@@ -167,6 +193,11 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
   }
   return {
     admissionPublicKey, issuerInstance,
+    async identity(request: Request, input: unknown) {
+      attempt(); exact(input, []);
+      // Identity is not a registration receipt or authorization. Challenge/context freshly check registration.
+      return { accountId: await authenticated(request), issuerInstance };
+    },
     async resolveContext(request: Request, input: unknown): Promise<SocialSigned<SocialJoinContext>> {
       attempt(); exact(input, ["sessionId"]); if (!matches(UUID, input.sessionId)) fail("invalid_request");
       // Authentication and the caller-authorized projection precede any lookup of this session's policy.
@@ -246,9 +277,12 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
           hostAccountId: policy.body.accountId, hostPublicKey: policy.body.publicKey, hostOperationId: policy.body.operationId, hostGeneration: policy.body.generation,
           guestAccountId: receipt.accountId, guestPublicKey: receipt.publicKey, guestOperationId: receipt.operationId, guestGeneration: receipt.generation,
           issuedAtUnixMs: now, admissionExpiresAtUnixMs: Math.min(now + 10_000, expires), sessionExpiresAtUnixMs: expires });
-        state = { body, policy, deadline: Math.min(originalDeadline, startMono + expires - startWall), terminal: false, busy: false, sequence: 0, leaseDeadline: 0, attempts: [] };
+        state = { body, policy, deadline: Math.min(originalDeadline, startMono + expires - startWall),
+          admissionDeadline: Math.min(originalDeadline, observed.mono + body.admissionExpiresAtUnixMs - now),
+          terminal: false, busy: false, sequence: 0, leaseDeadline: 0, attempts: [] };
         grants.set(body.grantId, state); live(state, request, false);
         const grant = await sign(body, socialAdmissionPreimage(body)); const firstLease = await lease(state, request, observed, true); live(state, request);
+        state.signedGrant = copySigned(grant); state.initialLease = copySigned(firstLease);
         return { grant, lease: firstLease };
       } catch (error) { policy.state = "terminal"; if (state) state.terminal = true; throw error; }
     },
@@ -269,6 +303,59 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
         return await lease(state, request, observed);
       } catch (error) { state.terminal = true; state.policy.state = "terminal"; throw error; }
       finally { state.busy = false; }
+    },
+    async hostPoll(request: Request, input: unknown) {
+      attempt(); exact(input, ["policyId"]); if (!matches(HEX, input.policyId)) fail("invalid_request");
+      const policy = await ownedPolicy(request, input.policyId);
+      try {
+        current(policy, request); await fresh(request, policy.body.accountId, policy); current(policy, request);
+        const grant = Array.from(grants.values()).find(value => value.policy === policy);
+        if (!grant?.signedGrant || !grant.initialLease || !grant.signedLease) return { state: "waiting" as const };
+        live(grant, request);
+        // Reading a mailbox never creates/renews a lease. Only the guest's fresh continuity request does.
+        return { state: "admitted" as const, grant: copySigned(grant.signedGrant), initialLease: copySigned(grant.initialLease), lease: copySigned(grant.signedLease) };
+      } catch (error) { stopPolicy(policy); throw error; }
+    },
+    async hostPublish(request: Request, input: unknown) {
+      attempt(); exact(input, ["grantId", "invitation"]);
+      if (!matches(HEX, input.grantId) || typeof input.invitation !== "string" || !input.invitation.length
+        || encoder.encode(input.invitation).length > 8_192) fail("invalid_request");
+      const invitation = input.invitation;
+      const grant = await ownedGrant(request, input.grantId, "host");
+      if (grant.invitation !== undefined || grant.publishing) fail("invitation_already_published");
+      grant.publishing = true;
+      try {
+        live(grant, request);
+        if (clock.monotonic() >= grant.admissionDeadline || clock.wall() >= grant.body.admissionExpiresAtUnixMs) fail("admission_expired");
+        await fresh(request, grant.body.hostAccountId, grant.policy); live(grant, request);
+        if (clock.monotonic() >= grant.admissionDeadline || clock.wall() >= grant.body.admissionExpiresAtUnixMs) fail("admission_expired");
+        // This is an opaque, untrusted transport envelope. Native verifies its signature, exact grant,
+        // game/TCP service, endpoint policy and original deadlines before opening any connection.
+        grant.invitation = invitation;
+        return { accepted: true as const };
+      } catch (error) { stopPolicy(grant.policy); throw error; }
+      finally { grant.publishing = false; }
+    },
+    async guestReceive(request: Request, input: unknown) {
+      attempt(); exact(input, ["grantId"]); if (!matches(HEX, input.grantId)) fail("invalid_request");
+      const grant = await ownedGrant(request, input.grantId, "guest");
+      try {
+        live(grant, request);
+        if (clock.monotonic() >= grant.admissionDeadline || clock.wall() >= grant.body.admissionExpiresAtUnixMs) fail("admission_expired");
+        await fresh(request, grant.body.guestAccountId, grant.policy); live(grant, request);
+        if (clock.monotonic() >= grant.admissionDeadline || clock.wall() >= grant.body.admissionExpiresAtUnixMs) fail("admission_expired");
+        if (grant.invitation === undefined) return { state: "waiting" as const };
+        if (!grant.signedLease) fail("continuity_expired");
+        return { state: "ready" as const, invitation: grant.invitation, lease: copySigned(grant.signedLease) };
+      } catch (error) { stopPolicy(grant.policy); throw error; }
+    },
+    async hostStop(request: Request, input: unknown) {
+      attempt(); exact(input, ["policyId"]); if (!matches(HEX, input.policyId)) fail("invalid_request");
+      const policy = await ownedPolicy(request, input.policyId); stopPolicy(policy); return { stopped: true as const };
+    },
+    async guestStop(request: Request, input: unknown) {
+      attempt(); exact(input, ["grantId"]); if (!matches(HEX, input.grantId)) fail("invalid_request");
+      const grant = await ownedGrant(request, input.grantId, "guest"); stopPolicy(grant.policy); return { stopped: true as const };
     },
     inspect() { prune(); return { policies: policies.size, grants: grants.size, terminalGrants: Array.from(grants.values()).filter(value => value.terminal).length }; },
   };

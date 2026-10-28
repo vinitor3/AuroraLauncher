@@ -79,6 +79,33 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            // Only the isolated debug social profile accepts its parent's public
+            // authority pin. It is never read from WebView state or an IPC call.
+            let connect = {
+                #[cfg(all(debug_assertions, feature = "connect-lab"))]
+                {
+                    use aurora_launcher_core::engine::connect::{
+                        ConnectManager, SocialLabAuthority,
+                    };
+                    if app.config().identifier == "com.aurora.smartlauncher.sociallab" {
+                        std::env::var("AURORA_SOCIAL_AUTHORITY_PIN")
+                            .ok()
+                            .zip(std::env::var("AURORA_SOCIAL_AUTHORITY_ISSUER").ok())
+                            .and_then(|(pin, issuer)| {
+                                SocialLabAuthority::from_local_process(&pin, &issuer).ok()
+                            })
+                            .map(ConnectManager::with_social_lab)
+                            .unwrap_or_default()
+                    } else {
+                        ConnectManager::default()
+                    }
+                }
+                #[cfg(not(all(debug_assertions, feature = "connect-lab")))]
+                {
+                    aurora_launcher_core::engine::connect::ConnectManager::default()
+                }
+            };
+            app.manage(connect);
             #[cfg(any(feature = "connect-lab", feature = "connect-voice-lab"))]
             app.manage(ExperimentalExitState::default());
             if create_launcher_tray(app).is_err() {
@@ -107,7 +134,6 @@ fn main() {
         .manage(doctor_runs::DoctorRuns::default())
         .manage(manual_downloads::ManualDownloads::default())
         .manage(aurora_launcher_core::engine::ai_tools::AiToolBroker::default())
-        .manage(aurora_launcher_core::engine::connect::ConnectManager::default())
         .manage(aurora_launcher_core::engine::connect_discovery::DiscoveryManager::default())
         .manage(
             aurora_launcher_core::engine::connect_voice_desktop::VoiceAnnouncementManager::default(
@@ -132,6 +158,11 @@ fn main() {
             voice_announcement_commands::voice_announcement_confirm_close,
             voice_announcement_commands::voice_announcement_finish_close,
             connect_commands::connect_capabilities,
+            connect_commands::connect_social_capabilities,
+            connect_commands::connect_social_reserve,
+            connect_commands::connect_social_authenticate,
+            connect_commands::connect_social_confirm_host,
+            connect_commands::connect_account_transition_stop,
             connect_commands::connect_prove_social_key_binding,
             connect_commands::connect_discover_instance,
             connect_commands::connect_review_discovered,

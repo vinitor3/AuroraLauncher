@@ -7,7 +7,9 @@ mod path_observation;
 pub use path_observation::{ConnectPathObservation, ConnectPathState};
 mod ready_game_caller;
 mod ready_game_profile;
+mod social_profile;
 pub use ready_game_profile::*;
+pub use social_profile::*;
 #[cfg(feature = "connect-lab")]
 mod ready_game_backend;
 #[cfg(feature = "connect-lab")]
@@ -243,6 +245,8 @@ pub struct StatusSummary {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectSnapshot {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub social: Option<SocialSnapshot>,
     pub available: bool,
     pub operation_id: Option<String>,
     pub generation: u64,
@@ -284,6 +288,7 @@ pub struct ConnectSnapshot {
 impl ConnectSnapshot {
     fn idle() -> Self {
         Self {
+            social: None,
             available: cfg!(feature = "connect-lab"),
             operation_id: None,
             generation: 0,
@@ -345,6 +350,8 @@ pub enum ConnectError {
     Internal,
     #[error("connect_source_changed")]
     SourceChanged,
+    #[error("connect_cleanup_failed")]
+    CleanupFailed,
 }
 impl ConnectError {
     pub fn code(self) -> &'static str {
@@ -363,6 +370,7 @@ impl ConnectError {
             Self::Cancelled => "connect_cancelled",
             Self::Internal => "connect_internal",
             Self::SourceChanged => "connect_source_changed",
+            Self::CleanupFailed => "connect_cleanup_failed",
         }
     }
 }

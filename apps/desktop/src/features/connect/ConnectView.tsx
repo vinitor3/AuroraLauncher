@@ -16,6 +16,7 @@ import type { ReadyGameLaunchContext } from "../connect-game-launch/types";
 import { isControlledSourceRejection, provesNoSourceReservation, type HostSourceProfile } from "./host-source-types";
 import { pathObservationText } from "./path-observation-types";
 import { connectDeadlines, preparationExpired, remainingText, reviewExpired, sessionGuidance } from "./session-guidance";
+import { socialStageText } from "../social/connect-types";
 
 type Action = "prepareHost" | "prepareGuest" | "reviewHost" | "reviewGuest" | "confirm" | "export" | "probe" | "retryUdp" | "stop" | "refresh" | GroupAction;
 const actionText: Record<Action, string> = {
@@ -456,6 +457,17 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   const guidance = sessionGuidance({ snapshot, selectedRole, capabilityAvailable: capabilities?.available === true, pending: busy,
     uncertain: sourcePreparationUncertain || hostReviewUncertain, stale: Boolean(warning) || loading, nowMs });
   const deadlines = connectDeadlines(snapshot);
+
+  if (snapshot?.social) return <section className="connect-view" aria-labelledby="connect-title">
+    <header className="connect-heading"><div><h2 id="connect-title">Aurora Connect</h2><p>{snapshot.phase === "closing" ? "Desconectando…" : socialStageText[snapshot.social.stage]}</p></div><span className="connect-badge">Experimental</span></header>
+    <p>Esta sessão foi preparada em Amigos e comunidade. Volte àquela página para acompanhar a entrada ou revisar o compartilhamento.</p>
+    <p>Jogo e voz ainda não verificados. A conexão social utiliza o mesmo controle de encerramento do launcher.</p>
+    {error && <p className="connect-error" role="alert">{error}</p>}
+    {warning && <p className="connect-warning" role="status">{warning}</p>}
+    <div className="connect-actions"><button className="secondary" disabled={busy} onClick={() => void perform("refresh", refresh)}>Atualizar estado</button>
+      {activeOperation && <button className="danger" disabled={pending === "stop" || snapshot.phase === "closing"} onClick={stop}>Encerrar Connect</button>}</div>
+    {snapshot.cleanupState === "complete" && <p role="status">Recursos da conexão liberados.</p>}
+  </section>;
 
   return <section className="connect-view" aria-labelledby="connect-title">
     <header className="connect-heading"><div><h2 id="connect-title">Aurora Connect</h2><p>Compartilhe um servidor autorizado ou use um convite recebido.</p></div><span className="connect-badge">Experimental</span></header>

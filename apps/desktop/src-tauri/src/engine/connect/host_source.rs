@@ -212,6 +212,7 @@ mod enabled {
                 profile: request.profile().name().unwrap_or("legacy"),
             });
             state.attempt = Some(Attempt {
+                social: None,
                 owner: owner.into(),
                 snapshot,
                 draft: None,

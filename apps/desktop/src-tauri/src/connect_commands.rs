@@ -18,6 +18,59 @@ fn owner(window: &WebviewWindow) -> Result<&str, &'static str> {
     Ok(window.label())
 }
 
+#[tauri::command]
+pub fn connect_social_capabilities(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+) -> Result<aurora_launcher_core::engine::connect::SocialCapabilities, &'static str> {
+    owner(&window)?;
+    Ok(manager.social_capabilities())
+}
+#[tauri::command]
+pub fn connect_social_reserve(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    request: aurora_launcher_core::engine::connect::SocialReserveRequest,
+) -> Result<aurora_launcher_core::engine::connect::SocialReservation, &'static str> {
+    manager
+        .social_reserve(owner(&window)?, request)
+        .map_err(|error| error.code())
+}
+#[tauri::command]
+pub async fn connect_social_authenticate(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    operation_id: String,
+    generation: u64,
+    id_token: String,
+) -> Result<ConnectSnapshot, &'static str> {
+    manager
+        .social_authenticate(owner(&window)?, &operation_id, generation, id_token)
+        .map_err(|error| error.code())
+}
+#[tauri::command]
+pub fn connect_social_confirm_host(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    operation_id: String,
+    generation: u64,
+    digest: String,
+) -> Result<ConnectSnapshot, &'static str> {
+    manager
+        .social_confirm_host(owner(&window)?, &operation_id, generation, &digest)
+        .map_err(|error| error.code())
+}
+#[tauri::command]
+pub async fn connect_account_transition_stop(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+) -> Result<ConnectSnapshot, &'static str> {
+    manager
+        .account_transition_stop(owner(&window)?)
+        .await
+        .map_err(|error| error.code())
+}
+
 /// Typed possession proof only; no approval, receipt, or transport side effect.
 #[tauri::command]
 pub fn connect_prove_social_key_binding(

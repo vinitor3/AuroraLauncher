@@ -96,7 +96,8 @@ export async function startSocialBindingLab({ enabled = false, port = 42_888, ad
   const authority = createSocialBindingAuthority(dependencies);
   const admissionAuthority = admission ? await createSocialAdmissionAuthority(authority, dependencies) : null;
   const keyRoutes = ["/v1/social/key/challenge", "/v1/social/key/proof"];
-  const admissionRoutes = ["/v1/social/context", "/v1/social/host/register", "/v1/social/join", "/v1/social/continuity"];
+  const admissionRoutes = ["/v1/social/identity", "/v1/social/context", "/v1/social/host/register", "/v1/social/join", "/v1/social/continuity",
+    "/v1/social/host/poll", "/v1/social/host/publish", "/v1/social/guest/receive", "/v1/social/host/stop", "/v1/social/guest/stop"];
   let origin;
   const server = http.createServer(async (req, res) => {
     const cancellation = new AbortController();
@@ -113,17 +114,23 @@ export async function startSocialBindingLab({ enabled = false, port = 42_888, ad
       switch (req.url) {
         case "/v1/social/key/challenge": output = await authority.challenge(request, body); break;
         case "/v1/social/key/proof": output = await authority.prove(request, body); break;
+        case "/v1/social/identity": output = await admissionAuthority.identity(request, body); break;
         case "/v1/social/context": output = await admissionAuthority.resolveContext(request, body); break;
         case "/v1/social/host/register": output = await admissionAuthority.registerHost(request, body); break;
         case "/v1/social/join": output = await admissionAuthority.join(request, body); break;
         case "/v1/social/continuity": output = await admissionAuthority.continuity(request, body); break;
+        case "/v1/social/host/poll": output = await admissionAuthority.hostPoll(request, body); break;
+        case "/v1/social/host/publish": output = await admissionAuthority.hostPublish(request, body); break;
+        case "/v1/social/guest/receive": output = await admissionAuthority.guestReceive(request, body); break;
+        case "/v1/social/host/stop": output = await admissionAuthority.hostStop(request, body); break;
+        case "/v1/social/guest/stop": output = await admissionAuthority.guestStop(request, body); break;
         default: fail("invalid_request");
       }
       reply(200, output);
     } catch (error) {
       const code = error instanceof SocialBindingError ? error.code : "lab_unavailable";
       const status = code === "unauthenticated" ? 401 : code === "rate_limited" ? 429 : code === "authority_busy" || code === "backend_timeout" || code === "backend_unavailable" ? 503
-        : code === "request_too_large" ? 413 : code === "context_unavailable" || code === "session_not_authorized" || code === "account_not_registered" ? 403 : 400;
+        : code === "request_too_large" ? 413 : code === "context_unavailable" || code === "session_not_authorized" || code === "account_not_registered" || code === "broker_unavailable" ? 403 : 400;
       reply(status, { code });
     }
   });

@@ -28,7 +28,7 @@ export type SocialService = {
   publishSession(value: SocialSessionDraft): Promise<void>;
   closeSession(): Promise<void>;
   listPublicSessions(cursor?: string | null): Promise<SocialPage>;
-  prepareJoin(sessionId: string): Promise<never>;
+  prepareJoin(sessionId: string): Promise<void>;
 };
 
 /** Exact nick search only; never a query over all accounts. */

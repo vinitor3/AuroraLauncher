@@ -79,15 +79,16 @@ type Invoke = (command: string, args?: Record<string, unknown>) => Promise<unkno
 
 /** Called only in Tauri. Capability availability never substitutes for cleanup. */
 export async function stopConnectForAccountTransition(invoke: Invoke): Promise<void> {
-  const current = snapshotFrom(await invoke("connect_snapshot"));
+  // The native command invalidates the account epoch before observing the slot.
+  // A late social reservation from the previous account cannot appear after an
+  // idle snapshot and escape logout cleanup.
+  const current = snapshotFrom(await invoke("connect_account_transition_stop"));
   if (current.operationId === null) {
     if (current.phase !== "idle" || !["notStarted", "complete"].includes(current.cleanupState)) {
       throw new Error("connect_account_cleanup_incomplete");
     }
     return;
   }
-  const stopped = snapshotFrom(await invoke("connect_stop", { operationId: current.operationId }));
-  if (stopped.operationId !== current.operationId || stopped.generation < current.generation
-    || !["closed", "failed"].includes(stopped.phase)
-    || stopped.cleanupState !== "complete") throw new Error("connect_account_cleanup_incomplete");
+  if (!["closed", "failed"].includes(current.phase)
+    || current.cleanupState !== "complete") throw new Error("connect_account_cleanup_incomplete");
 }

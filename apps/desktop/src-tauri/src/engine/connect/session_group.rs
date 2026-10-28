@@ -274,6 +274,7 @@ impl Manager {
             participants: Vec::new(),
         });
         state.attempt = Some(Attempt {
+            social: None,
             owner: owner.into(),
             snapshot,
             draft: None,

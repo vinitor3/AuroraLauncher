@@ -4,6 +4,7 @@ Decisão experimental no caminho existente: [Aurora Connect V2](PROPOSAL-aurora-
 
 | ADR | Decisão | Estado |
 | --- | --- | --- |
+| [033](ADR-033-social-desktop-join.md) | Entrada social no mesmo ConnectManager, broker autenticado local e barreira atômica de conta | PROTÓTIPO local; evidências e limites na tarefa89 |
 | [032](ADR-032-social-join-context.md) | Contexto social assinado resolvido pela sessão, destinatário e política atuais antes de ingresso | PROTÓTIPO local testado; integração gráfica/produção pendentes |
 | [031](ADR-031-social-local-admission.md) | Consentimento host, grant social separado e continuidade assinada, dois clientes TCP locais | PROTÓTIPO local testado; integração gráfica/produção pendentes |
 | [030](ADR-030-social-account-key-binding.md) | Prova Ed25519 entre conta autenticada, chave RAM e preparo original, sem autorização de transporte | PROTÓTIPO local testado; ingresso social pendente |
