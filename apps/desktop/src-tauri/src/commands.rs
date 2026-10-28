@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::doctor_runs::{self, DoctorRuns};
+use aurora_launcher_core::engine::launch_settings::{self, LaunchSettings, LaunchSettingsOverview};
 use aurora_launcher_core::engine::{
     ai_history,
     ai_tools::{
@@ -2381,6 +2382,14 @@ fn begin_instance_launch_inner(
     }
     doctor_runs::check_path(instance.root())?;
     let profile = read_instance_launch_profile(app.clone(), id.clone())?;
+    let launch_settings = launch_settings::read(&instance).map_err(|error| error.to_string())?;
+    let effective = launch_settings
+        .resolve(
+            launch_settings::physical_memory_mb(),
+            launch_settings::enabled_mod_count(&instance).map_err(|error| error.to_string())?,
+            0,
+        )
+        .map_err(|error| error.to_string())?;
     let run = DoctorRun {
         run_id: uuid::Uuid::new_v4().to_string(),
         started_at_ms: doctor_runs::now_ms(),
@@ -2391,7 +2400,7 @@ fn begin_instance_launch_inner(
         minecraft_version: profile.minecraft_version.unwrap_or_default(),
         java_executable: String::new(),
         java_major: None,
-        max_memory_mb: 4096,
+        max_memory_mb: effective.max_memory_mb,
         failure: None,
         logs_before: snapshot_logs(&instance),
     };
@@ -2483,14 +2492,22 @@ pub async fn analyze_instance(
             }
         }
         let profile = read_instance_launch_profile(app.clone(), id)?;
+        let mut settings_limitation = None;
         let context = if run_id.is_some() {
             let run = run.as_ref().ok_or("Execução não encontrada.")?;
             DoctorContext { version_id: run.version_id.clone(), minecraft_version: run.minecraft_version.clone(), java_executable: Some(run.java_executable.clone()).filter(|value| !value.is_empty()), max_memory_mb: run.max_memory_mb }
         } else {
-            DoctorContext { version_id: profile.version_id.unwrap_or_default(), minecraft_version: profile.minecraft_version.unwrap_or_default(), java_executable: java_executable.filter(|value| !value.trim().is_empty()), max_memory_mb: 4096 }
+            let (max_memory_mb, limitation) = launch_settings::diagnostic_memory(&instance, run.as_ref().map(|run| run.max_memory_mb));
+            settings_limitation = limitation;
+            DoctorContext { version_id: profile.version_id.unwrap_or_default(), minecraft_version: profile.minecraft_version.unwrap_or_default(), java_executable: java_executable.filter(|value| !value.trim().is_empty()), max_memory_mb }
         };
         let observed_run_id = run.as_ref().map(|run| run.run_id.clone());
         let mut report = analyze_doctor(&instance, context, run)?;
+        if let Some(limitation) = settings_limitation {
+            report.limitations.push(limitation.into());
+            report.sanitized_json.clear();
+            report.sanitized_json = serde_json::to_string_pretty(&report).map_err(|_| "Falha ao gerar relatório sanitizado.")?;
+        }
         let current_run_id = app.state::<DoctorRuns>().read(&doctor_directory(&app)?, instance.id().as_str())?.map(|run| run.run_id);
         if current_run_id != observed_run_id {
             return Err("Uma nova execução começou durante a análise. Analise novamente.".into());
@@ -2818,13 +2835,24 @@ fn launch_instance_tracked(
     // survive that process. Check the game directory before replacing any JAR.
     #[cfg(windows)]
     ensure_no_external_instance_game(instance.root())?;
+    let launch_settings = launch_settings::read(&instance).map_err(|error| error.to_string())?;
+    let java = JavaRuntime::from_executable(java_executable).map_err(|error| error.to_string())?;
+    let selected_java = java.major_version().map_err(|error| error.to_string())?;
+    doctor_run.java_major = Some(selected_java);
+    let total_memory_mb = launch_settings::physical_memory_mb();
+    launch_settings
+        .resolve(
+            total_memory_mb,
+            launch_settings::enabled_mod_count(&instance).map_err(|error| error.to_string())?,
+            selected_java,
+        )
+        .map_err(|error| error.to_string())?;
     if companion_migration_required(&instance).map_err(|error| error.to_string())? {
         #[cfg(not(windows))]
         ensure_no_external_instance_game(instance.root())?;
         migrate_managed_companion(&instance, &mutation_lock, false)
             .map_err(|error| error.to_string())?;
     }
-    let java = JavaRuntime::from_executable(java_executable).map_err(|error| error.to_string())?;
     let uuid = offline_uuid_for_nickname(&nickname).map_err(|error| error.to_string())?;
     let mut spec =
         resolve_launch_spec(&instance, &version_id).map_err(|error| error.to_string())?;
@@ -2840,20 +2868,20 @@ fn launch_instance_tracked(
         install_embedded_skins(&instance, &minecraft_version, loader)
             .map_err(|error| error.to_string())?;
         skins_installed = true;
-        let required_java = required_java_major_for_instance(&instance, &minecraft_version);
-        let selected_java = java.major_version().map_err(|error| error.to_string())?;
-        doctor_run.java_major = Some(selected_java);
-        let baseline_java = required_java_major(&minecraft_version);
-        let compatible = if required_java > baseline_java {
-            selected_java >= required_java
-        } else {
-            selected_java == required_java
-        };
-        if !compatible {
-            return Err(format!(
-                "esta instância precisa do Java {required_java}, mas o Java {selected_java} foi selecionado"
-            ));
-        }
+    }
+    // Inspect the final mod set, after the existing managed migration/install.
+    // Requirements from a retired Companion must not block its own removal.
+    let required_java = required_java_major_for_instance(&instance, &minecraft_version);
+    let baseline_java = required_java_major(&minecraft_version);
+    let compatible = if required_java > baseline_java {
+        selected_java >= required_java
+    } else {
+        selected_java == required_java
+    };
+    if !compatible {
+        return Err(format!("esta instância precisa do Java {required_java}, mas o Java {selected_java} foi selecionado"));
+    }
+    if let Some(loader) = loader {
         let server =
             IpcServer::start_with_session(Some(IpcSessionProfile::offline(uuid, nickname.clone())))
                 .map_err(|error| error.to_string())?;
@@ -2886,9 +2914,17 @@ fn launch_instance_tracked(
         }
         ipc_server = Some(server);
     }
+    let effective = launch_settings
+        .resolve(
+            total_memory_mb,
+            launch_settings::enabled_mod_count(&instance).map_err(|error| error.to_string())?,
+            selected_java,
+        )
+        .map_err(|error| error.to_string())?;
+    doctor_run.max_memory_mb = effective.max_memory_mb;
     let identity = LaunchIdentity::offline(nickname, uuid);
     let prepared = LauncherEngine
-        .prepare_launch(&instance, &java, &identity, &spec, 4_096)
+        .prepare_launch_with_settings(&instance, &java, &identity, &spec, &effective)
         .map_err(|error| error.to_string())?;
     let _ = doctor_recovery::record_observation(
         &instance,
@@ -3208,6 +3244,58 @@ fn loader_for_profile(version_id: &str) -> Option<&'static str> {
 fn public_profile_url(value: Option<&str>) -> Option<&str> {
     let value = value?.trim();
     (value.len() <= 2_048 && value.starts_with("https://")).then_some(value)
+}
+
+#[tauri::command]
+pub async fn read_launch_settings(
+    app: AppHandle,
+    id: String,
+) -> Result<LaunchSettingsOverview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let id = InstanceId::parse(id).map_err(|_| "Identificador de instância inválido.")?;
+        let instance = layout(&app)?.open(id);
+        let settings = launch_settings::read(&instance).map_err(|error| error.to_string())?;
+        launch_settings::overview(&instance, settings).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "Não foi possível ler a configuração de inicialização.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn save_launch_settings(
+    app: AppHandle,
+    id: String,
+    settings: LaunchSettings,
+) -> Result<LaunchSettingsOverview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let parsed = InstanceId::parse(&id).map_err(|_| "Identificador de instância inválido.")?;
+        if instance_is_running(&app.state::<RunningInstances>(), &id)? {
+            return Err("Feche o jogo antes de alterar a configuração de inicialização.".into());
+        }
+        let instance = layout(&app)?.open(parsed);
+        let guard = acquire_idle_instance(&instance)?;
+        diagnostic_lab::ensure_launchable(&instance).map_err(|error| error.to_string())?;
+        #[cfg(windows)]
+        ensure_no_external_instance_game(instance.root())?;
+        if app
+            .state::<DoctorRuns>()
+            .read(&doctor_directory(&app)?, &id)?
+            .is_some_and(|run| matches!(run.outcome.as_str(), "preparing" | "running"))
+        {
+            return Err("Aguarde a inicialização terminar antes de alterar a configuração.".into());
+        }
+        let overview =
+            launch_settings::overview(&instance, settings).map_err(|error| error.to_string())?;
+        overview
+            .settings
+            .resolve(overview.total_memory_mb, overview.mod_count, 0)
+            .map_err(|error| error.to_string())?;
+        launch_settings::save(&instance, &guard, &overview.settings)
+            .map_err(|error| error.to_string())?;
+        Ok(overview)
+    })
+    .await
+    .map_err(|_| "Não foi possível salvar a configuração de inicialização.".to_owned())?
 }
 
 #[tauri::command]
