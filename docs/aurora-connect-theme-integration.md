@@ -4,11 +4,21 @@
 
 ## Bases observadas
 
-Connect está no commit `a0d2e24e75ea48a52761f082ccf1678ad914d028`, branch `codex/aur-r4-connect`. A worktree de temas `C:/Users/usuario/.codex/worktrees/launcher-themes/AuroraLauncher`, branch informada `codex/aur-visual-themes`, foi consultada somente para leitura: HEAD `ffc37cc5f44ec74e3afa67cc9a81bf746a552d23`, com mudanças em andamento, incluindo `App.tsx`, contratos nativos/frontend e editor.
+Connect foi implementado no commit `a0d2e24e75ea48a52761f082ccf1678ad914d028`, branch `codex/aur-r4-connect`; o primeiro registro deste alinhamento é `ee304aa`. A primeira consulta somente leitura à worktree de temas `C:/Users/usuario/.codex/worktrees/launcher-themes/AuroraLauncher` encontrou HEAD `ffc37cc5f44ec74e3afa67cc9a81bf746a552d23` e mudanças em andamento. Após a conclusão da entrega, a branch `codex/aur-visual-themes` e o HEAD `3f30785e7344b6bc6841dfcee4c1c111cbf4999e` foram reconfirmados, com worktree limpa.
 
-Foram lidos `docs/launcher-themes.md` e `docs/engineering/ADR/ADR-027-declarative-launcher-themes.md` daquela worktree e consultados os contratos atuais de variáveis/IDs. Na consulta, `docs/theme-integration.md` ainda não existia e a nova seção de temas de `AGENTS.md` ainda não estava disponível. Não declarar esses dois materiais lidos: lê-los no commit concluído de temas antes da integração. `ThemeSurface` foi anunciado no alinhamento entre trabalhos; sua API não foi encontrada nesta consulta e não é inventada nesta base.
+Foram lidos `docs/launcher-themes.md` e `docs/engineering/ADR/ADR-027-declarative-launcher-themes.md` daquela worktree. Na primeira consulta, `docs/theme-integration.md`, a nova seção de AGENTS e a API ThemeSurface ainda estavam pendentes. No commit concluído `3f30785`, foram lidos integralmente `docs/theme-integration.md`, `AGENTS.md`, `ThemeSurface.tsx` e `surface.css`; os contratos de navegação TypeScript/Rust foram conferidos. Esta atualização substitui a pendência de leitura, sem declarar merge ou testes combinados.
 
-Não copiar arquivos inteiros entre worktrees, nem aplicar o `App.tsx` de uma sobre a outra. Esperar o commit revisado de temas e reconciliar cumulativamente com Connect, barreiras de conta, CAS/Doctor/Recovery, Assistente e nove pares Core/Skins. Alterações não commitadas da outra worktree permanecem sob responsabilidade de seu proprietário.
+O ancestral comum entre `ee304aa` e `3f30785` é `dc2ec5ac36a88f54b1130bac4789f8ecd56641d2`. Os dois commits exclusivos de temas são `ffc37cc` e `3f30785`; o segundo depende da base do primeiro. A matriz ativa nos dois checkouts conserva SHA-256 `96c4ec789902f8aa87931ecd72aca531fec53d4ac9c6055fcb9837ef77e6918a`.
+
+Não copiar arquivos inteiros entre worktrees, nem aplicar o `App.tsx` de uma sobre a outra. Integrar a entrega revisada de temas cumulativamente com Connect, barreiras de conta, CAS/Doctor/Recovery, Assistente e nove pares Core/Skins. Não assumir que o AGENTS da branch de temas contém os checkpoints Connect posteriores. A integração final das branches continua separada deste alinhamento; nenhuma branch de terceiros foi alterada.
+
+## API visual conferida em 3f30785
+
+`ThemeSurface` recebe somente `surfaceId`, `as` (`section`, `article` ou `div`), `labelledBy`, `className` e `children`. Não cria provider nem recebe handlers. `surfaceId` é constante da feature, exposta em `data-theme-surface`; não acrescenta um item de navegação, campo JSON ou associação por painel. O ID acessível do título pode usar `useId`, sem confundi-lo com essa identidade estável.
+
+O CSS oferece fallback oficial de superfície opaca, texto, borda, fonte, escala e espaçamento. Classes opcionais: `theme-surface-heading`, `theme-surface-description` e `theme-surface-action`. O painel mantém seu layout, foco e estados; dados essenciais e erros usam o texto principal. O contrato proíbe ativar/importar automaticamente temas recebidos de servidores, modpacks ou sessões Connect. Confirmações sensíveis e recuperação ficam fora da apresentação personalizada.
+
+Na integração, superfícies comuns podem adotar esses tokens com fallback, enquanto revisão de autorização e controles de segurança mantêm aparência oficial independente. Nenhuma importação desse componente foi adicionada antes da integração de sua dependência. As provas informadas pelo responsável de temas pertencem à sua entrega; não foram reexecutadas nem atribuídas ao Connect neste registro.
 
 ## Fronteira obrigatória
 
