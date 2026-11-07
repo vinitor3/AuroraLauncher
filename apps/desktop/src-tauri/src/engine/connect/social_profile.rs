@@ -45,6 +45,8 @@ pub struct SocialSnapshot {
     pub game_target: Option<String>,
     pub visibility: Option<String>,
     pub expires_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ready_game_launch_available: Option<bool>,
 }
 
 /// Supplied by the trusted local process launcher, never by an IPC command.

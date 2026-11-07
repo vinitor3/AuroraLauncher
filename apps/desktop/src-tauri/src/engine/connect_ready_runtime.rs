@@ -1,7 +1,9 @@
 //! Read-only readiness proof for one existing diagnostic copy. Kept distinct
 //! from installation and repair. Pins live only while the caller holds its lock.
 use super::{
-    connect::ReadyGameLaunchError as Error, connect_quick_play, connect_ready_files,
+    connect::ReadyGameLaunchError as Error,
+    connect_quick_play, connect_ready_files,
+    connect_ready_profile::{self, ReadyProfile},
     diagnostic_lab, recovery, Instance, InstanceMutationGuard, VersionLaunchSpec,
 };
 use sha2::{Digest, Sha256};
@@ -14,6 +16,7 @@ use std::{
 };
 
 pub struct ReadyRuntime {
+    pub profile: ReadyProfile,
     pub fingerprint: String,
     pub core_sha256: String,
     pub skins_sha256: String,
@@ -234,7 +237,7 @@ pub fn inspect_ready_runtime(
         directories
             .extend(recovery::pin_directory(&directory).map_err(|_| Error::InstanceNotReady)?);
     }
-    let mut root_profile_seen = false;
+    let mut root_profiles = Vec::new();
     for relative in ["aurora-instance.json", "aurora-modpack.json"] {
         let path =
             recovery::path(instance.root(), relative).map_err(|_| Error::InstanceNotReady)?;
@@ -242,46 +245,31 @@ pub fn inspect_ready_runtime(
             let bytes = reader.instance(instance, relative, 1024 * 1024)?;
             let metadata: serde_json::Value =
                 serde_json::from_slice(&bytes).map_err(|_| Error::UnsupportedRuntime)?;
-            if !metadata.is_object()
-                || metadata.get("versionId").is_some_and(|value| {
-                    value.as_str() != Some(connect_quick_play::CONNECT_QUICK_PLAY_VERSION_ID)
-                })
-                || metadata
-                    .get("minecraft")
-                    .is_some_and(|value| value.as_str() != Some("1.21.1"))
-            {
-                return Err(Error::UnsupportedRuntime);
-            }
-            root_profile_seen |= metadata
-                .get("versionId")
-                .and_then(serde_json::Value::as_str)
-                == Some(connect_quick_play::CONNECT_QUICK_PLAY_VERSION_ID);
+            root_profiles.push(metadata);
         }
     }
-    if !root_profile_seen {
-        return Err(Error::UnsupportedRuntime);
-    }
-    for version in ["1.21.1", connect_quick_play::CONNECT_QUICK_PLAY_VERSION_ID] {
+    let profile = connect_ready_profile::profile_from_metadata(&root_profiles)?;
+    for version in [profile.descriptor().minecraft_version, profile.version_id()] {
         reader.instance(
             instance,
             &format!("versions/{version}/{version}.json"),
             1024 * 1024,
         )?;
     }
-    let mut spec =
-        super::resolve_launch_spec(instance, connect_quick_play::CONNECT_QUICK_PLAY_VERSION_ID)
-            .map_err(|_| Error::UnsupportedRuntime)?;
+    let mut spec = super::resolve_launch_spec(instance, profile.version_id())
+        .map_err(|_| Error::UnsupportedRuntime)?;
     connect_quick_play::apply_guest_quick_play(instance, &mut spec, observed_java, endpoint)
         .map_err(|error| match error {
             connect_quick_play::QuickPlayError::ConflictingArguments => Error::ConflictingArguments,
             _ => Error::UnsupportedRuntime,
         })?;
     let managed =
-        connect_ready_files::verify_managed_files(instance, &cancelled).map_err(|e| match e {
-            connect_ready_files::ReadyFilesError::Cancelled => Error::Cancelled,
-            connect_ready_files::ReadyFilesError::Missing => Error::MissingArtifact,
-            _ => Error::ArtifactMismatch,
-        })?;
+        connect_ready_files::verify_managed_files_for_profile(instance, profile, &cancelled)
+            .map_err(|e| match e {
+                connect_ready_files::ReadyFilesError::Cancelled => Error::Cancelled,
+                connect_ready_files::ReadyFilesError::Missing => Error::MissingArtifact,
+                _ => Error::ArtifactMismatch,
+            })?;
     for file in &managed.fingerprints {
         let bytes = reader.instance(instance, &file.relative, 128 * 1024 * 1024)?;
         if bytes.len() as u64 != file.bytes
@@ -420,6 +408,7 @@ pub fn inspect_ready_runtime(
             observation.instance_uuid,
             observation.fingerprint,
             source_id,
+            profile.descriptor(),
             reader.hashes,
             &managed,
             &directory_observations,
@@ -427,6 +416,7 @@ pub fn inspect_ready_runtime(
         .map_err(|_| Error::Internal)?,
     );
     let proof = ReadyRuntime {
+        profile,
         fingerprint: format!("{:x}", hash.finalize()),
         core_sha256: managed.core_sha256,
         skins_sha256: managed.skins_sha256,

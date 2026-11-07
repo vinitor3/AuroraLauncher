@@ -2,6 +2,7 @@ export type SocialConnectStage = "reserved" | "authenticating" | "sourceChecking
 export type SocialConnectProjection = {
   sessionId: string; role: "host" | "guest"; stage: SocialConnectStage;
   digest: string | null; gameTarget: string | null; visibility: "public" | "friends" | null; expiresAtMs: number | null;
+  readyGameLaunchAvailable?: true;
 };
 export type SocialConnectCapabilities = { available: boolean; experimental: true; accountEpoch: number; maxSessionSeconds: 60; ownedGameTcpDiscovery?: boolean };
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -16,7 +17,9 @@ export function socialConnectCapabilitiesFrom(value: unknown): SocialConnectCapa
   return value as SocialConnectCapabilities;
 }
 export function socialConnectProjectionFrom(value: unknown): SocialConnectProjection {
-  if (!record(value) || Object.keys(value).length !== 7 || !socialSessionId(value.sessionId)
+  if (!record(value) || ![7, 8].includes(Object.keys(value).length)
+    || Object.keys(value).some(key => !["sessionId", "role", "stage", "digest", "gameTarget", "visibility", "expiresAtMs", "readyGameLaunchAvailable"].includes(key))
+    || !(value.readyGameLaunchAvailable === undefined || value.readyGameLaunchAvailable === true && value.role === "guest" && value.stage === "connected") || !socialSessionId(value.sessionId)
     || !["host", "guest"].includes(value.role as string)
     || !["reserved", "authenticating", "sourceChecking", "hostReview", "waitingGuest", "connecting", "connected", "closed", "failed"].includes(value.stage as string)
     || !(value.digest === null || typeof value.digest === "string" && /^[0-9a-f]{64}$/.test(value.digest))

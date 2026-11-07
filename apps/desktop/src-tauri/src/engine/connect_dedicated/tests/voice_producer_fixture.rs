@@ -2,6 +2,7 @@
 //! with fixed profile paths. It reuses the legacy STATUS codec without changing
 //! that codec's body, argv or control protocol. No Java/Minecraft/audio claim.
 use super::producer_fixture::{self as status, Event as StatusEvent, Notice};
+use super::voice_transport_fixture as transport;
 use super::*;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -35,10 +36,13 @@ pub(super) enum Action {
     RestoreValid,
     DropUdp,
     BindUdp,
+    DropTcp,
     MutableNoise,
     AddForeignMod,
     RemoveForeignMod,
     ReleaseStop,
+    HoldUdpReturns,
+    ReleaseUdpReturns,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -64,6 +68,9 @@ enum Event {
     StopObserved {
         lines: usize,
         eof: bool,
+    },
+    UdpHeld {
+        count: usize,
     },
 }
 type FixtureResult<T> = std::result::Result<T, &'static str>;
@@ -108,6 +115,7 @@ pub(super) struct Harness {
     stopped: bool,
     pub statuses: usize,
     pub pongs: usize,
+    udp_held: usize,
     profile: manifest::StoredVoiceProfileV2,
 }
 impl Harness {
@@ -122,6 +130,7 @@ impl Harness {
             stopped: false,
             statuses: 0,
             pongs: 0,
+            udp_held: 0,
             profile,
         }
     }
@@ -178,10 +187,18 @@ impl Harness {
                 assert!(!self.stopped);
                 self.stopped = true;
             }
+            Event::UdpHeld { count } => {
+                assert_eq!(count, self.udp_held + 1);
+                assert!(count <= 4);
+                self.udp_held = count;
+            }
             _ => panic!("voice_fixture_unexpected_event"),
         }
     }
     pub(super) fn command(&mut self, action: Action) {
+        if matches!(action, Action::HoldUdpReturns) {
+            self.udp_held = 0;
+        }
         self.sequence += 1;
         assert!(self.sequence <= MAX_COMMANDS);
         let command = CommandEnvelope {
@@ -208,6 +225,13 @@ impl Harness {
     }
     pub(super) fn stop_observed(&mut self) {
         while !self.stopped {
+            let event = self.event();
+            self.observe(event);
+        }
+    }
+    pub(super) fn udp_held(&mut self, count: usize) {
+        assert!((1..=4).contains(&count));
+        while self.udp_held < count {
             let event = self.event();
             self.observe(event);
         }
@@ -330,6 +354,9 @@ fn apply_action(
             *released = true;
             return Ok(());
         }
+        Action::HoldUdpReturns | Action::ReleaseUdpReturns | Action::DropTcp => {
+            return Err("voice_fixture_transport_action_dispatch")
+        }
     }
     .map_err(|_| "voice_fixture_action_io")
 }
@@ -370,7 +397,9 @@ fn child_loop(nonce: Uuid) -> FixtureResult<()> {
     listener
         .set_nonblocking(true)
         .map_err(|_| "voice_fixture_tcp_nonblocking")?;
+    let mut listener = Some(listener);
     let mut udp = Some(bind_udp(profile)?);
+    let mut udp_traffic = transport::UdpTraffic::default();
     let mut control =
         TcpStream::connect_timeout(&address, WAIT).map_err(|_| "voice_fixture_control_connect")?;
     control
@@ -461,35 +490,26 @@ fn child_loop(nonce: Uuid) -> FixtureResult<()> {
             if sequence > MAX_COMMANDS || command.nonce != nonce || command.sequence != sequence {
                 return Err("voice_fixture_command_identity");
             }
-            apply_action(
-                &root,
-                profile,
-                sequence,
-                command.action,
-                &mut udp,
-                &mut released,
-            )?;
+            match command.action {
+                Action::DropTcp => drop(listener.take()),
+                Action::HoldUdpReturns => udp_traffic.hold()?,
+                Action::ReleaseUdpReturns => {
+                    udp_traffic.release(udp.as_ref().ok_or("voice_fixture_udp_missing")?)?
+                }
+                action => apply_action(&root, profile, sequence, action, &mut udp, &mut released)?,
+            }
             message(&mut control, &Event::Acknowledged { sequence })?;
         }
         if let Some(socket) = &udp {
-            let mut request = [0; 16];
-            match socket.recv_from(&mut request) {
-                Ok((count, peer))
-                    if count == 8
-                        && &request[..count] == b"aur85c01"
-                        && peer.ip().is_loopback() =>
-                {
-                    socket
-                        .send_to(&request[..count], peer)
-                        .map_err(|_| "voice_fixture_udp_echo")?;
-                }
-                Ok(_) => return Err("voice_fixture_udp_payload"),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(_) => return Err("voice_fixture_udp_receive"),
+            if let Some(count) = transport::udp(socket, nonce, &mut udp_traffic)? {
+                message(&mut control, &Event::UdpHeld { count })?;
             }
         }
         if !stopped {
             for _ in 0..2 {
+                let Some(listener) = listener.as_ref() else {
+                    break;
+                };
                 match listener.accept() {
                     Ok((stream, peer)) => {
                         if !peer.ip().is_loopback() || sessions.tasks.len() >= MAX_SESSIONS {
@@ -499,7 +519,7 @@ fn child_loop(nonce: Uuid) -> FixtureResult<()> {
                         let notices = event_send.clone();
                         let first = first_status.clone();
                         sessions.tasks.push(thread::spawn(move || {
-                            status::status_session(stream, "normal".into(), stop, notices, first)
+                            transport::session(stream, nonce, stop, notices, first)
                         }));
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,

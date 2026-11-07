@@ -13,7 +13,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
-use super::{core, recovery, skins, Instance};
+use super::{connect_ready_profile::ReadyProfile, core, recovery, skins, Instance};
 
 pub const READY_CORE_FILE: &str = "mods/aurora-core-fabric-1.21.1.jar";
 pub const READY_SKINS_FILE: &str = "mods/aurora-skins-fabric-1.21.1.jar";
@@ -67,11 +67,21 @@ pub fn verify_managed_files(
     instance: &Instance,
     cancelled: impl Fn() -> bool,
 ) -> Result<ReadyManagedFiles, ReadyFilesError> {
+    verify_managed_files_for_profile(instance, ReadyProfile::Fabric1211, cancelled)
+}
+
+pub fn verify_managed_files_for_profile(
+    instance: &Instance,
+    profile: ReadyProfile,
+    cancelled: impl Fn() -> bool,
+) -> Result<ReadyManagedFiles, ReadyFilesError> {
     check_cancel(&cancelled)?;
     let expected_core =
-        core::verified_embedded_core("1.21.1", "fabric").map_err(|_| ReadyFilesError::Mismatch)?;
-    let expected_skins = skins::embedded_skins_artifact("1.21.1", "fabric")
-        .map_err(|_| ReadyFilesError::Mismatch)?;
+        core::verified_embedded_core(profile.descriptor().minecraft_version, "fabric")
+            .map_err(|_| ReadyFilesError::Mismatch)?;
+    let expected_skins =
+        skins::embedded_skins_artifact(profile.descriptor().minecraft_version, "fabric")
+            .map_err(|_| ReadyFilesError::Mismatch)?;
     let mods = recovery::path(instance.root(), "mods").map_err(|_| ReadyFilesError::Unsafe)?;
     let _pins = recovery::pin_directory(&mods).map_err(|_| ReadyFilesError::Unsafe)?;
     let entries = fs::read_dir(&mods).map_err(|_| ReadyFilesError::Missing)?;
@@ -122,12 +132,12 @@ pub fn verify_managed_files(
         }
         check_cancel(&cancelled)?;
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
-        if relative == READY_CORE_FILE {
+        if relative == profile.core_file() {
             if bytes != expected_core {
                 return Err(ReadyFilesError::Mismatch);
             }
             core_hash = Some(sha256.clone());
-        } else if relative == READY_SKINS_FILE {
+        } else if relative == profile.skins_file() {
             if bytes != expected_skins {
                 return Err(ReadyFilesError::Mismatch);
             }

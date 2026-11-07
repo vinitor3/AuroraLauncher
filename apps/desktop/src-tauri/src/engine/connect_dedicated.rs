@@ -29,7 +29,8 @@ mod runtime_config;
 mod voice_profile;
 
 pub(crate) use producer::{
-    NativeVoiceHostBinding, ReservedVoiceQuery, VoiceRuntimeError, VoiceRuntimeSample,
+    DedicatedError, NativeVoiceHostBinding, ReservedVoiceQuery, VoiceRuntimeError,
+    VoiceRuntimeSample,
 };
 pub(crate) use voice_profile::NativeVoiceProfile;
 

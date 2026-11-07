@@ -1,0 +1,48 @@
+// Pure DTO contracts. These tests do not create Java, transport or game files.
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { readFile } from "node:fs/promises";
+import ts from "typescript";
+const source = await readFile(new URL("./types.ts", import.meta.url), "utf8");
+const code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
+const types = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
+const previous = { minecraftVersion: "1.21.1", loader: "fabric", loaderVersion: "0.16.14", javaMajor: 21, coreVersion: "1.1.5", skinsVersion: "0.3.1" };
+const added = { ...previous, minecraftVersion: "1.20.1", javaMajor: 17 };
+const legacy = { schemaVersion: 1, instanceScope: "diagnosticCopy", maxPlanSeconds: 60, ...previous };
+const current = { schemaVersion: 2, instanceScope: "diagnosticCopy", maxPlanSeconds: 60, runtimes: [previous, added] };
+const operation = "11111111-1111-4111-8111-111111111111", plan = "22222222-2222-4222-8222-222222222222";
+function reviewed(runtime) {
+  return { operationId: operation, generation: 2, planId: plan, phase: "reviewed", result: null, errorCode: null,
+    review: { operationId: operation, planId: plan, digest: "a".repeat(64), expiresAtMs: 1800000030000, sessionExpiresAtMs: 1800000060000,
+      instanceId: "aurora-test-33333333-3333-4333-8333-333333333333", sourceInstanceId: "source", contextKey: "context",
+      javaExecutable: "C:/java/bin/java.exe", nickname: "Player93", appearance: { skinUrl: null, skinFile: null, capeUrl: null, skinModel: null },
+      gameAddress: "127.0.0.1:42010", coreSha256: "b".repeat(64), skinsSha256: "c".repeat(64), ...runtime } };
+}
+
+test("ready launch schema2 advertises exactly the two explicit existing Fabric profiles", () => {
+  assert.deepEqual(types.readyGameCapabilityFrom(current), current);
+  assert.deepEqual(types.readyGameCapabilityFrom(legacy), legacy);
+  for (const runtimes of [[], [previous], [added], [previous, previous], [previous, added, added],
+    [previous, { ...added, javaMajor: 21 }], [previous, { ...added, loader: "forge" }],
+    [previous, { ...added, minecraftVersion: "1.19.2" }], [previous, { ...added, loaderVersion: "0.16.15" }]]) {
+    assert.throws(() => types.readyGameCapabilityFrom({ ...current, runtimes }));
+  }
+  assert.throws(() => types.readyGameCapabilityFrom({ ...current, autoLaunch: true }));
+  assert.throws(() => types.readyGameCapabilityFrom({ ...legacy, minecraftVersion: "1.20.1", javaMajor: 17 }));
+});
+
+test("review metadata must pair the exact Minecraft version with its verified Java major", () => {
+  for (const profile of [previous, added]) assert.deepEqual(types.readyGameSnapshotFrom(reviewed(profile)), reviewed(profile));
+  for (const profile of [{ ...added, javaMajor: 21 }, { ...previous, javaMajor: 17 }, { ...added, loader: "forge" },
+    { ...added, minecraftVersion: "1.16.5", javaMajor: 8 }, { ...added, skinsVersion: "0.3.0" }, { ...added, loaderVersion: "0.16.13" }]) {
+    assert.throws(() => types.readyGameSnapshotFrom(reviewed(profile)));
+  }
+});
+
+test("legacy or missing capability never authorizes the additional runtime", () => {
+  assert.equal(types.readyGameCapabilitySupports(legacy, reviewed(previous).review), true);
+  assert.equal(types.readyGameCapabilitySupports(legacy, reviewed(added).review), false);
+  assert.equal(types.readyGameCapabilitySupports(current, reviewed(added).review), true);
+  assert.equal(types.readyGameCapabilitySupports(current, reviewed(previous).review), true);
+  assert.equal(types.readyGameCapabilitySupports(undefined, reviewed(added).review), false);
+});

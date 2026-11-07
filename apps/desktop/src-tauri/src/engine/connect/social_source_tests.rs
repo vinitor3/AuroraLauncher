@@ -42,6 +42,7 @@ fn reserve_run(
         expiry: a.snapshot.social.as_ref().unwrap().expires_at_ms.unwrap(),
         cancel: a.cancel.clone(),
         source_gate: None,
+        guard_probe: None,
     };
     (reserved, run)
 }

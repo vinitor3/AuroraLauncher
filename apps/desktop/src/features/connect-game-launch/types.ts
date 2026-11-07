@@ -1,9 +1,13 @@
 /** Strict presentation contracts. Only the native worker owns launch authority. */
+export type ReadyGameRuntime = {
+  minecraftVersion: "1.21.1" | "1.20.1"; loader: "fabric"; loaderVersion: "0.16.14";
+  javaMajor: 21 | 17; coreVersion: "1.1.5"; skinsVersion: "0.3.1";
+};
 export type ReadyGameLaunchCapability = {
   schemaVersion: 1; instanceScope: "diagnosticCopy"; maxPlanSeconds: 60;
   minecraftVersion: "1.21.1"; loader: "fabric"; loaderVersion: "0.16.14";
   javaMajor: 21; coreVersion: "1.1.5"; skinsVersion: "0.3.1";
-};
+} | { schemaVersion: 2; instanceScope: "diagnosticCopy"; maxPlanSeconds: 60; runtimes: ReadyGameRuntime[] };
 export type ReadyGameAppearance = {
   skinUrl: string | null; skinFile: string | null; capeUrl: string | null; skinModel: "classic" | "slim" | null;
 };
@@ -14,8 +18,8 @@ export type ReadyGameLaunchContext = {
 export type ReadyGameLaunchRequest = ReadyGameLaunchContext & { operationId: string; instanceId: string };
 export type ReadyGameLaunchReview = ReadyGameLaunchRequest & {
   planId: string; digest: string; expiresAtMs: number; sessionExpiresAtMs: number;
-  minecraftVersion: "1.21.1"; loader: "fabric"; loaderVersion: "0.16.14";
-  javaMajor: 21; gameAddress: string; coreVersion: "1.1.5"; coreSha256: string;
+  minecraftVersion: "1.21.1" | "1.20.1"; loader: "fabric"; loaderVersion: "0.16.14";
+  javaMajor: 21 | 17; gameAddress: string; coreVersion: "1.1.5"; coreSha256: string;
   skinsVersion: "0.3.1"; skinsSha256: string;
 };
 export type ReadyGameLaunchResult = { runId: string; processId: number; instanceId: string; worldState: "notVerified" };
@@ -38,11 +42,11 @@ const errors: Record<string, string> = {
   connect_ready_game_instance_changed: "A cópia ou algum arquivo mudou. Prepare uma nova revisão.",
   connect_ready_game_instance_busy: "Esta cópia está em uso. Feche seu jogo antes de tentar novamente.",
   connect_ready_game_recovery_pending: "A cópia tem uma recuperação pendente. Resolva-a antes de abrir o jogo.",
-  connect_ready_game_unsupported_runtime: "Esta entrada experimental exige Minecraft 1.21.1 com Fabric 0.16.14 já preparados.",
+  connect_ready_game_unsupported_runtime: "Esta entrada experimental exige Minecraft 1.21.1 ou 1.20.1 com Fabric 0.16.14 já preparados.",
   connect_ready_game_missing_artifact: "Faltam arquivos do jogo, Core ou Skins. Prepare a cópia pelo fluxo normal antes de continuar.",
   connect_ready_game_artifact_mismatch: "Os arquivos Core ou Skins não correspondem às versões verificadas desta integração.",
   connect_ready_game_java_unavailable: "O Java escolhido não pôde ser verificado. Selecione uma instalação disponível nas configurações.",
-  connect_ready_game_java_incompatible: "Esta cópia exige Java 21 já instalado. Confira o Java selecionado nas configurações.",
+  connect_ready_game_java_incompatible: "Confira o Java selecionado: Minecraft 1.21.1 exige Java 21; Minecraft 1.20.1 exige Java 17.",
   connect_ready_game_conflicting_arguments: "O perfil contém opções de entrada incompatíveis. Revise a cópia pelo fluxo normal.",
   connect_ready_game_launch_failed: "Não foi possível iniciar a cópia. Consulte o Doctor antes de tentar novamente.",
   connect_ready_game_internal: "Não foi possível concluir o preparo. Consulte o estado antes de tentar novamente.",
@@ -58,12 +62,29 @@ const copyId = (value: unknown): value is string => typeof value === "string" &&
 const hash = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const exact = (value: Record<string, unknown>, fields: string[]) => Object.keys(value).length === fields.length && fields.every(field => Object.hasOwn(value, field));
 const invalid = (): never => { throw new Error("Invalid ready game launch projection"); };
+const runtimeFields = ["minecraftVersion", "loader", "loaderVersion", "javaMajor", "coreVersion", "skinsVersion"];
+const validRuntime = (value: Record<string, unknown>) => value.loader === "fabric" && value.loaderVersion === "0.16.14"
+  && value.coreVersion === "1.1.5" && value.skinsVersion === "0.3.1"
+  && (value.minecraftVersion === "1.21.1" && value.javaMajor === 21 || value.minecraftVersion === "1.20.1" && value.javaMajor === 17);
 export function readyGameCapabilityFrom(value: unknown): ReadyGameLaunchCapability {
-  if (!object(value) || !exact(value, ["schemaVersion", "instanceScope", "maxPlanSeconds", "minecraftVersion", "loader", "loaderVersion", "javaMajor", "coreVersion", "skinsVersion"])
-    || value.schemaVersion !== 1 || value.instanceScope !== "diagnosticCopy" || value.maxPlanSeconds !== 60
-    || value.minecraftVersion !== "1.21.1" || value.loader !== "fabric" || value.loaderVersion !== "0.16.14"
-    || value.javaMajor !== 21 || value.coreVersion !== "1.1.5" || value.skinsVersion !== "0.3.1") return invalid();
+  if (!object(value) || value.instanceScope !== "diagnosticCopy" || value.maxPlanSeconds !== 60) return invalid();
+  if (value.schemaVersion === 1) {
+    if (!exact(value, ["schemaVersion", "instanceScope", "maxPlanSeconds", ...runtimeFields])
+      || !validRuntime(value) || value.minecraftVersion !== "1.21.1") return invalid();
+  } else if (value.schemaVersion === 2) {
+    if (!exact(value, ["schemaVersion", "instanceScope", "maxPlanSeconds", "runtimes"])
+      || !Array.isArray(value.runtimes) || value.runtimes.length !== 2
+      || !value.runtimes.every(runtime => object(runtime) && exact(runtime, runtimeFields) && validRuntime(runtime))
+      || new Set(value.runtimes.map(runtime => runtime.minecraftVersion)).size !== 2) return invalid();
+  } else return invalid();
   return value as ReadyGameLaunchCapability;
+}
+export function readyGameCapabilitySupports(capability: ReadyGameLaunchCapability | undefined, runtime: ReadyGameRuntime): boolean {
+  if (!capability) return false;
+  const allowed = capability.schemaVersion === 1 ? [capability] : capability.runtimes;
+  return allowed.some(profile => profile.minecraftVersion === runtime.minecraftVersion && profile.loader === runtime.loader
+    && profile.loaderVersion === runtime.loaderVersion && profile.javaMajor === runtime.javaMajor
+    && profile.coreVersion === runtime.coreVersion && profile.skinsVersion === runtime.skinsVersion);
 }
 function appearanceFrom(value: unknown): ReadyGameAppearance {
   if (!object(value) || !exact(value, ["skinUrl", "skinFile", "capeUrl", "skinModel"])
@@ -80,7 +101,7 @@ function reviewFrom(value: unknown): ReadyGameLaunchReview {
   if (!object(value) || !exact(value, ["operationId", "planId", "digest", "expiresAtMs", "sessionExpiresAtMs", "instanceId", "sourceInstanceId", "contextKey", "minecraftVersion", "loader", "loaderVersion", "javaExecutable", "javaMajor", "nickname", "appearance", "gameAddress", "coreVersion", "coreSha256", "skinsVersion", "skinsSha256"])
     || !uuid(value.operationId) || !uuid(value.planId) || !copyId(value.instanceId) || !hash(value.digest)
     || !integer(value.expiresAtMs) || !integer(value.sessionExpiresAtMs) || value.expiresAtMs === 0 || value.expiresAtMs > value.sessionExpiresAtMs
-    || value.minecraftVersion !== "1.21.1" || value.loader !== "fabric" || value.loaderVersion !== "0.16.14" || value.javaMajor !== 21
+    || !validRuntime(value)
     || typeof value.gameAddress !== "string" || !/^127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(value.gameAddress) || Number(value.gameAddress.slice(10)) > 65535
     || value.coreVersion !== "1.1.5" || !hash(value.coreSha256) || value.skinsVersion !== "0.3.1" || !hash(value.skinsSha256)
     || !validReadyGameContext(value)) return invalid();

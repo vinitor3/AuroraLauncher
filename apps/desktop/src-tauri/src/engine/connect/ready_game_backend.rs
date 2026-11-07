@@ -18,6 +18,7 @@ pub trait ReadyGameBackend: Send + Sync + 'static {
 /// Prepared immutable evidence. Implementations must reacquire the instance lock,
 /// compare all evidence and acquire tracking locks before entering the spawn gate.
 pub trait PreparedReadyGame: Send {
+    fn profile(&self) -> crate::engine::connect_ready_profile::ReadyProfile;
     fn fingerprint(&self) -> &str;
     fn core_sha256(&self) -> &str;
     fn skins_sha256(&self) -> &str;

@@ -6,7 +6,7 @@ import { SocialConnectionPanel, type SocialConnectionControls } from "./SocialCo
 import "./social.css";
 
 type FriendTab = "friends" | "incoming" | "outgoing" | "blocked";
-type Props = { service: SocialService | null; accountId: string; nickname: string; currentModpack?: string; connection?: SocialConnectionControls };
+type Props = { service: SocialService | null; accountId: string; nickname: string; currentModpack?: string; connection?: SocialConnectionControls; onOpenConnectedGame?: () => void };
 const friendTabs: [FriendTab, string][] = [["friends", "Amigos"], ["incoming", "Recebidos"], ["outgoing", "Enviados"], ["blocked", "Bloqueados"]];
 const MAX_VISIBLE_SESSIONS = 100;
 const emptyDraft = (): SocialSessionDraft => ({ title: "", modpackName: "", minecraftVersion: "", loader: "Vanilla", imageUrl: null, players: 0, maxPlayers: 8, visibility: "private", joinPolicy: "open" });
@@ -50,7 +50,7 @@ export function SocialView(props: Props) {
   return <SocialAccountView key={`${props.accountId}:${props.service ? clientKeys.get(props.service) : "none"}`} {...props} />;
 }
 
-function SocialAccountView({ service, accountId, nickname, currentModpack, connection }: Props) {
+function SocialAccountView({ service, accountId, nickname, currentModpack, connection, onOpenConnectedGame }: Props) {
   const [snapshot, setSnapshot] = useState<SocialSnapshot>();
   const [sessions, setSessions] = useState<SocialSession[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -202,7 +202,7 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
         </div>}
       </aside>
       <div className="social-community">
-        {connection && <SocialConnectionPanel connection={connection} ownSession={snapshot?.ownSession} now={now} />}
+        {connection && <SocialConnectionPanel connection={connection} ownSession={snapshot?.ownSession} now={now} onOpenConnectedGame={onOpenConnectedGame} />}
         <header className="social-community-heading"><div><h3>Mundos da comunidade</h3><p>Encontre uma sessão para a sua próxima aventura.</p></div><div className="social-layout-switch" aria-label="Visualização das sessões"><button aria-pressed={layout === "grid"} onClick={() => setLayout("grid")}>Grade</button><button aria-pressed={layout === "list"} onClick={() => setLayout("list")}>Lista</button></div></header>
         <div className="social-filters"><div className="social-tabs" aria-label="Origem das sessões"><button aria-pressed={scope === "public"} onClick={() => setScope("public")}>Comunidade</button><button aria-pressed={scope === "friends"} onClick={() => setScope("friends")}>Dos amigos</button></div><input aria-label="Filtrar sessões carregadas" placeholder="Filtrar modpack ou versão" value={filter} onChange={event => setFilter(event.target.value)} /></div>
         {available && !service?.capabilities.join && <p className="social-notice">Você já pode organizar amizades e descobrir anúncios. O botão Entrar ficará disponível quando a conexão social segura estiver integrada.</p>}

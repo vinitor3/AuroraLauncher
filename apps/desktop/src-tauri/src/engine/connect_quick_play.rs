@@ -8,7 +8,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use serde_json::Value;
 
-use super::{recovery, Instance, VersionLaunchSpec};
+use super::{connect_ready_profile::ReadyProfile, recovery, Instance, VersionLaunchSpec};
 
 pub const CONNECT_QUICK_PLAY_VERSION_ID: &str = "fabric-loader-0.16.14-1.21.1";
 pub const CONNECT_QUICK_PLAY_MINECRAFT_VERSION: &str = "1.21.1";
@@ -17,6 +17,7 @@ const FABRIC_MAIN: &str = "net.fabricmc.loader.impl.launch.knot.KnotClient";
 const VANILLA_MAIN: &str = "net.minecraft.client.main.Main";
 const LOADER_COORDINATE: &str = "net.fabricmc:fabric-loader:0.16.14";
 const LOADER_PATH: &str = "libraries/net/fabricmc/fabric-loader/0.16.14/fabric-loader-0.16.14.jar";
+#[cfg(test)]
 const CLIENT_PATH: &str = "versions/1.21.1/1.21.1.jar";
 const MAX_PROFILE_BYTES: u64 = 1024 * 1024;
 
@@ -57,10 +58,9 @@ pub fn apply_guest_quick_play(
     if endpoint.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) || endpoint.port() == 0 {
         return Err(QuickPlayError::InvalidEndpoint);
     }
-    if observed_java_major != CONNECT_QUICK_PLAY_JAVA_MAJOR
-        || spec.version_name != CONNECT_QUICK_PLAY_VERSION_ID
-        || spec.main_class != FABRIC_MAIN
-    {
+    let profile = ReadyProfile::from_version_id(&spec.version_name)
+        .ok_or(QuickPlayError::UnsupportedRuntime)?;
+    if observed_java_major != profile.descriptor().java_major || spec.main_class != FABRIC_MAIN {
         return Err(QuickPlayError::UnsupportedRuntime);
     }
     if spec.game_args.iter().any(|arg| conflicting_argument(arg))
@@ -68,7 +68,7 @@ pub fn apply_guest_quick_play(
     {
         return Err(QuickPlayError::ConflictingArguments);
     }
-    validate_installed_runtime(instance, spec)?;
+    validate_installed_runtime(instance, spec, profile)?;
     spec.game_args
         .extend(["--quickPlayMultiplayer".into(), endpoint.to_string()]);
     Ok(())
@@ -123,11 +123,18 @@ fn conflicting_jvm_arguments(args: &[String], natives: &std::path::Path) -> bool
             return true;
         }
         let name = argument.split('=').next().unwrap_or_default();
-        if name == "-Djava.library.path"
-            && argument.strip_prefix("-Djava.library.path=")
-                != Some(natives.to_string_lossy().as_ref())
+        if matches!(
+            name,
+            "-Djava.library.path"
+                | "-Djna.tmpdir"
+                | "-Dorg.lwjgl.system.SharedLibraryExtractPath"
+                | "-Dio.netty.native.workdir"
+        ) && argument.split_once('=').map(|(_, value)| value)
+            != Some(natives.to_string_lossy().as_ref())
         {
-            // Mojang's option may name only the exact resolved native directory.
+            // The official Mojang profile uses these native load/extraction
+            // properties. Each may name only the exact resolved, pinned native
+            // directory; no override, alias, suffix or empty value is accepted.
             return true;
         }
         if [
@@ -155,7 +162,6 @@ fn conflicting_jvm_arguments(args: &[String], natives: &std::path::Path) -> bool
                     | "-Dfabric.classPathGroups"
                     | "-Dfabric.remapClasspathFile"
                     | "-Dorg.lwjgl.librarypath"
-                    | "-Dorg.lwjgl.system.SharedLibraryExtractPath"
                     | "-Djava.io.tmpdir"
                     | "-Duser.dir"
                     | "-Duser.home"
@@ -227,24 +233,26 @@ fn read_profile(instance: &Instance, id: &str) -> Result<Value, QuickPlayError> 
 fn validate_installed_runtime(
     instance: &Instance,
     spec: &VersionLaunchSpec,
+    profile: ReadyProfile,
 ) -> Result<(), QuickPlayError> {
-    let child = read_profile(instance, CONNECT_QUICK_PLAY_VERSION_ID)?;
-    let base = read_profile(instance, CONNECT_QUICK_PLAY_MINECRAFT_VERSION)?;
-    if child["id"] != CONNECT_QUICK_PLAY_VERSION_ID
-        || child["inheritsFrom"] != CONNECT_QUICK_PLAY_MINECRAFT_VERSION
+    let runtime = profile.descriptor();
+    let child = read_profile(instance, profile.version_id())?;
+    let base = read_profile(instance, runtime.minecraft_version)?;
+    if child["id"] != profile.version_id()
+        || child["inheritsFrom"] != runtime.minecraft_version
         || child["mainClass"] != FABRIC_MAIN
         || child.get("jar").is_some()
-        || child.get("javaVersion").is_some_and(|java| {
-            java["majorVersion"].as_u64() != Some(CONNECT_QUICK_PLAY_JAVA_MAJOR.into())
-        })
-        || base["id"] != CONNECT_QUICK_PLAY_MINECRAFT_VERSION
+        || child
+            .get("javaVersion")
+            .is_some_and(|java| java["majorVersion"].as_u64() != Some(runtime.java_major.into()))
+        || base["id"] != runtime.minecraft_version
         || base["mainClass"] != VANILLA_MAIN
         || base.get("inheritsFrom").is_some()
         || base.get("jar").is_some()
         || base
             .pointer("/javaVersion/majorVersion")
             .and_then(Value::as_u64)
-            != Some(CONNECT_QUICK_PLAY_JAVA_MAJOR.into())
+            != Some(runtime.java_major.into())
     {
         return Err(QuickPlayError::UnsupportedRuntime);
     }
@@ -282,8 +290,11 @@ fn validate_installed_runtime(
             return Err(QuickPlayError::UnsupportedRuntime);
         }
     }
-    let client =
-        recovery::path(instance.root(), CLIENT_PATH).map_err(|_| QuickPlayError::InvalidProfile)?;
+    let client = recovery::path(
+        instance.root(),
+        &format!("versions/{0}/{0}.jar", runtime.minecraft_version),
+    )
+    .map_err(|_| QuickPlayError::InvalidProfile)?;
     let loader =
         recovery::path(instance.root(), LOADER_PATH).map_err(|_| QuickPlayError::InvalidProfile)?;
     if spec.client_jar != client
@@ -729,6 +740,56 @@ mod tests {
         let mut without = command.args;
         without.drain(at..at + 2);
         assert_eq!(without, baseline.args);
+    }
+
+    #[test]
+    fn connect_quick_play_accepts_official_native_paths_only_in_the_reviewed_directory() {
+        let fixture = Fixture::new();
+        let samples: Value =
+            serde_json::from_str(include_str!("connect_status_profile_fixtures.json")).unwrap();
+        fixture.change_profile("1.21.1", |value| {
+            value["arguments"] = samples[7]["base"]["profile"]["arguments"].clone();
+        });
+        fixture.change_profile(CONNECT_QUICK_PLAY_VERSION_ID, |value| {
+            value["arguments"] = samples[7]["profile"]["arguments"].clone();
+        });
+        let original = fixture.spec();
+        for property in [
+            "-Djava.library.path",
+            "-Djna.tmpdir",
+            "-Dorg.lwjgl.system.SharedLibraryExtractPath",
+            "-Dio.netty.native.workdir",
+        ] {
+            let native_path = fixture.instance.natives_dir().display().to_string();
+            assert!(original
+                .jvm_args
+                .contains(&format!("{property}={native_path}")));
+            for invalid in [
+                property.to_owned(),
+                format!("{property}="),
+                format!("{property}=outside"),
+                format!("{property}={native_path}/../outside"),
+                format!("{property}={native_path};outside"),
+                format!("{property}={native_path} "),
+            ] {
+                let mut spec = original.clone();
+                spec.jvm_args.push(invalid);
+                assert_refused_unchanged(
+                    &fixture,
+                    spec,
+                    21,
+                    endpoint(),
+                    QuickPlayError::ConflictingArguments,
+                );
+            }
+        }
+        let mut approved = original.clone();
+        apply_guest_quick_play(&fixture.instance, &mut approved, 21, endpoint()).unwrap();
+        assert_eq!(approved.jvm_args, original.jvm_args);
+        assert_eq!(
+            approved.game_args,
+            ["--quickPlayMultiplayer", "127.0.0.1:42010"]
+        );
     }
 
     #[test]

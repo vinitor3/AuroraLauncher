@@ -85,8 +85,17 @@ corrigido antes da rodada. A revisão estática também corrigiu uma lease vazia
 teste de liberação antes de executar esse teste, sem mudança de produção.
 O teste ignorado de processo social recebeu RPCs somente de
 teste para criar/selecionar/recolher um filho próprio, reservar fonte descoberta
-e consultar STATUS pela ponte nativa; a integração Auth/Firestore/broker90 deve
-ser registrada separadamente após execução, sem reaproveitar o eco89 como prova90.
+e consultar STATUS pela ponte nativa. A integração real Auth/Firestore/broker
+passou **7/7** (seis casos e pai),17,931s, com
+`AURORA_SOCIAL_DESKTOP_INTEGRATION=1`, `AURORA_SOCIAL_DESKTOP_TEST_BINARY`
+apontando ao binário de teste local e
+`node --test --test-concurrency=1 firebase/tests/social-desktop.integration.test.mjs`.
+O log `.aurora/connect-validation/resume90-social-desktop-integration.log`
+registra a porta efêmera descoberta, STATUS/pong correspondente, saída normal do
+filho fonte, encerramento automático dos dois peers e rebind. O caso novo levou
+2009ms e tinha59098ms restantes antes da retirada; não foi expiração ordinária.
+Amigos/público89 transferiram1MiB/direção nos casos separados; não amigo/bloqueado
+continuaram com zero conexões. A fonte90 é fixture própria, não Minecraft real.
 
 ## Próximos contratos
 

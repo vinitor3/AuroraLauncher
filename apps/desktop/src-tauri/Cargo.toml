@@ -36,3 +36,7 @@ windows-sys = { version = "=0.61.2", optional = true, features = ["Win32_Foundat
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
+
+[dev-dependencies]
+# Same locked local crate. Normal builds do not activate its fixture gates.
+aurora-connect-lab = { path = "../../connect-lab", features = ["native-voice-test-support"] }

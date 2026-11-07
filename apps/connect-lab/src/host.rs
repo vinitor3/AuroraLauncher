@@ -79,10 +79,15 @@ enum HostAuthorities {
 #[cfg(test)]
 #[path = "host_active_observation_tests.rs"]
 mod active_observation_tests;
+#[cfg(all(windows, debug_assertions, feature = "native-voice-test-support"))]
+#[path = "host_native_voice_test_support.rs"]
+mod native_voice_test_support;
 #[path = "host_session_group.rs"]
 mod session_group;
 #[path = "host_udp_service.rs"]
 mod udp_service;
+#[cfg(all(windows, debug_assertions, feature = "native-voice-test-support"))]
+pub use native_voice_test_support::{NativeVoiceRetirementGate, NativeVoiceRetirementStage};
 #[cfg(test)]
 #[path = "host_udp_service_tests.rs"]
 mod udp_service_tests;
@@ -1077,6 +1082,8 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
                         if connected.is_err() { let _ = reject(&mut send, Error::Destination, &state).await; continue; }
                         #[cfg(test)]
                         service_control.checkpoint(udp_service::Stage::AfterConnect, resource.socket.local_addr().ok()).await;
+                        #[cfg(all(windows, debug_assertions, feature = "native-voice-test-support"))]
+                        service_control.native_checkpoint(NativeVoiceRetirementStage::AfterConnect, resource.socket.local_addr().ok()).await;
                         if !service_control.enabled() { continue; }
                         if authorize_session(&state, &hello.lease_id, connection.remote_id()).is_err() { let _ = reject(&mut send, Error::Expired, &state).await; continue; }
                         let association = Arc::new(Association { service_handle: handle,
@@ -1365,6 +1372,15 @@ async fn receive_fragment(
         .work
         .control()
         .checkpoint(udp_service::Stage::Completed, a.socket().local_addr().ok())
+        .await;
+    #[cfg(all(windows, debug_assertions, feature = "native-voice-test-support"))]
+    a.resource
+        .work
+        .control()
+        .native_checkpoint(
+            NativeVoiceRetirementStage::Completed,
+            a.socket().local_addr().ok(),
+        )
         .await;
     if !a.fragment_authorized() {
         return;

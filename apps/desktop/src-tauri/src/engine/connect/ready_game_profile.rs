@@ -8,25 +8,18 @@ pub struct ReadyGameLaunchCapabilities {
     pub schema_version: u8,
     pub instance_scope: &'static str,
     pub max_plan_seconds: u16,
-    pub minecraft_version: &'static str,
-    pub loader: &'static str,
-    pub loader_version: &'static str,
-    pub java_major: u32,
-    pub core_version: &'static str,
-    pub skins_version: &'static str,
+    pub runtimes: Vec<crate::engine::connect_ready_profile::ReadyProfileDescriptor>,
 }
 impl Default for ReadyGameLaunchCapabilities {
     fn default() -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
             instance_scope: "diagnosticCopy",
             max_plan_seconds: 60,
-            minecraft_version: "1.21.1",
-            loader: "fabric",
-            loader_version: "0.16.14",
-            java_major: 21,
-            core_version: "1.1.5",
-            skins_version: "0.3.1",
+            runtimes: crate::engine::connect_ready_profile::ReadyProfile::ALL
+                .into_iter()
+                .map(|profile| profile.descriptor())
+                .collect(),
         }
     }
 }

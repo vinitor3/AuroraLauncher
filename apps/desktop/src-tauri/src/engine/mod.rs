@@ -12,6 +12,7 @@ pub(crate) mod connect_owned_run;
 pub mod connect_quick_play;
 #[cfg(feature = "connect-lab")]
 pub mod connect_ready_files;
+pub mod connect_ready_profile;
 #[cfg(all(windows, feature = "connect-lab"))]
 pub mod connect_ready_runtime;
 pub mod connect_status_profile;

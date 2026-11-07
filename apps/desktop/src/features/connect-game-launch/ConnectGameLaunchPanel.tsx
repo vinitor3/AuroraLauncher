@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ConnectSnapshot } from "../connect/types";
 import { ReadyCopyPicker } from "./ReadyCopyPicker";
 import {
-  isReadyGameError, readyGameContextFingerprint, readyGameError, readyGameSnapshotFrom,
+  isReadyGameError, readyGameCapabilitySupports, readyGameContextFingerprint, readyGameError, readyGameSnapshotFrom,
   sameReadyGameContext, validReadyGameContext, type ReadyGameLaunchCapability, type ReadyGameLaunchContext,
   type ReadyGameLaunchSnapshot,
 } from "./types";
@@ -157,7 +157,8 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext, obs
   const canStartNew = !!capability && connected(session) && !sessionStale && validReadyGameContext(launchContext)
     && !!snapshot && !active(snapshot) && !pending && !uncertain && !warning;
   const review = snapshot?.review && sameReadyGameContext(snapshot.review, launchContext) && !contextChanged ? snapshot.review : null;
-  const currentReview = review && review.instanceId === selectedId && review.expiresAtMs > now && review.sessionExpiresAtMs > now;
+  const supportedReview = !!review && readyGameCapabilitySupports(capability, review);
+  const currentReview = review && supportedReview && review.instanceId === selectedId && review.expiresAtMs > now && review.sessionExpiresAtMs > now;
   const canConfirm = !!capability && connected(session) && !sessionStale && !!currentReview && acknowledged && !pending && !uncertain && !warning;
 
   function prepare() {
@@ -174,7 +175,8 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext, obs
     const latest = observed.current?.review;
     if (!canConfirm || !latest || latest.digest !== review?.digest || latest.instanceId !== selectedId
       || !sameReadyGameContext(latest, current.current.launchContext) || Date.now() >= latest.expiresAtMs
-      || Date.now() >= latest.sessionExpiresAtMs || !connected(current.current.session) || current.current.sessionStale || !current.current.capability) {
+      || Date.now() >= latest.sessionExpiresAtMs || !connected(current.current.session) || current.current.sessionStale
+      || !readyGameCapabilitySupports(current.current.capability, latest)) {
       setAcknowledged(false); return;
     }
     void perform("confirm", "connect_confirm_ready_game_launch", { operationId: latest.operationId, planId: latest.planId, digest: latest.digest });
@@ -184,7 +186,7 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext, obs
   if (session?.role !== "guest" && !snapshot && !pending && !warning) return null;
   return <section className="connect-card" aria-label="Abrir cópia pelo Connect">
     <h3>Abrir o Minecraft nesta conexão</h3>
-    <p>Experimental: abre uma cópia de teste já preparada e tenta entrar pelo Connect. Exige Minecraft 1.21.1, Fabric 0.16.14, Java 21, Core 1.1.5 e Skins 0.3.1. Este botão não baixa nem instala arquivos.</p>
+    <p>Experimental: abre uma cópia de teste já preparada e tenta entrar pelo Connect. Exige Fabric 0.16.14, Core 1.1.5 e Skins 0.3.1. {capability?.schemaVersion === 2 ? "Minecraft 1.21.1 usa Java 21; Minecraft 1.20.1 usa Java 17." : "Minecraft 1.21.1 usa Java 21."} Este botão não baixa nem instala arquivos.</p>
     {!capability && <p role="status">Novos lançamentos estão indisponíveis. O preparo existente ainda pode ser consultado ou cancelado.</p>}
     {!connected(session) && <p>Conecte como convidado antes de preparar a entrada. Uma consulta ao servidor ou conexão TCP não confirma entrada no mundo.</p>}
     {sessionStale && <p role="status">Aguarde uma observação atual do Connect antes de autorizar a entrada.</p>}
@@ -214,6 +216,7 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext, obs
       </dl>
       <p>O jogo pode gravar dados nesta cópia, no cache de aparência do launcher e nos registros do Doctor e logs. Iniciar o processo não confirma entrada no mundo, áudio ou compatibilidade de contas.</p>
       {!currentReview && <p role="status">Esta revisão venceu ou mudou. Prepare uma nova revisão.</p>}
+      {!supportedReview && <p role="status">Esta versão do launcher não oferece o perfil desta cópia. Atualize os dados ou cancele o preparo.</p>}
       <label className="connect-consent"><input type="checkbox" checked={acknowledged} disabled={!currentReview || !!pending || uncertain || !capability || !connected(session) || sessionStale || !!warning}
         onChange={event => setAcknowledged(event.target.checked)} />Autorizo abrir esta cópia com os dados acima e tentar entrar nesta conexão.</label>
       <button className="primary" type="button" disabled={!canConfirm} onClick={confirm}>Iniciar cópia e tentar entrar</button>

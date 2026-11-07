@@ -1,4 +1,4 @@
-//! Private86A1 preparation/review. No Host, export, confirmation or IPC entry.
+//! Private86 preparation/review and native Host actor. No IPC entry.
 //! Every queued observation owns the original reserved84 job and is retained by
 //! the existing Attempt cleanup barrier, independently of the result waiter.
 #![cfg_attr(not(test), allow(dead_code))]
@@ -8,6 +8,8 @@ use crate::engine::connect_voice::dedicated::{
 };
 use std::collections::HashSet;
 
+#[path = "native_voice_host.rs"]
+mod host;
 #[path = "native_voice_review.rs"]
 mod review;
 pub(crate) use review::NativeReview;
@@ -133,6 +135,7 @@ pub(super) struct Operation {
     roster: Vec<GroupParticipantRequest>,
     services: Vec<lab::Service>,
     review: Option<review::RetainedReview>,
+    host: Option<host::HostOperation>,
     #[cfg(test)]
     dispatched: bool,
 }
@@ -261,6 +264,7 @@ impl Manager {
                 roster,
                 services,
                 review: None,
+                host: None,
                 #[cfg(test)]
                 dispatched: false,
             }),
@@ -547,6 +551,10 @@ pub(super) fn expire_pending(a: &mut Attempt, now: u64) {
     let Some(operation) = &a.native_voice else {
         return;
     };
+    if operation.host.is_some() {
+        host::refresh(a);
+        return;
+    }
     let deadline = operation
         .review
         .as_ref()

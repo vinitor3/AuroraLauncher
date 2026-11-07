@@ -3168,3 +3168,40 @@ test("social session cannot expose manual confirmation exports probes or prepara
   assert.match(container.textContent, /Recursos da conexão liberados/);
   for (const command of ["connect_confirm", "connect_export_invitation", "connect_probe_status", "connect_prepare_host"]) assert.equal(count(command), 0);
 });
+
+function socialReadyFixture(available = false) {
+  capabilities.readyGameLaunch = readyGameCapability;
+  snapshot = { ...idle(), operationId: "aaaaaaaa-1111-4111-8111-111111111111", generation: 2,
+    role: "guest", phase: "guestConnected", transportState: "authenticated", tcpAddress: "127.0.0.1:42010", cleanupState: "pending",
+    social: { sessionId: "11111111-2222-4333-8444-555555555555", role: "guest", stage: "connected", digest: null,
+      gameTarget: null, visibility: null, expiresAtMs: Date.now() + 60_000, ...(available ? { readyGameLaunchAvailable: true } : {}) } };
+  handlers.set("connect_ready_game_launch_snapshot", () => ({ operationId: snapshot.operationId, generation: 0, planId: null,
+    phase: "idle", review: null, result: null, errorCode: null }));
+  handlers.set("diagnostic_lab_list", () => []);
+}
+test("social transport alone does not enable ready game preparation", async () => {
+  socialReadyFixture(); await render();
+  assert.doesNotMatch(container.textContent, /Abrir o Minecraft nesta conexão/);
+  assert.equal(count("connect_ready_game_launch_snapshot"), 0);
+  assert.equal(count("connect_prepare_ready_game_launch"), 0);
+});
+test("published social source exposes the existing explicit review and forwards native launch context", async () => {
+  socialReadyFixture(true);
+  const launchContext = { sourceInstanceId: "social-source", contextKey: "social-context", javaExecutable: "C:\\fixture\\java.exe",
+    nickname: "FixturePlayer", appearance: { skinUrl: null, skinFile: null, capeUrl: null, skinModel: "classic" } };
+  await act(async () => root.render(createElement(ConnectView, { launchContext })));
+  assert.match(container.textContent, /Abrir o Minecraft nesta conexão/);
+  await click("Listar cópias prontas");
+  assert.deepEqual(calls.find(call => call.command === "diagnostic_lab_list").args, { id: "social-source" });
+  assert.equal(count("connect_prepare_ready_game_launch"), 0); assert.equal(count("connect_confirm_ready_game_launch"), 0);
+  for (const command of ["connect_confirm", "connect_export_invitation", "connect_probe_status", "launch_instance"]) assert.equal(count(command), 0);
+});
+test("withdrawn social source disables new launches while retaining ready operation observation", async () => {
+  socialReadyFixture(true); await render();
+  const { readyGameLaunchAvailable: _ready, ...social } = snapshot.social;
+  snapshot = { ...snapshot, generation: 3, social };
+  await click("Atualizar estado");
+  assert.match(container.textContent, /Novos lançamentos estão indisponíveis/);
+  assert.equal(button("Revisar entrada no servidor").disabled, true);
+  assert.equal(count("connect_prepare_ready_game_launch"), 0); assert.equal(count("connect_confirm_ready_game_launch"), 0);
+});

@@ -64,7 +64,11 @@ fn preimage(owner: &str, identity: (uuid::Uuid, &str), data: &ReviewData) -> Res
     ))
     .map_err(|_| ConnectError::Internal.into())
 }
-fn digest(owner: &str, binding: &NativeVoiceHostBinding, data: &ReviewData) -> Result<String> {
+pub(super) fn digest(
+    owner: &str,
+    binding: &NativeVoiceHostBinding,
+    data: &ReviewData,
+) -> Result<String> {
     Ok(format!(
         "{:x}",
         Sha256::digest(preimage(owner, binding.identity_preimage(), data)?)

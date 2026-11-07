@@ -467,6 +467,9 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
     <div className="connect-actions"><button className="secondary" disabled={busy} onClick={() => void perform("refresh", refresh)}>Atualizar estado</button>
       {activeOperation && <button className="danger" disabled={pending === "stop" || snapshot.phase === "closing"} onClick={stop}>Encerrar Connect</button>}</div>
     {snapshot.cleanupState === "complete" && <p role="status">Recursos da conexão liberados.</p>}
+    <ConnectGameLaunchPanel capability={snapshot.social.readyGameLaunchAvailable ? capabilities?.readyGameLaunch : undefined}
+      session={snapshot} launchContext={launchContext} observeExisting={!capabilities && !loading}
+      sessionStale={!snapshot.social.readyGameLaunchAvailable || Boolean(warning) || loading || pending === "stop"} />
   </section>;
 
   return <section className="connect-view" aria-labelledby="connect-title">

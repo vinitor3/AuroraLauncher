@@ -19,6 +19,10 @@ mod hardening;
 mod manifest_gates;
 #[path = "tests/native_voice_binding.rs"]
 mod native_voice_binding;
+#[path = "tests/native_voice_host.rs"]
+mod native_voice_host;
+#[path = "tests/native_voice_host_cases.rs"]
+mod native_voice_host_cases;
 #[path = "tests/native_voice_review.rs"]
 mod native_voice_review;
 #[path = "tests/probe.rs"]
@@ -51,6 +55,8 @@ mod voice_pre_spawn;
 mod voice_producer_fixture;
 #[path = "tests/voice_runtime.rs"]
 mod voice_runtime;
+#[path = "tests/voice_transport_fixture.rs"]
+mod voice_transport_fixture;
 
 use fixture::{bytes, locked, slot, target, unlocked, Fixture};
 

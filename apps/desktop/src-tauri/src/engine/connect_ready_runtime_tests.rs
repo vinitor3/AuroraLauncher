@@ -4,6 +4,8 @@ use crate::engine::{
     InstanceLayout,
 };
 use serde_json::json;
+#[path = "connect_ready_runtime_fabric1201_tests.rs"]
+mod fabric1201;
 #[path = "connect_ready_runtime_readonly_tests.rs"]
 mod readonly;
 
@@ -12,6 +14,7 @@ struct Fixture {
     source: Instance,
     copy: Instance,
     java: PathBuf,
+    java_major: u32,
 }
 impl Fixture {
     fn write(root: &Path, relative: &str, bytes: &[u8]) {
@@ -20,6 +23,30 @@ impl Fixture {
         fs::write(path, bytes).unwrap();
     }
     fn new() -> Self {
+        Self::with_profile(false)
+    }
+    fn fabric1201() -> Self {
+        Self::with_profile(true)
+    }
+    fn with_profile(fabric1201: bool) -> Self {
+        let (minecraft, version_id, java_major) = if fabric1201 {
+            ("1.20.1", "fabric-loader-0.16.14-1.20.1", 17)
+        } else {
+            ("1.21.1", "fabric-loader-0.16.14-1.21.1", 21)
+        };
+        let samples: serde_json::Value =
+            serde_json::from_str(include_str!("connect_status_profile_fixtures.json")).unwrap();
+        let base = if fabric1201 {
+            samples[5]["base"]["profile"].clone()
+        } else {
+            json!({"id":"1.21.1","mainClass":"net.minecraft.client.main.Main","javaVersion":{"majorVersion":21},"assetIndex":{"id":"17"},"libraries":[{"name":"fixture:library:1.0"}],"arguments":{"game":[],"jvm":[]}})
+        };
+        let child = if fabric1201 {
+            samples[5]["profile"].clone()
+        } else {
+            json!({"id":"fabric-loader-0.16.14-1.21.1","inheritsFrom":"1.21.1","mainClass":"net.fabricmc.loader.impl.launch.knot.KnotClient","libraries":[{"name":"net.fabricmc:fabric-loader:0.16.14"}],"arguments":{"game":[]}})
+        };
+        let asset_index = base["assetIndex"]["id"].as_str().unwrap();
         let root =
             std::env::temp_dir().join(format!("aurora-ready-runtime-{}", uuid::Uuid::new_v4()));
         let source = InstanceLayout::new(&root).open(InstanceId::parse("source-fixture").unwrap());
@@ -27,13 +54,25 @@ impl Fixture {
         Self::write(
             source.root(),
             "aurora-instance.json",
-            br#"{"minecraft":"1.21.1","versionId":"fabric-loader-0.16.14-1.21.1"}"#,
+            &serde_json::to_vec(&json!({"minecraft":minecraft,"versionId":version_id})).unwrap(),
         );
         Self::write(source.root(), "config/fixture.json", br#"{"value":1}"#);
-        Self::write(source.root(),"versions/1.21.1/1.21.1.json",&serde_json::to_vec(&json!({"id":"1.21.1","mainClass":"net.minecraft.client.main.Main","javaVersion":{"majorVersion":21},"assetIndex":{"id":"17"},"libraries":[{"name":"fixture:library:1.0"}],"arguments":{"game":[],"jvm":[]}})).unwrap());
-        Self::write(source.root(),"versions/fabric-loader-0.16.14-1.21.1/fabric-loader-0.16.14-1.21.1.json",&serde_json::to_vec(&json!({"id":"fabric-loader-0.16.14-1.21.1","inheritsFrom":"1.21.1","mainClass":"net.fabricmc.loader.impl.launch.knot.KnotClient","libraries":[{"name":"net.fabricmc:fabric-loader:0.16.14"}],"arguments":{"game":[]}})).unwrap());
+        Self::write(
+            source.root(),
+            &format!("versions/{minecraft}/{minecraft}.json"),
+            &serde_json::to_vec(&base).unwrap(),
+        );
+        Self::write(
+            source.root(),
+            &format!("versions/{version_id}/{version_id}.json"),
+            &serde_json::to_vec(&child).unwrap(),
+        );
+        Self::write(
+            source.root(),
+            &format!("versions/{minecraft}/{minecraft}.jar"),
+            b"never executed fixture",
+        );
         for relative in [
-            "versions/1.21.1/1.21.1.jar",
             "libraries/fixture/library/1.0/library-1.0.jar",
             "libraries/net/fabricmc/fabric-loader/0.16.14/fabric-loader-0.16.14.jar",
             "natives/lwjgl.dll",
@@ -49,7 +88,7 @@ impl Fixture {
         );
         Self::write(
             source.root(),
-            "assets/indexes/17.json",
+            &format!("assets/indexes/{asset_index}.json"),
             &serde_json::to_vec(&json!({"objects":{"fixture":{"hash":hash,"size":bytes.len()}}}))
                 .unwrap(),
         );
@@ -57,8 +96,8 @@ impl Fixture {
         let created = diagnostic_lab::create(&source, &guard, None, |_| {}).unwrap();
         drop(guard);
         let copy = InstanceLayout::new(&root).open(InstanceId::parse(created.id).unwrap());
-        install_embedded_core(&copy, "1.21.1", "fabric").unwrap();
-        install_embedded_skins(&copy, "1.21.1", "fabric").unwrap();
+        install_embedded_core(&copy, minecraft, "fabric").unwrap();
+        install_embedded_skins(&copy, minecraft, "fabric").unwrap();
         let java = root.join("java/bin/java.exe");
         for relative in [
             "bin/java.exe",
@@ -79,6 +118,7 @@ impl Fixture {
             source,
             copy,
             java,
+            java_major,
         }
     }
     fn inspect(&self, instance: &Instance, source: &str) -> Result<ReadyRuntime, Error> {
@@ -90,7 +130,7 @@ impl Fixture {
             &self.java,
             None,
             "127.0.0.1:42010".parse().unwrap(),
-            21,
+            self.java_major,
             || false,
         )
     }

@@ -10,6 +10,8 @@ description = "Explicitly invoked, direct-only Aurora Connect transport laborato
 [features]
 default = []
 local-relay-lab = ["dep:iroh-relay", "dep:windows-registry"]
+# Own native86 fixtures only; implementation also requires debug_assertions.
+native-voice-test-support = []
 
 [dependencies]
 iroh = { version = "=1.3.0", default-features = false, features = ["tls-ring"] }

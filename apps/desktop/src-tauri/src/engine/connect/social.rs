@@ -3,6 +3,12 @@ use super::*;
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
 
+#[cfg(test)]
+#[path = "social_ready_game_fixture.rs"]
+mod ready_fixture;
+#[path = "social_ready_game.rs"]
+pub(super) mod ready_source;
+
 #[derive(Clone)]
 struct DiscoverySelection {
     id: String,
@@ -17,12 +23,21 @@ pub(super) struct Control {
     reservation_generation: u64,
     approval: Option<oneshot::Sender<String>>,
     selection: Option<DiscoverySelection>,
+    #[cfg(test)]
+    guard_probe: Option<Arc<ready_source::fixture::Pause>>,
 }
 pub(super) fn clear(a: &mut Attempt) {
+    if let Some(social) = &mut a.snapshot.social {
+        social.ready_game_launch_available = None;
+    }
     if let Some(control) = &mut a.social {
         control.key = None;
         control.approval = None;
         control.selection = None;
+        #[cfg(test)]
+        if let Some(probe) = control.guard_probe.take() {
+            probe.release();
+        }
     }
 }
 pub(super) fn expire(a: &mut Attempt) {
@@ -200,6 +215,7 @@ impl Manager {
             game_target: request.game_target.clone(),
             visibility: request.visibility.clone(),
             expires_at_ms: Some(lab::unix_millis() + 60_000),
+            ready_game_launch_available: None,
         });
         state.attempt = Some(Attempt {
             #[cfg(all(windows, feature = "connect-voice-lab"))]
@@ -212,6 +228,8 @@ impl Manager {
                 reservation_generation: reservation.generation,
                 approval: None,
                 selection,
+                #[cfg(test)]
+                guard_probe: None,
             }),
             draft: None,
             reviewed: None,
@@ -273,6 +291,8 @@ impl Manager {
         let key = control.key.take().ok_or(ConnectError::StaleOperation)?;
         let request = control.request.clone();
         let selection = control.selection.take();
+        #[cfg(test)]
+        let guard_probe = control.guard_probe.clone();
         let deadline = a.prepared_deadline;
         let expiry = a
             .snapshot
@@ -302,6 +322,8 @@ impl Manager {
                 cancel: cancel.clone(),
                 #[cfg(all(test, windows))]
                 source_gate: None,
+                #[cfg(test)]
+                guard_probe,
             };
             let result = execute(run, id_token).await;
             close_operation(&worker_state, &operation, &cancel, execution_error(result)).await;
@@ -385,6 +407,8 @@ struct Run {
     cancel: CancellationToken,
     #[cfg(all(test, windows))]
     source_gate: Option<Arc<group_source::SourceGate>>,
+    #[cfg(test)]
+    guard_probe: Option<Arc<ready_source::fixture::Pause>>,
 }
 impl Run {
     fn current(&self) -> Result<(), ConnectError> {
@@ -1022,6 +1046,8 @@ async fn guest(run: Run, http: Http) -> Result<(), ConnectError> {
         .map_err(|_| ConnectError::InvitationRejected)?;
     let local_continuity = lab::SocialContinuity::start(&first_lease, &grant)
         .map_err(|_| ConnectError::InvitationRejected)?;
+    let authority = ready_source::LaunchAuthority::new(&run, grant.clone(), local_continuity)?;
+    let heartbeat_guard = authority.heartbeat_guard();
     let grant_id = grant.grant_id().to_owned();
     let heartbeat_cancel = CancellationToken::new();
     let heartbeat_signal = heartbeat_cancel.clone();
@@ -1029,6 +1055,7 @@ async fn guest(run: Run, http: Http) -> Result<(), ConnectError> {
     let heartbeat_id = grant_id.clone();
     let (sender, receiver) = tokio::sync::watch::channel(first_lease);
     let mut heartbeat = tokio::spawn(async move {
+        let _authority_guard = heartbeat_guard;
         loop {
             tokio::select! {biased;_=heartbeat_signal.cancelled()=>return Ok(()),_=tokio::time::sleep(Duration::from_millis(750))=>{}};
             let result = tokio::select! {biased;_=heartbeat_signal.cancelled()=>return Ok(()),result=heartbeat_http.post("/v1/social/continuity",json!({"grantId":heartbeat_id}))=>result?};
@@ -1048,9 +1075,10 @@ async fn guest(run: Run, http: Http) -> Result<(), ConnectError> {
         &grant,
         receiver,
         &mut heartbeat,
-        local_continuity,
+        &authority,
     )
     .await;
+    authority.close();
     heartbeat_cancel.cancel();
     let _ = heartbeat.await;
     http.stop("/v1/social/guest/stop", json!({"grantId":grant_id}))
@@ -1064,7 +1092,7 @@ async fn guest_admitted(
     grant: &lab::VerifiedSocialGrant,
     mut leases: tokio::sync::watch::Receiver<String>,
     heartbeat: &mut JoinHandle<Result<(), ConnectError>>,
-    mut continuity: lab::SocialContinuity,
+    authority: &Arc<ready_source::LaunchAuthority>,
 ) -> Result<(), ConnectError> {
     let mut delivery_tick = interval(Duration::from_millis(20));
     let delivery = loop {
@@ -1082,8 +1110,8 @@ async fn guest_admitted(
         let value = loop {
             tokio::select! {biased;
                 _=run.cancel.cancelled()=>return Err(ConnectError::Cancelled),
-                _=delivery_tick.tick()=>{run.current()?;expected.check_current().map_err(|_|ConnectError::PlanExpired)?;continuity.check().map_err(|_|ConnectError::PlanExpired)?;if heartbeat.is_finished(){return Err(ConnectError::TransportFailed);}},
-                result=leases.changed()=>{result.map_err(|_|ConnectError::TransportFailed)?;let lease=leases.borrow_and_update().clone();continuity.update(&lease).map_err(|_|ConnectError::InvitationRejected)?;},
+                _=delivery_tick.tick()=>{run.current()?;expected.check_current().map_err(|_|ConnectError::PlanExpired)?;authority.check_continuity().map_err(|_|ConnectError::PlanExpired)?;if heartbeat.is_finished(){return Err(ConnectError::TransportFailed);}},
+                result=leases.changed()=>{result.map_err(|_|ConnectError::TransportFailed)?;let lease=leases.borrow_and_update().clone();authority.update(&lease).map_err(|_|ConnectError::InvitationRejected)?;},
                 result=&mut receiving=>break result?,
             }
         };
@@ -1124,8 +1152,8 @@ async fn guest_admitted(
         .ok()
         .and_then(|value| value["body"]["sequence"].as_u64())
         .ok_or(ConnectError::InvitationRejected)?;
-    if sequence > continuity.sequence() {
-        continuity
+    if sequence > authority.sequence()? {
+        authority
             .update(&latest)
             .map_err(|_| ConnectError::InvitationRejected)?;
     }
@@ -1141,15 +1169,16 @@ async fn guest_admitted(
     let mut tick = interval(Duration::from_millis(20));
     let guest=loop{tokio::select!{biased;
         _=run.cancel.cancelled()=>{interrupted=true;break connecting.as_mut().await;},
-        _=tick.tick()=>if run.current().is_err()||expected.check_current().is_err()||continuity.check().is_err()||heartbeat.is_finished(){interrupted=true;break connecting.as_mut().await;},
-        result=leases.changed()=>{if result.is_err(){interrupted=true;break connecting.as_mut().await;}let lease=leases.borrow_and_update().clone();if continuity.update(&lease).is_err(){interrupted=true;break connecting.as_mut().await;}},
+        _=tick.tick()=>if run.current().is_err()||expected.check_current().is_err()||authority.check_continuity().is_err()||heartbeat.is_finished(){interrupted=true;break connecting.as_mut().await;},
+        result=leases.changed()=>{if result.is_err(){interrupted=true;break connecting.as_mut().await;}let lease=leases.borrow_and_update().clone();if authority.update(&lease).is_err(){interrupted=true;break connecting.as_mut().await;}},
         result=&mut connecting=>break result,
     }}.map_err(|_|if run.cancel.is_cancelled(){ConnectError::Cancelled}else{ConnectError::TransportFailed})?;
+    let guest = Arc::new(guest);
     let sockets = guest.bound_sockets();
     let (result, tcp) = if interrupted
         || run.current().is_err()
         || expected.check_current().is_err()
-        || continuity.check().is_err()
+        || authority.check_continuity().is_err()
     {
         (
             Err(if run.cancel.is_cancelled() {
@@ -1164,9 +1193,9 @@ async fn guest_admitted(
             run,
             &guest,
             expected,
-            grant,
+            &invitation,
             heartbeat,
-            &mut continuity,
+            authority,
             &mut leases,
         )
         .await
@@ -1178,11 +1207,11 @@ async fn guest_admitted(
 }
 async fn guest_connected(
     run: &Run,
-    guest: &lab::Guest,
+    guest: &Arc<lab::Guest>,
     expected: &lab::VerifiedSocialJoinContext,
-    grant: &lab::VerifiedSocialGrant,
+    invitation: &lab::SessionInvitation,
     heartbeat: &mut JoinHandle<Result<(), ConnectError>>,
-    continuity: &mut lab::SocialContinuity,
+    authority: &Arc<ready_source::LaunchAuthority>,
     leases: &mut tokio::sync::watch::Receiver<String>,
 ) -> (Result<(), ConnectError>, Option<SocketAddr>) {
     let binding = guest.tcp_bridge("game", 1, "127.0.0.1:0".parse().expect("fixed loopback"));
@@ -1192,13 +1221,13 @@ async fn guest_connected(
     let bound = loop {
         tokio::select! {biased;
             _=run.cancel.cancelled()=>{interrupted=true;guest.shutdown().await;break binding.as_mut().await;},
-            _=bind_tick.tick()=>if run.current().is_err()||expected.check_current().is_err()||continuity.check().is_err()||heartbeat.is_finished(){interrupted=true;guest.shutdown().await;break binding.as_mut().await;},
-            result=leases.changed()=>{if result.is_err(){interrupted=true;guest.shutdown().await;break binding.as_mut().await;}let lease=leases.borrow_and_update().clone();if continuity.update(&lease).is_err(){interrupted=true;guest.shutdown().await;break binding.as_mut().await;}},
+            _=bind_tick.tick()=>if run.current().is_err()||expected.check_current().is_err()||authority.check_continuity().is_err()||heartbeat.is_finished(){interrupted=true;guest.shutdown().await;break binding.as_mut().await;},
+            result=leases.changed()=>{if result.is_err(){interrupted=true;guest.shutdown().await;break binding.as_mut().await;}let lease=leases.borrow_and_update().clone();if authority.update(&lease).is_err(){interrupted=true;guest.shutdown().await;break binding.as_mut().await;}},
             result=&mut binding=>break result,
         }
     };
     let bridge = match bound {
-        Ok(bridge) => bridge,
+        Ok(bridge) => Arc::new(bridge),
         Err(_) => {
             return (
                 Err(if run.cancel.is_cancelled() {
@@ -1214,39 +1243,57 @@ async fn guest_connected(
     let result = if interrupted
         || run.current().is_err()
         || expected.check_current().is_err()
-        || grant.check_session().is_err()
-        || continuity.check().is_err()
+        || authority.check_continuity().is_err()
     {
         Err(if run.cancel.is_cancelled() {
             ConnectError::Cancelled
         } else {
             ConnectError::PlanExpired
         })
+    } else if authority.admit(invitation.clone()).is_err() {
+        Err(ConnectError::InvitationRejected)
     } else {
+        let source =
+            ready_game::GuestSource::social(guest, &bridge, authority, run.deadline, &run.cancel);
         update(&run.state, &run.id, |a| {
-            if !a.cancel.is_cancelled() {
+            if !a.cancel.is_cancelled() && authority.with_current(|| Ok(())).is_ok() {
+                a.guest_source = Some(source);
                 a.snapshot.phase = "guestConnected";
                 a.snapshot.transport_state = "authenticated";
                 a.snapshot.tcp_address = Some(tcp.to_string());
-                a.snapshot.expires_at_ms = Some(grant.session_expires_at_unix_ms());
+                a.snapshot.expires_at_ms = Some(invitation.session_expires_at_unix_ms());
                 a.session_deadline = Some(run.deadline);
                 if let Some(social) = &mut a.snapshot.social {
                     social.stage = "connected";
-                    social.expires_at_ms = Some(grant.session_expires_at_unix_ms());
+                    social.ready_game_launch_available = Some(true);
+                    social.expires_at_ms = Some(invitation.session_expires_at_unix_ms());
                 }
             }
         });
+        #[cfg(test)]
+        let pause_error = if let Some(probe) = &run.guard_probe {
+            probe
+                .hold(authority, leases.clone(), guest, &bridge, &run.cancel)
+                .await
+                .err()
+        } else {
+            None
+        };
         let mut tick = interval(Duration::from_millis(20));
         loop {
+            #[cfg(test)]
+            if let Some(error) = pause_error {
+                break Err(error);
+            }
             tokio::select! {
                 biased;
                 _ = run.cancel.cancelled() => break Ok(()),
                 _ = guest.connection().closed() => break Ok(()),
                 _ = tick.tick() => {
-                    if run.current().is_err() || grant.check_session().is_err() {
+                    if run.current().is_err() {
                         break Ok(());
                     }
-                    if continuity.check().is_err() {
+                    if authority.check_continuity().is_err() {
                         break Err(ConnectError::PlanExpired);
                     }
                     if heartbeat.is_finished() {
@@ -1258,13 +1305,21 @@ async fn guest_connected(
                         break Err(ConnectError::TransportFailed);
                     }
                     let lease = leases.borrow_and_update().clone();
-                    if continuity.update(&lease).is_err() {
+                    if authority.update(&lease).is_err() {
                         break Err(ConnectError::InvitationRejected);
                     }
                 },
             }
         }
     };
+    authority.close();
+    update(&run.state, &run.id, |a| {
+        a.guest_source = None;
+        ready_game::cancel(a);
+        if let Some(social) = &mut a.snapshot.social {
+            social.ready_game_launch_available = None;
+        }
+    });
     guest.shutdown().await;
     bridge.shutdown().await;
     drop(bridge);
@@ -1707,6 +1762,8 @@ mod tests {
         });
         emit(json!({"event":"ready","capabilities":manager.social_capabilities()}));
         let fixture_deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+        let mut ready_fixture: Option<Arc<ready_fixture::Fixture>> = None;
+        let mut guard_probe: Option<Arc<ready_source::fixture::Pause>> = None;
         #[cfg(windows)]
         let discovery = crate::engine::connect_discovery::DiscoveryManager::default();
         #[cfg(windows)]
@@ -1723,6 +1780,103 @@ mod tests {
                 .unwrap_or("");
             let generation = value.get("generation").and_then(Value::as_u64).unwrap_or(0);
             let result: Result<Value, ConnectError> = match command {
+                "guardProbeArm" => {
+                    let mut state = manager.live.state.lock().unwrap();
+                    match selected(&mut state, "main", id) {
+                        Ok(a)
+                            if a.worker.is_none()
+                                && a.snapshot.role == Some("guest")
+                                && guard_probe.is_none() =>
+                        {
+                            let probe = Arc::new(ready_source::fixture::Pause::default());
+                            a.social.as_mut().unwrap().guard_probe = Some(probe.clone());
+                            guard_probe = Some(probe);
+                            Ok(json!({"armed":true}))
+                        }
+                        _ => Err(ConnectError::InvalidRequest),
+                    }
+                }
+                "guardProbeInspect" => match &guard_probe {
+                    Some(probe) => probe.inspect_expiry().await,
+                    None => Err(ConnectError::InvalidRequest),
+                },
+                "guardProbeRelease" => {
+                    if let Some(probe) = &guard_probe {
+                        probe.release();
+                    }
+                    Ok(json!({"released":true}))
+                }
+                "readyPrepare" => {
+                    if ready_fixture.is_some() {
+                        Err(ConnectError::Busy)
+                    } else if let Ok(fixture) =
+                        ready_fixture::Fixture::new(value["hold"].as_str().unwrap_or("none"))
+                    {
+                        let result = manager.prepare_ready_game_launch(
+                            "main",
+                            ready_fixture::Fixture::request(id),
+                            Arc::new(fixture.clone()),
+                        );
+                        ready_fixture = Some(fixture);
+                        Ok(match result {
+                            Ok(snapshot) => serde_json::to_value(snapshot).unwrap(),
+                            Err(error) => json!({"errorCode":error.code()}),
+                        })
+                    } else {
+                        Err(ConnectError::InvalidRequest)
+                    }
+                }
+                "readySnapshot" => Ok(match manager.ready_game_launch_snapshot("main", id) {
+                    Ok(snapshot) => serde_json::to_value(snapshot).unwrap(),
+                    Err(error) => json!({"errorCode":error.code()}),
+                }),
+                "readyConfirm" => Ok(
+                    match manager.confirm_ready_game_launch(
+                        "main",
+                        id,
+                        value["planId"].as_str().unwrap_or(""),
+                        value["digest"].as_str().unwrap_or(""),
+                    ) {
+                        Ok(snapshot) => serde_json::to_value(snapshot).unwrap(),
+                        Err(error) => json!({"errorCode":error.code()}),
+                    },
+                ),
+                "readyRelease" => {
+                    if let Some(fixture) = &ready_fixture {
+                        fixture.release();
+                    }
+                    Ok(json!({"released":true}))
+                }
+                "readyFixture" => Ok(ready_fixture
+                    .as_ref()
+                    .map_or(json!({"spawns":0,"childAlive":false}), |fixture| {
+                        fixture.snapshot()
+                    })),
+                "readyStopDetached" => {
+                    use std::{
+                        future::Future,
+                        task::{Context, Poll, Waker},
+                    };
+                    let stopped = manager.stop("main", id);
+                    tokio::pin!(stopped);
+                    let pending = matches!(
+                        stopped
+                            .as_mut()
+                            .poll(&mut Context::from_waker(Waker::noop())),
+                        Poll::Pending
+                    );
+                    // The real stop waiter is dropped here; its worker remains owned.
+                    Ok(json!({"pending":pending}))
+                }
+                "readyAdvanceEpoch" => {
+                    // Exercise the real account transition's first linearized
+                    // step without the subsequent cancel masking a gate defect.
+                    let mut state = manager.live.state.lock().unwrap();
+                    state.social_epoch = state.social_epoch.checked_add(1).unwrap();
+                    Ok(
+                        json!({"epoch":state.social_epoch,"originalCancelled":state.attempt.as_ref().is_none_or(|a| a.cancel.is_cancelled())}),
+                    )
+                }
                 #[cfg(windows)]
                 "discoverFixture" => {
                     if owned_fixture.is_some() {
@@ -1821,7 +1975,16 @@ mod tests {
                         })
                 }
                 "quit" => {
+                    if let Some(probe) = &guard_probe {
+                        probe.release();
+                    }
+                    if let Some(fixture) = &ready_fixture {
+                        fixture.release();
+                    }
                     manager.shutdown_all().await;
+                    if let Some(fixture) = ready_fixture.take() {
+                        fixture.cleanup();
+                    }
                     #[cfg(windows)]
                     if let Some(mut fixture) = owned_fixture.take() {
                         fixture.stop();
@@ -1837,7 +2000,16 @@ mod tests {
                 Err(error) => emit(json!({"ok":false,"code":error.code()})),
             }
         }
+        if let Some(probe) = &guard_probe {
+            probe.release();
+        }
+        if let Some(fixture) = &ready_fixture {
+            fixture.release();
+        }
         manager.shutdown_all().await;
+        if let Some(fixture) = ready_fixture.take() {
+            fixture.cleanup();
+        }
         #[cfg(windows)]
         if let Some(mut fixture) = owned_fixture.take() {
             fixture.stop();

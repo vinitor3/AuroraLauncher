@@ -99,8 +99,39 @@ passou, com `--debug --no-bundle`,1m21s de compilação nativa e frontend493ms.
 O executável privado copiado para teste tem SHA256
 `b048ef81718e81f89db656b7d102e9b0708e73efe1dad7c2c50aa393024c58d9`;
 o helper de teste copiado, `b08971475129d951a671fe1fb27aa23c2ffa8b17b7c8dfc54c608425b304e3c1`.
-GUI ainda pendente neste checkpoint. Regressão completa será executada após os
-próximos incrementos, sem somar ou substituir as provas focais acima.
+O checkpoint revisado foi commitado localmente em `0bca0ea`. Regressão completa
+será executada após os próximos incrementos, sem somar as provas focais acima.
+
+### Execução gráfica posterior ao checkpoint
+
+O mesmo exe privado e helper acima foram copiados antes da próxima wave para
+`.aurora/connect-validation/social-gui90-e4287d4a95e24181b708cc77b2eb03b4/`,
+preservando bytes mesmo durante compilações futuras. O helper
+`firebase/tests/social-desktop-gui.mjs` foi executado com opt-in
+`AURORA_SOCIAL_DESKTOP_GUI=1` e caminhos absolutos nas variáveis
+`AURORA_SOCIAL_DESKTOP_EXE` e `AURORA_SOCIAL_DESKTOP_TEST_BINARY`.
+
+Pela skill Windows/computer-use, o operador automatizado entrou numa conta
+descartável do emulador, viu lista de amigos/catálogo e acionou **Entrar** no
+cartão público. A tela mostrou **Conexão autenticada** e endereço local derivado;
+o probe externo à UI confirmou1MiB por direção. **Desconectar** produziu
+**Conexão encerrada / Recursos da conexão liberados** e o Host real informou
+`phase=closed`, `cleanupState=complete`, sem erro.
+
+Outro Host local com visibilidade **friends** foi preparado; **Entrar** na linha
+do amigo autenticou nova ponte e outro probe confirmou1MiB por direção. Com a
+tela ainda exibindo conexão autenticada, **Fechar o launcher** fechou a janela.
+O supervisor observou exit0, o Host chegou a closed/complete e o helper terminou
+normalmente com `cleanup=true`, `nativeApplicationNormalExit=true`. O teste não
+forçou o processo e verificou rebind dos endpoints próprios no teardown.
+Emuladores receberam um único Ctrl+C e emitiram shutdown controlado; seu shell
+retornou1 após SIGINT, distinto do exit0 do launcher/helper.
+
+A primeira tentativa de acionar o cartão encontrou o botão abaixo da área
+visível; a automação recusou o clique sem executá-lo. A janela foi rolada e uma
+nova autoridade local foi criada antes do clique válido. Não é falha de
+transporte nem nova prova de expiração. Esta rodada não exercitou hospedagem
+gráfica por processo Minecraft, mundo, áudio, internet ou autoentrada73/92/93.
 
 ## Estado por componente
 
@@ -111,7 +142,7 @@ próximos incrementos, sem somar ou substituir as provas focais acima.
 | Direto | Loopback desta rodada; as provas IPv6 externas anteriores continuam separadas. |
 | Relay | Nenhum relay de produção ou serviço pago habilitado. |
 | Minecraft | STATUS de fixtures para os nove pares; nenhum jogo real novo ou homologação. |
-| Convites/interface | Entrega interna social e descoberta nativa implementadas; GUI desta rodada pendente. |
+| Convites/interface | Entrega interna social, Entrar público/amigo, Desconectar e saída normal passaram no exe privado local. Hospedagem descoberta tem prova nativa/backend, sem GUI Minecraft. |
 | Simple Voice Chat | Preparação/revisão nativas do perfil passaram em fixture; transporte vinculado/áudio pendentes. |
 | Plasmo Voice | Preparação/revisão próprias passaram em fixture; transporte vinculado/áudio pendentes. |
 
@@ -124,7 +155,7 @@ já iniciado. Rollback de código é revert local revisado dos commits próprios
 preservando evidências e alterações posteriores; sem reset/clean.
 
 TCP, UDP, direto, relay, Minecraft, convites/interface, Simple Voice Chat e Plasmo
-Voice terão estado separado após os testes. O serviço social remoto, aprovação
+Voice mantêm os estados separados acima. O serviço social remoto, aprovação
 individual, grupos sociais dinâmicos, autoentrada multiversão, áudio real, redes
 adicionais e sincronização de modpacks não são concluídos por estes incrementos.
 

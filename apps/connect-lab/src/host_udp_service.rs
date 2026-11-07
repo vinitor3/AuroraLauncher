@@ -20,6 +20,8 @@ pub(super) struct Control {
     registry: Mutex<Registry>,
     cancelled: CancellationToken,
     changed: Notify,
+    #[cfg(all(windows, debug_assertions, feature = "native-voice-test-support"))]
+    native_gate: super::native_voice_test_support::Slot,
     #[cfg(test)]
     hooks: Mutex<Hooks>,
     #[cfg(test)]
@@ -149,11 +151,28 @@ impl Delivery {
 }
 
 impl Control {
+    #[cfg(all(windows, debug_assertions, feature = "native-voice-test-support"))]
+    pub(super) fn native_gate(
+        &self,
+        stage: NativeVoiceRetirementStage,
+    ) -> Result<NativeVoiceRetirementGate> {
+        self.native_gate.install(stage)
+    }
+    #[cfg(all(windows, debug_assertions, feature = "native-voice-test-support"))]
+    pub(super) async fn native_checkpoint(
+        &self,
+        stage: NativeVoiceRetirementStage,
+        socket: Option<SocketAddr>,
+    ) {
+        self.native_gate.checkpoint(stage, socket).await;
+    }
     pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
             registry: Mutex::new(Registry::default()),
             cancelled: CancellationToken::new(),
             changed: Notify::new(),
+            #[cfg(all(windows, debug_assertions, feature = "native-voice-test-support"))]
+            native_gate: super::native_voice_test_support::Slot::default(),
             #[cfg(test)]
             hooks: Mutex::new(Hooks::default()),
             #[cfg(test)]

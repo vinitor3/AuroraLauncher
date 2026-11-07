@@ -49,6 +49,7 @@ impl Gate {
 }
 #[derive(Default)]
 struct FixtureBackend {
+    profile: Option<crate::engine::connect_ready_profile::ReadyProfile>,
     before_prepare: Option<Arc<Gate>>,
     before_spawn: Option<Arc<Gate>>,
     after_spawn: Option<Arc<Gate>>,
@@ -96,6 +97,11 @@ impl ReadyGameBackend for Arc<FixtureBackend> {
     }
 }
 impl PreparedReadyGame for FixturePrepared {
+    fn profile(&self) -> crate::engine::connect_ready_profile::ReadyProfile {
+        self.backend
+            .profile
+            .unwrap_or(crate::engine::connect_ready_profile::ReadyProfile::Fabric1211)
+    }
     fn fingerprint(&self) -> &str {
         "fixture-readiness-proof"
     }
@@ -374,6 +380,24 @@ fn pending<T>(future: std::pin::Pin<&mut impl Future<Output = T>>) {
         future.poll(&mut Context::from_waker(Waker::noop())),
         Poll::Pending
     ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ready_game_review_projects_the_verified_fabric1201_runtime() {
+    let pair = Pair::new().await;
+    let backend = fixture_backend(|backend| {
+        backend.profile = Some(crate::engine::connect_ready_profile::ReadyProfile::Fabric1201)
+    });
+    pair.prepare(backend.clone());
+    let review = launch_phase(&pair, "reviewed").await.review.unwrap();
+    assert_eq!(review.minecraft_version, "1.20.1");
+    assert_eq!(review.loader, "fabric");
+    assert_eq!(review.loader_version, "0.16.14");
+    assert_eq!(review.java_major, 17);
+    assert_eq!(review.core_version, "1.1.5");
+    assert_eq!(review.skins_version, "0.3.1");
+    assert_eq!(backend.spawns.load(Ordering::SeqCst), 0);
+    pair.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

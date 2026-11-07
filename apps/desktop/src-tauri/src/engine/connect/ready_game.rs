@@ -7,9 +7,44 @@ use std::sync::{mpsc, Weak};
 pub(super) struct GuestSource {
     guest: Weak<lab::Guest>,
     pub(super) bridge: Weak<lab::TcpBridge>,
-    authority: Authority,
+    authority: GuestAuthority,
     deadline: Instant,
     cancel: CancellationToken,
+}
+enum GuestAuthority {
+    Invitation(Box<Authority>),
+    Social(Weak<social::ready_source::LaunchAuthority>),
+}
+impl GuestAuthority {
+    fn with_current<T>(
+        &self,
+        work: impl FnOnce() -> Result<T, ReadyGameLaunchError>,
+    ) -> Result<T, ReadyGameLaunchError> {
+        match self {
+            Self::Invitation(authority) => {
+                authority
+                    .check_session()
+                    .map_err(|_| ReadyGameLaunchError::Unavailable)?;
+                work()
+            }
+            Self::Social(authority) => authority
+                .upgrade()
+                .ok_or(ReadyGameLaunchError::Unavailable)?
+                .with_current(work),
+        }
+    }
+    fn check_epoch(&self, epoch: u64) -> Result<(), ReadyGameLaunchError> {
+        match self {
+            Self::Social(authority)
+                if authority
+                    .upgrade()
+                    .is_none_or(|authority| authority.account_epoch() != epoch) =>
+            {
+                Err(ReadyGameLaunchError::Unavailable)
+            }
+            _ => Ok(()),
+        }
+    }
 }
 impl GuestSource {
     pub(super) fn new(
@@ -22,7 +57,22 @@ impl GuestSource {
         Arc::new(Self {
             guest: Arc::downgrade(guest),
             bridge: Arc::downgrade(bridge),
-            authority: authority.clone(),
+            authority: GuestAuthority::Invitation(Box::new(authority.clone())),
+            deadline,
+            cancel: cancel.clone(),
+        })
+    }
+    pub(super) fn social(
+        guest: &Arc<lab::Guest>,
+        bridge: &Arc<lab::TcpBridge>,
+        authority: &Arc<social::ready_source::LaunchAuthority>,
+        deadline: Instant,
+        cancel: &CancellationToken,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            guest: Arc::downgrade(guest),
+            bridge: Arc::downgrade(bridge),
+            authority: GuestAuthority::Social(Arc::downgrade(authority)),
             deadline,
             cancel: cancel.clone(),
         })
@@ -37,7 +87,7 @@ impl GuestSource {
         let current = || {
             !self.cancel.is_cancelled()
                 && Instant::now() < self.deadline
-                && self.authority.check_session().is_ok()
+                && self.authority.with_current(|| Ok(())).is_ok()
         };
         if !current() {
             return None;
@@ -51,7 +101,7 @@ impl GuestSource {
     fn address(&self) -> Result<SocketAddr, ReadyGameLaunchError> {
         if self.cancel.is_cancelled()
             || Instant::now() >= self.deadline
-            || self.authority.check_session().is_err()
+            || self.authority.with_current(|| Ok(())).is_err()
         {
             return Err(ReadyGameLaunchError::Unavailable);
         }
@@ -72,6 +122,30 @@ impl GuestSource {
             return Err(ReadyGameLaunchError::Unavailable);
         }
         Ok(bridge.local_addr())
+    }
+    fn with_current<T>(
+        &self,
+        work: impl FnOnce() -> Result<T, ReadyGameLaunchError>,
+    ) -> Result<T, ReadyGameLaunchError> {
+        // The social guard must cover the actual spawn, not only an observation
+        // immediately before it. Do not recursively lock it through address().
+        self.authority.with_current(|| {
+            if self.cancel.is_cancelled() || Instant::now() >= self.deadline {
+                return Err(ReadyGameLaunchError::Unavailable);
+            }
+            let guest = self
+                .guest
+                .upgrade()
+                .ok_or(ReadyGameLaunchError::Unavailable)?;
+            let bridge = self
+                .bridge
+                .upgrade()
+                .ok_or(ReadyGameLaunchError::Unavailable)?;
+            if guest.connection().close_reason().is_some() || bridge.is_closed() {
+                return Err(ReadyGameLaunchError::Unavailable);
+            }
+            work()
+        })
     }
 }
 pub(super) struct ReadyWork {
@@ -123,8 +197,15 @@ pub struct ReadyGameSpawnGate {
     cancel: CancellationToken,
     deadline: Instant,
     expires_at: u64,
+    #[cfg(test)]
+    epoch_rejected_before_spawn: std::sync::atomic::AtomicBool,
 }
 impl ReadyGameSpawnGate {
+    #[cfg(test)]
+    pub(super) fn epoch_rejected_for_test(&self) -> bool {
+        self.epoch_rejected_before_spawn
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
     pub fn with_current(
         &self,
         spawn_and_register: impl FnOnce() -> Result<ReadyGameLaunchResult, ReadyGameLaunchError>,
@@ -156,8 +237,14 @@ impl ReadyGameSpawnGate {
         if Instant::now() >= self.deadline || lab::unix_millis() >= self.expires_at {
             return Err(ReadyGameLaunchError::Expired);
         }
-        self.source.address()?;
-        let result = spawn_and_register()?;
+        let epoch_check = self.source.authority.check_epoch(state.social_epoch);
+        #[cfg(test)]
+        let epoch_check = epoch_check.inspect_err(|_| {
+            self.epoch_rejected_before_spawn
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        epoch_check?;
+        let result = self.source.with_current(spawn_and_register)?;
         let work = state
             .attempt
             .as_mut()
@@ -253,6 +340,7 @@ impl Manager {
         if state.shutting_down {
             return Err(ReadyGameLaunchError::Cancelled);
         }
+        let account_epoch = state.social_epoch;
         let a = selected_ready(&mut state, owner, &request.operation_id)?;
         if a.snapshot.phase != "guestConnected" || a.cancel.is_cancelled() {
             return Err(ReadyGameLaunchError::Unavailable);
@@ -264,6 +352,7 @@ impl Manager {
             .guest_source
             .clone()
             .ok_or(ReadyGameLaunchError::Unavailable)?;
+        source.authority.check_epoch(account_epoch)?;
         let endpoint = source.address()?;
         let plan = uuid::Uuid::new_v4().to_string();
         let cancel = a.cancel.child_token();
@@ -347,17 +436,19 @@ impl Manager {
                         source.address().map(|_| ())
                     };
                     check()?;
+                    let runtime = prepared.profile().descriptor();
                     let material = serde_json::to_vec(&(
                         &owner,
                         &request,
                         &plan,
                         endpoint,
                         expires_at,
+                        runtime,
                         prepared.fingerprint(),
                     ))
                     .map_err(|_| ReadyGameLaunchError::Internal)?;
                     let mut hash = Sha256::new();
-                    hash.update(b"aurora-connect-ready-game-v1\0");
+                    hash.update(b"aurora-connect-ready-game-v2\0");
                     hash.update(material);
                     let digest = format!("{:x}", hash.finalize());
                     let review = ReadyGameLaunchReview {
@@ -369,17 +460,17 @@ impl Manager {
                         instance_id: request.instance_id.clone(),
                         source_instance_id: request.source_instance_id.clone(),
                         context_key: request.context_key.clone(),
-                        minecraft_version: "1.21.1",
-                        loader: "fabric",
-                        loader_version: "0.16.14",
+                        minecraft_version: runtime.minecraft_version,
+                        loader: runtime.loader,
+                        loader_version: runtime.loader_version,
                         java_executable: request.java_executable.clone(),
-                        java_major: 21,
+                        java_major: runtime.java_major,
                         nickname: request.nickname.clone(),
                         appearance: request.appearance.clone(),
                         game_address: endpoint.to_string(),
-                        core_version: "1.1.5",
+                        core_version: runtime.core_version,
                         core_sha256: prepared.core_sha256().into(),
-                        skins_version: "0.3.1",
+                        skins_version: runtime.skins_version,
                         skins_sha256: prepared.skins_sha256().into(),
                     };
                     update_ready(&owned_state, &operation, &plan, |work| {
@@ -405,6 +496,8 @@ impl Manager {
                         cancel: cancel.clone(),
                         deadline,
                         expires_at,
+                        #[cfg(test)]
+                        epoch_rejected_before_spawn: std::sync::atomic::AtomicBool::new(false),
                     };
                     prepared.launch(&gate, &cancel)
                 }))
@@ -455,6 +548,7 @@ impl Manager {
             .state
             .lock()
             .map_err(|_| ReadyGameLaunchError::Internal)?;
+        let account_epoch = state.social_epoch;
         let a = selected_ready(&mut state, owner, operation)?;
         let work = a
             .ready_game
@@ -485,6 +579,11 @@ impl Manager {
             work.cancel.cancel();
             return Err(ReadyGameLaunchError::Expired);
         }
+        a.guest_source
+            .as_ref()
+            .ok_or(ReadyGameLaunchError::Unavailable)?
+            .authority
+            .check_epoch(account_epoch)?;
         a.guest_source
             .as_ref()
             .ok_or(ReadyGameLaunchError::Unavailable)?

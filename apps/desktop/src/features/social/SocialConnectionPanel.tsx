@@ -7,8 +7,8 @@ import type { SocialConnectController, SocialConnectState } from "./connect-cont
 export type SocialConnectionControls = { state: SocialConnectState; controller: SocialConnectController };
 
 /** Presentation only: the App-owned controller and native manager survive tabs. */
-export function SocialConnectionPanel({ connection, ownSession, now }: {
-  connection: SocialConnectionControls; ownSession?: SocialSession | null; now: number;
+export function SocialConnectionPanel({ connection, ownSession, now, onOpenConnectedGame }: {
+  connection: SocialConnectionControls; ownSession?: SocialSession | null; now: number; onOpenConnectedGame?: () => void;
 }) {
   const { state, controller } = connection;
   const snapshot = state.snapshot, social = snapshot?.social;
@@ -25,6 +25,9 @@ export function SocialConnectionPanel({ connection, ownSession, now }: {
   const canReview = snapshot?.phase === "reviewed" && social?.stage === "hostReview" && !!social.digest && !expired && !state.pending;
   const discovery = state.ownedGameTcpDiscovery === true;
   const sourceReady = !!selected && selected.expiresAtMs > now && socialGameTarget(selected.target);
+  const canOpenGame = !!onOpenConnectedGame && state.available && social?.readyGameLaunchAvailable === true && social.role === "guest" && snapshot?.role === "guest"
+    && social.stage === "connected" && snapshot?.phase === "guestConnected" && snapshot.transportState === "authenticated"
+    && !!snapshot.tcpAddress && !["complete", "failed"].includes(snapshot.cleanupState) && social.expiresAtMs !== null && social.expiresAtMs > now && !state.pending && !state.error;
   return <section className="social-connection" aria-label="Sua conexão multiplayer">
     <div className="social-community-heading"><div><h3>{snapshot?.phase === "closing" ? "Desconectando…" : social ? socialStageText[social.stage] : active ? "Há outra conexão em andamento" : "Sua conexão multiplayer"}</h3>
       <p>Teste local: uma pessoa convidada, somente jogo, por até 60 segundos. Voz desativada.</p></div><span className="social-tag">Experimental</span></div>
@@ -55,6 +58,9 @@ export function SocialConnectionPanel({ connection, ownSession, now }: {
       {copyMessage && <small role="status">{copyMessage}</small>}
     </div>}
     <div className="social-actions">
+      {canOpenGame && <button onClick={() => {
+        if (canOpenGame && social?.expiresAtMs && social.expiresAtMs > Date.now()) onOpenConnectedGame?.();
+      }}>Abrir Minecraft</button>}
       {!active && <button disabled={!state.available || state.pending || !hostEligible || (discovery && !sourceReady)} onClick={() => {
         if (!hostEligible || !ownSession || ownSession.visibility === "private") return;
         if (discovery) {

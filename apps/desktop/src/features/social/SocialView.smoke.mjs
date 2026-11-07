@@ -349,6 +349,30 @@ test("closing native phase takes precedence over retained connected or host-revi
   await render({ connection: connection({ ...connectionSnapshot(), phase: "closing" }) });
   assert.equal(button("Compartilhar agora").disabled, true);
 });
+
+test("social guest can navigate to explicit game review only after native source publication", async () => {
+  const snapshot = { ...connectionSnapshot("connected", "guest"), transportState: "authenticated" };
+  let opened = 0;
+  const onOpenConnectedGame = () => { opened++; };
+  await render({ connection: connection(snapshot), onOpenConnectedGame });
+  assert.equal([...container.querySelectorAll("button")].some(button => button.textContent === "Abrir Minecraft"), false);
+  const ready = { ...snapshot, social: { ...snapshot.social, readyGameLaunchAvailable: true } };
+  await render({ connection: connection(ready), onOpenConnectedGame });
+  assert.equal(opened, 0); await click("Abrir Minecraft"); assert.equal(opened, 1);
+  assert.equal(calls.some(call => call.name.startsWith("connect:") || call.name === "connect_prepare_ready_game_launch" || call.name === "launch_instance"), false);
+  await render({ connection: connection({ ...ready, phase: "closing" }), onOpenConnectedGame });
+  assert.equal([...container.querySelectorAll("button")].some(button => button.textContent === "Abrir Minecraft"), false);
+  await render({ connection: connection(snapshot), onOpenConnectedGame });
+  assert.equal([...container.querySelectorAll("button")].some(button => button.textContent === "Abrir Minecraft"), false);
+});
+test("social game navigation refuses expiry at click before the timer renders", async () => {
+  const snapshot = { ...connectionSnapshot("connected", "guest"), transportState: "authenticated" };
+  snapshot.social.readyGameLaunchAvailable = true; snapshot.social.expiresAtMs = fixedNow + 1000;
+  let opened = 0;
+  await render({ connection: connection(snapshot), onOpenConnectedGame: () => { opened++; } });
+  const savedNow = Date.now; Date.now = () => fixedNow + 1001;
+  try { await click("Abrir Minecraft"); assert.equal(opened, 0); } finally { Date.now = savedNow; }
+});
 for (const enabled of [false, true]) {
   test(`publication result explains separate host activation with social connection ${enabled ? "available" : "unavailable"}`, async () => {
     await render({ connection: enabled ? connection() : undefined });

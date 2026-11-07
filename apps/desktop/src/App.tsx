@@ -3688,6 +3688,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           <div className="workspace-main">
         {socialService && activeSection === "social" && !signingOut && <div className="section-social"><p className="eyebrow">TESTE LOCAL · CONTAS DESCARTÁVEIS · SEM PUBLICAÇÃO NA COMUNIDADE REAL</p><SocialView key={profile.uid} service={socialService} accountId={profile.uid} nickname={profile.username}
           connection={socialConnection}
+          onOpenConnectedGame={connectAvailable ? () => setActiveSection("connect") : undefined}
           currentModpack={runningInstances.length === 1 ? instances.find(item => item.id === runningInstances[0].instanceId)?.displayName || runningInstances[0].instanceId : undefined} /></div>}
         {connectAvailable && (connectVisited || activeSection === "connect") && <div className="section-connect" hidden={activeSection !== "connect"} inert={signingOut || activeSection !== "connect"}><ConnectView launchContext={connectLaunchContext} /></div>}
         <article className="panel instances section-instances">

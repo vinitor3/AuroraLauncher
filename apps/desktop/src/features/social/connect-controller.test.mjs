@@ -156,3 +156,14 @@ test("derived source projections accept only exact IPv4 loopback and source-chec
   assert.throws(() => snapshotFrom({ ...value, social: { ...value.social, stage: "sourceChecking" } }));
   snapshotFrom({ ...value, social: { ...value.social, stage: "sourceChecking", gameTarget: null, digest: null } });
 });
+
+test("social ready source flag requires an admitted guest and remains optional for older native builds", () => {
+  const guest = { ...active("guest", "connected"), phase: "guestConnected", transportState: "authenticated", tcpAddress: "127.0.0.1:51401" };
+  snapshotFrom(guest);
+  const ready = { ...guest, social: { ...guest.social, readyGameLaunchAvailable: true } };
+  assert.equal(snapshotFrom(ready).social.readyGameLaunchAvailable, true);
+  for (const change of [{ phase: "starting" }, { transportState: "closed" }, { tcpAddress: null }, { cleanupState: "complete" }])
+    assert.throws(() => snapshotFrom({ ...ready, ...change }));
+  for (const change of [{ readyGameLaunchAvailable: false }, { readyGameLaunchAvailable: "true" }, { stage: "connecting" }, { role: "host" }, { extra: true }])
+    assert.throws(() => snapshotFrom({ ...ready, social: { ...ready.social, ...change } }));
+});

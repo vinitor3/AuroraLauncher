@@ -22,6 +22,8 @@ pub use connect_observation::{GuestConnectObservation, GuestConnectPhase};
 pub use fragment::Completed as ReassembledDatagram;
 pub use guest::{FragmentedUdpAssociation, Guest, TcpBridge, UdpAssociation, UdpBridge};
 pub use host::Host;
+#[cfg(all(windows, debug_assertions, feature = "native-voice-test-support"))]
+pub use host::{NativeVoiceRetirementGate, NativeVoiceRetirementStage};
 pub use invitation::{
     Invitation, MAX_INVITATION_BYTES, MAX_INVITATION_LIFETIME,
     validate_direct_ipv4_invitation_address, validate_external_invitation_address,

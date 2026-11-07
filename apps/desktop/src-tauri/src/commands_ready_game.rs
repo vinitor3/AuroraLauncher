@@ -7,6 +7,7 @@ use aurora_launcher_core::engine::{
         ReadyGameLaunchResult, ReadyGameSpawnGate,
     },
     connect_java_probe::probe_java_major,
+    connect_ready_profile::{select_ready_profile, ReadyProfile},
     connect_ready_runtime::{inspect_ready_runtime, ReadyRuntime},
 };
 use std::net::SocketAddr;
@@ -27,6 +28,7 @@ struct DesktopPrepared {
     fingerprint: String,
     core: String,
     skins: String,
+    profile: ReadyProfile,
 }
 
 fn check_cancel(cancel: &CancellationToken) -> Result<(), Error> {
@@ -100,6 +102,7 @@ fn inspect(
     let skin = appearance(app, request)?;
     // First verify the installed runtime shape and pin the executable/runtime
     // files, then run the bounded -version probe while those pins are retained.
+    let selected_profile = select_ready_profile(&instance)?;
     let proof = inspect_ready_runtime(
         &instance,
         &guard,
@@ -107,7 +110,7 @@ fn inspect(
         &java_path,
         skin.as_deref(),
         endpoint,
-        21,
+        selected_profile.descriptor().java_major,
         || cancel.is_cancelled(),
     )?;
     check_cancel(cancel)?;
@@ -118,7 +121,7 @@ fn inspect(
             Error::JavaUnavailable
         }
     })?;
-    if observed != 21 {
+    if observed != proof.profile.descriptor().java_major {
         return Err(Error::JavaIncompatible);
     }
     let java = JavaRuntime::from_executable(java_path).map_err(|_| Error::JavaUnavailable)?;
@@ -140,10 +143,14 @@ impl ReadyGameBackend for DesktopReadyGameBackend {
             fingerprint: proof.fingerprint.clone(),
             core: proof.core_sha256.clone(),
             skins: proof.skins_sha256.clone(),
+            profile: proof.profile,
         }))
     }
 }
 impl PreparedReadyGame for DesktopPrepared {
+    fn profile(&self) -> ReadyProfile {
+        self.profile
+    }
     fn fingerprint(&self) -> &str {
         &self.fingerprint
     }
@@ -160,7 +167,8 @@ impl PreparedReadyGame for DesktopPrepared {
     ) -> Result<ReadyGameLaunchResult, Error> {
         let (instance, mutation_lock, proof, java, skin) =
             inspect(&self.app, &self.request, self.endpoint, cancel)?;
-        if proof.fingerprint != self.fingerprint
+        if proof.profile != self.profile
+            || proof.fingerprint != self.fingerprint
             || proof.core_sha256 != self.core
             || proof.skins_sha256 != self.skins
         {
@@ -177,7 +185,10 @@ impl PreparedReadyGame for DesktopPrepared {
         .map_err(|_| Error::LaunchFailed)?;
         spec.aurora_ipc_port = Some(server.endpoint().port);
         spec.aurora_session_nonce = Some(server.endpoint().nonce.clone());
-        spec.jvm_args.push("-Daurora.loader=fabric".into());
+        spec.jvm_args.push(format!(
+            "-Daurora.loader={}",
+            proof.profile.descriptor().loader
+        ));
         let skins_root = data_directory(&self.app)
             .map_err(|_| Error::LaunchFailed)?
             .join("skins")
@@ -223,9 +234,9 @@ impl PreparedReadyGame for DesktopPrepared {
             outcome: "preparing".into(),
             exit_code: None,
             version_id: spec.version_name.clone(),
-            minecraft_version: "1.21.1".into(),
+            minecraft_version: proof.profile.descriptor().minecraft_version.into(),
             java_executable: self.request.java_executable.clone(),
-            java_major: Some(21),
+            java_major: Some(proof.profile.descriptor().java_major),
             max_memory_mb: 4096,
             failure: None,
             logs_before: snapshot_logs(&instance),

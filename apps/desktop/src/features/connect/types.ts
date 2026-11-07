@@ -192,6 +192,8 @@ export function snapshotFrom(value: unknown): ConnectSnapshot {
       || value.invitationProfile !== undefined || value.sessionTiming !== undefined
       || value.hostGroup !== undefined || value.pendingGroupSource !== undefined || value.pendingHostSource !== undefined) return invalid();
     noFragmentedFields(value);
+    if (social.readyGameLaunchAvailable && (value.phase !== "guestConnected" || value.transportState !== "authenticated"
+      || value.tcpAddress === null || ["complete", "failed"].includes(value.cleanupState as string))) return invalid();
     if (value.tcpAddress !== null && !(typeof value.tcpAddress === "string" && /^127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(value.tcpAddress) && Number(value.tcpAddress.split(":")[1]) <= 65535)) return invalid();
     return value as ConnectSnapshot;
   }
