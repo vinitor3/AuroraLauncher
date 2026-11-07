@@ -97,6 +97,7 @@ const { createRoot } = await import("react-dom/client");
 const { ConnectView } = await import(await sourceModule(new URL("./ConnectView.tsx", import.meta.url)));
 const types = await import(await sourceModule(new URL("./types.ts", import.meta.url)));
 const hostSourceTypes = await import(await sourceModule(new URL("./host-source-types.ts", import.meta.url)));
+const discoveryTypes = await import(await sourceModule(new URL("./DiscoveryPicker.tsx", import.meta.url)));
 const container = document.getElementById("root");
 const button = label => { const found = [...container.querySelectorAll("button")].find(element => element.textContent === label); assert.ok(found, `Button ${label}`); return found; };
 const click = async label => { assert.equal(button(label).disabled, false); await act(async () => button(label).dispatchEvent(new window.Event("click", { bubbles: true }))); };
@@ -262,12 +263,13 @@ test("STATUS preserves the native signed protocol mismatch without claiming comp
 });
 
 const discoveryCandidate = { candidateId: "candidate-fixture", target: "127.0.0.1:45432", bindKind: "wildcard" };
-const discoveryInventory = { inventoryId: "inventory-fixture", instanceId: "managed-fixture", runId: "run-fixture", expiresAtMs: 1800000030000, candidates: [discoveryCandidate] };
+const discoveryRuntime = { minecraftVersion: "1.21.1", loader: "fabric", loaderVersion: "0.16.14", statusProtocol: 767, evidence: "nativeLaunchProfile" };
+const discoveryInventory = { inventoryId: "inventory-fixture", instanceId: "managed-fixture", runId: "run-fixture", expiresAtMs: 1800000030000, candidates: [discoveryCandidate], runtime: discoveryRuntime };
 const discoveryReview = { reviewId: "review-fixture", digest, inventoryId: discoveryInventory.inventoryId, candidate: discoveryCandidate,
   instanceId: discoveryInventory.instanceId, runId: discoveryInventory.runId, expiresAtMs: discoveryInventory.expiresAtMs,
-  statusProtocol: 767, handshakeHost: "localhost", handshakePort: 45432 };
+  statusProtocol: 767, handshakeHost: "localhost", handshakePort: 45432, runtime: discoveryRuntime };
 const discoverySelected = { selectionId: "selection-fixture", target: discoveryCandidate.target, instanceId: discoveryInventory.instanceId,
-  runId: discoveryInventory.runId, expiresAtMs: discoveryInventory.expiresAtMs, verifiedBeforeAfter: true, worldState: "notVerified",
+  runId: discoveryInventory.runId, expiresAtMs: discoveryInventory.expiresAtMs, verifiedBeforeAfter: true, worldState: "notVerified", runtime: discoveryRuntime,
   summary: { requestedProtocol: 767, reportedProtocol: 767, protocolMatchesRequested: true, reportedPlayersOnline: 1,
     reportedPlayersMax: 8, connectMicros: 1, statusMicros: 2, pingMicros: 3, totalMicros: 6 } };
 function discoveryFixtures() {
@@ -346,6 +348,70 @@ test("discovery rejects a native target changed between review and STATUS", asyn
   assert.match(container.textContent, /Não foi possível concluir/);
   assert.equal(button("Preparar anfitrião").disabled, true);
   assert.equal(count("connect_prepare_discovered_host"), 0);
+});
+
+test("discovery runtime projections cover exactly the nine active pairs with matching protocols", async () => {
+  const matrix = JSON.parse(await readFile(new URL("../../../../../scripts/active-mod-matrix.json", import.meta.url), "utf8"));
+  const protocols = { "1.12.2": 340, "1.16.5": 754, "1.19.2": 760, "1.20.1": 763, "1.21.1": 767 };
+  assert.equal(matrix.targets.length, 9);
+  for (const target of matrix.targets) {
+    const runtime = { minecraftVersion: target.minecraft, loader: target.loader, loaderVersion: target.loaderVersion,
+      statusProtocol: protocols[target.minecraft], evidence: "nativeLaunchProfile" };
+    assert.deepEqual(discoveryTypes.inventoryFrom({ ...discoveryInventory, runtime }).runtime, runtime);
+    assert.deepEqual(discoveryTypes.discoveryReviewFrom({ ...discoveryReview, runtime, statusProtocol: runtime.statusProtocol }).runtime, runtime);
+    assert.deepEqual(discoveryTypes.discoveredTargetFrom({ ...discoverySelected, runtime,
+      summary: { ...discoverySelected.summary, requestedProtocol: runtime.statusProtocol, reportedProtocol: runtime.statusProtocol } }).runtime, runtime);
+  }
+});
+
+test("discovery refuses missing, arbitrary or contradictory runtime metadata without a default protocol", () => {
+  for (const runtime of [undefined, {}, { ...discoveryRuntime, minecraftVersion: "1.20.2" },
+    { ...discoveryRuntime, statusProtocol: 340 }, { ...discoveryRuntime, loader: "neoforge" },
+    { ...discoveryRuntime, loaderVersion: "0.16.15" }, { ...discoveryRuntime, evidence: "renderer" },
+    { ...discoveryRuntime, pid: 123 }]) {
+    assert.throws(() => discoveryTypes.inventoryFrom({ ...discoveryInventory, runtime }));
+    assert.throws(() => discoveryTypes.discoveryReviewFrom({ ...discoveryReview, runtime }));
+    assert.throws(() => discoveryTypes.discoveredTargetFrom({ ...discoverySelected, runtime }));
+  }
+  assert.equal(discoveryTypes.inventoryFrom({ ...discoveryInventory, runtime: null }).runtime, null);
+  assert.throws(() => discoveryTypes.discoveryReviewFrom({ ...discoveryReview, statusProtocol: 763 }));
+  assert.throws(() => discoveryTypes.discoveredTargetFrom({ ...discoverySelected,
+    summary: { ...discoverySelected.summary, reportedProtocol: 763, protocolMatchesRequested: true } }));
+});
+
+test("unknown native launch profile keeps inventory visible without permitting STATUS", async () => {
+  discoveryFixtures(); handlers.set("connect_discover_instance", () => ({ ...discoveryInventory, runtime: null }));
+  await render(); await chooseManaged(); await click("Buscar jogos abertos pelo Aurora"); await click("Ver portas de managed-fixture");
+  assert.match(container.textContent, /perfil desta execução não pôde ser confirmado/);
+  assert.equal(button("Revisar 127.0.0.1:45432").disabled, true);
+  assert.equal(count("connect_review_discovered"), 0);
+  assert.equal(count("connect_confirm_discovered_status"), 0);
+  assert.equal(button("Preparar anfitrião").disabled, true);
+});
+
+test("discovery displays the native older profile and preserves a mismatched STATUS observation", async () => {
+  discoveryFixtures();
+  const runtime = { minecraftVersion: "1.12.2", loader: "forge", loaderVersion: "14.23.5.2860", statusProtocol: 340, evidence: "nativeLaunchProfile" };
+  handlers.set("connect_discover_instance", () => ({ ...discoveryInventory, runtime }));
+  handlers.set("connect_review_discovered", () => ({ ...discoveryReview, runtime, statusProtocol: 340 }));
+  handlers.set("connect_confirm_discovered_status", () => ({ ...discoverySelected, runtime,
+    summary: { ...discoverySelected.summary, requestedProtocol: 340, protocolMatchesRequested: false } }));
+  await render(); await discoveryToReview();
+  assert.match(container.textContent, /Minecraft 1\.12\.2 \(forge 14\.23\.5\.2860, protocolo 340\)/);
+  assert.equal(count("connect_confirm_discovered_status"), 0);
+  await click("Autorizar consulta e selecionar porta");
+  assert.match(container.textContent, /767, diferente ao solicitado \(340\)/);
+  assert.deepEqual(calls.find(c => c.command === "connect_confirm_discovered_status").args, { reviewId: "review-fixture", digest });
+});
+
+test("discovery refuses a valid runtime changed between inventory, review and status", async () => {
+  discoveryFixtures();
+  const runtime = { ...discoveryRuntime, minecraftVersion: "1.20.1", statusProtocol: 763 };
+  handlers.set("connect_review_discovered", () => ({ ...discoveryReview, runtime, statusProtocol: 763 }));
+  await render(); await discoveryToReview();
+  assert.match(container.textContent, /Não foi possível concluir/);
+  assert.equal(count("connect_confirm_discovered_status"), 0);
+  assert.equal(button("Preparar anfitrião").disabled, true);
 });
 
 const sessionCapability = { profile: "sessionGameTcp", schemaVersion: 2, maxAdmissionSeconds: 600, maxSessionSeconds: 3600 };

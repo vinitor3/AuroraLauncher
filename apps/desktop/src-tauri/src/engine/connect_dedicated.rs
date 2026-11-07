@@ -28,6 +28,9 @@ mod runtime_config;
 #[path = "connect_dedicated/voice_profile.rs"]
 mod voice_profile;
 
+pub(crate) use producer::{
+    NativeVoiceHostBinding, ReservedVoiceQuery, VoiceRuntimeError, VoiceRuntimeSample,
+};
 pub(crate) use voice_profile::NativeVoiceProfile;
 
 #[cfg(test)]

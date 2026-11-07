@@ -274,6 +274,8 @@ impl Manager {
             participants: Vec::new(),
         });
         state.attempt = Some(Attempt {
+            #[cfg(all(windows, feature = "connect-voice-lab"))]
+            native_voice: None,
             social: None,
             owner: owner.into(),
             snapshot,

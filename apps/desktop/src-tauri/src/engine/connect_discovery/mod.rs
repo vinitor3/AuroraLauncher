@@ -2,6 +2,9 @@
 //! actor: inventory sends no packets; STATUS requires an exact consumed review.
 //! No paths, process arguments, remote destinations or generic PID API.
 use super::connect::StatusSummary;
+#[cfg(all(windows, feature = "connect-lab"))]
+use super::connect_status_profile::StatusRuntimeProfile;
+use super::connect_status_profile::StatusRuntimeSummary;
 use serde::Serialize;
 #[cfg(all(windows, feature = "connect-lab"))]
 use sha2::{Digest, Sha256};
@@ -82,6 +85,8 @@ pub enum DiscoveryError {
     Busy,
     #[error("discovery_status_failed")]
     StatusFailed,
+    #[error("discovery_runtime_unavailable")]
+    RuntimeUnavailable,
     #[error("discovery_internal")]
     Internal,
 }
@@ -98,6 +103,7 @@ impl DiscoveryError {
             Self::Digest => "discovery_wrong_digest",
             Self::Busy => "discovery_busy",
             Self::StatusFailed => "discovery_status_failed",
+            Self::RuntimeUnavailable => "discovery_runtime_unavailable",
             Self::Internal => "discovery_internal",
         }
     }
@@ -117,6 +123,7 @@ pub struct Inventory {
     pub run_id: String,
     pub expires_at_ms: u64,
     pub candidates: Vec<Candidate>,
+    pub runtime: Option<StatusRuntimeSummary>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -129,6 +136,7 @@ pub struct TargetReview {
     pub run_id: String,
     pub expires_at_ms: u64,
     pub status_protocol: i32,
+    pub runtime: StatusRuntimeSummary,
     pub handshake_host: &'static str,
     pub handshake_port: u16,
 }
@@ -140,6 +148,7 @@ pub struct TargetStatus {
     pub instance_id: String,
     pub run_id: String,
     pub summary: StatusSummary,
+    pub runtime: StatusRuntimeSummary,
     pub verified_before_after: bool,
     pub expires_at_ms: u64,
     pub world_state: &'static str,
@@ -174,6 +183,7 @@ fn local_target(bind: SocketAddr) -> Option<(SocketAddr, &'static str)> {
 struct Stored {
     owner: String,
     proof: OwnedChildProof,
+    runtime: Option<StatusRuntimeProfile>,
     inventory: Inventory,
     rows: BTreeMap<String, SocketAddr>,
     deadline: Instant,
@@ -188,10 +198,24 @@ pub struct DiscoveryManager {
 }
 #[cfg(all(windows, feature = "connect-lab"))]
 impl DiscoveryManager {
+    #[cfg(test)]
     pub fn inventory(
         &self,
         owner: &str,
         proof: OwnedChildProof,
+    ) -> Result<Inventory, DiscoveryError> {
+        self.inventory_for_runtime(
+            owner,
+            proof,
+            Some(super::connect_status_profile::fixture_profile(7)),
+        )
+    }
+
+    pub fn inventory_for_runtime(
+        &self,
+        owner: &str,
+        proof: OwnedChildProof,
+        runtime: Option<StatusRuntimeProfile>,
     ) -> Result<Inventory, DiscoveryError> {
         if owner.is_empty() || owner.len() > 128 {
             return Err(DiscoveryError::InvalidRequest);
@@ -229,10 +253,12 @@ impl DiscoveryManager {
             run_id: proof.run_id().into(),
             expires_at_ms: aurora_connect_lab::unix_millis() + 30_000,
             candidates,
+            runtime: runtime.as_ref().map(StatusRuntimeProfile::summary),
         };
         *state = Some(Stored {
             owner: owner.into(),
             proof,
+            runtime,
             inventory: inventory.clone(),
             rows,
             deadline: Instant::now() + Duration::from_secs(30),
@@ -258,6 +284,10 @@ impl DiscoveryManager {
             return Err(DiscoveryError::Stale);
         }
         let bind = *stored.rows.get(candidate_id).ok_or(DiscoveryError::Stale)?;
+        let runtime = stored
+            .runtime
+            .as_ref()
+            .ok_or(DiscoveryError::RuntimeUnavailable)?;
         windows::require_listener(&stored.proof, bind)?;
         let candidate = stored
             .inventory
@@ -274,13 +304,19 @@ impl DiscoveryManager {
             instance_id: stored.proof.instance_id().into(),
             run_id: stored.proof.run_id().into(),
             expires_at_ms: stored.inventory.expires_at_ms,
-            status_protocol: 767,
+            status_protocol: runtime.summary().status_protocol,
+            runtime: runtime.summary(),
             handshake_host: "localhost",
             handshake_port: bind.port(),
         };
         // Private ownership observations bind the hash but never enter the DTO.
-        let bytes = serde_json::to_vec(&(stored.proof.fingerprint(), bind.to_string(), &review))
-            .map_err(|_| DiscoveryError::Internal)?;
+        let bytes = serde_json::to_vec(&(
+            stored.proof.fingerprint(),
+            runtime.fingerprint(),
+            bind.to_string(),
+            &review,
+        ))
+        .map_err(|_| DiscoveryError::Internal)?;
         review.digest = Sha256::digest(bytes)
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -338,7 +374,7 @@ impl DiscoveryManager {
                 endpoint: target,
                 handshake_host: "localhost".into(),
                 handshake_port: bind.port(),
-                protocol: 767,
+                protocol: review.status_protocol,
                 timeout: remaining.min(aurora_connect_lab::MAX_MINECRAFT_STATUS_TIMEOUT),
             },
         )
@@ -367,6 +403,7 @@ impl DiscoveryManager {
                 ping_micros: summary.ping_micros,
                 total_micros: summary.total_micros,
             },
+            runtime: review.runtime,
             verified_before_after: true,
             expires_at_ms: stored.inventory.expires_at_ms,
             world_state: "notVerified",

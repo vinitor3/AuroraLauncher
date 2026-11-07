@@ -14,6 +14,7 @@ pub mod connect_quick_play;
 pub mod connect_ready_files;
 #[cfg(all(windows, feature = "connect-lab"))]
 pub mod connect_ready_runtime;
+pub mod connect_status_profile;
 #[cfg(feature = "connect-voice-lab")]
 pub mod connect_voice;
 pub mod connect_voice_desktop;

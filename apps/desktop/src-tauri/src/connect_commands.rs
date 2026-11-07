@@ -49,6 +49,23 @@ pub async fn connect_social_authenticate(
         .map_err(|error| error.code())
 }
 #[tauri::command]
+pub fn connect_social_reserve_discovered(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    discovery: State<'_, DiscoveryManager>,
+    request: aurora_launcher_core::engine::connect::SocialDiscoveredReserveRequest,
+    selection_id: String,
+) -> Result<aurora_launcher_core::engine::connect::SocialReservation, &'static str> {
+    manager
+        .social_reserve_discovered(
+            owner(&window)?,
+            request,
+            selection_id,
+            discovery.inner().clone(),
+        )
+        .map_err(|error| error.code())
+}
+#[tauri::command]
 pub fn connect_social_confirm_host(
     window: WebviewWindow,
     manager: State<'_, ConnectManager>,
@@ -381,11 +398,11 @@ pub fn connect_discover_instance(
     let owner = owner(&window)?;
     #[cfg(all(windows, feature = "connect-lab"))]
     {
-        let proof = running
+        let (proof, runtime) = running
             .connect_owned_child(&instance_id)
             .map_err(|error| error.code())?;
         discovery
-            .inventory(owner, proof)
+            .inventory_for_runtime(owner, proof, runtime)
             .map_err(|error| error.code())
     }
     #[cfg(not(all(windows, feature = "connect-lab")))]

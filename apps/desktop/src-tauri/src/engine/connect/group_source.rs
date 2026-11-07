@@ -8,6 +8,12 @@ pub(super) struct SourceWork {
     #[cfg(test)]
     pub(super) hooks: SourceHooks,
 }
+#[cfg(all(windows, feature = "connect-voice-lab"))]
+pub(super) fn install_worker(a: &mut Attempt, worker: JoinHandle<()>) {
+    let work = a.group_source.as_mut().expect("reserved source work");
+    debug_assert!(work.worker.as_ref().is_none_or(JoinHandle::is_finished));
+    work.worker = Some(worker);
+}
 impl Default for SourceWork {
     fn default() -> Self {
         Self {
@@ -160,6 +166,8 @@ impl Manager {
         });
         let cancel = CancellationToken::new();
         state.attempt = Some(Attempt {
+            #[cfg(all(windows, feature = "connect-voice-lab"))]
+            native_voice: None,
             social: None,
             owner: owner.into(),
             snapshot: snapshot.clone(),

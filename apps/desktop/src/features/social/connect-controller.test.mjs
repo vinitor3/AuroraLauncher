@@ -33,9 +33,10 @@ async function fixture(options = {}) {
   const controller = createSocialConnectController({ accountId: user.uid, user, currentUser: () => currentUser,
     publish: value => published.push(value), invoke: async (command, args) => {
       calls.push([command, args]); if (handlers[command]) return handlers[command](args);
-      if (command === "connect_social_capabilities") return { available: options.available ?? true, experimental: true, accountEpoch: 7, maxSessionSeconds: 60 };
+      if (command === "connect_social_capabilities") return { available: options.available ?? true, experimental: true, accountEpoch: 7, maxSessionSeconds: 60, ...(options.discovery ? { ownedGameTcpDiscovery: true } : {}) };
       if (command === "connect_snapshot") return structuredClone(snapshot);
       if (command === "connect_social_reserve") { snapshot = active(args.request.role); return { operationId: operation, generation: 1 }; }
+      if (command === "connect_social_reserve_discovered") { snapshot = active("host"); snapshot.social.gameTarget = null; return { operationId: operation, generation: 1 }; }
       if (command === "connect_social_authenticate") return structuredClone(snapshot);
       if (command === "connect_stop") { snapshot = { ...snapshot, phase: "closed", transportState: "closed", cleanupState: "complete", social: snapshot.social && { ...snapshot.social, stage: "closed" } }; return structuredClone(snapshot); }
       if (command === "connect_social_confirm_host") { snapshot = { ...snapshot, phase: "hostListening", social: { ...snapshot.social, stage: "waitingGuest" } }; return structuredClone(snapshot); }
@@ -126,4 +127,32 @@ test("capability schema rejects authority material and invalid epochs", () => {
   const value = { available: true, experimental: true, accountEpoch: 1, maxSessionSeconds: 60 }; socialConnectCapabilitiesFrom(value);
   assert.throws(() => socialConnectCapabilitiesFrom({ ...value, authorityPin: "a".repeat(64) }));
   assert.throws(() => socialConnectCapabilitiesFrom({ ...value, accountEpoch: -1 }));
+});
+test("discovered host reserves only opaque selection before credentials and never sends a port", async () => {
+  const f = await fixture({ discovery: true });
+  await f.controller.prepareHostDiscovered(session, "friends", operation);
+  assert.deepEqual(f.calls.find(([name]) => name === "connect_social_reserve_discovered")[1], {
+    request: { accountEpoch: 7, accountId: "own-account", sessionId: session, visibility: "friends" }, selectionId: operation,
+  });
+  assert.ok(f.calls.findIndex(([name]) => name === "connect_social_reserve_discovered") < f.calls.findIndex(([name]) => name === "SDK token"));
+  assert.equal(f.calls.filter(([name]) => name === "connect_social_confirm_host").length, 0);
+  assert.equal(f.calls.filter(([name]) => name === "connect_social_reserve").length, 0);
+});
+test("older capability cannot invoke discovered reservation or read credentials", async () => {
+  const f = await fixture(); await f.controller.prepareHostDiscovered(session, "public", operation);
+  assert.equal(f.tokenCalls(), 0); assert.equal(f.calls.filter(([name]) => name === "connect_social_reserve_discovered").length, 0);
+});
+test("discovered late reservation after account invalidation is reaped without token handoff", async () => {
+  const reply = deferred(), f = await fixture({ discovery: true }); f.handlers.connect_social_reserve_discovered = () => reply.promise;
+  const work = f.controller.prepareHostDiscovered(session, "public", operation); await tick(); f.controller.invalidate();
+  f.setSnapshot(active("host")); reply.resolve({ operationId: operation, generation: 1 }); await work;
+  assert.equal(f.tokenCalls(), 0); assert.equal(f.calls.filter(([name]) => name === "connect_stop").length, 1);
+});
+test("derived source projections accept only exact IPv4 loopback and source-checking cannot claim a destination", () => {
+  const value = active("host", "hostReview"); value.social.digest = "a".repeat(64); value.social.gameTarget = "127.0.0.1:51029";
+  snapshotFrom(value);
+  for (const gameTarget of ["127.0.0.2:51029", "[::1]:51029", "127.0.0.1:0", "127.0.0.1:65536", "http://127.0.0.1:1", "127.0.0.1:01"])
+    assert.throws(() => snapshotFrom({ ...value, social: { ...value.social, gameTarget } }));
+  assert.throws(() => snapshotFrom({ ...value, social: { ...value.social, stage: "sourceChecking" } }));
+  snapshotFrom({ ...value, social: { ...value.social, stage: "sourceChecking", gameTarget: null, digest: null } });
 });

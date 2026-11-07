@@ -11,6 +11,14 @@ pub struct SocialReserveRequest {
     pub game_target: Option<String>,
     pub visibility: Option<String>,
 }
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SocialDiscoveredReserveRequest {
+    pub account_epoch: u64,
+    pub account_id: String,
+    pub session_id: String,
+    pub visibility: String,
+}
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SocialReservation {
@@ -24,6 +32,8 @@ pub struct SocialCapabilities {
     pub experimental: bool,
     pub account_epoch: u64,
     pub max_session_seconds: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owned_game_tcp_discovery: Option<bool>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -83,6 +93,7 @@ impl ConnectManager {
                 experimental: true,
                 account_epoch: 0,
                 max_session_seconds: 60,
+                owned_game_tcp_discovery: None,
             }
         }
     }
@@ -116,6 +127,24 @@ impl ConnectManager {
         #[cfg(not(feature = "connect-lab"))]
         {
             let _ = (owner, operation_id, generation, id_token);
+            Err(ConnectError::Disabled)
+        }
+    }
+    pub fn social_reserve_discovered(
+        &self,
+        owner: &str,
+        request: SocialDiscoveredReserveRequest,
+        selection_id: String,
+        discovery: super::super::connect_discovery::DiscoveryManager,
+    ) -> Result<SocialReservation, ConnectError> {
+        #[cfg(all(windows, feature = "connect-lab"))]
+        {
+            self.live
+                .social_reserve_discovered(owner, request, selection_id, discovery)
+        }
+        #[cfg(not(all(windows, feature = "connect-lab")))]
+        {
+            let _ = (owner, request, selection_id, discovery);
             Err(ConnectError::Disabled)
         }
     }

@@ -35,6 +35,17 @@ fn show_launcher(app: &tauri::AppHandle) {
     }
 }
 
+/// The same exit request as the tray. ExitRequested remains the sole owner of
+/// voice approval and Connect shutdown; this command never kills the process.
+#[tauri::command]
+fn launcher_request_exit(window: tauri::WebviewWindow) -> Result<(), &'static str> {
+    if window.label() != "main" {
+        return Err("launcher_wrong_window");
+    }
+    window.app_handle().exit(0);
+    Ok(())
+}
+
 fn create_launcher_tray(app: &tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open-launcher", "Abrir Aurora", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
@@ -160,6 +171,7 @@ fn main() {
             connect_commands::connect_capabilities,
             connect_commands::connect_social_capabilities,
             connect_commands::connect_social_reserve,
+            connect_commands::connect_social_reserve_discovered,
             connect_commands::connect_social_authenticate,
             connect_commands::connect_social_confirm_host,
             connect_commands::connect_account_transition_stop,
@@ -197,6 +209,7 @@ fn main() {
             connect_commands::connect_probe_status,
             connect_commands::connect_stop,
             launcher_sessions::launcher_auth_scope,
+            launcher_request_exit,
             player_profiles::lookup_player_skin,
             commands::engine_status,
             commands::list_instances,

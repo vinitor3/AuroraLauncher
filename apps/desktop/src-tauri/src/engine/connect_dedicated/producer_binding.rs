@@ -41,6 +41,63 @@ impl DedicatedRun {
 
 #[allow(dead_code)] // Observation only; service admission remains a later gate.
 impl NativeVoiceHostBinding {
+    pub(crate) fn check_current(&self) -> std::result::Result<(), VoiceRuntimeError> {
+        self.current().map(|_| ()).map_err(VoiceRuntimeError::from)
+    }
+
+    pub(crate) fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
+    /// Private preimage only; never a frontend projection or a constructor.
+    pub(crate) fn identity_preimage(&self) -> (Uuid, &'static str) {
+        (
+            self.native_nonce,
+            match self.profile {
+                StoredVoiceProfileV2::Svc => "svc",
+                StoredVoiceProfileV2::Plasmo => "plasmo",
+            },
+        )
+    }
+
+    pub(crate) fn copy_id(&self) -> std::result::Result<String, VoiceRuntimeError> {
+        let shared = self.current().map_err(VoiceRuntimeError::from)?;
+        shared
+            .voice_context
+            .as_ref()
+            .map(|context| context.copy_id().to_owned())
+            .ok_or(VoiceRuntimeError::Closed)
+    }
+
+    pub(crate) fn accepts(&self, sample: &VoiceRuntimeSample) -> bool {
+        let expected = match self.profile {
+            StoredVoiceProfileV2::Svc => {
+                (super::super::NativeVoiceProfile::SimpleVoiceChat, "2.6.22")
+            }
+            StoredVoiceProfileV2::Plasmo => {
+                (super::super::NativeVoiceProfile::PlasmoVoice, "2.1.17")
+            }
+        };
+        sample.profile == expected.0
+            && sample.artifact_version == expected.1
+            && sample.minecraft == "1.21.1"
+            && sample.loader == "fabric"
+            && sample.loader_version == "0.16.14"
+            && sample.binding == VoiceRuntimeBinding::Ipv4Literal
+            && sample.announcement == VoiceRuntimeAnnouncement::DefaultUnchanged
+    }
+
+    pub(crate) fn targets(&self) -> (SocketAddr, SocketAddr) {
+        let port = match self.profile {
+            StoredVoiceProfileV2::Svc => 43002,
+            StoredVoiceProfileV2::Plasmo => 43003,
+        };
+        (
+            ENDPOINT,
+            SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+        )
+    }
+
     fn current(&self) -> RunResult<Arc<Shared>> {
         let shared = self.shared.upgrade().ok_or(DedicatedError::Closed)?;
         {

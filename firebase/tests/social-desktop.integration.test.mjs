@@ -92,4 +92,56 @@ test('89 launcher ConnectManager joins social sessions through authenticated loc
   await t.test('backend loss closes both native workers without a stop command', () => scenario('public', 'backend-loss'));
   await t.test('nonfriend cannot open a friends game source', () => scenario('friends', 'nonfriend'));
   await t.test('blocked account cannot open a public game source', () => scenario('public', 'blocked-before'));
+  await t.test('90 discovered owned source joins through the broker and exit closes both peers', async () => {
+    let lab, host, guest, hostClient, guestClient, bridge, primary, cleanupFailure;
+    const started = performance.now();
+    try {
+      lab = await startSocialBindingLab({ enabled: true, port: 42888, admission: true });
+      host = await account(factory, 'src90'); guest = await account(factory, 'gst90');
+      await host.service.publishSession({ title: 'Owned source fixture', modpackName: 'Connect discovery test', minecraftVersion: '1.21.1', loader: 'Fabric',
+        imageUrl: null, players: 1, maxPlayers: 2, visibility: 'public', joinPolicy: 'open' });
+      const sessionId = await host.sessionId();
+      hostClient = await manager(binary, lab); guestClient = await manager(binary, lab);
+      const source = await hostClient.ok('discoverFixture');
+      assert.match(source.target, /^127\.0\.0\.1:\d+$/);
+      assert.notEqual(source.target, '127.0.0.1:43001', 'source must be discovered on an ephemeral port');
+      const reservation = await hostClient.ok('reserveDiscovered', { selectionId: source.selectionId, request: {
+        accountEpoch: hostClient.ready.capabilities.accountEpoch, accountId: host.uid, sessionId, visibility: 'public',
+      } });
+      await hostClient.ok('authenticate', { ...reservation, token: await host.token() });
+      const review = await waitSnapshot(hostClient, value => value.social?.stage === 'hostReview');
+      assert.equal(review.social.gameTarget, source.target);
+      await hostClient.ok('confirm', { ...reservation, generation: review.generation, digest: review.social.digest });
+      await waitSnapshot(hostClient, value => value.social?.stage === 'waitingGuest');
+      await prepareGuest(guestClient, guest, sessionId);
+      const connected = await waitSnapshot(guestClient, value => value.phase === 'guestConnected');
+      bridge = connected.tcpAddress;
+      const status = await guestClient.ok('probeStatus');
+      assert.equal(status.requestedProtocol, 767); assert.equal(status.reportedProtocol, 767);
+      assert.equal(status.protocolMatchesRequested, true);
+      const remaining = connected.social.expiresAtMs - Date.now();
+      assert.ok(remaining > 10_000, 'source withdrawal must precede ordinary expiry');
+      const stopped = await hostClient.ok('stopFixture');
+      assert.equal(stopped.cleanup, true, 'owned source child must exit normally');
+      const [closedHost, closedGuest] = await Promise.all([
+        waitSnapshot(hostClient, value => ['closed', 'failed'].includes(value.phase) && value.cleanupState === 'complete'),
+        waitSnapshot(guestClient, value => ['closed', 'failed'].includes(value.phase) && value.cleanupState === 'complete'),
+      ]);
+      assert.equal(closedHost.errorCode, 'connect_source_changed');
+      assert.equal(closedGuest.tcpAddress, null);
+      await rebind(bridge);
+      t.diagnostic(JSON.stringify({ case: 'public-owned-source', sourceDiscovered: true, statusAndMatchingPong: true,
+        sourceExitClosedBothPeers: true, tcpRebind: true, remainingSessionMs: remaining,
+        elapsedMs: Math.round(performance.now() - started), source: 'synthetic_owned_child', minecraft: 'not_tested', voice: 'not_tested' }));
+    } catch (error) { primary = error; }
+    finally {
+      for (const cleanup of [guestClient && (() => guestClient.close()), hostClient && (() => hostClient.close()),
+        guest && (() => guest.close()), host && (() => host.close()), lab && (() => lab.close())].filter(Boolean)) {
+        try { await cleanup(); } catch (error) { cleanupFailure ??= error; }
+      }
+    }
+    if (primary && cleanupFailure) throw new AggregateError([primary, cleanupFailure], 'DISCOVERY_AND_CLEANUP_FAILED');
+    if (cleanupFailure) throw cleanupFailure;
+    if (primary) throw primary;
+  });
 });

@@ -1,7 +1,7 @@
 import { snapshotFrom, type ConnectSnapshot } from "../connect/types";
 import { socialConnectCapabilitiesFrom, socialConnectError, socialReservationFrom, socialSessionId, type SocialConnectCapabilities } from "./connect-types";
 
-export type SocialConnectState = { available: boolean; pending: boolean; error: string; snapshot?: ConnectSnapshot };
+export type SocialConnectState = { available: boolean; ownedGameTcpDiscovery?: boolean; pending: boolean; error: string; snapshot?: ConnectSnapshot };
 export const emptySocialConnectState = (): SocialConnectState => ({ available: false, pending: false, error: "" });
 type AuthUser = { uid: string; getIdToken(): Promise<string> };
 type Options = {
@@ -52,7 +52,7 @@ export function createSocialConnectController(options: Options) {
       check(generation);
       const value = await options.invoke("connect_social_capabilities");
       check(generation); capabilities = socialConnectCapabilitiesFrom(value);
-      emit({ available: capabilities.available });
+      emit({ available: capabilities.available, ownedGameTcpDiscovery: capabilities.ownedGameTcpDiscovery === true });
       await poll();
     } catch (cause) { if (alive && generation === revision) emit({ error: socialConnectError(cause), available: false }); }
   }
@@ -64,13 +64,18 @@ export function createSocialConnectController(options: Options) {
     catch (cause) { if (alive && generation === revision) emit({ error: socialConnectError(cause) }); }
     finally { if (alive && generation === revision) { busy = false; emit({ pending: false }); await observe(); } }
   }
-  async function reserve(role: "host" | "guest", sessionId: string, visibility?: "public" | "friends") {
+  async function reserve(role: "host" | "guest", sessionId: string, visibility?: "public" | "friends", selectionId?: string) {
     if (!socialSessionId(sessionId)) { emit({ error: socialConnectError("connect_social_failed") }); return; }
+    if (selectionId !== undefined && (!socialSessionId(selectionId) || capabilities?.ownedGameTcpDiscovery !== true)) {
+      emit({ error: socialConnectError("connect_social_unavailable") }); return;
+    }
     await perform(async generation => {
       let reserved: { operationId: string; generation: number } | undefined;
       try {
         check(generation);
-        reserved = socialReservationFrom(await options.invoke("connect_social_reserve", { request: {
+        reserved = socialReservationFrom(await options.invoke(selectionId ? "connect_social_reserve_discovered" : "connect_social_reserve", selectionId ? {
+          request: { accountEpoch: capabilities!.accountEpoch, accountId: options.accountId, sessionId, visibility }, selectionId,
+        } : { request: {
           accountEpoch: capabilities!.accountEpoch, accountId: options.accountId, sessionId, role,
           ...(role === "host" ? { gameTarget: "127.0.0.1:43001", visibility } : {}),
         } }));
@@ -105,6 +110,7 @@ export function createSocialConnectController(options: Options) {
     start,
     join: (sessionId: string) => reserve("guest", sessionId),
     prepareHost: (sessionId: string, visibility: "public" | "friends") => reserve("host", sessionId, visibility),
+    prepareHostDiscovered: (sessionId: string, visibility: "public" | "friends", selectionId: string) => reserve("host", sessionId, visibility, selectionId),
     confirmHost: () => perform(async generation => {
       const snapshot = state.snapshot, social = snapshot?.social;
       if (!snapshot?.operationId || social?.stage !== "hostReview" || !social.digest || !social.expiresAtMs || social.expiresAtMs <= Date.now()) throw "connect_plan_expired";

@@ -23,7 +23,7 @@ async function sourceModule(source) {
   } }).outputText.replace(/^import ["'][^"']+\.css["'];?$/gm, "");
   for (const { fileName: specifier } of ts.preProcessFile(output).importedFiles) {
     const dependency = specifier.startsWith(".") ? ["", ".ts", ".tsx"].map(ext => new URL(specifier + ext, source)).find(url => existsSync(fileURLToPath(url))) : undefined;
-    const resolved = dependency ? await sourceModule(dependency) : pathToFileURL(require.resolve(specifier)).href;
+    const resolved = specifier === "@tauri-apps/api/core" ? "data:text/javascript,export const invoke=(...args)=>globalThis.__socialDiscoveryInvoke(...args)" : dependency ? await sourceModule(dependency) : pathToFileURL(require.resolve(specifier)).href;
     output = output.replaceAll(`from "${specifier}"`, `from ${JSON.stringify(resolved)}`);
   }
   const url = `data:text/javascript;base64,${Buffer.from(output).toString("base64")}`;
@@ -32,6 +32,7 @@ async function sourceModule(source) {
 const { act, createElement } = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { SocialView } = await import(await sourceModule(new URL("./SocialView.tsx", import.meta.url)));
+const { SocialConnectionPanel } = await import(await sourceModule(new URL("./SocialConnectionPanel.tsx", import.meta.url)));
 const { socialArtwork } = await import(await sourceModule(new URL("./presentation.ts", import.meta.url)));
 const actualNow = Date.now;
 const fixedNow = 1_800_000_000_000;
@@ -63,7 +64,9 @@ const edit = async (element, value) => { assert.ok(element); await act(async () 
 }); };
 const submit = async selector => { const form = container.querySelector(selector); assert.ok(form); await act(async () => form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }))); };
 const count = name => calls.filter(call => call.name === name).length;
-beforeEach(() => { Date.now = () => fixedNow; calls = []; handlers = {}; state = empty(); page = { items: [], nextCursor: null }; service = makeService(); root = createRoot(container); });
+beforeEach(() => { Date.now = () => fixedNow; calls = []; handlers = {}; state = empty(); page = { items: [], nextCursor: null }; service = makeService(); root = createRoot(container);
+  globalThis.__socialDiscoveryInvoke = async (name, args) => { calls.push({ name, args }); if (handlers[name]) return handlers[name](args); throw new Error("Unexpected discovery call"); };
+});
 afterEach(async () => { await act(async () => root.unmount()); Date.now = actualNow; });
 
 test("unavailable service performs no reads, mutations or automatic social activation", async () => {
@@ -276,7 +279,7 @@ test("acceptance checks the request deadline at click time even before a timer r
 
 function connection(snapshot) {
   const controller = {};
-  for (const name of ["prepareHost", "confirmHost", "stop", "refresh"]) controller[name] = async (...args) => { calls.push({ name: `connect:${name}`, args }); };
+  for (const name of ["prepareHost", "prepareHostDiscovered", "confirmHost", "stop", "refresh"]) controller[name] = async (...args) => { calls.push({ name: `connect:${name}`, args }); };
   return { state: { available: true, pending: false, error: "", snapshot }, controller };
 }
 function connectionSnapshot(stage = "hostReview", role = "host") {
@@ -359,3 +362,62 @@ for (const enabled of [false, true]) {
     assert.doesNotMatch(container.textContent, /A conexão automática continua separada/);
   });
 }
+
+function discoveryFixture(target = "127.0.0.1:51029") {
+  const common = { instanceId: "owned-game", runId: "owned-run", expiresAtMs: fixedNow + 30_000,
+    runtime: { minecraftVersion: "1.21.1", loader: "fabric", loaderVersion: "0.16.14", statusProtocol: 767, evidence: "nativeLaunchProfile" } };
+  const candidate = { candidateId: "candidate", target, bindKind: "loopback" };
+  handlers.list_running_instances = () => [{ instanceId: common.instanceId }];
+  handlers.connect_discover_instance = () => ({ ...common, inventoryId: "inventory", candidates: [candidate] });
+  handlers.connect_review_discovered = () => ({ ...common, inventoryId: "inventory", reviewId: "review", digest: "a".repeat(64), candidate,
+    statusProtocol: 767, handshakeHost: "localhost", handshakePort: 51029 });
+  const selected = { ...common, selectionId: "22222222-2222-4333-8444-555555555555", target, verifiedBeforeAfter: true, worldState: "notVerified",
+    summary: { requestedProtocol: 767, reportedProtocol: 767, protocolMatchesRequested: true, reportedPlayersOnline: 0, reportedPlayersMax: 2,
+      connectMicros: 1, statusMicros: 2, pingMicros: 3, totalMicros: 6 } };
+  handlers.connect_confirm_discovered_status = () => selected;
+  return selected;
+}
+const chooseDiscovery = async (target = "127.0.0.1:51029") => {
+  await click("Buscar jogos abertos pelo Aurora"); await click("Ver portas de owned-game");
+  await click(`Revisar ${target}`); await click("Autorizar consulta e selecionar porta");
+};
+const renderPanel = async (control, ownSession = { ...baseSession, hostUid: "owner-uid" }) => {
+  await act(async () => root.render(createElement(SocialConnectionPanel, { connection: control, ownSession, now: Date.now() })));
+};
+test("social discovered host requires explicit owned selection and consumes it before reservation", async () => {
+  const selected = discoveryFixture(), control = connection(); control.state.ownedGameTcpDiscovery = true;
+  await renderPanel(control);
+  assert.equal(calls.length, 0); assert.equal(button("Preparar meu servidor").disabled, true);
+  await chooseDiscovery(); assert.equal(button("Preparar meu servidor").disabled, false);
+  await click("Preparar meu servidor");
+  assert.deepEqual(calls.find(call => call.name === "connect:prepareHostDiscovered").args, [baseSession.id, "public", selected.selectionId]);
+  assert.equal(button("Preparar meu servidor").disabled, true);
+  assert.equal(count("connect:prepareHost"), 0); assert.equal(count("connect:confirmHost"), 0);
+});
+test("social discovered selection expires at click and IPv6 cannot become a social host source", async () => {
+  const selected = discoveryFixture(), control = connection(); control.state.ownedGameTcpDiscovery = true;
+  await renderPanel(control); await chooseDiscovery(); Date.now = () => selected.expiresAtMs;
+  await click("Preparar meu servidor"); assert.equal(count("connect:prepareHostDiscovered"), 0);
+  Date.now = () => fixedNow; discoveryFixture("[::1]:51029");
+  await renderPanel(control, { ...baseSession, id: "new-advert", hostUid: "owner-uid" });
+  await chooseDiscovery("[::1]:51029"); assert.equal(button("Preparar meu servidor").disabled, true);
+  assert.match(container.textContent, /exige uma porta IPv4/);
+});
+test("changing advert discards selected source and delayed STATUS cannot restore it", async () => {
+  const selected = discoveryFixture(), control = connection(); control.state.ownedGameTcpDiscovery = true;
+  await renderPanel(control); await chooseDiscovery();
+  await renderPanel(control, { ...baseSession, id: "new-advert", hostUid: "owner-uid" });
+  assert.equal(button("Preparar meu servidor").disabled, true);
+  const reply = deferred(); handlers.connect_confirm_discovered_status = () => reply.promise;
+  await chooseDiscovery();
+  await renderPanel(control, { ...baseSession, id: "third-advert", hostUid: "owner-uid" });
+  await act(async () => reply.resolve(selected));
+  assert.equal(button("Preparar meu servidor").disabled, true); assert.equal(count("connect:prepareHostDiscovered"), 0);
+});
+test("native source checking keeps Disconnect available without exposing a fabricated source", async () => {
+  const snapshot = connectionSnapshot("sourceChecking"); snapshot.phase = "starting"; snapshot.social.gameTarget = null; snapshot.social.digest = null;
+  const control = connection(snapshot); control.state.ownedGameTcpDiscovery = true;
+  await renderPanel(control); assert.match(container.textContent, /Conferindo o jogo selecionado/);
+  assert.equal(button("Desconectar").disabled, false); assert.equal(buttons("Compartilhar agora").length, 0);
+  await click("Desconectar"); assert.equal(count("connect:stop"), 1);
+});

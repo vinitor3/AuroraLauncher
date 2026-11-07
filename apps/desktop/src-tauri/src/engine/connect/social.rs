@@ -3,6 +3,12 @@ use super::*;
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
 
+#[derive(Clone)]
+struct DiscoverySelection {
+    id: String,
+    manager: crate::engine::connect_discovery::DiscoveryManager,
+}
+
 const ORIGIN: &str = "http://127.0.0.1:42888";
 const MAX_HTTP_BYTES: usize = 8192;
 pub(super) struct Control {
@@ -10,11 +16,13 @@ pub(super) struct Control {
     key: Option<lab::SecretKey>,
     reservation_generation: u64,
     approval: Option<oneshot::Sender<String>>,
+    selection: Option<DiscoverySelection>,
 }
 pub(super) fn clear(a: &mut Attempt) {
     if let Some(control) = &mut a.social {
         control.key = None;
         control.approval = None;
+        control.selection = None;
     }
 }
 pub(super) fn expire(a: &mut Attempt) {
@@ -89,12 +97,50 @@ impl Manager {
             experimental: true,
             account_epoch: self.state.lock().map_or(0, |s| s.social_epoch),
             max_session_seconds: 60,
+            owned_game_tcp_discovery: cfg!(windows).then_some(self.social_authority.is_some()),
         }
     }
     pub(in crate::engine::connect) fn social_reserve(
         &self,
         owner: &str,
         request: SocialReserveRequest,
+    ) -> Result<SocialReservation, ConnectError> {
+        self.social_reserve_inner(owner, request, None)
+    }
+    #[cfg(windows)]
+    pub(in crate::engine::connect) fn social_reserve_discovered(
+        &self,
+        owner: &str,
+        request: SocialDiscoveredReserveRequest,
+        selection_id: String,
+        discovery: crate::engine::connect_discovery::DiscoveryManager,
+    ) -> Result<SocialReservation, ConnectError> {
+        if !uuid::Uuid::parse_str(&selection_id)
+            .is_ok_and(|id| id.get_version_num() == 4 && id.to_string() == selection_id)
+        {
+            return Err(ConnectError::InvalidRequest);
+        }
+        self.social_reserve_inner(
+            owner,
+            SocialReserveRequest {
+                account_epoch: request.account_epoch,
+                account_id: request.account_id,
+                session_id: request.session_id,
+                role: "host".into(),
+                game_target: None,
+                visibility: Some(request.visibility),
+            },
+            Some(DiscoverySelection {
+                id: selection_id,
+                manager: discovery,
+            }),
+        )
+    }
+    fn social_reserve_inner(
+        &self,
+        owner: &str,
+        request: SocialReserveRequest,
+        selection: Option<DiscoverySelection>,
     ) -> Result<SocialReservation, ConnectError> {
         if self.social_authority.is_none() {
             return Err(ConnectError::Disabled);
@@ -103,12 +149,20 @@ impl Manager {
             .is_ok_and(|id| id.get_version_num() == 4 && id.to_string() == request.session_id);
         let role = match request.role.as_str() {
             "host"
-                if request.game_target.as_deref() == Some("127.0.0.1:43001")
+                if ((selection.is_none()
+                    && request.game_target.as_deref() == Some("127.0.0.1:43001"))
+                    || (selection.is_some() && request.game_target.is_none()))
                     && matches!(request.visibility.as_deref(), Some("public" | "friends")) =>
             {
                 "host"
             }
-            "guest" if request.game_target.is_none() && request.visibility.is_none() => "guest",
+            "guest"
+                if selection.is_none()
+                    && request.game_target.is_none()
+                    && request.visibility.is_none() =>
+            {
+                "guest"
+            }
             _ => return Err(ConnectError::InvalidRequest),
         };
         if owner != "main" || !valid_uid(&request.account_id) || !valid_session {
@@ -148,6 +202,8 @@ impl Manager {
             expires_at_ms: Some(lab::unix_millis() + 60_000),
         });
         state.attempt = Some(Attempt {
+            #[cfg(all(windows, feature = "connect-voice-lab"))]
+            native_voice: None,
             owner: owner.into(),
             snapshot,
             social: Some(Control {
@@ -155,6 +211,7 @@ impl Manager {
                 key: Some(lab::generate_key()),
                 reservation_generation: reservation.generation,
                 approval: None,
+                selection,
             }),
             draft: None,
             reviewed: None,
@@ -215,6 +272,7 @@ impl Manager {
         }
         let key = control.key.take().ok_or(ConnectError::StaleOperation)?;
         let request = control.request.clone();
+        let selection = control.selection.take();
         let deadline = a.prepared_deadline;
         let expiry = a
             .snapshot
@@ -236,11 +294,14 @@ impl Manager {
                 id: operation.clone(),
                 generation,
                 request,
+                selection,
                 key,
                 authority,
                 deadline,
                 expiry,
                 cancel: cancel.clone(),
+                #[cfg(all(test, windows))]
+                source_gate: None,
             };
             let result = execute(run, id_token).await;
             close_operation(&worker_state, &operation, &cancel, execution_error(result)).await;
@@ -316,11 +377,14 @@ struct Run {
     id: String,
     generation: u64,
     request: SocialReserveRequest,
+    selection: Option<DiscoverySelection>,
     key: lab::SecretKey,
     authority: SocialLabAuthority,
     deadline: Instant,
     expiry: u64,
     cancel: CancellationToken,
+    #[cfg(all(test, windows))]
+    source_gate: Option<Arc<group_source::SourceGate>>,
 }
 impl Run {
     fn current(&self) -> Result<(), ConnectError> {
@@ -536,9 +600,107 @@ fn limits() -> lab::Limits {
     }
 }
 
+/// A blocking source query belongs to the social actor. It captures no endpoint;
+/// cancellation releases transport before awaiting the exact retained query.
+async fn source_query<T: Send + 'static>(
+    run: &Run,
+    host: &mut Option<lab::Host>,
+    lease: Option<&str>,
+    permitted: impl Fn() -> Result<(), ConnectError>,
+    query: impl FnOnce() -> Result<T, ConnectError> + Send + 'static,
+) -> Result<T, ConnectError> {
+    run.current()?;
+    permitted()?;
+    let mut query = tokio::task::spawn_blocking(query);
+    let mut tick = interval(Duration::from_millis(20));
+    let failure = loop {
+        tokio::select! { biased;
+            _ = run.cancel.cancelled() => break ConnectError::Cancelled,
+            _ = tick.tick() => {
+                if let Err(error) = run.current().and_then(|_| permitted()) { break error; }
+            },
+            result = &mut query => {
+                let result = result.unwrap_or(Err(ConnectError::Internal));
+                return run.current().and_then(|_| permitted()).and(result);
+            },
+        }
+    };
+    if let Some(host) = host.take() {
+        if let Some(lease) = lease {
+            host.revoke(lease);
+        }
+        host.shutdown().await;
+        drop(host);
+    }
+    let _ = query.await;
+    Err(failure)
+}
+
+async fn discovered_source(run: &Run) -> Result<(TargetGuard, SocketAddr), ConnectError> {
+    let Some(selection) = run.selection.clone() else {
+        return Ok((
+            TargetGuard::Manual,
+            "127.0.0.1:43001".parse().expect("fixed local source"),
+        ));
+    };
+    #[cfg(windows)]
+    {
+        run.stage("sourceChecking", "starting");
+        #[cfg(test)]
+        let gate = run.source_gate.clone();
+        source_query(
+            run,
+            &mut None,
+            None,
+            || Ok(()),
+            move || {
+                #[cfg(test)]
+                if let Some(gate) = gate {
+                    gate.wait();
+                }
+                let active = selection
+                    .manager
+                    .take_target("main", &selection.id)
+                    .and_then(|target| target.activate())
+                    .map_err(|_| ConnectError::SourceChanged)?;
+                let target = active
+                    .recheck_owned()
+                    .map_err(|_| ConnectError::SourceChanged)?;
+                // Existing social policy permits only the exact IPv4 loopback.
+                lab::social_source_digest(target).map_err(|_| ConnectError::InvalidRequest)?;
+                Ok((TargetGuard::Owned(Arc::new(active)), target))
+            },
+        )
+        .await
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = selection;
+        Err(ConnectError::Disabled)
+    }
+}
+
+async fn check_source(
+    run: &Run,
+    source: &TargetGuard,
+    host: &mut Option<lab::Host>,
+    lease: Option<&str>,
+    permitted: impl Fn() -> Result<(), ConnectError>,
+) -> Result<(), ConnectError> {
+    if matches!(source, TargetGuard::Manual) {
+        return run.current().and_then(|_| permitted());
+    }
+    let source = source.clone();
+    source_query(run, host, lease, permitted, move || {
+        source.recheck().map(|_| ())
+    })
+    .await
+}
+
 async fn host(run: Run, http: Http) -> Result<(), ConnectError> {
+    let (source_guard, source) = discovered_source(&run).await?;
     let (challenge, proof) = challenge(&run, &http, None).await?;
-    let source: SocketAddr = "127.0.0.1:43001".parse().expect("fixed local source");
+    check_source(&run, &source_guard, &mut None, None, || Ok(())).await?;
     let policy = lab::SocialHostPolicy::review(
         &challenge,
         run.request
@@ -558,6 +720,7 @@ async fn host(run: Run, http: Http) -> Result<(), ConnectError> {
             if let Some(social) = &mut a.snapshot.social {
                 social.stage = "hostReview";
                 social.digest = Some(digest.clone());
+                social.game_target = Some(source.to_string());
                 social.expires_at_ms = Some(policy.expires_at_unix_ms());
             }
             a.snapshot.phase = "reviewed";
@@ -567,6 +730,7 @@ async fn host(run: Run, http: Http) -> Result<(), ConnectError> {
     _=tokio::time::sleep_until(run.deadline.into())=>return Err(ConnectError::PlanExpired),
     result=receiver=>result.map_err(|_|ConnectError::Cancelled)?, };
     run.current()?;
+    check_source(&run, &source_guard, &mut None, None, || Ok(())).await?;
     let policy = policy
         .approve(&run.key, &approved, run.deadline)
         .map_err(|_| ConnectError::WrongDigest)?;
@@ -585,7 +749,16 @@ async fn host(run: Run, http: Http) -> Result<(), ConnectError> {
             return Err(ConnectError::InvitationRejected);
         }
         run.stage("waitingGuest", "hostListening");
-        host_registered(&run, &http, &challenge, &policy, source, &policy_id).await
+        host_registered(
+            &run,
+            &http,
+            &challenge,
+            &policy,
+            source,
+            &source_guard,
+            &policy_id,
+        )
+        .await
     }
     .await;
     http.stop("/v1/social/host/stop", json!({"policyId":policy_id}))
@@ -598,9 +771,15 @@ async fn host_registered(
     challenge: &lab::SocialKeyChallenge,
     policy: &lab::SignedSocialHostPolicy,
     source: SocketAddr,
+    source_guard: &TargetGuard,
     policy_id: &str,
 ) -> Result<(), ConnectError> {
+    let mut source_checked = Instant::now();
     let delivery = loop {
+        if source_checked.elapsed() >= Duration::from_secs(1) {
+            source_checked = Instant::now();
+            check_source(run, source_guard, &mut None, None, || Ok(())).await?;
+        }
         let packet = http
             .post("/v1/social/host/poll", json!({"policyId":policy_id}))
             .await?;
@@ -652,6 +831,13 @@ async fn host_registered(
         .check_admission()
         .map_err(|_| ConnectError::PlanExpired)?;
     continuity.check().map_err(|_| ConnectError::PlanExpired)?;
+    check_source(run, source_guard, &mut None, None, || {
+        grant
+            .check_admission()
+            .and_then(|_| continuity.check())
+            .map_err(|_| ConnectError::PlanExpired)
+    })
+    .await?;
     drop(reservation);
     // Keep the owned bind future alive through cancellation; late results close.
     let starting = lab::Host::start_invited_session(
@@ -673,7 +859,24 @@ async fn host_registered(
         _=tick.tick()=>if run.current().is_err()||continuity.check().is_err()||grant.check_admission().is_err(){interrupted=true;break starting.as_mut().await;},
         result=&mut starting=>break result,
     }}.map_err(|_|if run.cancel.is_cancelled(){ConnectError::Cancelled}else{ConnectError::TransportFailed})?;
-    let result = if interrupted || run.current().is_err() || continuity.check().is_err() {
+    let sockets = host.bound_sockets();
+    let mut host = Some(host);
+    let checked = check_source(
+        run,
+        source_guard,
+        &mut host,
+        Some(invitation.invitation_id()),
+        || {
+            grant
+                .check_admission()
+                .and_then(|_| continuity.check())
+                .map_err(|_| ConnectError::PlanExpired)
+        },
+    )
+    .await;
+    let result = if let Err(error) = checked {
+        Err(error)
+    } else if interrupted || run.current().is_err() || continuity.check().is_err() {
         Err(if run.cancel.is_cancelled() {
             ConnectError::Cancelled
         } else {
@@ -683,29 +886,37 @@ async fn host_registered(
         host_active(
             run,
             http,
-            &host,
+            &mut host,
             &grant,
             &invitation,
             &mut continuity,
-            policy_id,
+            HostPolicyScope {
+                id: policy_id,
+                source: source_guard,
+            },
         )
         .await
     };
-    host.revoke(invitation.invitation_id());
-    let sockets = host.bound_sockets();
-    host.shutdown().await;
-    drop(host);
+    if let Some(host) = host {
+        host.revoke(invitation.invitation_id());
+        host.shutdown().await;
+        drop(host);
+    }
     release(&sockets, None).await?;
     result
+}
+struct HostPolicyScope<'a> {
+    id: &'a str,
+    source: &'a TargetGuard,
 }
 async fn host_active(
     run: &Run,
     http: &Http,
-    host: &lab::Host,
+    host: &mut Option<lab::Host>,
     grant: &lab::VerifiedSocialGrant,
     invitation: &lab::SessionInvitation,
     continuity: &mut lab::SocialContinuity,
-    policy_id: &str,
+    policy: HostPolicyScope<'_>,
 ) -> Result<(), ConnectError> {
     let publishing = http.post(
         "/v1/social/host/publish",
@@ -732,18 +943,26 @@ async fn host_active(
     let mut admitted = false;
     let mut tick = interval(Duration::from_millis(20));
     let mut poll = interval(Duration::from_millis(500));
+    let mut source_checked = Instant::now();
     loop {
         tokio::select! {biased;
             _=run.cancel.cancelled()=>return Ok(()),
             _=tick.tick()=>{
                 run.current()?;continuity.check().map_err(|_|ConnectError::PlanExpired)?;
-                admitted|=host.invitation_consumed(invitation.invitation_id());
+                let live_host = host.as_ref().ok_or(ConnectError::Cancelled)?;
+                admitted|=live_host.invitation_consumed(invitation.invitation_id());
                 if admitted{run.stage("connected","hostListening");}
                 if !admitted{grant.check_admission().map_err(|_|ConnectError::PlanExpired)?;}
-                if admitted&&!host.invitation_active(invitation.invitation_id()){return Ok(());}
+                if admitted&&!live_host.invitation_active(invitation.invitation_id()){return Ok(());}
+                if source_checked.elapsed() >= Duration::from_secs(1) {
+                    source_checked = Instant::now();
+                    check_source(run, policy.source, host, Some(invitation.invitation_id()), || {
+                        grant.check_session().and_then(|_| continuity.check()).map_err(|_| ConnectError::PlanExpired)
+                    }).await?;
+                }
             },
             _=poll.tick()=>{
-                let querying=http.post("/v1/social/host/poll",json!({"policyId":policy_id}));tokio::pin!(querying);
+                let querying=http.post("/v1/social/host/poll",json!({"policyId":policy.id}));tokio::pin!(querying);
                 let result=loop{tokio::select!{biased;
                     _=run.cancel.cancelled()=>return Ok(()),
                     _=tick.tick()=>{run.current()?;continuity.check().map_err(|_|ConnectError::PlanExpired)?;},
@@ -1093,7 +1312,7 @@ async fn release(sockets: &[SocketAddr], tcp: Option<SocketAddr>) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn manager() -> Manager {
+    pub(super) fn manager() -> Manager {
         Manager::with_social_lab(
             SocialLabAuthority::from_local_process(
                 &lab::generate_key().public().to_string(),
@@ -1488,6 +1707,10 @@ mod tests {
         });
         emit(json!({"event":"ready","capabilities":manager.social_capabilities()}));
         let fixture_deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+        #[cfg(windows)]
+        let discovery = crate::engine::connect_discovery::DiscoveryManager::default();
+        #[cfg(windows)]
+        let mut owned_fixture: Option<crate::engine::connect_discovery::tests::Fixture> = None;
         loop {
             let line = tokio::select! {_=tokio::time::sleep_until(fixture_deadline)=>break,line=receive.recv()=>line};
             let Some(Ok(value)) = line else {
@@ -1500,6 +1723,59 @@ mod tests {
                 .unwrap_or("");
             let generation = value.get("generation").and_then(Value::as_u64).unwrap_or(0);
             let result: Result<Value, ConnectError> = match command {
+                #[cfg(windows)]
+                "discoverFixture" => {
+                    if owned_fixture.is_some() {
+                        Err(ConnectError::Busy)
+                    } else {
+                        let mut fixture = crate::engine::connect_discovery::tests::Fixture::new();
+                        let selected = crate::engine::connect_discovery::tests::selection(
+                            &discovery,
+                            &mut fixture,
+                        )
+                        .await;
+                        owned_fixture = Some(fixture);
+                        Ok(json!({"selectionId":selected.selection_id,"target":selected.target}))
+                    }
+                }
+                #[cfg(windows)]
+                "reserveDiscovered" => serde_json::from_value(value["request"].clone())
+                    .map_err(|_| ConnectError::InvalidRequest)
+                    .and_then(|request| {
+                        manager.social_reserve_discovered(
+                            "main",
+                            request,
+                            value
+                                .get("selectionId")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .into(),
+                            discovery.clone(),
+                        )
+                    })
+                    .and_then(|result| {
+                        serde_json::to_value(result).map_err(|_| ConnectError::Internal)
+                    }),
+                #[cfg(windows)]
+                "stopFixture" => {
+                    if let Some(mut fixture) = owned_fixture.take() {
+                        fixture.stop();
+                    }
+                    Ok(json!({"cleanup":true}))
+                }
+                "probeStatus" => {
+                    let snapshot = manager.snapshot("main").unwrap();
+                    if snapshot.role != Some("guest") || snapshot.phase != "guestConnected" {
+                        Err(ConnectError::InvalidRequest)
+                    } else {
+                        let endpoint: SocketAddr = snapshot.tcp_address.unwrap().parse().unwrap();
+                        lab::probe_minecraft_status(lab::MinecraftStatusRequest { endpoint,
+                            handshake_host: "localhost".into(), handshake_port: endpoint.port(), protocol: 767,
+                            timeout: Duration::from_secs(3) }).await
+                            .map(|summary| json!({"requestedProtocol":summary.requested_protocol,"reportedProtocol":summary.reported_protocol,"protocolMatchesRequested":summary.protocol_matches_requested}))
+                            .map_err(|_| ConnectError::StatusFailed)
+                    }
+                }
                 "reserve" => serde_json::from_value(value["request"].clone())
                     .map_err(|_| ConnectError::InvalidRequest)
                     .and_then(|request| manager.social_reserve("main", request))
@@ -1546,6 +1822,10 @@ mod tests {
                 }
                 "quit" => {
                     manager.shutdown_all().await;
+                    #[cfg(windows)]
+                    if let Some(mut fixture) = owned_fixture.take() {
+                        fixture.stop();
+                    }
                     let cleanup = cleanup_complete(&manager.snapshot("main").unwrap());
                     emit(json!({"ok":true,"value":{"cleanup":cleanup}}));
                     break;
@@ -1558,6 +1838,10 @@ mod tests {
             }
         }
         manager.shutdown_all().await;
+        #[cfg(windows)]
+        if let Some(mut fixture) = owned_fixture.take() {
+            fixture.stop();
+        }
         assert!(
             cleanup_complete(&manager.snapshot("main").unwrap()),
             "fixture native cleanup incomplete"
@@ -1568,3 +1852,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "social_source_tests.rs"]
+mod source_tests;

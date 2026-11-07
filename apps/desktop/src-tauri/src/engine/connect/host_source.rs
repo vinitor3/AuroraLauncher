@@ -212,6 +212,8 @@ mod enabled {
                 profile: request.profile().name().unwrap_or("legacy"),
             });
             state.attempt = Some(Attempt {
+                #[cfg(all(windows, feature = "connect-voice-lab"))]
+                native_voice: None,
                 social: None,
                 owner: owner.into(),
                 snapshot,

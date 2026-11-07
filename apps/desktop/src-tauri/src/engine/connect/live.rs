@@ -37,6 +37,9 @@ mod host_source;
 #[cfg(all(test, windows))]
 #[path = "host_source_tests.rs"]
 mod host_source_tests;
+#[cfg(all(windows, feature = "connect-voice-lab"))]
+#[path = "native_voice.rs"]
+mod native_voice;
 #[cfg(all(test, windows))]
 #[path = "owned_group_tests.rs"]
 mod owned_group_tests;
@@ -134,6 +137,8 @@ struct Reviewed {
     review_deadline: Instant,
 }
 struct Attempt {
+    #[cfg(all(windows, feature = "connect-voice-lab"))]
+    native_voice: Option<native_voice::Operation>,
     social: Option<social::Control>,
     owner: String,
     snapshot: ConnectSnapshot,
@@ -260,6 +265,11 @@ fn expire_pending(a: &mut Attempt) {
     expire_pending_at(a, lab::unix_millis());
 }
 fn expire_pending_at(a: &mut Attempt, now_unix: u64) {
+    #[cfg(all(windows, feature = "connect-voice-lab"))]
+    if a.native_voice.is_some() {
+        native_voice::expire_pending(a, now_unix);
+        return;
+    }
     if a.social.is_some() {
         social::expire(a);
         return;
@@ -344,6 +354,8 @@ fn update(state: &Mutex<State>, id: &str, change: impl FnOnce(&mut Attempt)) {
 }
 fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
     update(state, id, |a| {
+        #[cfg(all(windows, feature = "connect-voice-lab"))]
+        native_voice::closing(a);
         session_group::finished(a);
         udp_recovery::clear(a);
         a.snapshot.phase = if error.is_some() { "failed" } else { "closed" };
@@ -516,6 +528,8 @@ impl Manager {
             snapshot.udp = Some(FragmentedGuestState::default());
         }
         state.attempt = Some(Attempt {
+            #[cfg(all(windows, feature = "connect-voice-lab"))]
+            native_voice: None,
             social: None,
             owner: owner.into(),
             snapshot,
@@ -1181,6 +1195,8 @@ impl Manager {
             let mut state = lock(&self.state)?;
             let a = selected(&mut state, owner, id)?;
             a.cancel.cancel();
+            #[cfg(all(windows, feature = "connect-voice-lab"))]
+            native_voice::closing(a);
             social::clear(a);
             path_projection::clear(a);
             udp_recovery::clear(a);

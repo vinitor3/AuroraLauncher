@@ -50,6 +50,7 @@ import { DoctorView } from "./features/doctor/DoctorView";
 import { RecoveryView } from "./features/recovery/RecoveryView";
 import { DiagnosticLabView } from "./features/diagnostic-lab/DiagnosticLabView";
 import { ConnectView } from "./features/connect/ConnectView";
+import { ExitLauncherButton } from "./features/connect/ExitLauncherButton";
 import { SocialView } from "./features/social/SocialView";
 import { createSocialConnectController, emptySocialConnectState, type SocialConnectController, type SocialConnectState } from "./features/social/connect-controller";
 import { createSocialFirebaseService } from "./lib/socialFirebase";
@@ -3668,6 +3669,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         <div className="sidebar-bottom">
           <button className={assistantOpen ? "compact sidebar-action" : "secondary compact sidebar-action"} onClick={() => setAssistantOpen((current) => !current)} type="button">Assistente</button>
           <button className="text-button sidebar-action" disabled={signingOut} onClick={() => void signOutWithConnectCleanup()} type="button">{signingOut ? "Encerrando conexão…" : "Sair da conta"}</button>
+          <ExitLauncherButton disabled={signingOut || updatesApplying || recoveryBusy} />
         </div>
       </aside>
       <section className={`workspace active-${activeSection}`}>

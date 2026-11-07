@@ -229,6 +229,9 @@ struct RunningInstance {
     doctor: Option<(AppHandle, String)>,
     instance_id: String,
     child: Child,
+    #[cfg(all(windows, feature = "connect-lab"))]
+    status_runtime:
+        Option<aurora_launcher_core::engine::connect_status_profile::StatusRuntimeProfile>,
     // The OS lock also excludes updates from another launcher process.
     _mutation_lock: InstanceMutationGuard,
 }
@@ -244,7 +247,10 @@ impl RunningInstances {
         &self,
         instance_id: &str,
     ) -> Result<
-        aurora_launcher_core::engine::connect_discovery::OwnedChildProof,
+        (
+            aurora_launcher_core::engine::connect_discovery::OwnedChildProof,
+            Option<aurora_launcher_core::engine::connect_status_profile::StatusRuntimeProfile>,
+        ),
         aurora_launcher_core::engine::connect_discovery::DiscoveryError,
     > {
         use aurora_launcher_core::engine::connect_discovery::{DiscoveryError, OwnedChildProof};
@@ -276,7 +282,8 @@ impl RunningInstances {
             .doctor
             .as_ref()
             .ok_or(DiscoveryError::ProcessChanged)?;
-        OwnedChildProof::from_child(&mut process.child, &process.instance_id, run_id)
+        let proof = OwnedChildProof::from_child(&mut process.child, &process.instance_id, run_id)?;
+        Ok((proof, process.status_runtime.clone()))
     }
 }
 
@@ -2875,6 +2882,11 @@ fn launch_instance_tracked(
     let uuid = offline_uuid_for_nickname(&nickname).map_err(|error| error.to_string())?;
     let mut spec =
         resolve_launch_spec(&instance, &version_id).map_err(|error| error.to_string())?;
+    #[cfg(all(windows, feature = "connect-lab"))]
+    let status_runtime =
+        aurora_launcher_core::engine::connect_status_profile::inspect_launch_profile(
+            &instance, &spec,
+        );
     spec.apply_offline_compatibility(&minecraft_version);
     let loader = loader_for_profile(&version_id);
     let mut ipc_server = None;
@@ -2976,6 +2988,8 @@ fn launch_instance_tracked(
             doctor: Some((app.clone(), doctor_run.run_id.clone())),
             instance_id,
             child,
+            #[cfg(all(windows, feature = "connect-lab"))]
+            status_runtime,
             _mutation_lock: mutation_lock,
         },
     );
@@ -3549,6 +3563,8 @@ mod tests {
                 doctor: None,
                 instance_id: "locked-game".to_owned(),
                 child,
+                #[cfg(all(windows, feature = "connect-lab"))]
+                status_runtime: None,
                 _mutation_lock: guard,
             },
         );

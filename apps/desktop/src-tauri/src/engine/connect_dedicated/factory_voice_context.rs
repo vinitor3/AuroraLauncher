@@ -109,6 +109,9 @@ impl ImmutableVoiceContext {
     pub(in super::super) fn native_nonce(&self) -> Uuid {
         self.native_nonce
     }
+    pub(in super::super) fn copy_id(&self) -> &str {
+        &self.manifest.copy_id
+    }
     pub(in super::super) fn configuration_root(&self) -> &Path {
         &self.copy.path
     }

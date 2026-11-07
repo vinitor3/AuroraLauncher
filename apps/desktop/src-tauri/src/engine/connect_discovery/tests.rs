@@ -57,7 +57,11 @@ impl Write for CancelStream {
         self.check()
     }
 }
-fn fixture_status(socket: &mut CancelStream) -> std::io::Result<()> {
+fn fixture_status(
+    socket: &mut CancelStream,
+    expected_protocol: i32,
+    reported_protocol: i32,
+) -> std::io::Result<()> {
     fn length(socket: &mut impl Read) -> std::io::Result<usize> {
         let mut value = 0;
         for shift in [0, 7, 14, 21, 28] {
@@ -90,15 +94,21 @@ fn fixture_status(socket: &mut CancelStream) -> std::io::Result<()> {
     }
     let mut handshake = vec![0; size];
     socket.read_exact(&mut handshake)?;
+    let mut input = handshake.as_slice();
+    if length(&mut input)? != 0 || length(&mut input)? != expected_protocol as usize {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
     let mut request = [0; 2];
     socket.read_exact(&mut request)?;
     if request != [1, 0] {
         return Err(std::io::ErrorKind::InvalidData.into());
     }
-    let json = br#"{"version":{"protocol":767,"name":"fixture"},"players":{"max":2,"online":0},"description":{"text":"fixture"}}"#;
+    let json = format!(
+        r#"{{"version":{{"protocol":{reported_protocol},"name":"fixture"}},"players":{{"max":2,"online":0}},"description":{{"text":"fixture"}}}}"#
+    );
     let mut payload = vec![0];
     payload.extend(varint(json.len()));
-    payload.extend(json);
+    payload.extend(json.as_bytes());
     let mut frame = varint(payload.len());
     frame.extend(payload);
     socket.write_all(&frame)?;
@@ -113,6 +123,14 @@ fn owned_listener_fixture() {
         std::env::var_os(MARKER).is_some(),
         "owned fixture marker required"
     );
+    let expected_protocol: i32 = std::env::var("AURORA_DISCOVERY_PROTOCOL")
+        .unwrap_or_else(|_| "767".into())
+        .parse()
+        .unwrap();
+    let reported_protocol: i32 = std::env::var("AURORA_DISCOVERY_REPORTED_PROTOCOL")
+        .unwrap_or_else(|_| expected_protocol.to_string())
+        .parse()
+        .unwrap();
     let listeners = [
         TcpListener::bind("127.0.0.1:0").unwrap(),
         TcpListener::bind("0.0.0.0:0").unwrap(),
@@ -141,7 +159,7 @@ fn owned_listener_fixture() {
                         // exercise stop with this exact accepted socket.
                         println!("DISCOVERY_ACCEPTED {index}");
                         std::io::stdout().flush().unwrap();
-                        let _ = fixture_status(&mut socket);
+                        let _ = fixture_status(&mut socket, expected_protocol, reported_protocol);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
@@ -176,6 +194,9 @@ pub(crate) fn expire_selection(manager: &DiscoveryManager) {
 }
 impl Fixture {
     pub(crate) fn new() -> Self {
+        Self::with_protocol(767, 767)
+    }
+    fn with_protocol(expected_protocol: i32, reported_protocol: i32) -> Self {
         let mut command = Command::new(std::env::current_exe().unwrap());
         #[cfg(windows)]
         {
@@ -190,6 +211,11 @@ impl Fixture {
                 "--nocapture",
             ])
             .env(MARKER, "1")
+            .env("AURORA_DISCOVERY_PROTOCOL", expected_protocol.to_string())
+            .env(
+                "AURORA_DISCOVERY_REPORTED_PROTOCOL",
+                reported_protocol.to_string(),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -394,6 +420,101 @@ async fn status_requires_review_and_exact_digest_then_returns_single_use_owned_t
         target.recheck(),
         Err(DiscoveryError::ProcessChanged)
     ));
+}
+
+#[tokio::test]
+async fn native_profile_status_sends_the_reviewed_protocol_for_all_nine_active_pairs() {
+    for index in 0..9 {
+        let installed = super::super::connect_status_profile::tests::Fixture::new(index);
+        let runtime = installed.profile();
+        let expected = runtime.summary();
+        let mut fixture =
+            Fixture::with_protocol(expected.status_protocol, expected.status_protocol);
+        let manager = DiscoveryManager::default();
+        let inventory = manager
+            .inventory_for_runtime("main", fixture.proof(), Some(runtime))
+            .unwrap();
+        assert_eq!(inventory.runtime.as_ref(), Some(&expected));
+        let candidate = inventory
+            .candidates
+            .iter()
+            .find(|c| c.bind_kind == "loopback" && c.target.starts_with("127.0.0.1:"))
+            .unwrap();
+        let review = manager
+            .review("main", &inventory.inventory_id, &candidate.candidate_id)
+            .unwrap();
+        assert_eq!(review.status_protocol, expected.status_protocol);
+        assert_eq!(review.runtime, expected);
+        // A later mutable marker cannot change the native observation retained
+        // with this inventory or the protocol included in its consumed review.
+        std::fs::write(
+            installed.instance.root().join("aurora-instance.json"),
+            br#"{"minecraft":"1.21.1"}"#,
+        )
+        .unwrap();
+        let status = manager
+            .confirm_status("main", &review.review_id, &review.digest)
+            .await
+            .unwrap();
+        assert_eq!(status.runtime, expected);
+        assert_eq!(status.summary.requested_protocol, expected.status_protocol);
+        assert_eq!(status.summary.reported_protocol, expected.status_protocol);
+        assert!(status.summary.protocol_matches_requested && status.verified_before_after);
+        assert_eq!(status.world_state, "notVerified");
+        fixture.stop();
+    }
+}
+
+#[tokio::test]
+async fn unknown_runtime_keeps_inventory_without_review_or_network_query() {
+    let mut fixture = Fixture::new();
+    let manager = DiscoveryManager::default();
+    let inventory = manager
+        .inventory_for_runtime("main", fixture.proof(), None)
+        .unwrap();
+    assert!(inventory.runtime.is_none());
+    assert!(!inventory.candidates.is_empty());
+    assert!(matches!(
+        manager.review(
+            "main",
+            &inventory.inventory_id,
+            &inventory.candidates[0].candidate_id
+        ),
+        Err(DiscoveryError::RuntimeUnavailable)
+    ));
+    assert!(matches!(
+        manager.confirm_status("main", "missing", "wrong").await,
+        Err(DiscoveryError::Stale)
+    ));
+    assert!(fixture.accepted.try_recv().is_err());
+    fixture.stop();
+}
+
+#[tokio::test]
+async fn version_aware_status_preserves_an_independent_reported_protocol_mismatch() {
+    let installed = super::super::connect_status_profile::tests::Fixture::new(0);
+    let mut fixture = Fixture::with_protocol(340, 767);
+    let manager = DiscoveryManager::default();
+    let inventory = manager
+        .inventory_for_runtime("main", fixture.proof(), Some(installed.profile()))
+        .unwrap();
+    let candidate = inventory
+        .candidates
+        .iter()
+        .find(|c| c.bind_kind == "loopback" && c.target.starts_with("127.0.0.1:"))
+        .unwrap();
+    let review = manager
+        .review("main", &inventory.inventory_id, &candidate.candidate_id)
+        .unwrap();
+    let status = manager
+        .confirm_status("main", &review.review_id, &review.digest)
+        .await
+        .unwrap();
+    assert_eq!(status.summary.requested_protocol, 340);
+    assert_eq!(status.summary.reported_protocol, 767);
+    assert!(!status.summary.protocol_matches_requested);
+    assert_eq!(status.world_state, "notVerified");
+    fixture.stop();
 }
 
 pub(crate) async fn selection(manager: &DiscoveryManager, fixture: &mut Fixture) -> TargetStatus {

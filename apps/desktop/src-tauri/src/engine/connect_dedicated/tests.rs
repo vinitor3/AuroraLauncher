@@ -19,6 +19,8 @@ mod hardening;
 mod manifest_gates;
 #[path = "tests/native_voice_binding.rs"]
 mod native_voice_binding;
+#[path = "tests/native_voice_review.rs"]
+mod native_voice_review;
 #[path = "tests/probe.rs"]
 mod probe;
 #[path = "tests/producer_boot_bounds.rs"]

@@ -93,6 +93,7 @@ const ERROR_TEXT: Record<string, string> = {
   discovery_wrong_digest: "A revisão da porta mudou. Selecione e revise novamente.",
   discovery_busy: "Aguarde a consulta de porta em andamento.",
   discovery_status_failed: "A porta selecionada não respondeu à consulta Minecraft.",
+  discovery_runtime_unavailable: "O perfil desta execução não pôde ser confirmado para consultar Minecraft.",
   discovery_internal: "Não foi possível conferir a porta. Repita a busca.",
 };
 export function connectError(cause: unknown): string {

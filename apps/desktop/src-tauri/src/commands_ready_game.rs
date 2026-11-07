@@ -263,6 +263,11 @@ impl PreparedReadyGame for DesktopPrepared {
             check_cancel(cancel)?;
             proof.recheck_before_spawn()?;
             let run_id = run.run_id.clone();
+            let status_runtime =
+                aurora_launcher_core::engine::connect_status_profile::inspect_launch_profile(
+                    &instance,
+                    &proof.spec,
+                );
             let result_instance = instance_id.clone();
             let doctor_app = self.app.clone();
             let launched = gate.with_current(|| {
@@ -280,6 +285,7 @@ impl PreparedReadyGame for DesktopPrepared {
                         doctor: Some((doctor_app, run_id.clone())),
                         instance_id: result_instance.clone(),
                         child,
+                        status_runtime,
                         _mutation_lock: mutation_lock,
                     },
                 );
