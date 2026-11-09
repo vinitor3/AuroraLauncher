@@ -1,0 +1,23 @@
+name = "aurora-connect-social"
+main = "src/connectSocialWorker.ts"
+compatibility_date = "2026-11-09"
+
+[vars]
+FIREBASE_PROJECT_ID = "auroralauncher"
+
+[[durable_objects.bindings]]
+name = "SOCIAL_SESSIONS"
+class_name = "SocialSessionAuthority"
+[[durable_objects.bindings]]
+name = "SOCIAL_ACCOUNTS"
+class_name = "SocialAccountBudget"
+[[migrations]]
+tag = "social-v1"
+new_sqlite_classes = ["SocialSessionAuthority", "SocialAccountBudget", "ConnectRelaySession"]
+
+[[durable_objects.bindings]]
+name = "RELAY_SESSIONS"
+class_name = "ConnectRelaySession"
+
+[observability]
+enabled = false

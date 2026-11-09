@@ -8,34 +8,35 @@ import type { SocialBindingSession } from "./connectSocialBinding.ts";
 const req = (uid = "guest", signal?: AbortSignal) => new Request("http://127.0.0.1/local", { signal, headers: { Authorization: `Bearer fixture-${uid}` } });
 const code = (expected: string) => (error: unknown) => error instanceof SocialBindingError && error.code === expected;
 const hex = (buffer: ArrayBuffer) => Buffer.from(buffer).toString("hex");
-async function fixture() {
+async function fixture(online = false) {
   let wall = 1_800_000_000_000, mono = 1_000, reads = 0;
   let hook: ((count: number) => Promise<void>) | undefined;
   const blocked = new Set<string>(); const sessions = new Map<string, SocialBindingSession>();
   const session: SocialBindingSession = { id: crypto.randomUUID(), hostUid: "host", title: "World", modpackName: "Local", minecraftVersion: "1.21.1", loader: "Fabric", imageUrl: null,
-    players: 1, maxPlayers: 2, visibility: "public", joinPolicy: "open", expiresAtMs: wall + 300_000 };
+    players: 1, maxPlayers: online ? 8 : 2, visibility: "public", joinPolicy: "open", expiresAtMs: wall + (online ? 14_395_000 : 300_000) };
   sessions.set(session.id, session);
   const dependencies = { clock: { wall: () => wall, monotonic: () => mono },
     trustedAuthenticate: async (request: Request) => { const auth = request.headers.get("Authorization"); if (!auth?.startsWith("Bearer fixture-")) throw new SocialBindingError("unauthenticated"); return auth.slice(15); },
     readSession: async (principal: { accountId: string }, id: string) => { reads++; await hook?.(reads); if (blocked.has(principal.accountId)) throw new SocialBindingError("session_not_authorized");
       const value = sessions.get(id); if (!value) throw new SocialBindingError("session_not_authorized"); return { ...value }; } };
-  const binding = createSocialBindingAuthority(dependencies), authority = await createSocialAdmissionAuthority(binding, dependencies);
+  const keys = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+  const binding = createSocialBindingAuthority(dependencies), authority = await createSocialAdmissionAuthority(binding, dependencies, { keys, online });
   async function prepared(uid = "guest", role: "guest" | "host" = "guest", selected = session) {
     const keys = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
     const publicKey = hex(await crypto.subtle.exportKey("raw", keys.publicKey));
     const challenge = await binding.challenge(req(uid), { schemaVersion: 1, operationId: crypto.randomUUID(), generation: 1, role, publicKey,
       sessionId: selected.id, preparedExpiresAtUnixMs: wall + 55_000 });
     const proof = { schemaVersion: 1, challenge, signature: hex(await crypto.subtle.sign("Ed25519", keys.privateKey, socialKeyProofPreimage(challenge))) };
-    const body = { schemaVersion: 1, purpose: "hostSocialSession", issuerInstance: challenge.issuerInstance, policyId: challenge.challengeId,
+    const body = { schemaVersion: online ? 2 : 1, purpose: "hostSocialSession", issuerInstance: challenge.issuerInstance, policyId: challenge.challengeId,
       accountId: uid, operationId: challenge.operationId, generation: challenge.generation, publicKey, sessionId: selected.id, sessionDigest: challenge.sessionDigest,
-      visibility: selected.visibility, joinPolicy: "open", serviceId: "game", protocol: "tcp", sourceDigest: "a".repeat(64), maxGuests: 1,
-      issuedAtUnixMs: challenge.issuedAtUnixMs, expiresAtUnixMs: challenge.expiresAtUnixMs };
+      visibility: selected.visibility, joinPolicy: selected.joinPolicy, serviceId: "game", protocol: "tcp", sourceDigest: "a".repeat(64), maxGuests: online ? 8 : 1,
+      issuedAtUnixMs: challenge.issuedAtUnixMs, expiresAtUnixMs: online ? selected.expiresAtMs : challenge.expiresAtUnixMs };
     const policySigned = { body, signature: hex(await crypto.subtle.sign("Ed25519", keys.privateKey, hostSocialPolicyPreimage(body))) };
     return { uid, proof, policySigned, keys };
   }
   const register = async () => { const host = await prepared("host", "host"); const policy = await authority.registerHost(req("host"), { proof: host.proof, policySigned: host.policySigned }); return { host, policy }; };
   const pair = async () => { const { host, policy } = await register(); const guest = await prepared(); const packet = await authority.join(req(), { proof: guest.proof, policyId: policy.policyId }); return { host, guest, policy, packet }; };
-  return { binding, authority, dependencies, session, sessions, prepared, register, pair, block: (uid = "guest") => blocked.add(uid), unblock: (uid = "guest") => blocked.delete(uid),
+  return { binding, authority, dependencies, keys, session, sessions, prepared, register, pair, block: (uid = "guest") => blocked.add(uid), unblock: (uid = "guest") => blocked.delete(uid),
     readCount: () => reads, onRead: (fn: (count: number) => Promise<void>) => { hook = fn; },
     advance: (amount: number) => { wall += amount; mono += amount; }, wallOnly: (amount: number) => { wall += amount; }, monoOnly: (amount: number) => { mono += amount; } };
 }
@@ -186,9 +187,9 @@ test("original proof is consumed internally; client receipt and policy without c
   await assert.rejects(f.authority.registerHost(req("host"), { proof: second.proof, policySigned: second.policySigned }), code("invalid_signature"));
   await assert.rejects(f.binding.prove(req("host"), second.proof), code("challenge_unavailable"));
 });
-test("changed host context, extra fields, wrong visibility or approval are never a policy", async () => {
+test("changed host context, extra fields, wrong visibility or unknown approval mode are never a policy", async () => {
   const f = await fixture(); const host = await f.prepared("host", "host");
-  for (const extension of [{ visibility: ["public"] }, { joinPolicy: "approval" }, { maxGuests: 2 }, { protocol: "udp" }, { expiresAtUnixMs: host.proof.challenge.issuedAtUnixMs + 60_001 }]) {
+  for (const extension of [{ visibility: ["public"] }, { joinPolicy: "automatic" }, { maxGuests: 2 }, { protocol: "udp" }, { expiresAtUnixMs: host.proof.challenge.issuedAtUnixMs + 60_001 }]) {
     assert.throws(() => validateHostSocialPolicy({ ...host.policySigned.body, ...extension }), code("invalid_policy"));
   }
   host.policySigned.body.operationId = crypto.randomUUID();
@@ -443,4 +444,144 @@ test("context signing racing a slot reservation rechecks the original policy bef
     const denied = assert.rejects(f.authority.resolveContext(req("other"), { sessionId: f.session.id }), code("context_unavailable"));
     await reached; await f.authority.join(req(), { proof: guest.proof, policyId: policy.policyId }); release(); await denied;
   } finally { release(); crypto.subtle.sign = original; }
+});
+
+
+test("durable restoration preserves signing identity, consumed challenge, original lease and terminal revocation", async () => {
+  const f = await fixture(), { guest, policy, packet } = await f.pair();
+  const binding = createSocialBindingAuthority(f.dependencies, f.binding.durableState());
+  const authority = await createSocialAdmissionAuthority(binding, f.dependencies, { keys: f.keys, state: f.authority.durableState() });
+  assert.equal(authority.admissionPublicKey, f.authority.admissionPublicKey);
+  assert.equal(authority.issuerInstance, f.authority.issuerInstance);
+  await assert.rejects(binding.prove(req(), guest.proof), code("challenge_unavailable"));
+  const polled = await authority.hostPoll(req("host"), { policyId: policy.policyId });
+  assert.equal(polled.state, "admitted"); if (polled.state !== "admitted") assert.fail();
+  assert.deepEqual(polled.lease, packet.lease);
+  await authority.guestStop(req(), { grantId: packet.grant.body.grantId });
+  const restarted = await createSocialAdmissionAuthority(binding, f.dependencies, { keys: f.keys, state: authority.durableState() });
+  await assert.rejects(restarted.continuity(req(), { grantId: packet.grant.body.grantId }), code("policy_expired"));
+});
+
+test("approval is bound into signed host policy and cannot replace the published session policy", async () => {
+  const f = await fixture(), host = await f.prepared("host", "host");
+  host.policySigned.body.joinPolicy = "approval";
+  host.policySigned.signature = hex(await crypto.subtle.sign("Ed25519", host.keys.privateKey, hostSocialPolicyPreimage(host.policySigned.body)));
+  await assert.rejects(f.authority.registerHost(req("host"), { proof: host.proof, policySigned: host.policySigned }), code("session_changed"));
+});
+
+
+test("online v2 permits eight concurrent guests; departure frees capacity without reusing proof or moving deadline", async () => {
+  const f = await fixture(true), { policy } = await f.register(); const joined = [];
+  for (let i = 0; i < 8; i++) { const guest = await f.prepared(`guest${i}`); joined.push(await f.authority.join(req(`guest${i}`), { proof: guest.proof, policyId: policy.policyId })); }
+  const ninth = await f.prepared("guest8");
+  await assert.rejects(f.authority.join(req("guest8"), { proof: ninth.proof, policyId: policy.policyId }), code("authority_busy"));
+  await assert.rejects(f.binding.prove(req("guest8"), ninth.proof), code("challenge_unavailable"));
+  const before = await f.authority.hostPoll(req("host"), { policyId: policy.policyId }); assert.equal(before.state, "group");
+  if (before.state !== "group") assert.fail(); assert.equal(before.deliveries.length, 8);
+  await f.authority.guestStop(req("guest0"), { grantId: joined[0].grant.body.grantId });
+  const replacement = await f.prepared("replacement"), packet = await f.authority.join(req("replacement"), { proof: replacement.proof, policyId: policy.policyId });
+  assert.equal(packet.grant.body.sessionExpiresAtUnixMs, joined[0].grant.body.sessionExpiresAtUnixMs);
+  await assert.rejects(f.authority.continuity(req("guest0"), { grantId: joined[0].grant.body.grantId }), code("grant_terminal"));
+  assert.equal((await f.authority.continuity(req("guest1"), { grantId: joined[1].grant.body.grantId })).body.sequence, 2);
+  await f.authority.hostStop(req("host"), { policyId: policy.policyId });
+  await assert.rejects(f.authority.continuity(req("replacement"), { grantId: packet.grant.body.grantId }), code("policy_expired"));
+});
+
+test("online original session survives preparation expiry; short continuity and admission stay independent", async () => {
+  const f = await fixture(true), { packet, policy } = await f.pair(), expiry = packet.grant.body.sessionExpiresAtUnixMs;
+  for (let i = 0; i < 65; i++) { f.advance(1000); await f.authority.continuity(req(), { grantId: packet.grant.body.grantId }); await f.authority.hostPoll(req("host"), { policyId: policy.policyId }); }
+  const guest = await f.prepared("late"), late = await f.authority.join(req("late"), { proof: guest.proof, policyId: policy.policyId });
+  assert.equal(late.grant.body.schemaVersion, 2); assert.equal(late.grant.body.sessionExpiresAtUnixMs, expiry);
+  assert.equal(late.grant.body.admissionExpiresAtUnixMs - late.grant.body.issuedAtUnixMs, 10_000);
+  f.block("late"); await assert.rejects(f.authority.continuity(req("late"), { grantId: late.grant.body.grantId }), code("session_not_authorized"));
+  await f.authority.continuity(req(), { grantId: packet.grant.body.grantId });
+  const roster = await f.authority.hostPoll(req("host"), { policyId: policy.policyId }); assert.equal(roster.state, "group");
+  if (roster.state !== "group") assert.fail(); assert.equal(roster.deliveries.length, 1);
+});
+
+test("online relay identity is derived from exact policy/grant and cannot select another peer or account", async () => {
+  const f = await fixture(true), { packet, policy } = await f.pair();
+  const guest = await f.authority.relayIdentity(req(), { role: "guest", id: packet.grant.body.grantId });
+  assert.equal(guest.peerId, packet.grant.body.guestPublicKey); assert.equal(guest.hostPeerId, packet.grant.body.hostPublicKey);
+  assert.equal(guest.expiresAtUnixMs, packet.grant.body.sessionExpiresAtUnixMs);
+  await assert.rejects(f.authority.relayIdentity(req("other"), { role: "guest", id: packet.grant.body.grantId }), code("broker_unavailable"));
+  await assert.rejects(f.authority.relayIdentity(req(), { role: "guest", id: packet.grant.body.grantId, peerId: "00".repeat(32) }), code("invalid_shape"));
+  await f.authority.hostStop(req("host"), { policyId: policy.policyId });
+  await assert.rejects(f.authority.relayIdentity(req(), { role: "guest", id: packet.grant.body.grantId }), code("policy_expired"));
+});
+
+test("online voice policy binds profile, source and host-player consent into every grant with seven remote slots", async () => {
+  const f = await fixture(true), host = await f.prepared("host", "host");
+  const body = { ...host.policySigned.body, schemaVersion: 3, maxGuests: 7, voiceProfile: "svc", voiceSourceDigest: "b".repeat(64), hostPlayer: true };
+  const signature = hex(await crypto.subtle.sign("Ed25519", host.keys.privateKey, hostSocialPolicyPreimage(body)));
+  assert.deepEqual(hostSocialPolicyPreimage(body), hostSocialPolicyPreimage(Object.fromEntries(Object.entries(body).reverse())));
+  const { policyId } = await f.authority.registerHost(req("host"), { proof: host.proof, policySigned: { body, signature } });
+  for (let i = 0; i < 7; i++) {
+    const guest = await f.prepared(`voice${i}`), joined = await f.authority.join(req(`voice${i}`), { proof: guest.proof, policyId });
+    assert.equal(joined.grant.body.schemaVersion, 3); assert.equal(joined.grant.body.voiceProfile, "svc");
+    assert.equal(joined.grant.body.voiceSourceDigest, body.voiceSourceDigest); assert.equal(joined.grant.body.hostPlayer, true);
+    for (const extension of [{ voiceProfile: "plasmo" }, { voiceSourceDigest: "c".repeat(64) }, { hostPlayer: false }]) {
+      assert.equal(await verify(f.authority.admissionPublicKey, joined.grant, socialAdmissionPreimage({ ...joined.grant.body, ...extension })), false);
+    }
+  }
+  const eighth = await f.prepared("voice7"); await assert.rejects(f.authority.join(req("voice7"), { proof: eighth.proof, policyId }), code("authority_busy"));
+  for (const extension of [{ schemaVersion: 2 }, { voiceProfile: "other" }, { voiceSourceDigest: "invalid" }, { hostPlayer: null }, { maxGuests: 8 }]) {
+    assert.throws(() => validateHostSocialPolicy({ ...body, ...extension }));
+  }
+  const { hostPlayer: _omitted, ...missing } = body; assert.throws(() => validateHostSocialPolicy(missing));
+  assert.notEqual(await hostSocialPolicyDigest(body), await hostSocialPolicyDigest({ ...body, hostPlayer: false }));
+});
+
+test("online observation sharing saves reads without moving original host freshness or guest lease expiry", async () => {
+  const f = await fixture(true), { packet, policy } = await f.pair();
+  const first = await f.authority.continuity(req(), { grantId: packet.grant.body.grantId });
+  const polled = await f.authority.hostPoll(req("host"), { policyId: policy.policyId });
+  assert.equal(polled.state, "group"); if (polled.state !== "group") assert.fail();
+  const reads = f.readCount(); f.advance(500); f.block();
+  const shared = await f.authority.continuity(req(), { grantId: packet.grant.body.grantId });
+  const host = await f.authority.hostPoll(req("host"), { policyId: policy.policyId });
+  assert.equal(f.readCount(), reads); assert.equal(host.state, "group"); if (host.state !== "group") assert.fail();
+  assert.equal(host.checkedAtUnixMs, polled.checkedAtUnixMs);
+  assert.equal(shared.body.issuedAtUnixMs, first.body.issuedAtUnixMs);
+  assert.equal(shared.body.expiresAtUnixMs, first.body.expiresAtUnixMs);
+  assert.equal(shared.body.sequence, first.body.sequence + 1);
+  f.advance(500); await assert.rejects(f.authority.continuity(req(), { grantId: packet.grant.body.grantId }), code("session_not_authorized"));
+  f.unblock(); await assert.rejects(f.authority.continuity(req(), { grantId: packet.grant.body.grantId }), code("grant_terminal"));
+});
+
+test("original host removal is idempotent, durable for that account in this policy and leaves the other guest live", async () => {
+  const f = await fixture(true), { packet, policy } = await f.pair();
+  const other = await f.prepared("other"), second = await f.authority.join(req("other"), { proof: other.proof, policyId: policy.policyId });
+  const grantId = packet.grant.body.grantId;
+  await assert.rejects(f.authority.hostRevoke(req(), { grantId }), code("broker_unavailable"));
+  await assert.rejects(f.authority.hostRevoke(req("other"), { grantId }), code("broker_unavailable"));
+  assert.deepEqual(await f.authority.hostRevoke(req("host"), { grantId }), { revoked: true });
+  assert.deepEqual(await f.authority.hostRevoke(req("host"), { grantId }), { revoked: true });
+  await assert.rejects(f.authority.continuity(req(), { grantId }), code("grant_terminal"));
+  assert.equal((await f.authority.continuity(req("other"), { grantId: second.grant.body.grantId })).body.sequence, 2);
+  const restored = await createSocialAdmissionAuthority(f.binding, f.dependencies, { keys: f.keys, state: f.authority.durableState(), online: true });
+  const replay = await f.prepared(); await assert.rejects(restored.join(req(), { proof: replay.proof, policyId: policy.policyId }), code("session_not_authorized"));
+  await assert.rejects(f.binding.prove(req(), replay.proof), code("challenge_unavailable"));
+  const roster = await restored.hostPoll(req("host"), { policyId: policy.policyId });
+  assert.equal(roster.state, "group"); if (roster.state !== "group") assert.fail(); assert.equal(roster.deliveries.length, 1);
+  assert.equal(roster.deliveries[0].grant.body.guestAccountId, "other");
+});
+test("online host capacity cannot exceed its advertisement and includes the local player", async () => {
+  for (const hostPlayer of [false, true]) {
+    const f = await fixture(true); f.session.maxPlayers = 2;
+    const host = await f.prepared("host", "host");
+    const body = { ...host.policySigned.body, schemaVersion: 3, maxGuests: 3 - Number(hostPlayer), voiceProfile: "svc", voiceSourceDigest: "b".repeat(64), hostPlayer };
+    const signature = hex(await crypto.subtle.sign("Ed25519", host.keys.privateKey, hostSocialPolicyPreimage(body)));
+    await assert.rejects(f.authority.registerHost(req("host"), { proof: host.proof, policySigned: { body, signature } }), code("session_changed"));
+  }
+  const f = await fixture(true); f.session.maxPlayers = 2;
+  const host = await f.prepared("host", "host");
+  const body = { ...host.policySigned.body, maxGuests: 2 };
+  const signature = hex(await crypto.subtle.sign("Ed25519", host.keys.privateKey, hostSocialPolicyPreimage(body)));
+  const { policyId } = await f.authority.registerHost(req("host"), { proof: host.proof, policySigned: { body, signature } });
+  for (const uid of ["one", "two"]) {
+    const guest = await f.prepared(uid); await f.authority.join(req(uid), { proof: guest.proof, policyId });
+  }
+  const guest = await f.prepared("three");
+  await assert.rejects(f.authority.join(req("three"), { proof: guest.proof, policyId }), code("authority_busy"));
 });

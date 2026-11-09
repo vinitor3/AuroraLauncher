@@ -112,15 +112,20 @@ async function bounded<T>(work: (signal: AbortSignal) => Promise<T>, callerSigna
   finally { if (timeout !== undefined) clearTimeout(timeout); if (aborted) callerSignal?.removeEventListener("abort", aborted); controller.abort(); }
 }
 type Pending = { accountId: string; state: "preparing" | "pending" | "verifying"; challenge?: SocialKeyChallenge; deadline: number; issuedAt: number; expiresAt: number };
+export type SocialBindingState = {
+  issuerInstance: string; pending: [string, Pending][];
+  receipts: [string, { receipt: SocialBindingReceipt; deadline: number; issuedAt: number }][];
+  rates: [string, { until: number; count: number }][]; globalRate: { until: number; count: number };
+};
 
 /** One process, bounded RAM, fail closed on overload. Not a distributed authority or an ingress grant. */
-export function createSocialBindingAuthority(dependencies: SocialBindingDependencies) {
+export function createSocialBindingAuthority(dependencies: SocialBindingDependencies, restored?: SocialBindingState) {
   const clock = dependencies.clock ?? { wall: () => Date.now(), monotonic: () => performance.now() };
-  const issuerInstance = toHex(crypto.getRandomValues(new Uint8Array(32)));
-  const pending = new Map<string, Pending>();
-  const receipts = new Map<string, { receipt: SocialBindingReceipt; deadline: number; issuedAt: number }>();
-  const rates = new Map<string, { until: number; count: number }>();
-  let globalRate = { until: clock.monotonic() + 60_000, count: 0 };
+  const issuerInstance = restored?.issuerInstance ?? toHex(crypto.getRandomValues(new Uint8Array(32)));
+  const pending = new Map<string, Pending>(restored?.pending);
+  const receipts = new Map<string, { receipt: SocialBindingReceipt; deadline: number; issuedAt: number }>(restored?.receipts);
+  const rates = new Map<string, { until: number; count: number }>(restored?.rates);
+  let globalRate = restored?.globalRate ?? { until: clock.monotonic() + 60_000, count: 0 };
   function prune() {
     const mono = clock.monotonic(), wall = clock.wall();
     for (const [id, entry] of pending) if (entry.state !== "preparing" && entry.state !== "verifying" && (mono >= entry.deadline || wall >= entry.expiresAt || wall < entry.issuedAt)) pending.delete(id);
@@ -182,6 +187,8 @@ export function createSocialBindingAuthority(dependencies: SocialBindingDependen
   }
   return {
     issuerInstance,
+    /** Private durable adapter state. Never return this through an HTTP route. */
+    durableState(): SocialBindingState { prune(); return structuredClone({ issuerInstance, pending: [...pending], receipts: [...receipts], rates: [...rates], globalRate }); },
     async challenge(request: Request, raw: unknown): Promise<SocialKeyChallenge> {
       globalAttempt(); const input = inputValue(raw);
       const initialWall = clock.wall();

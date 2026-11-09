@@ -1,6 +1,6 @@
-/** Local ADR-031 authority. A separate signed admission, never a promotion of an 88A receipt. */
+/** Signed social admission; local v1 and explicitly selected online v2/v3 retain separate bounds. */
 import { normalizeSocialBindingSession, socialBindingSessionDigest, SocialBindingError } from "./connectSocialBinding.ts";
-import type { createSocialBindingAuthority, SocialBindingDependencies, SocialBindingReceipt } from "./connectSocialBinding.ts";
+import type { createSocialBindingAuthority, SocialBindingDependencies, SocialBindingReceipt, SocialBindingSession } from "./connectSocialBinding.ts";
 
 const encoder = new TextEncoder();
 const HEX = /^[0-9a-f]{64}$/, SIGNATURE = /^[0-9a-f]{128}$/, UID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -12,15 +12,17 @@ export const SOCIAL_JOIN_CONTEXT_DOMAIN = "aurora/connect/social-join-context/v1
 const policyKeys = ["schemaVersion", "purpose", "issuerInstance", "policyId", "accountId", "operationId", "generation", "publicKey", "sessionId", "sessionDigest", "visibility", "joinPolicy", "serviceId", "protocol", "sourceDigest", "maxGuests", "issuedAtUnixMs", "expiresAtUnixMs"] as const;
 const grantKeys = ["schemaVersion", "purpose", "issuerInstance", "grantId", "policyId", "policyDigest", "sessionId", "sessionDigest", "hostAccountId", "hostPublicKey", "hostOperationId", "hostGeneration", "guestAccountId", "guestPublicKey", "guestOperationId", "guestGeneration", "issuedAtUnixMs", "admissionExpiresAtUnixMs", "sessionExpiresAtUnixMs"] as const;
 const leaseKeys = ["schemaVersion", "purpose", "issuerInstance", "grantId", "policyDigest", "sequence", "issuedAtUnixMs", "expiresAtUnixMs"] as const;
+const voicePolicyKeys = [...policyKeys, "voiceProfile", "voiceSourceDigest", "hostPlayer"] as const;
+const voiceGrantKeys = [...grantKeys, "voiceProfile", "voiceSourceDigest", "hostPlayer"] as const;
 const contextKeys = ["schemaVersion", "purpose", "issuerInstance", "recipientAccountId", "sessionId", "sessionDigest", "hostAccountId", "hostPublicKey", "hostOperationId", "hostGeneration", "policyId", "policyDigest", "issuedAtUnixMs", "expiresAtUnixMs"] as const;
 export type HostSocialPolicy = {
-  schemaVersion: 1; purpose: "hostSocialSession"; issuerInstance: string; policyId: string; accountId: string; operationId: string; generation: number;
-  publicKey: string; sessionId: string; sessionDigest: string; visibility: "public" | "friends"; joinPolicy: "open"; serviceId: "game"; protocol: "tcp";
-  sourceDigest: string; maxGuests: 1; issuedAtUnixMs: number; expiresAtUnixMs: number;
+  schemaVersion: 1 | 2 | 3; purpose: "hostSocialSession"; issuerInstance: string; policyId: string; accountId: string; operationId: string; generation: number;
+  publicKey: string; sessionId: string; sessionDigest: string; visibility: "public" | "friends"; joinPolicy: "open" | "approval"; serviceId: "game"; protocol: "tcp";
+  sourceDigest: string; voiceProfile?: "svc" | "plasmo"; voiceSourceDigest?: string; hostPlayer?: boolean; maxGuests: number; issuedAtUnixMs: number; expiresAtUnixMs: number;
 };
 export type SocialAdmissionGrant = {
-  schemaVersion: 1; purpose: "socialAdmission"; issuerInstance: string; grantId: string; policyId: string; policyDigest: string; sessionId: string; sessionDigest: string;
-  hostAccountId: string; hostPublicKey: string; hostOperationId: string; hostGeneration: number; guestAccountId: string; guestPublicKey: string; guestOperationId: string; guestGeneration: number;
+  schemaVersion: 1 | 2 | 3; purpose: "socialAdmission"; issuerInstance: string; grantId: string; policyId: string; policyDigest: string; sessionId: string; sessionDigest: string;
+  hostAccountId: string; hostPublicKey: string; hostOperationId: string; hostGeneration: number; guestAccountId: string; guestPublicKey: string; guestOperationId: string; guestGeneration: number; voiceProfile?: "svc" | "plasmo"; voiceSourceDigest?: string; hostPlayer?: boolean;
   issuedAtUnixMs: number; admissionExpiresAtUnixMs: number; sessionExpiresAtUnixMs: number;
 };
 export type SocialContinuityLease = { schemaVersion: 1; purpose: "socialContinuity"; issuerInstance: string; grantId: string; policyDigest: string; sequence: number; issuedAtUnixMs: number; expiresAtUnixMs: number };
@@ -43,26 +45,30 @@ function canonical(domain: string, input: object, keys: readonly string[]): Uint
   return out;
 }
 export function validateHostSocialPolicy(input: unknown): HostSocialPolicy {
-  exact(input, policyKeys);
-  if (input.schemaVersion !== 1 || input.purpose !== "hostSocialSession" || !matches(HEX, input.issuerInstance) || !matches(HEX, input.policyId)
+  const keys = (input as {schemaVersion?: unknown})?.schemaVersion === 3 ? voicePolicyKeys : policyKeys;
+  exact(input, keys);
+  if (![1, 2, 3].includes(input.schemaVersion as number) || input.purpose !== "hostSocialSession" || !matches(HEX, input.issuerInstance) || !matches(HEX, input.policyId)
     || !matches(UID, input.accountId) || !matches(UUID, input.operationId) || !positive(input.generation) || !matches(HEX, input.publicKey)
     || !matches(UUID, input.sessionId) || !matches(HEX, input.sessionDigest) || (input.visibility !== "public" && input.visibility !== "friends")
-    || input.joinPolicy !== "open" || input.serviceId !== "game" || input.protocol !== "tcp" || !matches(HEX, input.sourceDigest) || input.maxGuests !== 1
+    || !["open", "approval"].includes(input.joinPolicy as string) || input.serviceId !== "game" || input.protocol !== "tcp" || !matches(HEX, input.sourceDigest) || (input.schemaVersion === 1 ? input.maxGuests !== 1 : !positive(input.maxGuests) || input.maxGuests > 8)
     || !positive(input.issuedAtUnixMs) || !positive(input.expiresAtUnixMs) || input.expiresAtUnixMs <= input.issuedAtUnixMs
-    || input.expiresAtUnixMs - input.issuedAtUnixMs > 60_000) fail("invalid_policy");
-  return ordered(input, policyKeys);
+    || input.expiresAtUnixMs - input.issuedAtUnixMs > (input.schemaVersion !== 1 ? 14_400_000 : 60_000)) fail("invalid_policy");
+  if (input.schemaVersion === 3 && (!["svc", "plasmo"].includes(input.voiceProfile as string) || !matches(HEX, input.voiceSourceDigest) || typeof input.hostPlayer !== "boolean" || (input.hostPlayer && (input.maxGuests as number) > 7))) fail("invalid_policy");
+  return ordered(input, keys);
 }
 export function validateSocialAdmissionGrant(input: unknown): SocialAdmissionGrant {
-  exact(input, grantKeys);
-  if (input.schemaVersion !== 1 || input.purpose !== "socialAdmission" || !matches(HEX, input.issuerInstance) || !matches(HEX, input.grantId)
+  const keys = (input as {schemaVersion?: unknown})?.schemaVersion === 3 ? voiceGrantKeys : grantKeys;
+  exact(input, keys);
+  if (![1, 2, 3].includes(input.schemaVersion as number) || input.purpose !== "socialAdmission" || !matches(HEX, input.issuerInstance) || !matches(HEX, input.grantId)
     || !matches(HEX, input.policyId) || !matches(HEX, input.policyDigest) || !matches(UUID, input.sessionId) || !matches(HEX, input.sessionDigest)
     || !matches(UID, input.hostAccountId) || !matches(HEX, input.hostPublicKey) || !matches(UUID, input.hostOperationId) || !positive(input.hostGeneration)
     || !matches(UID, input.guestAccountId) || !matches(HEX, input.guestPublicKey) || !matches(UUID, input.guestOperationId) || !positive(input.guestGeneration)
     || input.hostAccountId === input.guestAccountId || input.hostPublicKey === input.guestPublicKey
     || !positive(input.issuedAtUnixMs) || !positive(input.admissionExpiresAtUnixMs) || !positive(input.sessionExpiresAtUnixMs)
     || input.admissionExpiresAtUnixMs <= input.issuedAtUnixMs || input.admissionExpiresAtUnixMs > input.sessionExpiresAtUnixMs
-    || input.admissionExpiresAtUnixMs - input.issuedAtUnixMs > 10_000 || input.sessionExpiresAtUnixMs - input.issuedAtUnixMs > 60_000) fail("invalid_grant");
-  return ordered(input, grantKeys);
+    || input.admissionExpiresAtUnixMs - input.issuedAtUnixMs > 10_000 || input.sessionExpiresAtUnixMs - input.issuedAtUnixMs > (input.schemaVersion !== 1 ? 14_400_000 : 60_000)) fail("invalid_grant");
+  if (input.schemaVersion === 3 && (!["svc", "plasmo"].includes(input.voiceProfile as string) || !matches(HEX, input.voiceSourceDigest) || typeof input.hostPlayer !== "boolean")) fail("invalid_grant");
+  return ordered(input, keys);
 }
 export function validateSocialContinuityLease(input: unknown): SocialContinuityLease {
   exact(input, leaseKeys);
@@ -81,8 +87,8 @@ export function validateSocialJoinContext(input: unknown): SocialJoinContext {
     || input.expiresAtUnixMs - input.issuedAtUnixMs > 10_000) fail("invalid_context");
   return ordered(input, contextKeys);
 }
-export const hostSocialPolicyPreimage = (input: unknown) => canonical(HOST_POLICY_DOMAIN, validateHostSocialPolicy(input), policyKeys);
-export const socialAdmissionPreimage = (input: unknown) => canonical(SOCIAL_ADMISSION_DOMAIN, validateSocialAdmissionGrant(input), grantKeys);
+export const hostSocialPolicyPreimage = (input: unknown) => canonical(HOST_POLICY_DOMAIN, validateHostSocialPolicy(input), (input as HostSocialPolicy).schemaVersion === 3 ? voicePolicyKeys : policyKeys);
+export const socialAdmissionPreimage = (input: unknown) => canonical(SOCIAL_ADMISSION_DOMAIN, validateSocialAdmissionGrant(input), (input as SocialAdmissionGrant).schemaVersion === 3 ? voiceGrantKeys : grantKeys);
 export const socialContinuityPreimage = (input: unknown) => canonical(SOCIAL_CONTINUITY_DOMAIN, validateSocialContinuityLease(input), leaseKeys);
 export const socialJoinContextPreimage = (input: unknown) => canonical(SOCIAL_JOIN_CONTEXT_DOMAIN, validateSocialJoinContext(input), contextKeys);
 const hex = (bytes: Uint8Array) => Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
@@ -104,26 +110,39 @@ async function bounded<T>(request: Request, work: (signal: AbortSignal) => Promi
   } catch (error) { if (error instanceof SocialBindingError) throw error; return fail("backend_unavailable"); }
   finally { clearTimeout(timer); if (abort) request.signal.removeEventListener("abort", abort); controller.abort(); }
 }
-type PolicyState = { body: HostSocialPolicy; digest: string; deadline: number; state: "registering" | "open" | "reserved" | "terminal" };
+type PolicyState = { body: HostSocialPolicy; digest: string; deadline: number; checkedAt?: number; pendingGuests?: number; deniedAccounts?: string[]; state: "registering" | "open" | "reserved" | "terminal" };
 type GrantState = { body: SocialAdmissionGrant; policy: PolicyState; deadline: number; admissionDeadline: number; terminal: boolean; busy: boolean; sequence: number;
   lastLease?: SocialContinuityLease; leaseDeadline: number; attempts: number[];
   signedGrant?: SocialSigned<SocialAdmissionGrant>; initialLease?: SocialSigned<SocialContinuityLease>;
   signedLease?: SocialSigned<SocialContinuityLease>; invitation?: string; publishing?: boolean };
+export type SocialAdmissionState = {
+  policies: [string, PolicyState][]; grants: [string, Omit<GrantState, "policy"> & { policyId: string }][];
+  entryWindow: { until: number; count: number }; continuityWindow: { until: number; count: number };
+  accountRates: [string, { until: number; count: number }][];
+};
 
-export async function createSocialAdmissionAuthority(binding: ReturnType<typeof createSocialBindingAuthority>, dependencies: SocialBindingDependencies) {
+export async function createSocialAdmissionAuthority(binding: ReturnType<typeof createSocialBindingAuthority>, dependencies: SocialBindingDependencies,
+  durable?: { keys: CryptoKeyPair; state?: SocialAdmissionState; online?: boolean }) {
   const clock = dependencies.clock ?? { wall: () => Date.now(), monotonic: () => performance.now() };
-  const keys = await crypto.subtle.generateKey("Ed25519", false, ["sign", "verify"]);
+  const keys = durable?.keys ?? await crypto.subtle.generateKey("Ed25519", false, ["sign", "verify"]);
   const admissionPublicKey = hex(new Uint8Array(await crypto.subtle.exportKey("raw", keys.publicKey)));
   const issuerInstance = binding.issuerInstance;
-  const policies = new Map<string, PolicyState>(), grants = new Map<string, GrantState>();
-  let entryWindow = { until: clock.monotonic() + 60_000, count: 0 }, continuityWindow = { until: clock.monotonic() + 60_000, count: 0 };
-  const accountRates = new Map<string, { until: number; count: number }>();
+  const policies = new Map<string, PolicyState>(durable?.state?.policies), grants = new Map<string, GrantState>();
+  for (const [id, stored] of durable?.state?.grants ?? []) {
+    const { policyId, ...value } = stored, policy = policies.get(policyId);
+    if (!policy) fail("backend_unavailable"); grants.set(id, { ...value, policy });
+  }
+  let entryWindow = durable?.state?.entryWindow ?? { until: clock.monotonic() + 60_000, count: 0 },
+    continuityWindow = durable?.state?.continuityWindow ?? { until: clock.monotonic() + 60_000, count: 0 };
+  const accountRates = new Map<string, { until: number; count: number }>(durable?.state?.accountRates);
+  type Observation = { session: SocialBindingSession; wall: number; mono: number };
+  const observations = new Map<string, { credential: string; wall: number; mono: number; value: Promise<Observation> }>();
   function prune() {
     for (const [id, value] of policies) if (value.state !== "registering" && (clock.monotonic() >= value.deadline || clock.wall() >= value.body.expiresAtUnixMs)) policies.delete(id);
     for (const [id, value] of grants) if (!value.busy && (clock.monotonic() >= value.deadline || clock.wall() >= value.body.sessionExpiresAtUnixMs)) grants.delete(id);
     for (const [id, value] of accountRates) if (clock.monotonic() >= value.until) accountRates.delete(id);
   }
-  function attempt() { prune(); if (clock.monotonic() >= entryWindow.until) entryWindow = { until: clock.monotonic() + 60_000, count: 0 }; if (++entryWindow.count > 512) fail("rate_limited"); }
+  function attempt() { prune(); if (clock.monotonic() >= entryWindow.until) entryWindow = { until: clock.monotonic() + 60_000, count: 0 }; if (++entryWindow.count > (durable?.online ? 4096 : 512)) fail("rate_limited"); }
   function accountAttempt(uid: string) {
     let rate = accountRates.get(uid); if (!rate) { if (accountRates.size >= 128) fail("authority_busy"); rate = { until: clock.monotonic() + 60_000, count: 0 }; accountRates.set(uid, rate); }
     if (++rate.count > 256) fail("rate_limited");
@@ -137,14 +156,30 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
     if (grant.terminal || clock.monotonic() >= grant.deadline || clock.wall() < grant.body.issuedAtUnixMs || clock.wall() >= grant.body.sessionExpiresAtUnixMs) fail("grant_terminal");
     if (requireLease && (!grant.lastLease || clock.monotonic() >= grant.leaseDeadline || clock.wall() < grant.lastLease.issuedAtUnixMs || clock.wall() >= grant.lastLease.expiresAtUnixMs)) fail("continuity_expired");
   }
-  async function fresh(request: Request, uid: string, policy: PolicyState) {
+  async function fresh(request: Request, uid: string, policy: PolicyState, reuseKey?: string) {
     current(policy, request);
-    const observed = { wall: clock.wall(), mono: clock.monotonic() };
-    const session = normalizeSocialBindingSession(await bounded(request, signal => dependencies.readSession({ accountId: uid, request }, policy.body.sessionId, signal)));
-    if (session.id !== policy.body.sessionId || session.hostUid !== policy.body.accountId || session.visibility !== policy.body.visibility || session.joinPolicy !== "open"
-      || session.expiresAtMs <= clock.wall() || await socialBindingSessionDigest(session) !== policy.body.sessionDigest) fail("session_changed");
+    for (const [key, value] of observations) if (clock.monotonic() - value.mono >= 1000 || clock.wall() < value.wall) observations.delete(key);
+    const credential = request.headers.get("authorization") ?? "";
+    const cached = durable?.online && reuseKey ? observations.get(reuseKey) : undefined;
+    let observation: Observation;
+    if (cached && cached.credential === credential) observation = await cached.value;
+    else {
+      const observed = { wall: clock.wall(), mono: clock.monotonic() };
+      const value = (async () => ({ ...observed, session: normalizeSocialBindingSession(await bounded(request,
+        signal => dependencies.readSession({ accountId: uid, request }, policy.body.sessionId, signal))) }))();
+      // RAM only, one original observation per participant for at most 1s.
+      // In-flight sharing never advances the observation or the resulting lease.
+      if (durable?.online && reuseKey && observations.size < 128) observations.set(reuseKey, { ...observed, credential, value });
+      try { observation = await value; } catch (error) { if (reuseKey) observations.delete(reuseKey); throw error; }
+    }
+    const { session } = observation, observed = { wall: observation.wall, mono: observation.mono };
+    if (session.id !== policy.body.sessionId || session.hostUid !== policy.body.accountId || session.visibility !== policy.body.visibility || session.joinPolicy !== policy.body.joinPolicy
+      || session.expiresAtMs <= clock.wall() || policy.body.expiresAtUnixMs > session.expiresAtMs
+      || (policy.body.schemaVersion !== 1 && policy.body.maxGuests + Number(policy.body.hostPlayer === true) > session.maxPlayers)
+      || await socialBindingSessionDigest(session) !== policy.body.sessionDigest) fail("session_changed");
     current(policy, request);
     if (clock.wall() < observed.wall) fail("policy_expired");
+    if (uid === policy.body.accountId) policy.checkedAt = observed.wall;
     return observed;
   }
   async function sign<T extends object>(body: T, preimage: Uint8Array<ArrayBuffer>): Promise<SocialSigned<T>> {
@@ -193,6 +228,24 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
   }
   return {
     admissionPublicKey, issuerInstance,
+    async relayIdentity(request: Request, input: unknown) {
+      attempt(); exact(input, ["role", "id"]); if (!matches(HEX, input.id)) fail("invalid_request");
+      if (input.role === "host") {
+        const policy = await ownedPolicy(request, input.id); await fresh(request, policy.body.accountId, policy); current(policy, request);
+        if (policy.body.schemaVersion === 1) fail("invalid_request");
+        return { sessionId: policy.body.sessionId, issuerInstance, peerId: policy.body.publicKey, hostPeerId: policy.body.publicKey,
+          accountId: policy.body.accountId, generation: policy.body.generation, issuedAtUnixMs: policy.body.issuedAtUnixMs, expiresAtUnixMs: policy.body.expiresAtUnixMs };
+      }
+      if (input.role !== "guest") fail("invalid_request");
+      const grant = await ownedGrant(request, input.id, "guest"); await fresh(request, grant.body.guestAccountId, grant.policy); live(grant, request);
+      if (grant.body.schemaVersion === 1) fail("invalid_request");
+      return { sessionId: grant.body.sessionId, issuerInstance, peerId: grant.body.guestPublicKey, hostPeerId: grant.body.hostPublicKey,
+        accountId: grant.body.guestAccountId, generation: grant.body.guestGeneration, issuedAtUnixMs: grant.body.issuedAtUnixMs, expiresAtUnixMs: grant.body.sessionExpiresAtUnixMs };
+    },
+    /** Private durable adapter state, including consumed slots and revocations. */
+    durableState(): SocialAdmissionState { prune(); return structuredClone({ policies: [...policies],
+      grants: [...grants].map(([id, { policy, ...value }]) => [id, { ...value, policyId: policy.body.policyId }] as [string, Omit<GrantState, "policy"> & { policyId: string }]),
+      entryWindow, continuityWindow, accountRates: [...accountRates] }); },
     async identity(request: Request, input: unknown) {
       attempt(); exact(input, []);
       // Identity is not a registration receipt or authorization. Challenge/context freshly check registration.
@@ -207,11 +260,12 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
       try {
         const session = normalizeSocialBindingSession(await bounded(request, signal => dependencies.readSession({ accountId: uid, request }, input.sessionId as string, signal)));
         if (session.id !== input.sessionId || session.hostUid === uid || (session.visibility !== "public" && session.visibility !== "friends")
-          || session.joinPolicy !== "open" || session.expiresAtMs <= clock.wall()) fail("context_unavailable");
+          || !["open", "approval"].includes(session.joinPolicy) || session.expiresAtMs <= clock.wall()) fail("context_unavailable");
         const digest = await socialBindingSessionDigest(session);
         const candidates = Array.from(policies.values()).filter(value => value.body.sessionId === session.id && value.body.accountId === session.hostUid && value.state === "open");
         if (candidates.length !== 1) fail("context_unavailable");
         const policy = candidates[0];
+        if (policy.deniedAccounts?.includes(uid)) fail("context_unavailable");
         if (policy.body.sessionDigest !== digest || policy.body.visibility !== session.visibility) fail("context_unavailable");
         const deadline = Math.min(policy.deadline, observed.mono + 10_000);
         const expires = Math.min(policy.body.expiresAtUnixMs, session.expiresAtMs, observed.wall + Math.floor(deadline - observed.mono));
@@ -233,7 +287,7 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
     },
     async registerHost(request: Request, input: unknown) {
       attempt(); exact(input, ["proof", "policySigned"]); const signed = signedPolicy(input.policySigned), body = signed.body;
-      if (body.issuerInstance !== issuerInstance || policies.has(body.policyId)) fail("policy_unavailable");
+      if ((body.schemaVersion !== 1 && durable?.online !== true) || body.issuerInstance !== issuerInstance || policies.has(body.policyId)) fail("policy_unavailable");
       if (policies.size >= 32) fail("authority_busy");
       if (Array.from(policies.values()).some(value => value.body.accountId === body.accountId && value.body.sessionId === body.sessionId)) fail("policy_unavailable");
       const state: PolicyState = { body, digest: "", deadline: clock.monotonic() + Math.max(0, body.expiresAtUnixMs - clock.wall()), state: "registering" };
@@ -241,11 +295,11 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
       try {
         current(state, request);
         const retained = await binding.proveRetained(request, input.proof), receipt = retained.receipt; accountAttempt(receipt.accountId);
-        state.deadline = Math.min(state.deadline, retained.originalDeadlineMonotonic); current(state, request);
+        if (body.schemaVersion === 1) state.deadline = Math.min(state.deadline, retained.originalDeadlineMonotonic); current(state, request);
         const proof = input.proof as { challenge: { challengeId: string; issuedAtUnixMs: number } };
         if (receipt.role !== "host" || body.policyId !== proof.challenge.challengeId || body.accountId !== receipt.accountId || body.publicKey !== receipt.publicKey
           || body.operationId !== receipt.operationId || body.generation !== receipt.generation || !matching(receipt, body)
-          || body.issuedAtUnixMs !== proof.challenge.issuedAtUnixMs || body.expiresAtUnixMs > receipt.expiresAtUnixMs) fail("policy_binding_mismatch");
+          || body.issuedAtUnixMs !== proof.challenge.issuedAtUnixMs || (body.schemaVersion === 1 && body.expiresAtUnixMs > receipt.expiresAtUnixMs)) fail("policy_binding_mismatch");
         for (const other of policies.values()) if (other !== state && other.state !== "registering" && other.body.accountId === body.accountId && other.body.sessionId === body.sessionId) fail("policy_unavailable");
         const key = await crypto.subtle.importKey("raw", unhex(body.publicKey), "Ed25519", false, ["verify"]);
         if (!await crypto.subtle.verify("Ed25519", key, unhex(signed.signature), hostSocialPolicyPreimage(body))) fail("invalid_signature");
@@ -264,27 +318,35 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
       current(policy, request);
       if (receipt.role !== "guest" || !matching(receipt, policy.body) || receipt.accountId === policy.body.accountId || receipt.publicKey === policy.body.publicKey) fail("guest_binding_mismatch");
       if (policy.state !== "open") fail("policy_unavailable");
-      // One slot, claimed synchronously before backend IO or signing. No failure returns it to the pool.
-      policy.state = "reserved";
+      const online = policy.body.schemaVersion !== 1;
+      if (online && policy.deniedAccounts?.includes(receipt.accountId)) fail("session_not_authorized");
+      const activeGuests = [...grants.values()].filter(value => value.policy === policy && !value.terminal && value.body.sessionExpiresAtUnixMs > clock.wall());
+      if (online && (grants.size >= (policy.body.hostPlayer ? 127 : 128) || activeGuests.length + (policy.pendingGuests ?? 0) >= policy.body.maxGuests
+        || activeGuests.some(value => value.body.guestAccountId === receipt.accountId || value.body.guestPublicKey === receipt.publicKey))) fail("authority_busy");
+      // Each proof is consumed; only explicitly departed v2 participants free capacity.
+      if (online) policy.pendingGuests = (policy.pendingGuests ?? 0) + 1; else policy.state = "reserved";
       let state: GrantState | undefined;
       try {
         const observed = await fresh(request, receipt.accountId, policy);
+        if (policy.deniedAccounts?.includes(receipt.accountId)) fail("session_not_authorized");
         const now = observed.wall;
-        const originalDeadline = Math.min(policy.deadline, retained.originalDeadlineMonotonic, startMono + receipt.expiresAtUnixMs - startWall);
-        const expires = Math.min(policy.body.expiresAtUnixMs, receipt.expiresAtUnixMs, clock.wall() + Math.floor(originalDeadline - clock.monotonic()));
-        const body = validateSocialAdmissionGrant({ schemaVersion: 1, purpose: "socialAdmission", issuerInstance, grantId: hex(crypto.getRandomValues(new Uint8Array(32))),
+        const originalDeadline = policy.body.schemaVersion !== 1 ? policy.deadline : Math.min(policy.deadline, retained.originalDeadlineMonotonic, startMono + receipt.expiresAtUnixMs - startWall);
+        const expires = online ? policy.body.expiresAtUnixMs : Math.min(policy.body.expiresAtUnixMs, receipt.expiresAtUnixMs, clock.wall() + Math.floor(originalDeadline - clock.monotonic()));
+        const body = validateSocialAdmissionGrant({ schemaVersion: policy.body.schemaVersion, purpose: "socialAdmission", issuerInstance, grantId: hex(crypto.getRandomValues(new Uint8Array(32))),
           policyId: policy.body.policyId, policyDigest: policy.digest, sessionId: policy.body.sessionId, sessionDigest: policy.body.sessionDigest,
           hostAccountId: policy.body.accountId, hostPublicKey: policy.body.publicKey, hostOperationId: policy.body.operationId, hostGeneration: policy.body.generation,
           guestAccountId: receipt.accountId, guestPublicKey: receipt.publicKey, guestOperationId: receipt.operationId, guestGeneration: receipt.generation,
-          issuedAtUnixMs: now, admissionExpiresAtUnixMs: Math.min(now + 10_000, expires), sessionExpiresAtUnixMs: expires });
+          issuedAtUnixMs: now, admissionExpiresAtUnixMs: Math.min(now + 10_000, expires, receipt.expiresAtUnixMs), sessionExpiresAtUnixMs: expires, ...(policy.body.schemaVersion === 3 ? { voiceProfile: policy.body.voiceProfile, voiceSourceDigest: policy.body.voiceSourceDigest, hostPlayer: policy.body.hostPlayer } : {}) });
         state = { body, policy, deadline: Math.min(originalDeadline, startMono + expires - startWall),
           admissionDeadline: Math.min(originalDeadline, observed.mono + body.admissionExpiresAtUnixMs - now),
           terminal: false, busy: false, sequence: 0, leaseDeadline: 0, attempts: [] };
         grants.set(body.grantId, state); live(state, request, false);
         const grant = await sign(body, socialAdmissionPreimage(body)); const firstLease = await lease(state, request, observed, true); live(state, request);
+        if (policy.deniedAccounts?.includes(receipt.accountId)) fail("session_not_authorized");
         state.signedGrant = copySigned(grant); state.initialLease = copySigned(firstLease);
         return { grant, lease: firstLease };
-      } catch (error) { policy.state = "terminal"; if (state) state.terminal = true; throw error; }
+      } catch (error) { if (!online) policy.state = "terminal"; if (state) state.terminal = true; throw error; }
+      finally { if (online) policy.pendingGuests = Math.max(0, (policy.pendingGuests ?? 1) - 1); }
     },
     async continuity(request: Request, input: unknown) {
       attempt(); exact(input, ["grantId"]); if (!matches(HEX, input.grantId)) fail("invalid_grant");
@@ -293,22 +355,30 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
         live(state, request);
         const now = clock.monotonic();
         if (now >= continuityWindow.until) continuityWindow = { until: now + 60_000, count: 0 };
-        if (++continuityWindow.count > 256) fail("rate_limited");
+        if (++continuityWindow.count > (durable?.online ? 2048 : 256)) fail("rate_limited");
         state.attempts = state.attempts.filter(time => now - time < 1_000);
         if (state.busy || state.attempts.length >= 4) fail("rate_limited");
         state.attempts.push(now); state.busy = true;
         const uid = await bounded(request, signal => dependencies.trustedAuthenticate(request, signal));
         if (!matches(UID, uid) || uid !== state.body.guestAccountId) fail("account_mismatch"); accountAttempt(uid);
-        const observed = await fresh(request, uid, state.policy); live(state, request);
+        const observed = await fresh(request, uid, state.policy, state.body.grantId); live(state, request);
         return await lease(state, request, observed);
-      } catch (error) { state.terminal = true; state.policy.state = "terminal"; throw error; }
+      } catch (error) { state.terminal = true; if (state.policy.body.schemaVersion === 1) state.policy.state = "terminal"; throw error; }
       finally { state.busy = false; }
     },
     async hostPoll(request: Request, input: unknown) {
       attempt(); exact(input, ["policyId"]); if (!matches(HEX, input.policyId)) fail("invalid_request");
       const policy = await ownedPolicy(request, input.policyId);
       try {
-        current(policy, request); await fresh(request, policy.body.accountId, policy); current(policy, request);
+        current(policy, request); await fresh(request, policy.body.accountId, policy, `host:${policy.body.policyId}`); current(policy, request);
+        if (policy.body.schemaVersion !== 1) {
+          const deliveries = [];
+          for (const grant of grants.values()) if (grant.policy === policy && !grant.terminal) {
+            try { live(grant, request); } catch { grant.terminal = true; continue; }
+            if (grant.signedGrant && grant.initialLease && grant.signedLease) deliveries.push({ grant: copySigned(grant.signedGrant), initialLease: copySigned(grant.initialLease), lease: copySigned(grant.signedLease) });
+          }
+          return { state: "group" as const, checkedAtUnixMs: policy.checkedAt!, deliveries };
+        }
         const grant = Array.from(grants.values()).find(value => value.policy === policy);
         if (!grant?.signedGrant || !grant.initialLease || !grant.signedLease) return { state: "waiting" as const };
         live(grant, request);
@@ -333,7 +403,7 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
         // game/TCP service, endpoint policy and original deadlines before opening any connection.
         grant.invitation = invitation;
         return { accepted: true as const };
-      } catch (error) { stopPolicy(grant.policy); throw error; }
+      } catch (error) { if (grant.policy.body.schemaVersion !== 1) grant.terminal = true; else stopPolicy(grant.policy); throw error; }
       finally { grant.publishing = false; }
     },
     async guestReceive(request: Request, input: unknown) {
@@ -347,15 +417,33 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
         if (grant.invitation === undefined) return { state: "waiting" as const };
         if (!grant.signedLease) fail("continuity_expired");
         return { state: "ready" as const, invitation: grant.invitation, lease: copySigned(grant.signedLease) };
-      } catch (error) { stopPolicy(grant.policy); throw error; }
+      } catch (error) { if (grant.policy.body.schemaVersion !== 1) grant.terminal = true; else stopPolicy(grant.policy); throw error; }
     },
     async hostStop(request: Request, input: unknown) {
       attempt(); exact(input, ["policyId"]); if (!matches(HEX, input.policyId)) fail("invalid_request");
       const policy = await ownedPolicy(request, input.policyId); stopPolicy(policy); return { stopped: true as const };
     },
+    async hostRevoke(request: Request, input: unknown) {
+      attempt(); exact(input, ["grantId"]); if (!matches(HEX, input.grantId)) fail("invalid_request");
+      const grant = await ownedGrant(request, input.grantId, "host"), policy = grant.policy;
+      if (policy.body.schemaVersion === 1) fail("invalid_request");
+      current(policy, request);
+      // Claim synchronously before any further I/O. Revocation can never be
+      // undone by a delayed join/signing result, a new key or a refreshed token.
+      const denied = policy.deniedAccounts ??= [];
+      if (!denied.includes(grant.body.guestAccountId)) {
+        if (denied.length >= 128) fail("authority_busy"); denied.push(grant.body.guestAccountId);
+      }
+      for (const participant of grants.values()) if (participant.policy === policy && participant.body.guestAccountId === grant.body.guestAccountId) {
+        participant.terminal = true; participant.invitation = undefined; participant.signedLease = undefined; participant.initialLease = undefined;
+      }
+      observations.delete(grant.body.grantId);
+      return { revoked: true as const };
+    },
     async guestStop(request: Request, input: unknown) {
       attempt(); exact(input, ["grantId"]); if (!matches(HEX, input.grantId)) fail("invalid_request");
-      const grant = await ownedGrant(request, input.grantId, "guest"); stopPolicy(grant.policy); return { stopped: true as const };
+      const grant = await ownedGrant(request, input.grantId, "guest");
+      if (grant.policy.body.schemaVersion !== 1) { grant.terminal = true; grant.invitation = undefined; } else stopPolicy(grant.policy); return { stopped: true as const };
     },
     inspect() { prune(); return { policies: policies.size, grants: grants.size, terminalGrants: Array.from(grants.values()).filter(value => value.terminal).length }; },
   };
