@@ -9,10 +9,12 @@ export type SocialConnectionControls = { state: SocialConnectState; controller: 
 function NativeVoiceLimits() {
   return <div className="social-voice-limits">
     <p>Voz para até 8 participantes, incluindo o anfitrião quando jogar neste computador. O limite do anúncio pode ser menor.</p>
-    <ul><li>Mensagens de voz de até 4.096 bytes.</li>
-      <li>Retorno por participante: até 524.288 bytes/s (512 KiB/s) e 1.600 fragmentos/s.</li>
-      <li>Tráfego agregado da sessão (TCP e UDP, nos dois sentidos): até 5.000.000 bytes/s, com rajada compartilhada de 128 KiB.</li></ul>
-    <small>A disponibilidade também depende das cotas gratuitas do serviço. Estes limites não comprovam áudio dentro do jogo.</small>
+    <details><summary>Limites técnicos da sessão</summary>
+      <ul><li>Mensagens de voz de até 4.096 bytes.</li>
+        <li>Retorno por participante: até 524.288 bytes/s (512 KiB/s) e 1.600 fragmentos/s.</li>
+        <li>Tráfego agregado da sessão (TCP e UDP, nos dois sentidos): até 5.000.000 bytes/s, com rajada compartilhada de 128 KiB.</li></ul>
+    </details>
+    <small>A disponibilidade também depende das cotas gratuitas do serviço. Áudio dentro do jogo ainda não validado.</small>
   </div>;
 }
 

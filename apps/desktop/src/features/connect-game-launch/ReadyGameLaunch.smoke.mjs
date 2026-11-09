@@ -223,6 +223,16 @@ test("a reviewed official runtime copy supplies its own Java on a fresh launcher
 const profile1211 = { minecraftVersion: "1.21.1", loader: "fabric", loaderVersion: "0.16.14", javaMajor: 21, coreVersion: "1.1.5", skinsVersion: "0.3.1" };
 const profile1201 = { ...profile1211, minecraftVersion: "1.20.1", javaMajor: 17 };
 const capability93 = { schemaVersion: 2, instanceScope: "diagnosticCopy", maxPlanSeconds: 60, runtimes: [profile1211, profile1201] };
+
+test("runtime copy creation rejects any source ID with the reserved diagnostic prefix", async () => {
+  for (const sourceInstanceId of [copyId, "aurora-test-origem"]) {
+    await picker({ sourceInstanceId, connectOperationId: operationId, runtimes: [profile1211] });
+    assert.match(container.textContent, /Selecione a instância de origem para preparar outra cópia/);
+    assert.equal(container.querySelector("details"), null);
+    assert.equal(button("Listar cópias prontas").disabled, false);
+  }
+  assert.equal(calls.length, 0);
+});
 test("a signed session preselects its only compatible runtime and ignores old install completion after account change", async () => {
   fixtures();
   let complete;

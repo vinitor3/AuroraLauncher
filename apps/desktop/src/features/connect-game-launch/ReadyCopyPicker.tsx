@@ -73,7 +73,7 @@ export function ReadyCopyPicker({ sourceInstanceId, contextKey, connectOperation
   const offered = requiredProfile ? runtimes.filter(runtime => profileId(runtime) === requiredProfile) : runtimes;
   const selectedProfile = requiredProfile && offered.length ? requiredProfile : target;
   const targetRuntime = offered.find(runtime => profileId(runtime) === selectedProfile);
-  const originalSelected = !idPattern.test(sourceInstanceId);
+  const originalSelected = !sourceInstanceId.startsWith("aurora-test-");
   async function prepareRuntime() {
     if (disabled || busy || install || !targetRuntime || !approved || !sourceInstanceId || !connectOperationId || !originalSelected) return;
     const operationId = crypto.randomUUID();

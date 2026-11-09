@@ -703,8 +703,12 @@ test("native guest review shows approved voice limits and requires its own expli
   const snapshot = guestVoiceReviewSnapshot();
   await render({connection: connection(snapshot)});
   for (const text of [/até 8 participantes/, /4\.096 bytes/, /524\.288 bytes\/s/, /1\.600 fragmentos\/s/, /5\.000\.000 bytes\/s/, /128 KiB/, /9 segundos restantes/]) assert.match(container.textContent, text);
+  const limits = container.querySelector(".social-voice-limits details");
+  assert.ok(limits); assert.equal(limits.hasAttribute("open"), false);
+  assert.equal(limits.querySelector("summary").textContent, "Limites técnicos da sessão");
   assert.equal(button("Confirmar entrada com voz").disabled, true); assert.equal(count("connect:confirmGuest"), 0);
   const consent = container.querySelector(".social-connection .social-consent input");
+  assert.equal(consent.closest("details"), null);
   await act(async () => {consent.checked = true; consent.dispatchEvent(new window.Event("click", {bubbles:true}));});
   await click("Confirmar entrada com voz"); assert.equal(count("connect:confirmGuest"), 1); assert.equal(count("connect:confirmHost"), 0);
   await render({connection: connection({...snapshot, social:{...snapshot.social,digest:"c".repeat(64)}})});
@@ -724,7 +728,19 @@ test("native guest review does not renew its original deadline on refresh or app
 test("native host review exposes the same transport budget without changing legacy reviews", async () => {
   const snapshot = connectionSnapshot(); await render({connection: connection(snapshot)});
   assert.doesNotMatch(container.textContent, /5\.000\.000 bytes\/s/);
+  assert.equal(container.querySelector(".social-voice-limits details"), null);
   Object.assign(snapshot.social, {voiceProfile:"plasmo", voiceTransportProfile:"nativeVoice8V1", hostPlayer:true, runtimeProfile:"fabric-loader-0.16.14-1.21.1"});
   await render({connection: connection(snapshot)}); assert.match(container.textContent, /5\.000\.000 bytes\/s/);
+  const limits = container.querySelector(".social-voice-limits details");
+  assert.ok(limits); assert.equal(limits.hasAttribute("open"), false);
+  assert.equal(limits.querySelector("summary").textContent, "Limites técnicos da sessão");
+  for (const text of [/4\.096 bytes/, /524\.288 bytes\/s/, /1\.600 fragmentos\/s/, /5\.000\.000 bytes\/s/, /128 KiB/]) assert.match(limits.textContent, text);
+  const visible = container.cloneNode(true); visible.querySelectorAll("details").forEach(details => details.remove());
+  for (const text of [/até 8 participantes/, /Plasmo Voice/, /Experimental/, /para a comunidade/, /por até 1 minutos, dentro do prazo da origem/, /Áudio dentro do jogo ainda não validado/]) assert.match(visible.textContent, text);
+  assert.doesNotMatch(visible.textContent, /5\.000\.000 bytes\/s|1\.600 fragmentos\/s/);
+  assert.equal(button("Compartilhar agora").closest("details"), null);
+  limits.setAttribute("open", "");
+  await act(async () => limits.dispatchEvent(new window.Event("toggle")));
   assert.equal(button("Compartilhar agora").disabled, true);
+  assert.equal(count("connect:confirmHost"), 0, "opening technical details cannot grant consent");
 });
