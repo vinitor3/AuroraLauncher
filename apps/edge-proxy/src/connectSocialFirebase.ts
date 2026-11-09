@@ -51,7 +51,7 @@ export async function socialAuthenticate(request: Request, project: string, sign
   } catch (error) { if (error instanceof SocialBindingError) throw error; return fail("unauthenticated"); }
 }
 type Field = { stringValue?: string; integerValue?: string; timestampValue?: string; nullValue?: null };
-export function createSocialFirebaseDependencies(project: string, authenticatedUid: string, routedSession: string): SocialBindingDependencies {
+export function createSocialFirebaseDependencies(project: string, authenticatedUid: string, routedSession: string, advertisementOnly = false): SocialBindingDependencies {
   return {
     // The Worker verifies the signature before invoking the non-public DO RPC.
     trustedAuthenticate: async request => {
@@ -79,7 +79,7 @@ export function createSocialFirebaseDependencies(project: string, authenticatedU
         imageUrl: fields.imageUrl?.nullValue === null ? null : fields.imageUrl?.stringValue,
         players: Number(fields.players?.integerValue), maxPlayers: Number(fields.maxPlayers?.integerValue), visibility: fields.visibility?.stringValue,
         joinPolicy: fields.joinPolicy?.stringValue, expiresAtMs: Date.parse(fields.expiresAt?.timestampValue ?? "") });
-      const [registry, approval] = await Promise.all([get(`usernames/${nick}`), session.hostUid !== callerUid && session.joinPolicy === "approval"
+      const [registry, approval] = await Promise.all([get(`usernames/${nick}`), !advertisementOnly && session.hostUid !== callerUid && session.joinPolicy === "approval"
         ? get(`socialJoinRequests/${sessionId}/guests/${callerUid}`) : Promise.resolve(undefined)]);
       if (registry.uid?.stringValue !== callerUid) fail("account_not_registered");
       if (approval) {

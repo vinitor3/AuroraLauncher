@@ -89,7 +89,16 @@ for (const policySchema of [2, 4]) test(`real social Worker HTTP schema ${policy
     await start();
     assert.equal((await request("host", "bootstrap", {}, { Origin: "https://renderer.invalid" })).status, 403);
     assert.equal((await request("host", "bootstrap", {}, { Authorization: "Bearer unsigned.token.value" })).status, 401);
-    const bootstrap = await good("host", "bootstrap"); assert.equal(bootstrap.accountId, "host"); assert.match(bootstrap.admissionPublicKey, /^[a-f0-9]{64}$/);
+    assert.equal((await good("stranger", "presence")).state, "unavailable", "visible pending advert is observable before an authority exists");
+    const clockRequest = { operationId: crypto.randomUUID(), generation: 7, nonce: "ab".repeat(16) };
+    const bootstrap = await good("host", "bootstrap", clockRequest); assert.equal(bootstrap.accountId, "host"); assert.match(bootstrap.admissionPublicKey, /^[a-f0-9]{64}$/);
+    const pin = await crypto.subtle.importKey("raw", Buffer.from(bootstrap.admissionPublicKey, "hex"), "Ed25519", false, ["verify"]);
+    assert.equal(bootstrap.clock.body.nonce, clockRequest.nonce); assert.equal(bootstrap.clock.body.operationId, clockRequest.operationId);
+    assert.equal(bootstrap.clock.body.generation, 7); assert.equal(bootstrap.clock.body.sessionId, session);
+    assert.equal(bootstrap.clock.body.accountId, "host"); assert.equal(bootstrap.clock.body.sessionExpiresAtUnixMs, bootstrap.expiresAtUnixMs);
+    assert.ok(bootstrap.clock.body.serverReceivedAtUnixMs <= bootstrap.clock.body.serverNowUnixMs);
+    assert.equal(await crypto.subtle.verify("Ed25519", pin, Buffer.from(bootstrap.clock.signature, "hex"),
+      new TextEncoder().encode("aurora/connect/social-clock/v1\0" + JSON.stringify(bootstrap.clock.body))), true);
     const host = await prepare("host", "host"), c = host.challenge;
     const body = { schemaVersion: policySchema, purpose: "hostSocialSession", issuerInstance: c.issuerInstance, policyId: c.challengeId, accountId: "host",
       operationId: c.operationId, generation: c.generation, publicKey: c.publicKey, sessionId: session, sessionDigest: c.sessionDigest,
@@ -97,13 +106,13 @@ for (const policySchema of [2, 4]) test(`real social Worker HTTP schema ${policy
       issuedAtUnixMs: c.issuedAtUnixMs, expiresAtUnixMs: expiry,
       ...(policySchema === 4 ? { voiceProfile: "svc", voiceSourceDigest: "d".repeat(64), hostPlayer: false, runtimeProfile: "fabric-loader-0.16.14-1.21.1" } : {}) };
     const policyId = (await good("host", "host/register", { proof: host.proof, policySigned: { body, signature: hex(await crypto.subtle.sign("Ed25519", host.keys.privateKey, hostSocialPolicyPreimage(body))) } })).policyId;
+    assert.equal((await good("stranger", "presence")).state, "unknown", "registered policy alone cannot invent native transport observations");
     assert.equal((await request("stranger", "context", { sessionId: session })).status, 403);
     const context = await good("guest", "context", { sessionId: session }); assert.equal(context.body.recipientAccountId, "guest");
     const guest = await prepare("guest", "guest"), joined = await good("guest", "join", { proof: guest.proof, policyId });
     const grantId = joined.grant.body.grantId; assert.equal(joined.grant.body.guestPublicKey, guest.challenge.publicKey);
     assert.equal(joined.grant.body.schemaVersion, policySchema);
     assert.equal(joined.grant.body.runtimeProfile, body.runtimeProfile);
-    const pin = await crypto.subtle.importKey("raw", Buffer.from(bootstrap.admissionPublicKey, "hex"), "Ed25519", false, ["verify"]);
     const { socialAdmissionPreimage } = await import("../src/connectSocialAdmission.ts");
     assert.equal(await crypto.subtle.verify("Ed25519", pin, Buffer.from(joined.grant.signature, "hex"), socialAdmissionPreimage(joined.grant.body)), true);
     const polled = await good("host", "host/poll", { policyId }); assert.equal(polled.deliveries.length, 1); assert.ok(polled.checkedAtUnixMs <= Date.now());
@@ -111,6 +120,13 @@ for (const policySchema of [2, 4]) test(`real social Worker HTTP schema ${policy
     assert.equal((await good("guest", "guest/receive", { grantId })).invitation, "opaque-native-envelope-only");
     assert.notEqual((await request("stranger", "guest/receive", { grantId })).status, 200);
     const renewed = await good("guest", "continuity", { grantId }); assert.equal(renewed.body.sequence, 2);
+    await good("host", "host/poll", { policyId, transport: { observedAtUnixMs: Date.now(), connectedGrantIds: [grantId], hostPlayerConnected: false } });
+    const presence = await good("stranger", "presence");
+    assert.equal(presence.accountId, "stranger"); assert.equal(presence.state, "ready");
+    assert.equal(presence.admittedGuests, 1); assert.equal(presence.connectedGuests, 1); assert.equal(presence.maxGuests, 8);
+    assert.equal(presence.hostPlayerConnected, false); assert.ok(presence.expiresAtUnixMs - presence.checkedAtUnixMs <= 3000);
+    assert.doesNotMatch(JSON.stringify(presence), /grantId|publicKey|policyId|fixture-rsa|\.eyJ/);
+    assert.equal((await request("stranger", "context", { sessionId: session })).status, 403, "observing presence never approves entry");
     const ticket = await good("guest", "relay/ticket", { role: "guest", id: grantId });
     const actor = (await runtime.getDurableObjectNamespace("SOCIAL_SESSIONS")).getByName(session);
     assert.deepEqual((await actor.relayAuthorize(ticket)).allowedPeers, [c.publicKey]);
@@ -122,6 +138,7 @@ for (const policySchema of [2, 4]) test(`real social Worker HTTP schema ${policy
     assert.equal((await request("guest", "host/revoke", { grantId })).status, 403);
     await good("host", "host/revoke", { grantId });
     await good("host", "host/revoke", { grantId });
+    const departed = await good("stranger", "presence"); assert.equal(departed.admittedGuests, 0); assert.equal(departed.connectedGuests, 0);
     await assert.rejects(actor.relayAuthorize(ticket));
     const readBeforeRestart = reads;
     await runtime.dispose(); runtime = undefined; await start();
@@ -135,7 +152,9 @@ for (const policySchema of [2, 4]) test(`real social Worker HTTP schema ${policy
     assert.equal((await good("host", "host/poll", { policyId })).deliveries.length, 0);
     assert.ok(reads > readBeforeRestart);
     blocked = true; assert.notEqual((await request("guest", "bootstrap")).status, 200);
+    assert.equal((await request("guest", "presence")).status, 403, "live Firestore block also closes display-only visibility");
     await good("host", "host/stop", { policyId });
+    assert.equal((await good("stranger", "presence")).state, "unavailable");
   } finally {
     for (const socket of sockets) if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
     await runtime?.dispose();

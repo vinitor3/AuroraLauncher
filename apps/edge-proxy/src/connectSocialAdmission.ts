@@ -130,7 +130,8 @@ async function bounded<T>(request: Request, work: (signal: AbortSignal) => Promi
   } catch (error) { if (error instanceof SocialBindingError) throw error; return fail("backend_unavailable"); }
   finally { clearTimeout(timer); if (abort) request.signal.removeEventListener("abort", abort); controller.abort(); }
 }
-type PolicyState = { body: HostSocialPolicy; digest: string; deadline: number; checkedAt?: number; pendingGuests?: number;
+type PolicyState = { body: HostSocialPolicy; digest: string; deadline: number; checkedAt?: number; checkedDeadline?: number; pendingGuests?: number;
+  transport?: { checkedAt: number; connectedGrantIds: string[]; hostPlayerConnected: boolean };
   pendingIdentities?: { accountId: string; publicKey: string }[]; deniedAccounts?: string[]; state: "registering" | "open" | "reserved" | "terminal" };
 type GrantState = { body: SocialAdmissionGrant; policy: PolicyState; deadline: number; admissionDeadline: number; terminal: boolean; busy: boolean; sequence: number;
   lastLease?: SocialContinuityLease; leaseDeadline: number; attempts: number[];
@@ -172,8 +173,17 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
     if (request.signal.aborted) fail("binding_cancelled");
     if (policy.state === "terminal" || clock.monotonic() >= policy.deadline || clock.wall() < policy.body.issuedAtUnixMs || clock.wall() >= policy.body.expiresAtUnixMs) fail("policy_expired");
   }
+  function hostCurrent(policy: PolicyState, request: Request) {
+    current(policy, request);
+    if (policy.body.schemaVersion !== 1 && (!Number.isFinite(policy.checkedAt) || !Number.isFinite(policy.checkedDeadline)
+      || clock.wall() < policy.checkedAt! || clock.wall() >= policy.checkedAt! + 3_000 || clock.monotonic() >= policy.checkedDeadline!)) {
+      // A missing legacy snapshot anchor or a lost Host window is terminal.
+      // Another guest, delayed read or later Host poll cannot reopen this policy.
+      stopPolicy(policy); fail("policy_expired");
+    }
+  }
   function live(grant: GrantState, request: Request, requireLease = true) {
-    current(grant.policy, request);
+    hostCurrent(grant.policy, request);
     if (grant.terminal || clock.monotonic() >= grant.deadline || clock.wall() < grant.body.issuedAtUnixMs || clock.wall() >= grant.body.sessionExpiresAtUnixMs) fail("grant_terminal");
     if (requireLease && (!grant.lastLease || clock.monotonic() >= grant.leaseDeadline || clock.wall() < grant.lastLease.issuedAtUnixMs || clock.wall() >= grant.lastLease.expiresAtUnixMs)) fail("continuity_expired");
   }
@@ -202,7 +212,14 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
       || await socialBindingSessionDigest(session) !== policy.body.sessionDigest) fail("session_changed");
     current(policy, request);
     if (clock.wall() < observed.wall) fail("policy_expired");
-    if (uid === policy.body.accountId) policy.checkedAt = observed.wall;
+    if (uid === policy.body.accountId) {
+      if (policy.body.schemaVersion !== 1 && policy.state !== "registering") hostCurrent(policy, request);
+      // Persist the original virtual monotonic deadline, which the DO restores
+      // while consuming all elapsed dormancy. Do not reanchor on completion.
+      if (policy.checkedDeadline === undefined || observed.mono + 3_000 >= policy.checkedDeadline) {
+        policy.checkedAt = observed.wall; policy.checkedDeadline = observed.mono + 3_000;
+      }
+    }
     return observed;
   }
   async function sign<T extends object>(body: T, preimage: Uint8Array<ArrayBuffer>): Promise<SocialSigned<T>> {
@@ -254,7 +271,7 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
     async relayIdentity(request: Request, input: unknown) {
       attempt(); exact(input, ["role", "id"]); if (!matches(HEX, input.id)) fail("invalid_request");
       if (input.role === "host") {
-        const policy = await ownedPolicy(request, input.id); await fresh(request, policy.body.accountId, policy); current(policy, request);
+        const policy = await ownedPolicy(request, input.id); hostCurrent(policy, request); await fresh(request, policy.body.accountId, policy); hostCurrent(policy, request);
         if (policy.body.schemaVersion === 1) fail("invalid_request");
         return { sessionId: policy.body.sessionId, issuerInstance, peerId: policy.body.publicKey, hostPeerId: policy.body.publicKey,
           accountId: policy.body.accountId, generation: policy.body.generation, issuedAtUnixMs: policy.body.issuedAtUnixMs, expiresAtUnixMs: policy.body.expiresAtUnixMs };
@@ -293,7 +310,7 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
         const deadline = Math.min(policy.deadline, observed.mono + 10_000);
         const expires = Math.min(policy.body.expiresAtUnixMs, session.expiresAtMs, observed.wall + Math.floor(deadline - observed.mono));
         const currentContext = () => {
-          current(policy, request);
+          hostCurrent(policy, request);
           if (policies.get(policy.body.policyId) !== policy || policy.state !== "open" || clock.monotonic() >= deadline
             || clock.wall() < observed.wall || clock.wall() >= expires) fail("context_unavailable");
         };
@@ -326,7 +343,7 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
         for (const other of policies.values()) if (other !== state && other.state !== "registering" && other.body.accountId === body.accountId && other.body.sessionId === body.sessionId) fail("policy_unavailable");
         const key = await crypto.subtle.importKey("raw", unhex(body.publicKey), "Ed25519", false, ["verify"]);
         if (!await crypto.subtle.verify("Ed25519", key, unhex(signed.signature), hostSocialPolicyPreimage(body))) fail("invalid_signature");
-        await fresh(request, receipt.accountId, state); state.digest = await hostSocialPolicyDigest(body); current(state, request);
+        await fresh(request, receipt.accountId, state); state.digest = await hostSocialPolicyDigest(body); hostCurrent(state, request);
         // Registration is serialized at publication too; neither async contender can publish a duplicate host/session.
         for (const other of policies.values()) if (other !== state && other.state !== "registering" && other.body.accountId === body.accountId && other.body.sessionId === body.sessionId) fail("policy_unavailable");
         state.state = "open"; return { policyId: body.policyId, policyDigest: state.digest, expiresAtUnixMs: body.expiresAtUnixMs };
@@ -335,10 +352,10 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
     async join(request: Request, input: unknown) {
       attempt(); exact(input, ["proof", "policyId"]); if (!matches(HEX, input.policyId)) fail("invalid_policy");
       const policy = policies.get(input.policyId); if (!policy || policy.state !== "open") fail("policy_unavailable");
-      current(policy, request);
+      hostCurrent(policy, request);
       const startWall = clock.wall(), startMono = clock.monotonic();
       const retained = await binding.proveRetained(request, input.proof), receipt = retained.receipt; accountAttempt(receipt.accountId);
-      current(policy, request);
+      hostCurrent(policy, request);
       if (receipt.role !== "guest" || !matching(receipt, policy.body) || receipt.accountId === policy.body.accountId || receipt.publicKey === policy.body.publicKey) fail("guest_binding_mismatch");
       if (policy.state !== "open") fail("policy_unavailable");
       const online = policy.body.schemaVersion !== 1;
@@ -356,6 +373,7 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
       let state: GrantState | undefined;
       try {
         const observed = await fresh(request, receipt.accountId, policy);
+        hostCurrent(policy, request);
         if (policy.deniedAccounts?.includes(receipt.accountId)) fail("session_not_authorized");
         const now = observed.wall;
         const originalDeadline = policy.body.schemaVersion !== 1 ? policy.deadline : Math.min(policy.deadline, retained.originalDeadlineMonotonic, startMono + receipt.expiresAtUnixMs - startWall);
@@ -400,10 +418,25 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
       finally { state.busy = false; }
     },
     async hostPoll(request: Request, input: unknown) {
-      attempt(); exact(input, ["policyId"]); if (!matches(HEX, input.policyId)) fail("invalid_request");
+      attempt(); const hasTransport = !!input && typeof input === "object" && Object.hasOwn(input, "transport");
+      exact(input, hasTransport ? ["policyId", "transport"] : ["policyId"]); if (!matches(HEX, input.policyId)) fail("invalid_request");
+      const transport = hasTransport ? input.transport : undefined;
+      if (hasTransport) {
+        exact(transport, ["observedAtUnixMs", "connectedGrantIds", "hostPlayerConnected"]);
+        if (!positive(transport.observedAtUnixMs) || !Array.isArray(transport.connectedGrantIds) || transport.connectedGrantIds.length > 8
+          || transport.connectedGrantIds.some(id => !matches(HEX, id)) || new Set(transport.connectedGrantIds).size !== transport.connectedGrantIds.length
+          || typeof transport.hostPlayerConnected !== "boolean") fail("invalid_request");
+      }
       const policy = await ownedPolicy(request, input.policyId);
       try {
-        current(policy, request); await fresh(request, policy.body.accountId, policy, `host:${policy.body.policyId}`); current(policy, request);
+        hostCurrent(policy, request); await fresh(request, policy.body.accountId, policy, `host:${policy.body.policyId}`); hostCurrent(policy, request);
+        if (transport) {
+          const value = transport as { observedAtUnixMs: number; connectedGrantIds: string[]; hostPlayerConnected: boolean };
+          if (policy.body.schemaVersion === 1 || value.observedAtUnixMs > clock.wall() || value.observedAtUnixMs + 3_000 <= clock.wall()
+            || (value.hostPlayerConnected && policy.body.hostPlayer !== true)
+            || value.connectedGrantIds.some(id => grants.get(id)?.policy !== policy)) fail("invalid_request");
+          policy.transport = { checkedAt: Math.min(value.observedAtUnixMs, policy.checkedAt!), connectedGrantIds: [...value.connectedGrantIds], hostPlayerConnected: value.hostPlayerConnected };
+        }
         if (policy.body.schemaVersion !== 1) {
           const deliveries = [];
           for (const grant of grants.values()) if (grant.policy === policy && !grant.terminal) {

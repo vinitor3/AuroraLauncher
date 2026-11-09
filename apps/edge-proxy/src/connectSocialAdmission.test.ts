@@ -500,6 +500,70 @@ test("online original session survives preparation expiry; short continuity and 
   if (roster.state !== "group") assert.fail(); assert.equal(roster.deliveries.length, 1);
 });
 
+test("online context and admission require the original recent Host observation and never reopen it", async () => {
+  for (const operation of ["context", "join"] as const) {
+    const f = await fixture(true), { policy } = await f.register(), guest = await f.prepared();
+    const before = f.authority.durableState().policies[0][1];
+    f.advance(3000);
+    await assert.rejects(operation === "context" ? f.authority.resolveContext(req(), { sessionId: f.session.id })
+      : f.authority.join(req(), { proof: guest.proof, policyId: policy.policyId }), code(operation === "context" ? "context_unavailable" : "policy_expired"));
+    await assert.rejects(f.authority.hostPoll(req("host"), { policyId: policy.policyId }), code("policy_expired"));
+    const after = f.authority.durableState();
+    assert.equal(after.policies[0][1].state, "terminal");
+    assert.equal(after.policies[0][1].checkedAt, before.checkedAt);
+    assert.equal(after.policies[0][1].checkedDeadline, before.checkedDeadline);
+    assert.equal(after.grants.length, 0);
+  }
+});
+
+test("online Host freshness consumes monotonic time and old snapshots cannot invent a new anchor", async () => {
+  const f = await fixture(true), { policy } = await f.register();
+  f.advance(2000); f.wallOnly(-1000); f.monoOnly(1000);
+  await assert.rejects(f.authority.resolveContext(req(), { sessionId: f.session.id }), code("context_unavailable"));
+  await assert.rejects(f.authority.hostPoll(req("host"), { policyId: policy.policyId }), code("policy_expired"));
+  const g = await fixture(true), registered = await g.register(), stored = g.authority.durableState();
+  delete stored.policies[0][1].checkedDeadline;
+  const restored = await createSocialAdmissionAuthority(g.binding, g.dependencies, { keys: g.keys, online: true, state: stored });
+  await assert.rejects(restored.hostPoll(req("host"), { policyId: registered.policy.policyId }), code("policy_expired"));
+  assert.equal(restored.durableState().policies[0][1].state, "terminal");
+});
+
+test("online context, guest proof, fresh read and delayed Host poll cannot cross the Host window", async () => {
+  for (const operation of ["context", "proof", "fresh", "host"] as const) {
+    const f = await fixture(true), { policy } = await f.register(), guest = await f.prepared();
+    const target = f.readCount() + (operation === "fresh" ? 2 : 1);
+    f.onRead(async count => { if (count === target) f.advance(3000); });
+    const work = operation === "context" ? f.authority.resolveContext(req(), { sessionId: f.session.id })
+      : operation === "host" ? f.authority.hostPoll(req("host"), { policyId: policy.policyId })
+      : f.authority.join(req(), { proof: guest.proof, policyId: policy.policyId });
+    await assert.rejects(work, code(operation === "context" ? "context_unavailable" : "policy_expired"));
+    const stored = f.authority.durableState();
+    assert.equal(stored.policies[0][1].state, "terminal");
+    assert.equal(stored.policies[0][1].pendingGuests ?? 0, 0);
+    assert.equal(stored.policies[0][1].pendingIdentities?.length ?? 0, 0);
+    assert.equal(stored.grants.filter(([, grant]) => !grant.terminal).length, 0);
+  }
+});
+
+test("online context, grant and initial lease signing recheck Host freshness before publication", async () => {
+  for (const domain of ["social-join-context", "social-admission", "social-continuity"] as const) {
+    const f = await fixture(true), { policy } = await f.register(), guest = await f.prepared();
+    const original = crypto.subtle.sign;
+    let delayed = false;
+    crypto.subtle.sign = (async (algorithm, key, data) => {
+      const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      if (new TextDecoder().decode(bytes).startsWith(`aurora/connect/${domain}/v1\0`)) { delayed = true; f.advance(3000); }
+      return original.call(crypto.subtle, algorithm, key, data);
+    }) as typeof crypto.subtle.sign;
+    try {
+      await assert.rejects(domain === "social-join-context" ? f.authority.resolveContext(req(), { sessionId: f.session.id })
+        : f.authority.join(req(), { proof: guest.proof, policyId: policy.policyId }), code(domain === "social-join-context" ? "context_unavailable" : "policy_expired"));
+      assert.equal(delayed, true);
+      assert.equal(f.authority.durableState().grants.filter(([, grant]) => !grant.terminal).length, 0);
+    } finally { crypto.subtle.sign = original; }
+  }
+});
+
 test("concurrent online proofs from one account reserve its identity before the fresh read", async () => {
   const f = await fixture(true), { policy } = await f.register();
   const first = await f.prepared("same_guest"), second = await f.prepared("same_guest");

@@ -4,6 +4,7 @@ export { ConnectRelaySession };
 import { createSocialBindingAuthority, SocialBindingError, type SocialBindingState } from "./connectSocialBinding.ts";
 import { createSocialAdmissionAuthority, type SocialAdmissionState } from "./connectSocialAdmission.ts";
 import { createSocialFirebaseDependencies, socialAuthenticate, socialBearer, socialJson, SOCIAL_UUID } from "./connectSocialFirebase.ts";
+import { projectSocialPresence } from "./connectSocialPresence.ts";
 
 interface Env {
   FIREBASE_PROJECT_ID: string;
@@ -11,9 +12,18 @@ interface Env {
   SOCIAL_ACCOUNTS: DurableObjectNamespace<SocialAccountBudget>;
   RELAY_SESSIONS: DurableObjectNamespace<ConnectRelaySession>;
 }
-const paths = new Set(["bootstrap", "identity", "key/challenge", "key/proof", "context", "host/register", "join", "continuity", "host/poll", "host/publish", "host/revoke", "guest/receive", "host/stop", "guest/stop", "relay/ticket"]);
+const paths = new Set(["bootstrap", "presence", "identity", "key/challenge", "key/proof", "context", "host/register", "join", "continuity", "host/poll", "host/publish", "host/revoke", "guest/receive", "host/stop", "guest/stop", "relay/ticket"]);
 const fail = (code: string): never => { throw new SocialBindingError(code); };
 const reply = (data: unknown, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
+function clockRequest(body: unknown): { operationId: string; generation: number; nonce: string } | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return fail("invalid_request");
+  const value = body as Record<string, unknown>;
+  if (Object.keys(value).length === 0) return undefined;
+  if (Object.keys(value).length !== 3 || typeof value.operationId !== "string" || !SOCIAL_UUID.test(value.operationId)
+    || typeof value.generation !== "number" || !Number.isSafeInteger(value.generation) || value.generation < 1
+    || typeof value.nonce !== "string" || !/^[0-9a-f]{32}$/.test(value.nonce)) return fail("invalid_request");
+  return value as { operationId: string; generation: number; nonce: string };
+}
 type Live = { stored: Stored; binding: ReturnType<typeof createSocialBindingAuthority>; admission: Awaited<ReturnType<typeof createSocialAdmissionAuthority>>; keys: CryptoKeyPair; clock: { wall(): number; monotonic(): number }; active: number; failed: boolean };
 type Stored = { sessionId: string; until: number; busy: boolean; clock: { wall: number; monotonic: number }; privateJwk: JsonWebKey; publicJwk: JsonWebKey; binding: SocialBindingState; admission: SocialAdmissionState };
 
@@ -29,7 +39,28 @@ export class SocialAccountBudget extends DurableObject<Env> {
       await txn.put("budget", value); await txn.setAlarm(value.until); return true;
     });
   }
-  async alarm() { await this.ctx.storage.deleteAll(); }
+  async admitObservation(sessionId: string): Promise<boolean> {
+    const now = Date.now();
+    return this.ctx.storage.transaction(async txn => {
+      const prior = await txn.get<{ until: number; count: number; sessions: string[] }>("observations");
+      const value = prior && prior.until > now ? prior : { until: now + 60_000, count: 0, sessions: [] };
+      if (value.count >= 240 || (!value.sessions.includes(sessionId) && value.sessions.length >= 32)) return false;
+      value.count++; if (!value.sessions.includes(sessionId)) value.sessions.push(sessionId);
+      await txn.put("observations", value); await txn.setAlarm(value.until); return true;
+    });
+  }
+  async alarm() {
+    const now = Date.now();
+    await this.ctx.storage.transaction(async txn => {
+      const remaining: number[] = [];
+      for (const name of ["budget", "observations"]) {
+        const value = await txn.get<{ until: number }>(name);
+        if (value && value.until > now) remaining.push(value.until);
+        else await txn.delete(name);
+      }
+      if (remaining.length) await txn.setAlarm(Math.min(...remaining));
+    });
+  }
 }
 
 /** One session is a coordination atom. No token/request is written to durable storage. */
@@ -86,7 +117,19 @@ export class SocialSessionAuthority extends DurableObject<Env> {
     catch { live.failed = true; fail("backend_unavailable"); }
   }
   async dispatch(uid: string, token: string, sessionId: string, path: string, body: unknown): Promise<unknown> {
+    const receivedWall = Date.now();
     const request = new Request(`https://social.internal/v1/social/${path}`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "x-aurora-verified-account": uid }, signal: AbortSignal.timeout(5000) });
+    if (path === "presence") {
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length) fail("invalid_request");
+      // Firestore's real caller rules still decide whether this advert is visible.
+      // Approval to join is a separate capability and is never granted here.
+      const session = await createSocialFirebaseDependencies(this.env.FIREBASE_PROJECT_ID, uid, sessionId, true)
+        .readSession({ accountId: uid, request }, sessionId, request.signal);
+      const stored = await this.ctx.storage.get<Stored>("authority"), now = Date.now();
+      const usable = session.expiresAtMs > now && !!stored && stored.sessionId === sessionId && stored.until > now
+        && stored.clock.wall <= now && !this.live?.failed && (!stored.busy || !!this.live?.active);
+      return { accountId: uid, ...projectSocialPresence(sessionId, stored?.admission, now, usable) };
+    }
     const live = await this.load(sessionId, request, path === "bootstrap");
     if (live.active >= 16) fail("authority_busy");
     live.active++;
@@ -104,8 +147,24 @@ export class SocialSessionAuthority extends DurableObject<Env> {
             const signature = await crypto.subtle.sign("Ed25519", keys.privateKey, new TextEncoder().encode("aurora/connect/relay-ticket/v1\0" + JSON.stringify(ticket)));
             return { body: ticket, signature: [...new Uint8Array(signature)].map(byte => byte.toString(16).padStart(2, "0")).join("") };
           }
-          case "bootstrap": return { schemaVersion: 1, sessionId, accountId: uid, issuerInstance: binding.issuerInstance,
-            admissionPublicKey: admission.admissionPublicKey, joinPolicy: session!.joinPolicy, maxPlayers: session!.maxPlayers, expiresAtUnixMs: stored.until };
+          case "bootstrap": {
+            const requested = clockRequest(body);
+            const result = { schemaVersion: 1, sessionId, accountId: uid, issuerInstance: binding.issuerInstance,
+              admissionPublicKey: admission.admissionPublicKey, joinPolicy: session!.joinPolicy, maxPlayers: session!.maxPlayers, expiresAtUnixMs: stored.until };
+            if (!requested) return result;
+            const serverNow = Date.now();
+            // Workers' performance.now is also based on the last I/O time, so
+            // it cannot independently attest elapsed time. The native caller
+            // bounds this signed interval by its original monotonic HTTP RTT.
+            if (serverNow < receivedWall) fail("backend_unavailable");
+            const clockBody = { schemaVersion: 1, issuerInstance: binding.issuerInstance, accountId: uid, sessionId,
+              operationId: requested.operationId, generation: requested.generation, nonce: requested.nonce,
+              serverReceivedAtUnixMs: receivedWall, serverNowUnixMs: serverNow, sessionExpiresAtUnixMs: stored.until };
+            if (clockBody.serverNowUnixMs >= stored.until) fail("session_not_authorized");
+            const signed = await crypto.subtle.sign("Ed25519", keys.privateKey,
+              new TextEncoder().encode("aurora/connect/social-clock/v1\0" + JSON.stringify(clockBody)));
+            return { ...result, clock: { body: clockBody, signature: [...new Uint8Array(signed)].map(byte => byte.toString(16).padStart(2, "0")).join("") } };
+          }
           case "identity": return await admission.identity(request, body);
           case "key/challenge": return await binding.challenge(request, body);
           case "key/proof": return await binding.prove(request, body);
@@ -176,9 +235,10 @@ export default {
         || !url.pathname.startsWith("/v1/social/") || !paths.has(path) || !SOCIAL_UUID.test(sessionId)
         || request.headers.get("content-type") !== "application/json" || request.headers.has("content-encoding")) fail("invalid_request");
       const body = await socialJson(new Response(request.body), 8192);
-      if (path === "bootstrap" && Object.keys(body).length !== 0) fail("invalid_request");
+      if (path === "bootstrap") clockRequest(body);
       const uid = await socialAuthenticate(request, env.FIREBASE_PROJECT_ID, AbortSignal.timeout(5000));
-      if (!await env.SOCIAL_ACCOUNTS.getByName(uid).admit(sessionId)) fail("rate_limited");
+      const budget = env.SOCIAL_ACCOUNTS.getByName(uid);
+      if (!await (path === "presence" ? budget.admitObservation(sessionId) : budget.admit(sessionId))) fail("rate_limited");
       const result = await env.SOCIAL_SESSIONS.getByName(sessionId).dispatchHttp(uid, socialBearer(request), sessionId, path, body);
       if (!result.ok) fail(result.code);
       return reply(result.value);

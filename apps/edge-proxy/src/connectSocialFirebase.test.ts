@@ -51,7 +51,10 @@ test("authorized Firestore projection uses only caller token and exact paths; ap
   const dependencies = createSocialFirebaseDependencies("auroralauncher", "guest", sessionId), principal = { accountId: "guest", request: request(bearer) };
   assert.equal((await dependencies.readSession(principal, sessionId, AbortSignal.timeout(1000))).joinPolicy, "approval");
   accepted = false; await assert.rejects(dependencies.readSession(principal, sessionId, AbortSignal.timeout(1000)), denied("session_not_authorized"));
+  const advertisement = createSocialFirebaseDependencies("auroralauncher", "guest", sessionId, true);
+  assert.equal((await advertisement.readSession(principal, sessionId, AbortSignal.timeout(1000))).joinPolicy, "approval", "visible advertisement observation is separate from admission");
   accepted = true; blocked = true; await assert.rejects(dependencies.readSession(principal, sessionId, AbortSignal.timeout(1000)), denied("session_not_authorized"));
+  await assert.rejects(advertisement.readSession(principal, sessionId, AbortSignal.timeout(1000)), denied("session_not_authorized"), "visibility/block rules still apply to observations");
   await assert.rejects(dependencies.readSession({ ...principal, accountId: "host" }, sessionId, AbortSignal.timeout(1000)), denied("session_not_authorized"));
 });
 test("body reader applies streaming limit before JSON parsing", async () => {
