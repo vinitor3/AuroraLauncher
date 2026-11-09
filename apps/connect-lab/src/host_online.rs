@@ -92,21 +92,7 @@ impl Host {
         ticket: &OnlineNetworkTicket,
     ) -> Result<Self> {
         invitation.check_host_online(&config)?;
-        ticket.check_host(&config)?;
-        if !crate::OnlineClock::same_scope(invitation.online_clock(), ticket.clock()) {
-            return Err(Error::Unauthorized);
-        }
-        let authority = OnlineAuthority {
-            first: invitation.clone(),
-            ticket: ticket.clone(),
-        };
-        authority.check_current()?;
-        Self::start_with_authorities(
-            config,
-            HostAuthorities::Online(Box::new(authority)),
-            transport::EndpointMode::Online(ticket.clone()),
-        )
-        .await
+        Self::start_online_authorized(config, invitation, ticket).await
     }
 
     pub async fn start_invited_online_fragmented(
@@ -115,6 +101,23 @@ impl Host {
         ticket: &OnlineNetworkTicket,
     ) -> Result<Self> {
         invitation.check_host_online_fragmented(&config)?;
+        Self::start_online_authorized(config, invitation, ticket).await
+    }
+
+    pub async fn start_invited_online_native_voice(
+        config: HostConfig,
+        invitation: &SessionInvitation,
+        ticket: &OnlineNetworkTicket,
+    ) -> Result<Self> {
+        invitation.check_host_online_native_voice(&config)?;
+        Self::start_online_authorized(config, invitation, ticket).await
+    }
+
+    async fn start_online_authorized(
+        config: HostConfig,
+        invitation: &SessionInvitation,
+        ticket: &OnlineNetworkTicket,
+    ) -> Result<Self> {
         ticket.check_host(&config)?;
         if !crate::OnlineClock::same_scope(invitation.online_clock(), ticket.clock()) {
             return Err(Error::Unauthorized);
@@ -134,15 +137,13 @@ impl Host {
 
     /// Native caller must have explicitly included this player in the reviewed
     /// roster. No address argument exists: only this Host's bound IPv4 socket
-    /// can supply the route, and the already-registered schema5 lease is retained.
+    /// can supply the route, and the already-registered online voice lease is retained.
     pub fn local_player_ticket(
         &self,
         invitation: &SessionInvitation,
         local_key: &SecretKey,
     ) -> Result<HostLocalPlayerTicket> {
-        invitation.check_profile(
-            crate::session_invitation::SessionInvitationProfile::OnlineFragmentedGameUdp,
-        )?;
+        invitation.check_online_local_player()?;
         let online = self.state.online.as_ref().ok_or(Error::Configuration)?;
         online.check_current()?;
         if invitation.host_key() != self.id() || invitation.guest_key() != local_key.public() {

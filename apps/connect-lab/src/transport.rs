@@ -1,4 +1,4 @@
-use crate::{ALPN, DATAGRAM_HEADER_LEN, Error, Limits, Result, model::Metrics};
+use crate::{ALPN, DATAGRAM_HEADER_LEN, Error, Limits, NativeVoiceBudget, Result, model::Metrics};
 use iroh::{
     Endpoint, NetReportConfig, RelayMode, SecretKey,
     endpoint::{
@@ -190,6 +190,22 @@ pub(crate) struct Bucket {
     rate: f64,
     burst: f64,
     at: Instant,
+    tcp_reserve: usize,
+    native_voice: Option<Box<VoicePressure>>,
+}
+
+#[derive(Default)]
+struct VoicePressure {
+    last_udp: Option<Instant>,
+    tcp_ready_at: Option<Instant>,
+    pressured: bool,
+}
+
+impl VoicePressure {
+    fn recent_udp(&self, now: Instant) -> bool {
+        self.last_udp
+            .is_some_and(|last| now.duration_since(last) < NativeVoiceBudget::UDP_PRESSURE_IDLE)
+    }
 }
 impl Bucket {
     pub fn new(rate: u32, burst: u32) -> Self {
@@ -198,10 +214,59 @@ impl Bucket {
             rate: rate as f64,
             burst: burst as f64,
             at: Instant::now(),
+            tcp_reserve: 0,
+            native_voice: None,
         }
     }
+    pub fn session(limits: &Limits, native_voice: bool) -> Budget {
+        let (burst, reserve) = if native_voice {
+            (
+                NativeVoiceBudget::AGGREGATE_BURST,
+                NativeVoiceBudget::TCP_RESERVE,
+            )
+        } else {
+            (64 * 1024, 16 * 1024)
+        };
+        let mut bucket = Self::new(limits.session_bytes_per_second, burst);
+        bucket.tcp_reserve = reserve;
+        bucket.native_voice = native_voice.then(|| Box::new(VoicePressure::default()));
+        Arc::new(Mutex::new(bucket))
+    }
     pub fn take(&mut self, count: usize) -> bool {
-        self.take_with_reserve(count, 0)
+        let allowed = self.take_with_reserve(count, 0);
+        if let Some(voice) = &mut self.native_voice {
+            let recent = voice.recent_udp(self.at);
+            // When a real UDP burst reaches the aggregate ceiling, stop TCP
+            // taking future burst credit until this UDP activity subsides.
+            voice.pressured = !allowed || (recent && voice.pressured);
+            voice.last_udp = Some(self.at);
+            if !recent {
+                voice.tcp_ready_at = None;
+            }
+        }
+        allowed
+    }
+    fn take_tcp(&mut self, count: usize) -> bool {
+        let now = Instant::now();
+        let pressured = self
+            .native_voice
+            .as_ref()
+            .filter(|voice| voice.pressured && voice.recent_udp(now));
+        if pressured.is_some_and(|voice| voice.tcp_ready_at.is_some_and(|ready| now < ready)) {
+            return false;
+        }
+        let pace = pressured.is_some();
+        let allowed = self.take_with_reserve(count, self.tcp_reserve);
+        if allowed
+            && pace
+            && let Some(voice) = &mut self.native_voice
+        {
+            let wait = Duration::from_secs_f64(
+                count as f64 / f64::from(NativeVoiceBudget::TCP_BYTES_PER_SECOND_UNDER_PRESSURE),
+            );
+            voice.tcp_ready_at = Some(self.at + wait);
+        }
+        allowed
     }
     // Observe already-accounted state without sampling time or refilling it.
     #[cfg(test)]
@@ -264,7 +329,7 @@ async fn pump<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                 // TCP waits instead of consuming the last datagram burst credit.
                 // Both protocols still charge the same aggregate bucket, so this
                 // reservation cannot exceed the configured session bandwidth.
-                if budget.lock().unwrap().take_with_reserve(size, 16 * 1024) {
+                if budget.lock().unwrap().take_tcp(size) {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(2)).await;

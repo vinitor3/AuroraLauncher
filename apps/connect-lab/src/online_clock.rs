@@ -24,6 +24,18 @@ pub struct OnlineClockBinding<'a> {
     pub nonce: &'a str,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum OnlineClockBootstrapError {
+    #[error("{0}")]
+    Rejected(Error),
+    #[error("expired_clock_session")]
+    Expired,
+    /// A valid signed response for a live session whose round trip leaves
+    /// too much unobserved time. No clock anchor is created.
+    #[error("uncertain_clock_sample")]
+    Uncertain { session_expiry: u64 },
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Body {
@@ -69,26 +81,45 @@ impl OnlineClock {
         sent: Instant,
         received: Instant,
     ) -> Result<Self> {
+        Self::verify_bootstrap_sample(encoded, pin, binding, sent, received).map_err(|error| {
+            match error {
+                OnlineClockBootstrapError::Rejected(error) => error,
+                OnlineClockBootstrapError::Expired
+                | OnlineClockBootstrapError::Uncertain { .. } => Error::Expired,
+            }
+        })
+    }
+
+    /// Only a fully authenticated sample can report retryable uncertainty.
+    pub fn verify_bootstrap_sample(
+        encoded: &str,
+        pin: EndpointId,
+        binding: OnlineClockBinding<'_>,
+        sent: Instant,
+        received: Instant,
+    ) -> std::result::Result<Self, OnlineClockBootstrapError> {
+        use OnlineClockBootstrapError::{Expired, Rejected, Uncertain};
         let now = Instant::now();
         let round_trip = received
             .checked_duration_since(sent)
             .filter(|duration| *duration <= Self::BOOTSTRAP_TIMEOUT)
-            .ok_or(Error::Expired)?;
+            .ok_or(Rejected(Error::Expired))?;
         if encoded.is_empty()
             || encoded.len() > 2048
             || !encoded.is_ascii()
             || received > now
             || now.saturating_duration_since(received) > MAX_UNCERTAINTY
         {
-            return Err(Error::Expired);
+            return Err(Rejected(Error::Expired));
         }
         let shape: serde_json::Value =
-            serde_json::from_str(encoded).map_err(|_| Error::Protocol)?;
+            serde_json::from_str(encoded).map_err(|_| Rejected(Error::Protocol))?;
         if !shape.is_object() || !shape["body"].is_object() {
-            return Err(Error::Protocol);
+            return Err(Rejected(Error::Protocol));
         }
         // Decode the original text again so duplicate struct fields still fail.
-        let envelope: Envelope = serde_json::from_str(encoded).map_err(|_| Error::Protocol)?;
+        let envelope: Envelope =
+            serde_json::from_str(encoded).map_err(|_| Rejected(Error::Protocol))?;
         let body = envelope.body;
         if body.schema_version != 1
             || !lower_hex(&body.issuer_instance, 64)
@@ -112,34 +143,42 @@ impl OnlineClock {
             || body.server_received_at_unix_ms == 0
             || body.session_expires_at_unix_ms > MAX_SAFE_INTEGER
         {
-            return Err(Error::Unauthorized);
+            return Err(Rejected(Error::Unauthorized));
         }
-        body.session_expires_at_unix_ms
-            .checked_sub(body.server_now_unix_ms)
-            .filter(|lifetime| (1..=MAX_SESSION_MS).contains(lifetime))
-            .ok_or(Error::Expired)?;
+        let signature = signature(&envelope.signature).map_err(Rejected)?;
+        let mut material = DOMAIN.to_vec();
+        material.extend(serde_json::to_vec(&body).map_err(|_| Rejected(Error::Protocol))?);
+        pin.verify(&material, &signature)
+            .map_err(|_| Rejected(Error::Unauthorized))?;
+        if body.session_expires_at_unix_ms <= body.server_now_unix_ms {
+            return Err(Expired);
+        }
+        if body.session_expires_at_unix_ms - body.server_now_unix_ms > MAX_SESSION_MS {
+            return Err(Rejected(Error::Expired));
+        }
         let server_elapsed = body
             .server_now_unix_ms
             .checked_sub(body.server_received_at_unix_ms)
             .map(Duration::from_millis)
             .filter(|elapsed| *elapsed <= round_trip)
-            .ok_or(Error::Expired)?;
-        // The server's signed samples bracket its work in one authority. The
-        // unobserved remainder includes both network directions and rounding.
-        let processing_credit = server_elapsed.saturating_sub(SAMPLE_RESOLUTION);
-        if round_trip - processing_credit > MAX_UNCERTAINTY {
-            return Err(Error::Expired);
-        }
-        let signature = signature(&envelope.signature)?;
-        let mut material = DOMAIN.to_vec();
-        material.extend(serde_json::to_vec(&body).map_err(|_| Error::Protocol)?);
-        pin.verify(&material, &signature)
-            .map_err(|_| Error::Unauthorized)?;
+            .ok_or(Rejected(Error::Expired))?;
         let deadline = project_deadline(
             sent,
             body.server_received_at_unix_ms,
             body.session_expires_at_unix_ms,
-        )?;
+        )
+        .map_err(|_| Expired)?;
+        if Instant::now() >= deadline {
+            return Err(Expired);
+        }
+        // The server's signed samples bracket its work in one authority. The
+        // unobserved remainder includes both network directions and rounding.
+        let processing_credit = server_elapsed.saturating_sub(SAMPLE_RESOLUTION);
+        if round_trip - processing_credit > MAX_UNCERTAINTY {
+            return Err(Uncertain {
+                session_expiry: body.session_expires_at_unix_ms,
+            });
+        }
         let clock = Self(Arc::new(Anchor {
             body,
             pin,
@@ -147,7 +186,7 @@ impl OnlineClock {
             received,
             deadline,
         }));
-        clock.check_current()?;
+        clock.check_current().map_err(|_| Expired)?;
         Ok(clock)
     }
 
@@ -451,6 +490,52 @@ pub(crate) mod tests {
         assert!(verify(2_725, 2_724).is_err());
         assert!(verify(-1, 100).is_err());
         assert!(verify(5_000, 6_001).is_err());
+    }
+
+    #[test]
+    fn bootstrap_retry_requires_signed_uncertainty_and_unexpired_authority() {
+        use OnlineClockBootstrapError::{Expired, Rejected, Uncertain};
+        let authority = generate_key();
+        let received = Instant::now();
+        let sent = received - Duration::from_millis(2_100);
+        let server_now = crate::unix_millis();
+        let session_expiry = server_now + 20_000;
+        let verify = |proof: &str| {
+            OnlineClock::verify_bootstrap_sample(
+                proof,
+                authority.public(),
+                binding(),
+                sent,
+                received,
+            )
+            .err()
+        };
+        let proof = signed(&authority, server_now, session_expiry);
+        assert_eq!(verify(&proof), Some(Uncertain { session_expiry }));
+        let mut damaged: serde_json::Value = serde_json::from_str(&proof).unwrap();
+        damaged["signature"] = json!("00".repeat(64));
+        assert_eq!(
+            verify(&damaged.to_string()),
+            Some(Rejected(Error::Unauthorized))
+        );
+        assert_eq!(
+            verify(&signed(&authority, server_now, server_now - 1)),
+            Some(Expired)
+        );
+        assert_eq!(
+            verify(&signed(&authority, server_now, server_now + 1_000)),
+            Some(Expired)
+        );
+        assert_eq!(
+            verify(&signed_for(
+                &authority,
+                &binding(),
+                server_now + 1,
+                server_now,
+                session_expiry
+            )),
+            Some(Rejected(Error::Expired)),
+        );
     }
 
     #[test]

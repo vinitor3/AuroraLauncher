@@ -2,9 +2,10 @@
 //! Admission and the admitted session have independent absolute deadlines.
 //! Host owns admission, consumption and revocation; this value never renews.
 use crate::{
-    Capability, EndpointId, Error, HostConfig, Lease, OnlineClock, Protocol, Result, SecretKey,
-    Service, UdpReturnPolicy, generate_key, invitation::InvitationAddressMode as AddressMode,
-    model::valid_id, unix_millis, wire::InvitationProof,
+    Capability, EndpointId, Error, HostConfig, Lease, NativeVoiceBudget, OnlineClock, Protocol,
+    Result, SecretKey, Service, UdpReturnPolicy, generate_key,
+    invitation::InvitationAddressMode as AddressMode, model::valid_id, unix_millis,
+    wire::InvitationProof,
 };
 use iroh::Signature;
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,7 @@ pub const MAX_ADMISSION_LIFETIME: Duration = Duration::from_secs(600);
 pub const MAX_SESSION_LIFETIME: Duration = Duration::from_secs(3600);
 const DOMAIN: &[u8] = b"aurora/connect-lab/session-invitation/v2\0";
 const ONLINE_FRAGMENTED_DOMAIN: &[u8] = b"aurora/connect/session-invitation/v5\0";
+const ONLINE_NATIVE_VOICE_DOMAIN: &[u8] = b"aurora/connect/session-invitation/v6\0";
 const ONLINE_DOMAIN: &[u8] = b"aurora/connect/session-invitation/v4\0";
 const FRAGMENTED_DOMAIN: &[u8] = b"aurora/connect-lab/session-invitation/v3\0";
 
@@ -29,16 +31,20 @@ pub(crate) enum SessionInvitationProfile {
     GameTcp,
     OnlineGameTcp,
     OnlineFragmentedGameUdp,
+    OnlineNativeVoice8,
     FragmentedGameUdp,
 }
 impl SessionInvitationProfile {
     fn online(self) -> bool {
-        matches!(self, Self::OnlineGameTcp | Self::OnlineFragmentedGameUdp)
+        matches!(
+            self,
+            Self::OnlineGameTcp | Self::OnlineFragmentedGameUdp | Self::OnlineNativeVoice8
+        )
     }
     fn fragmented(self) -> bool {
         matches!(
             self,
-            Self::FragmentedGameUdp | Self::OnlineFragmentedGameUdp
+            Self::FragmentedGameUdp | Self::OnlineFragmentedGameUdp | Self::OnlineNativeVoice8
         )
     }
     fn schema(self) -> u8 {
@@ -46,23 +52,32 @@ impl SessionInvitationProfile {
             Self::GameTcp => 2,
             Self::OnlineGameTcp => 4,
             Self::OnlineFragmentedGameUdp => 5,
+            Self::OnlineNativeVoice8 => 6,
             Self::FragmentedGameUdp => 3,
         }
     }
     fn grants(self) -> Vec<Grant> {
         match self {
             Self::GameTcp | Self::OnlineGameTcp => vec![Grant::game()],
-            Self::FragmentedGameUdp | Self::OnlineFragmentedGameUdp => {
-                vec![Grant::game(), Grant::fragmented_aux()]
+            Self::FragmentedGameUdp | Self::OnlineFragmentedGameUdp | Self::OnlineNativeVoice8 => {
+                vec![Grant::game(), self.aux_grant()]
             }
         }
+    }
+    fn aux_grant(self) -> Grant {
+        let mut grant = Grant::fragmented_aux();
+        if self == Self::OnlineNativeVoice8 {
+            grant.max_datagram_bytes = Some(NativeVoiceBudget::MAX_DATAGRAM_BYTES);
+            grant.udp_return_policy = Some(NativeVoiceBudget::RETURN_POLICY.into());
+        }
+        grant
     }
     fn validate_grants(self, grants: &[Grant]) -> Result<()> {
         if grants.len() != self.grants().len() {
             return Err(Error::Configuration);
         }
         grants[0].validate()?;
-        if self.fragmented() && !grants[1].matches(&Grant::fragmented_aux()) {
+        if self.fragmented() && !grants[1].matches(&self.aux_grant()) {
             return Err(Error::Configuration);
         }
         Ok(())
@@ -213,7 +228,8 @@ fn validate_profile_services(
             validate_local_services(services)
         }
         SessionInvitationProfile::FragmentedGameUdp
-        | SessionInvitationProfile::OnlineFragmentedGameUdp => {
+        | SessionInvitationProfile::OnlineFragmentedGameUdp
+        | SessionInvitationProfile::OnlineNativeVoice8 => {
             if services.len() != 2 || services[0].max_datagram_bytes != 1400 {
                 return Err(Error::Configuration);
             }
@@ -228,7 +244,7 @@ fn validate_profile_services(
                 max_datagram_bytes: Some(aux.max_datagram_bytes),
                 udp_return_policy: Some(aux.udp_return_policy.into()),
             };
-            if !grant.matches(&Grant::fragmented_aux()) {
+            if !grant.matches(&profile.aux_grant()) {
                 return Err(Error::Configuration);
             }
             Ok(())
@@ -298,7 +314,32 @@ impl SessionInvitation {
         fragmented: bool,
         clock: &OnlineClock,
     ) -> Result<Self> {
-        if !clock.session_matches(session_id) {
+        let profile = if fragmented {
+            SessionInvitationProfile::OnlineFragmentedGameUdp
+        } else {
+            SessionInvitationProfile::OnlineGameTcp
+        };
+        Self::issue_online_in_profile(
+            host,
+            guest,
+            session_id,
+            services,
+            deadlines,
+            profile,
+            Some(clock),
+        )
+    }
+
+    fn issue_online_in_profile(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        services: &[Service],
+        deadlines: SessionDeadlines,
+        profile: SessionInvitationProfile,
+        clock: Option<&OnlineClock>,
+    ) -> Result<Self> {
+        if clock.is_some_and(|clock| !clock.session_matches(session_id)) {
             return Err(Error::Unauthorized);
         }
         Self::issue_using_clock(
@@ -310,13 +351,9 @@ impl SessionInvitation {
             IssueOptions {
                 timing: IssueTiming::Absolute(deadlines),
                 mode: AddressMode::Loopback,
-                profile: if fragmented {
-                    SessionInvitationProfile::OnlineFragmentedGameUdp
-                } else {
-                    SessionInvitationProfile::OnlineGameTcp
-                },
+                profile,
             },
-            Some(clock),
+            clock,
         )
     }
 
@@ -327,22 +364,36 @@ impl SessionInvitation {
         fragmented: bool,
         clock: &OnlineClock,
     ) -> Result<Self> {
-        let (monotonic, unix_ms) = OnlineClock::observe(Some(clock));
-        Self::verify_in_profile(
+        let profile = if fragmented {
+            SessionInvitationProfile::OnlineFragmentedGameUdp
+        } else {
+            SessionInvitationProfile::OnlineGameTcp
+        };
+        Self::verify_online_in_profile(encoded, expected_host, guest, profile, Some(clock))
+    }
+
+    fn verify_online_in_profile(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+        profile: SessionInvitationProfile,
+        clock: Option<&OnlineClock>,
+    ) -> Result<Self> {
+        let (monotonic, unix_ms) = OnlineClock::observe(clock);
+        let invitation = Self::verify_in_profile(
             encoded,
             expected_host,
             guest,
             VerificationOptions {
                 clock: Clock { monotonic, unix_ms },
                 mode: AddressMode::Loopback,
-                profile: if fragmented {
-                    SessionInvitationProfile::OnlineFragmentedGameUdp
-                } else {
-                    SessionInvitationProfile::OnlineGameTcp
-                },
+                profile,
             },
-        )?
-        .bind_clock(clock)
+        )?;
+        match clock {
+            Some(clock) => invitation.bind_clock(clock),
+            None => Ok(invitation),
+        }
     }
 
     fn bind_clock(mut self, clock: &OnlineClock) -> Result<Self> {
@@ -459,6 +510,95 @@ impl SessionInvitation {
                 profile: SessionInvitationProfile::OnlineFragmentedGameUdp,
             },
         )
+    }
+    pub fn issue_online_native_voice(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        services: &[Service],
+        deadlines: SessionDeadlines,
+    ) -> Result<Self> {
+        Self::issue_online_in_profile(
+            host,
+            guest,
+            session_id,
+            services,
+            deadlines,
+            SessionInvitationProfile::OnlineNativeVoice8,
+            None,
+        )
+    }
+
+    pub fn issue_online_native_voice_with_clock(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        services: &[Service],
+        deadlines: SessionDeadlines,
+        clock: &OnlineClock,
+    ) -> Result<Self> {
+        Self::issue_online_in_profile(
+            host,
+            guest,
+            session_id,
+            services,
+            deadlines,
+            SessionInvitationProfile::OnlineNativeVoice8,
+            Some(clock),
+        )
+    }
+
+    pub fn verify_online_native_voice(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+    ) -> Result<Self> {
+        Self::verify_online_in_profile(
+            encoded,
+            expected_host,
+            guest,
+            SessionInvitationProfile::OnlineNativeVoice8,
+            None,
+        )
+    }
+
+    pub fn verify_online_native_voice_with_clock(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+        clock: &OnlineClock,
+    ) -> Result<Self> {
+        Self::verify_online_in_profile(
+            encoded,
+            expected_host,
+            guest,
+            SessionInvitationProfile::OnlineNativeVoice8,
+            Some(clock),
+        )
+    }
+
+    pub fn is_online_native_voice(&self) -> bool {
+        self.profile == SessionInvitationProfile::OnlineNativeVoice8
+    }
+
+    pub(crate) fn check_host_online_native_voice(&self, config: &HostConfig) -> Result<()> {
+        NativeVoiceBudget::check_limits(&config.limits)?;
+        self.check_host_profile_at(
+            config,
+            VerificationOptions {
+                clock: self.current_clock(),
+                mode: AddressMode::Loopback,
+                profile: SessionInvitationProfile::OnlineNativeVoice8,
+            },
+        )
+    }
+
+    pub(crate) fn check_online_local_player(&self) -> Result<()> {
+        match self.profile {
+            SessionInvitationProfile::OnlineFragmentedGameUdp
+            | SessionInvitationProfile::OnlineNativeVoice8 => self.check_profile(self.profile),
+            _ => Err(Error::Configuration),
+        }
     }
     pub(crate) fn check_same_online_profile(&self, other: &Self) -> Result<()> {
         if !other.profile.online()
@@ -1089,7 +1229,8 @@ impl SessionInvitation {
                 vec![Capability::ReliableStream]
             }
             SessionInvitationProfile::FragmentedGameUdp
-            | SessionInvitationProfile::OnlineFragmentedGameUdp => {
+            | SessionInvitationProfile::OnlineFragmentedGameUdp
+            | SessionInvitationProfile::OnlineNativeVoice8 => {
                 vec![Capability::ReliableStream, Capability::FragmentedDatagram]
             }
         }
@@ -1201,6 +1342,7 @@ impl SessionInvitation {
             SessionInvitationProfile::GameTcp => "sessionGameTcp",
             SessionInvitationProfile::OnlineGameTcp => "onlineGameTcp",
             SessionInvitationProfile::OnlineFragmentedGameUdp => "onlineFragmentedGameUdp",
+            SessionInvitationProfile::OnlineNativeVoice8 => "onlineNativeVoice8",
             SessionInvitationProfile::FragmentedGameUdp => "sessionFragmentedGameUdp",
         };
         let mut preview = json!({"schemaVersion":self.profile.schema(),"experimental":true,"profile":profile,
@@ -1289,7 +1431,9 @@ fn validate_body(
 fn signed_bytes(body: &Body) -> Result<Vec<u8>> {
     let encoded = serde_json::to_vec(body).map_err(|_| Error::Protocol)?;
     // Every public issue/verify path first checks its explicitly selected schema.
-    let domain = if body.schema_version == 5 {
+    let domain = if body.schema_version == 6 {
+        ONLINE_NATIVE_VOICE_DOMAIN
+    } else if body.schema_version == 5 {
         ONLINE_FRAGMENTED_DOMAIN
     } else if body.schema_version == 4 {
         ONLINE_DOMAIN

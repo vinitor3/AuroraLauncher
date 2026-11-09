@@ -49,7 +49,7 @@ fn voice_fields(
     digest: &Option<String>,
     host_player: Option<bool>,
 ) -> bool {
-    if matches!(schema, 3 | 4) {
+    if matches!(schema, 3..=5) {
         matches!(profile.as_deref(), Some("svc" | "plasmo"))
             && digest.as_deref().is_some_and(is_hex)
             && host_player.is_some()
@@ -58,7 +58,7 @@ fn voice_fields(
     }
 }
 fn runtime_fields(schema: u8, profile: Option<&str>, voice: Option<&str>) -> bool {
-    if schema != 4 {
+    if !matches!(schema, 4 | 5) {
         return profile.is_none();
     }
     matches!(
@@ -75,6 +75,13 @@ fn runtime_fields(schema: u8, profile: Option<&str>, voice: Option<&str>) -> boo
                 | "1.12.2-forge-14.23.5.2860"
         )
     ) && !(profile == Some("1.12.2-forge-14.23.5.2860") && voice == Some("plasmo"))
+}
+fn voice_transport_fields(schema: u8, profile: Option<&str>) -> bool {
+    if schema == 5 {
+        profile == Some("nativeVoice8V1")
+    } else {
+        profile.is_none()
+    }
 }
 fn non_null_bool<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -242,6 +249,12 @@ pub struct SocialHostPolicy {
         deserialize_with = "non_null_string"
     )]
     runtime_profile: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null_string"
+    )]
+    voice_transport_profile: Option<String>,
 }
 impl SocialHostPolicy {
     pub fn review(
@@ -293,6 +306,7 @@ impl SocialHostPolicy {
             voice_source_digest: None,
             host_player: None,
             runtime_profile: None,
+            voice_transport_profile: None,
         };
         value.validate()?;
         Ok(value)
@@ -404,11 +418,23 @@ impl SocialHostPolicy {
         self.validate()?;
         Ok(self)
     }
+    /// Approve the bounded native voice transport explicitly in a new schema.
+    /// The runtime and source binding must already belong to the original review.
+    pub fn with_native_voice_transport(mut self) -> Result<Self> {
+        if self.schema_version != 4 {
+            return Err(SocialAdmissionError::Context);
+        }
+        self.schema_version = 5;
+        self.voice_transport_profile = Some("nativeVoice8V1".into());
+        self.validate()?;
+        Ok(self)
+    }
     pub fn max_guests(&self) -> u8 {
         self.max_guests
     }
     fn validate(&self) -> Result<()> {
-        if !matches!(self.schema_version, 1..=4)
+        if !matches!(self.schema_version, 1..=5)
+            || !voice_transport_fields(self.schema_version, self.voice_transport_profile.as_deref())
             || !runtime_fields(
                 self.schema_version,
                 self.runtime_profile.as_deref(),
@@ -474,7 +500,7 @@ impl SocialHostPolicy {
             self.issued_at_unix_ms.to_string(),
             self.expires_at_unix_ms.to_string(),
         ];
-        if matches!(self.schema_version, 3 | 4) {
+        if matches!(self.schema_version, 3..=5) {
             fields.push(self.voice_profile.clone().expect("validated voice profile"));
             fields.push(
                 self.voice_source_digest
@@ -483,11 +509,18 @@ impl SocialHostPolicy {
             );
             fields.push(self.host_player.expect("validated host player").to_string());
         }
-        if self.schema_version == 4 {
+        if matches!(self.schema_version, 4 | 5) {
             fields.push(
                 self.runtime_profile
                     .clone()
                     .expect("validated runtime profile"),
+            );
+        }
+        if self.schema_version == 5 {
+            fields.push(
+                self.voice_transport_profile
+                    .clone()
+                    .expect("validated voice transport"),
             );
         }
         preimage(POLICY_DOMAIN, &fields)
@@ -556,6 +589,9 @@ impl SocialHostPolicy {
     }
     pub fn runtime_profile(&self) -> Option<&str> {
         self.runtime_profile.as_deref()
+    }
+    pub fn voice_transport_profile(&self) -> Option<&str> {
+        self.voice_transport_profile.as_deref()
     }
     pub fn matches_host(
         &self,
@@ -861,10 +897,17 @@ struct GrantBody {
         deserialize_with = "non_null_string"
     )]
     runtime_profile: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null_string"
+    )]
+    voice_transport_profile: Option<String>,
 }
 impl GrantBody {
     fn validate(&self) -> Result<()> {
-        if !matches!(self.schema_version, 1..=4)
+        if !matches!(self.schema_version, 1..=5)
+            || !voice_transport_fields(self.schema_version, self.voice_transport_profile.as_deref())
             || !runtime_fields(
                 self.schema_version,
                 self.runtime_profile.as_deref(),
@@ -897,7 +940,12 @@ impl GrantBody {
             || !integer(self.admission_expires_at_unix_ms)
             || !integer(self.session_expires_at_unix_ms)
             || self.admission_expires_at_unix_ms <= self.issued_at_unix_ms
-            || self.admission_expires_at_unix_ms - self.issued_at_unix_ms > 10_000
+            || self.admission_expires_at_unix_ms - self.issued_at_unix_ms
+                > if self.schema_version == 5 {
+                    60_000
+                } else {
+                    10_000
+                }
             || self.session_expires_at_unix_ms < self.admission_expires_at_unix_ms
             || self.session_expires_at_unix_ms - self.issued_at_unix_ms
                 > if self.schema_version != 1 {
@@ -932,7 +980,7 @@ impl GrantBody {
             self.admission_expires_at_unix_ms.to_string(),
             self.session_expires_at_unix_ms.to_string(),
         ];
-        if matches!(self.schema_version, 3 | 4) {
+        if matches!(self.schema_version, 3..=5) {
             fields.push(self.voice_profile.clone().expect("validated voice profile"));
             fields.push(
                 self.voice_source_digest
@@ -941,11 +989,18 @@ impl GrantBody {
             );
             fields.push(self.host_player.expect("validated host player").to_string());
         }
-        if self.schema_version == 4 {
+        if matches!(self.schema_version, 4 | 5) {
             fields.push(
                 self.runtime_profile
                     .clone()
                     .expect("validated runtime profile"),
+            );
+        }
+        if self.schema_version == 5 {
+            fields.push(
+                self.voice_transport_profile
+                    .clone()
+                    .expect("validated voice transport"),
             );
         }
         preimage(GRANT_DOMAIN, &fields)
@@ -1094,6 +1149,7 @@ impl VerifiedSocialGrant {
             || b.voice_source_digest != p.voice_source_digest
             || b.host_player != p.host_player
             || b.runtime_profile != p.runtime_profile
+            || b.voice_transport_profile != p.voice_transport_profile
             || b.policy_id != p.policy_id
             || b.policy_digest != p.digest()
             || b.host_account_id != p.account_id
@@ -1191,6 +1247,9 @@ impl VerifiedSocialGrant {
     }
     pub fn runtime_profile(&self) -> Option<&str> {
         self.body.runtime_profile.as_deref()
+    }
+    pub fn voice_transport_profile(&self) -> Option<&str> {
+        self.body.voice_transport_profile.as_deref()
     }
     pub fn session_deadline(&self) -> Instant {
         self.session_deadline
@@ -1354,7 +1413,7 @@ impl SocialContinuity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
     struct Fixture {
         authority: SecretKey,
         host: SecretKey,
@@ -1419,6 +1478,7 @@ mod tests {
                 voice_source_digest: None,
                 host_player: None,
                 runtime_profile: None,
+                voice_transport_profile: None,
             };
             let expected = SocialGuestExpectation {
                 host_account_id: hc.account_id().into(),
@@ -1552,16 +1612,14 @@ mod tests {
             f.cap,
         )
         .unwrap();
-        assert!(
-            VerifiedSocialGrant::for_guest(
-                &encoded,
-                f.authority.public(),
-                &f.gc,
-                &f.context(&f.expected),
-                f.cap
-            )
-            .is_err()
-        );
+        assert!(VerifiedSocialGrant::for_guest(
+            &encoded,
+            f.authority.public(),
+            &f.gc,
+            &f.context(&f.expected),
+            f.cap
+        )
+        .is_err());
         for kind in 0..3 {
             let mut changed = f.grant.clone();
             match kind {
@@ -1592,6 +1650,14 @@ mod tests {
             policy.digest(),
             "e8a05fd40d0d2eedcb8a5f4249e2ce46e6be7061f02ff1e534786b57ec4aa71b"
         );
+        let native = policy.with_native_voice_transport().unwrap();
+        assert_eq!(
+            native.digest(),
+            "0e77362cd49f34e7427d2666fd344537ba54ffbb5d8d67fb1224b37b7a2c7762"
+        );
+        assert!(native
+            .bytes()
+            .ends_with(&preimage("", &["nativeVoice8V1".into()])));
     }
     #[test]
     fn social_runtime_profile_has_closed_version_four_codec_and_original_host_congruence() {
@@ -1676,14 +1742,94 @@ mod tests {
             false,
         )
         .unwrap();
-        assert!(
-            plasmo
-                .with_runtime_profile("1.12.2-forge-14.23.5.2860")
-                .is_err()
-        );
+        assert!(plasmo
+            .with_runtime_profile("1.12.2-forge-14.23.5.2860")
+            .is_err());
         let mut legacy = serde_json::to_value(f.grant).unwrap();
         legacy["runtimeProfile"] = Value::Null;
         assert!(serde_json::from_value::<GrantBody>(legacy).is_err());
+    }
+    #[test]
+    fn native_voice_transport_profile_is_explicit_signed_and_never_accepted_by_legacy_schema() {
+        let mut f = Fixture::new();
+        let legacy = SocialHostPolicy::review_online_voice(
+            &f.hc,
+            "friends",
+            "127.0.0.1:43001".parse().unwrap(),
+            "open",
+            f.hc.issued_at_unix_ms() + 300_000,
+            "svc",
+            &"77".repeat(32),
+            true,
+        )
+        .unwrap();
+        assert!(legacy.clone().with_native_voice_transport().is_err());
+        let runtime = legacy
+            .with_runtime_profile("fabric-loader-0.16.14-1.21.1")
+            .unwrap();
+        let original_bytes = runtime.bytes();
+        let review = runtime.clone().with_native_voice_transport().unwrap();
+        assert_eq!(runtime.bytes(), original_bytes);
+        assert!(runtime.voice_transport_profile().is_none());
+        assert_ne!(runtime.digest(), review.digest());
+        assert!(review.approve(&f.host, &runtime.digest(), f.cap).is_err());
+        f.policy = review.approve(&f.host, &review.digest(), f.cap).unwrap();
+        f.grant.schema_version = 5;
+        f.grant.policy_digest = review.digest();
+        f.expected.policy_digest = review.digest();
+        f.grant.session_expires_at_unix_ms = review.expires_at_unix_ms();
+        f.grant.voice_profile = Some("svc".into());
+        f.grant.voice_source_digest = Some("77".repeat(32));
+        f.grant.host_player = Some(true);
+        f.grant.runtime_profile = Some("fabric-loader-0.16.14-1.21.1".into());
+        f.grant.voice_transport_profile = Some("nativeVoice8V1".into());
+        f.grant.admission_expires_at_unix_ms = f.grant.issued_at_unix_ms + 45_000;
+        let mut timing = f.grant.clone();
+        timing.admission_expires_at_unix_ms = timing.issued_at_unix_ms + 60_000;
+        timing.validate().unwrap();
+        timing.admission_expires_at_unix_ms += 1;
+        assert!(timing.validate().is_err());
+        timing.schema_version = 4;
+        timing.voice_transport_profile = None;
+        timing.admission_expires_at_unix_ms = timing.issued_at_unix_ms + 10_001;
+        assert!(timing.validate().is_err());
+        timing.admission_expires_at_unix_ms -= 1;
+        timing.validate().unwrap();
+        let encoded = f.encoded(&f.grant);
+        assert_eq!(
+            f.verify_host(&encoded).unwrap().voice_transport_profile(),
+            Some("nativeVoice8V1")
+        );
+        assert_eq!(
+            VerifiedSocialGrant::for_guest_online(
+                &encoded,
+                f.authority.public(),
+                &f.gc,
+                &f.context(&f.expected),
+                f.cap
+            )
+            .unwrap()
+            .voice_transport_profile(),
+            Some("nativeVoice8V1")
+        );
+        for value in [None, Some("unknown".into()), Some("nativeVoice8V2".into())] {
+            let mut changed = f.grant.clone();
+            changed.voice_transport_profile = value;
+            assert!(changed.validate().is_err());
+        }
+        let mut changed = f.grant.clone();
+        changed.schema_version = 4;
+        assert!(changed.validate().is_err());
+        changed.voice_transport_profile = None;
+        changed.admission_expires_at_unix_ms = changed.issued_at_unix_ms + 9_000;
+        changed.validate().unwrap();
+        assert!(
+            f.verify_host(&f.encoded(&changed)).is_err(),
+            "a valid authority signature cannot downgrade the original host policy"
+        );
+        let mut raw = serde_json::to_value(&f.grant).unwrap();
+        raw["voiceTransportProfile"] = Value::Null;
+        assert!(serde_json::from_value::<GrantBody>(raw).is_err());
     }
     #[test]
     fn social_online_capacity_can_only_shrink_before_fresh_approval() {
@@ -1753,17 +1899,15 @@ mod tests {
                 .digest(),
             review.digest()
         );
-        assert!(
-            VerifiedSocialGrant::for_host(
-                &f.encoded(&f.grant),
-                f.authority.public(),
-                &f.hc,
-                &f.policy,
-                "127.0.0.1:43002".parse().unwrap(),
-                f.cap
-            )
-            .is_err()
-        );
+        assert!(VerifiedSocialGrant::for_host(
+            &f.encoded(&f.grant),
+            f.authority.public(),
+            &f.hc,
+            &f.policy,
+            "127.0.0.1:43002".parse().unwrap(),
+            f.cap
+        )
+        .is_err());
     }
     #[test]
     fn social_admission_binds_both_clients_and_independent_guest_expectation() {
@@ -1810,27 +1954,23 @@ mod tests {
                 "{field}"
             );
         }
-        assert!(
-            VerifiedSocialGrant::for_guest(
-                &encoded,
-                f.authority.public(),
-                &f.hc,
-                &f.context(&f.expected),
-                f.cap
-            )
-            .is_err()
-        );
-        assert!(
-            VerifiedSocialGrant::for_host(
-                &encoded,
-                crate::generate_key().public(),
-                &f.hc,
-                &f.policy,
-                "127.0.0.1:43001".parse().unwrap(),
-                f.cap
-            )
-            .is_err()
-        );
+        assert!(VerifiedSocialGrant::for_guest(
+            &encoded,
+            f.authority.public(),
+            &f.hc,
+            &f.context(&f.expected),
+            f.cap
+        )
+        .is_err());
+        assert!(VerifiedSocialGrant::for_host(
+            &encoded,
+            crate::generate_key().public(),
+            &f.hc,
+            &f.policy,
+            "127.0.0.1:43001".parse().unwrap(),
+            f.cap
+        )
+        .is_err());
     }
     #[test]
     fn social_admission_all_signed_fields_and_trusted_context_changes_are_rejected() {
@@ -1882,16 +2022,14 @@ mod tests {
         assert!(f.verify_host(&f.encoded(&wrong)).is_err());
         let mut wrong = f.grant.clone();
         wrong.guest_account_id = "other".into();
-        assert!(
-            VerifiedSocialGrant::for_guest(
-                &f.encoded(&wrong),
-                f.authority.public(),
-                &f.gc,
-                &f.context(&f.expected),
-                f.cap
-            )
-            .is_err()
-        );
+        assert!(VerifiedSocialGrant::for_guest(
+            &f.encoded(&wrong),
+            f.authority.public(),
+            &f.gc,
+            &f.context(&f.expected),
+            f.cap
+        )
+        .is_err());
         let mut wrong = signed;
         wrong["signature"] = json!(hex(&f
             .authority
@@ -1903,17 +2041,15 @@ mod tests {
     fn social_admission_monotonic_preparation_caps_clones_and_closed_schema() {
         let f = Fixture::new();
         let encoded = f.encoded(&f.grant);
-        assert!(
-            VerifiedSocialGrant::for_host(
-                &encoded,
-                f.authority.public(),
-                &f.hc,
-                &f.policy,
-                "127.0.0.1:43001".parse().unwrap(),
-                Instant::now()
-            )
-            .is_err()
-        );
+        assert!(VerifiedSocialGrant::for_host(
+            &encoded,
+            f.authority.public(),
+            &f.hc,
+            &f.policy,
+            "127.0.0.1:43001".parse().unwrap(),
+            Instant::now()
+        )
+        .is_err());
         let mut grant = f.verified();
         grant.session_deadline = Instant::now();
         assert_eq!(
@@ -1939,10 +2075,9 @@ mod tests {
             let wrong: GrantBody = serde_json::from_value(raw).unwrap();
             assert!(f.verify_host(&f.encoded(&wrong)).is_err(), "{field}");
         }
-        assert!(
-            f.verify_host(&" ".repeat(MAX_SOCIAL_ADMISSION_BYTES + 1))
-                .is_err()
-        );
+        assert!(f
+            .verify_host(&" ".repeat(MAX_SOCIAL_ADMISSION_BYTES + 1))
+            .is_err());
     }
     #[test]
     fn social_admission_continuity_increases_sequence_without_renewing_session() {
@@ -1999,23 +2134,19 @@ mod tests {
             VerifiedSocialJoinContext::verify(&encoded, pin, account, session, f.cap)
         };
         verify(f.authority.public(), f.gc.account_id(), f.gc.session_id()).unwrap();
-        assert!(
-            verify(
-                crate::generate_key().public(),
-                f.gc.account_id(),
-                f.gc.session_id()
-            )
-            .is_err()
-        );
+        assert!(verify(
+            crate::generate_key().public(),
+            f.gc.account_id(),
+            f.gc.session_id()
+        )
+        .is_err());
         assert!(verify(f.authority.public(), "other", f.gc.session_id()).is_err());
-        assert!(
-            verify(
-                f.authority.public(),
-                f.gc.account_id(),
-                "ed35a732-2839-4a18-9740-73ed5ecff11c"
-            )
-            .is_err()
-        );
+        assert!(verify(
+            f.authority.public(),
+            f.gc.account_id(),
+            "ed35a732-2839-4a18-9740-73ed5ecff11c"
+        )
+        .is_err());
         context.check_challenge(&f.gc).unwrap();
         assert!(context.check_challenge(&f.hc).is_err());
         for (field, value) in [
@@ -2076,41 +2207,35 @@ mod tests {
         }
         let mut extra = original.clone();
         extra["body"]["source"] = json!("127.0.0.1:43001");
-        assert!(
-            VerifiedSocialJoinContext::verify(
-                &extra.to_string(),
-                f.authority.public(),
-                f.gc.account_id(),
-                f.gc.session_id(),
-                f.cap
-            )
-            .is_err()
-        );
+        assert!(VerifiedSocialJoinContext::verify(
+            &extra.to_string(),
+            f.authority.public(),
+            f.gc.account_id(),
+            f.gc.session_id(),
+            f.cap
+        )
+        .is_err());
         let mut wrong = original;
         wrong["signature"] = json!(hex(&f
             .authority
             .sign(b"aurora/connect/social-admission/v1\0")
             .to_bytes()));
-        assert!(
-            VerifiedSocialJoinContext::verify(
-                &wrong.to_string(),
-                f.authority.public(),
-                f.gc.account_id(),
-                f.gc.session_id(),
-                f.cap
-            )
-            .is_err()
-        );
-        assert!(
-            VerifiedSocialJoinContext::verify(
-                &" ".repeat(MAX_SOCIAL_ADMISSION_BYTES + 1),
-                f.authority.public(),
-                f.gc.account_id(),
-                f.gc.session_id(),
-                f.cap
-            )
-            .is_err()
-        );
+        assert!(VerifiedSocialJoinContext::verify(
+            &wrong.to_string(),
+            f.authority.public(),
+            f.gc.account_id(),
+            f.gc.session_id(),
+            f.cap
+        )
+        .is_err());
+        assert!(VerifiedSocialJoinContext::verify(
+            &" ".repeat(MAX_SOCIAL_ADMISSION_BYTES + 1),
+            f.authority.public(),
+            f.gc.account_id(),
+            f.gc.session_id(),
+            f.cap
+        )
+        .is_err());
     }
     #[test]
     fn social_join_context_original_clocks_do_not_renew_or_shorten_an_admitted_session() {
@@ -2130,16 +2255,14 @@ mod tests {
                 .check_at(context.body.issued_at_unix_ms, context.deadline),
             Err(SocialAdmissionError::Expired)
         );
-        assert!(
-            VerifiedSocialJoinContext::verify(
-                &f.encoded_context(&context.body),
-                f.authority.public(),
-                f.gc.account_id(),
-                f.gc.session_id(),
-                Instant::now()
-            )
-            .is_err()
-        );
+        assert!(VerifiedSocialJoinContext::verify(
+            &f.encoded_context(&context.body),
+            f.authority.public(),
+            f.gc.account_id(),
+            f.gc.session_id(),
+            Instant::now()
+        )
+        .is_err());
         let grant = VerifiedSocialGrant::for_guest(
             &f.encoded(&f.grant),
             f.authority.public(),
@@ -2152,16 +2275,14 @@ mod tests {
         let mut expired = context.clone();
         expired.deadline = Instant::now();
         assert!(expired.check_current().is_err());
-        assert!(
-            VerifiedSocialGrant::for_guest(
-                &f.encoded(&f.grant),
-                f.authority.public(),
-                &f.gc,
-                &expired,
-                f.cap
-            )
-            .is_err()
-        );
+        assert!(VerifiedSocialGrant::for_guest(
+            &f.encoded(&f.grant),
+            f.authority.public(),
+            &f.gc,
+            &expired,
+            f.cap
+        )
+        .is_err());
         grant.check_session().unwrap(); // Discovery expiry never becomes a new session authority.
     }
     #[test]

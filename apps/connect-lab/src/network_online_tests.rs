@@ -9,6 +9,9 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[path = "native_voice_budget_tests.rs"]
+mod native_voice_budget_tests;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TicketBody {

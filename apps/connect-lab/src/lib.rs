@@ -9,6 +9,7 @@ mod invitation;
 mod local_relay;
 mod minecraft_status;
 mod model;
+mod native_voice_budget;
 pub mod network_online;
 #[cfg(all(test, feature = "local-relay-lab"))]
 mod network_online_tests;
@@ -43,8 +44,9 @@ pub use minecraft_status::{
     MinecraftStatusSummary, probe_minecraft_status,
 };
 pub use model::*;
+pub use native_voice_budget::NativeVoiceBudget;
 pub use network_online::OnlineNetworkTicket;
-pub use online_clock::{OnlineClock, OnlineClockBinding};
+pub use online_clock::{OnlineClock, OnlineClockBinding, OnlineClockBootstrapError};
 pub use path_observation::{PathObservation, PathState};
 pub use plan::{MAX_PLAN_BYTES, PlanError, ValidatedPlan, load_fragmented_plan, load_plan};
 pub use session_invitation::{

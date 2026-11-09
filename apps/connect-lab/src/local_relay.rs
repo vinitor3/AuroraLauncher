@@ -94,6 +94,7 @@ fn require_no_proxy_scope() -> std::result::Result<(), LocalRelayError> {
 }
 struct Allowed {
     peers: HashSet<EndpointId>,
+    maximum_connections: usize,
     connections: Mutex<HashMap<ConnectionId, EndpointId>>,
     denied: AtomicU64,
 }
@@ -117,7 +118,7 @@ impl AccessControl for Allowed {
         };
         // This bounds admitted relay clients. It is not a claim that upstream
         // bounds unauthenticated HTTP accepts (its accept limit is unimplemented).
-        if active.len() >= 4
+        if active.len() >= self.maximum_connections
             || active
                 .values()
                 .filter(|peer| **peer == request.endpoint_id())
@@ -283,7 +284,7 @@ impl LocalRelayFixture {
         peers: [EndpointId; 2],
         profile: LocalRelayProfile,
     ) -> std::result::Result<Self, LocalRelayError> {
-        Self::start_inner(peers, profile, None).await
+        Self::start_inner(peers, profile, &[], 4).await
     }
     /// Native desktop test only: one original Host and two independently keyed
     /// remote Guests. The existing relay-only ticket still binds its original pair.
@@ -292,7 +293,19 @@ impl LocalRelayFixture {
         peers: [EndpointId; 3],
         profile: LocalRelayProfile,
     ) -> std::result::Result<Self, LocalRelayError> {
-        Self::start_inner([peers[0], peers[1]], profile, Some(peers[2])).await
+        Self::start_inner([peers[0], peers[1]], profile, &peers[2..], 4).await
+    }
+    #[cfg(test)]
+    pub(crate) async fn start_native_voice_test(
+        peers: [EndpointId; 8],
+    ) -> std::result::Result<Self, LocalRelayError> {
+        Self::start_inner(
+            [peers[0], peers[1]],
+            LocalRelayProfile::Normal,
+            &peers[2..],
+            peers.len() * 2,
+        )
+        .await
     }
     #[cfg(all(windows, debug_assertions, feature = "native-voice-test-support"))]
     pub fn bound_addr(&self) -> SocketAddr {
@@ -301,10 +314,12 @@ impl LocalRelayFixture {
     async fn start_inner(
         peers: [EndpointId; 2],
         profile: LocalRelayProfile,
-        extra: Option<EndpointId>,
+        extra: &[EndpointId],
+        maximum_connections: usize,
     ) -> std::result::Result<Self, LocalRelayError> {
         require_no_proxy_scope()?;
-        if peers[0] == peers[1] || extra.is_some_and(|peer| peers.contains(&peer)) {
+        let mut allowed = HashSet::from(peers);
+        if allowed.len() != peers.len() || extra.iter().any(|peer| !allowed.insert(*peer)) {
             return Err(LocalRelayError::Peers);
         }
         let started = Instant::now();
@@ -315,7 +330,8 @@ impl LocalRelayFixture {
         });
         let expires_at_unix_ms = unix_millis().saturating_add(60_000);
         let access = Arc::new(Allowed {
-            peers: peers.into_iter().chain(extra).collect(),
+            peers: allowed,
+            maximum_connections,
             connections: Mutex::new(HashMap::new()),
             denied: AtomicU64::new(0),
         });

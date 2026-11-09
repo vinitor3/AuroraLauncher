@@ -519,6 +519,21 @@ impl Guest {
         )
         .await
     }
+    pub async fn connect_invited_online_native_voice(
+        secret_key: SecretKey,
+        invitation: &SessionInvitation,
+        limits: Limits,
+        ticket: &OnlineNetworkTicket,
+    ) -> Result<Self> {
+        Self::connect_online_in_profile(
+            secret_key,
+            invitation,
+            limits,
+            ticket,
+            SessionInvitationProfile::OnlineNativeVoice8,
+        )
+        .await
+    }
     /// Explicit Host-player on the same original online Host. The opaque ticket
     /// supplies its owned loopback route; callers cannot provide any endpoint.
     pub async fn connect_local_authorized(
@@ -527,7 +542,10 @@ impl Guest {
         limits: Limits,
         ticket: &crate::HostLocalPlayerTicket,
     ) -> Result<Self> {
-        invitation.check_profile(SessionInvitationProfile::OnlineFragmentedGameUdp)?;
+        invitation.check_online_local_player()?;
+        if invitation.is_online_native_voice() {
+            crate::NativeVoiceBudget::check_limits(&limits)?;
+        }
         let peer = secret_key.public();
         let address = ticket.begin(invitation, peer)?;
         let guest = Self::connect_inner_authorized(
@@ -562,6 +580,9 @@ impl Guest {
         profile: SessionInvitationProfile,
     ) -> Result<Self> {
         invitation.check_profile(profile)?;
+        if invitation.is_online_native_voice() {
+            crate::NativeVoiceBudget::check_limits(&limits)?;
+        }
         invitation.check_admission_current()?;
         if secret_key.public() != invitation.guest_key()
             || ticket.session_id() != invitation.session_id()
@@ -748,10 +769,10 @@ impl Guest {
         let associations = Arc::new(Mutex::new(HashMap::new()));
         let metrics = Arc::new(Metrics::default());
         let fragment_memory = bridge::peer_budget(connection.remote_id());
-        let budget = Arc::new(Mutex::new(Bucket::new(
-            config.limits.session_bytes_per_second,
-            65536,
-        )));
+        let native_voice = session_authority
+            .as_ref()
+            .is_some_and(|authority| authority.invitation.is_online_native_voice());
+        let budget = Bucket::session(&config.limits, native_voice);
         let task = tokio::spawn(receive(
             connection.clone(),
             associations.clone(),

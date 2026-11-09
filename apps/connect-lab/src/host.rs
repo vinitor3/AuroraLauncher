@@ -496,6 +496,7 @@ impl Host {
     ) -> Result<Self> {
         config.limits.validate()?;
         let online = matches!(&authorities, HostAuthorities::Online(_));
+        let native_voice = matches!(&authorities, HostAuthorities::Online(authority) if authority.first.is_online_native_voice());
         if !valid_id(&config.session_id)
             || config.services.is_empty()
             || config.services.len() > 8
@@ -607,10 +608,7 @@ impl Host {
             online,
             tcp: Arc::new(Semaphore::new(config.limits.max_tcp_total)),
             udp: Arc::new(Semaphore::new(config.limits.max_udp_total)),
-            budget: Arc::new(Mutex::new(Bucket::new(
-                config.limits.session_bytes_per_second,
-                65536,
-            ))),
+            budget: Bucket::session(&config.limits, native_voice),
             limits: config.limits,
             metrics: Arc::new(Metrics::default()),
             active_leases: Mutex::new(HashMap::new()),
