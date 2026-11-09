@@ -25,6 +25,12 @@ mod producer;
 mod resources;
 #[path = "connect_dedicated/runtime_config.rs"]
 mod runtime_config;
+#[path = "connect_dedicated/server_catalog.rs"]
+mod server_catalog;
+#[path = "connect_dedicated/server_preparation.rs"]
+mod server_preparation;
+#[path = "connect_dedicated/voice_catalog.rs"]
+mod voice_catalog;
 #[path = "connect_dedicated/voice_profile.rs"]
 mod voice_profile;
 
@@ -32,8 +38,34 @@ pub(crate) use producer::{
     DedicatedError, NativeVoiceHostBinding, ReservedVoiceQuery, VoiceRuntimeAnnouncement,
     VoiceRuntimeError, VoiceRuntimeSample,
 };
+#[cfg(feature = "connect-voice-lab")]
+pub(crate) use resources::cache::acquire_client_mods_for;
 pub(crate) use resources::{acquire_client_mods, client_voice_pins};
 pub(crate) use voice_profile::NativeVoiceProfile;
+
+pub(crate) fn client_voice_pins_for(
+    runtime: crate::engine::connect_ready_profile::ReadyProfile,
+    voice: NativeVoiceProfile,
+) -> Option<Vec<(&'static str, u64, &'static str)>> {
+    voice_catalog::artifacts(runtime, voice).map(|pins| {
+        pins.iter()
+            .map(|pin| (pin.relative, pin.bytes, pin.sha256))
+            .collect()
+    })
+}
+
+pub(super) fn runtime_announcement_artifact(
+    runtime: crate::engine::connect_ready_profile::ReadyProfile,
+    voice: super::VoiceMod,
+) -> Option<(&'static str, u64)> {
+    let voice = match voice {
+        super::VoiceMod::SimpleVoiceChat => NativeVoiceProfile::SimpleVoiceChat,
+        super::VoiceMod::PlasmoVoice => NativeVoiceProfile::PlasmoVoice,
+    };
+    voice_catalog::artifacts(runtime, voice)
+        .and_then(|pins| pins.first())
+        .map(|pin| (pin.sha256, pin.bytes))
+}
 
 #[cfg(test)]
 use eula::EulaOutcome;
@@ -70,7 +102,7 @@ pub(crate) fn plan_status_execution(
 pub(crate) fn plan_voice_execution(
     prepared: factory::PreparedStatus,
 ) -> std::result::Result<producer::DedicatedPlan, producer::DedicatedError> {
-    prepared.bundle.manifest.voice_v2()?;
+    prepared.bundle.manifest.voice()?;
     producer::plan_voice(prepared)
 }
 

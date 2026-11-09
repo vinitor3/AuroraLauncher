@@ -73,8 +73,34 @@ pub(super) struct TestHooks {
     pub(super) read_error_stdout: Option<bool>,
     pub(super) fail_stop_write: bool,
     pub(super) metadata: Mutex<Option<(String, String)>>,
+    // Prefix progress only: never retain or publish a child's raw output.
+    pub(super) launcher_stderr: Mutex<(usize, bool)>,
 }
 impl TestHooks {
+    pub(super) fn observe_launcher_stderr(&self, bytes: &[u8]) {
+        const PREFIX: &[u8] = b"Error: Unable to access jarfile ";
+        let mut state = self
+            .launcher_stderr
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        for &byte in bytes {
+            if state.0 >= PREFIX.len() || state.1 {
+                break;
+            }
+            if byte != PREFIX[state.0] {
+                state.1 = true;
+                break;
+            }
+            state.0 += 1;
+        }
+    }
+    pub(super) fn java_launcher_jar_unavailable(&self) -> bool {
+        let state = self
+            .launcher_stderr
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        !state.1 && state.0 == b"Error: Unable to access jarfile ".len()
+    }
     pub(super) fn metadata_snapshot(&self) -> Option<(String, String)> {
         self.metadata
             .lock()

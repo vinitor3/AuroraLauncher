@@ -106,6 +106,21 @@ fn directory_names(root: &Path, relative: &str) -> Result<Vec<String>, Error> {
     names.sort();
     Ok(names)
 }
+
+fn validate_assets_path(spec: &VersionLaunchSpec, instance: &Instance) -> Result<(), Error> {
+    let index = spec.asset_index.as_str();
+    if spec.assets_dir != instance.root().join("assets")
+        || index.is_empty()
+        || index.len() > 64
+        || matches!(index, "." | "..")
+        || !index
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    {
+        return Err(Error::UnsupportedRuntime);
+    }
+    Ok(())
+}
 impl ReadyRuntime {
     pub fn prepare_voice_install(
         &self,
@@ -124,12 +139,18 @@ impl ReadyRuntime {
                 .filter(|file| file.action == ReadyVoiceAction::Install)
                 .map(|file| file.relative.as_str())
                 .collect();
-            let downloads = voice::acquire_client_mods(
-                app_data,
-                dedicated_voice_profile(review.profile),
-                &missing,
-                &cancelled,
-            )
+            let profile = dedicated_voice_profile(review.profile);
+            let downloads = if self.profile == ReadyProfile::Fabric1211 {
+                voice::acquire_client_mods(app_data, profile, &missing, &cancelled)
+            } else {
+                voice::acquire_client_mods_for(
+                    app_data,
+                    self.profile,
+                    profile,
+                    &missing,
+                    &cancelled,
+                )
+            }
             .map_err(|error| match error {
                 voice::Error::Cancelled => Error::Cancelled,
                 voice::Error::Busy => Error::Busy,
@@ -334,7 +355,7 @@ pub fn verify_installed_copy_runtime(
     let child = read_profile(profile.version_id())?;
     connect_quick_play::validate_profile_chain(&base, &child, profile)
         .map_err(|_| Error::UnsupportedRuntime)?;
-    let pins = RuntimePins::from_profiles(profile, &base, &child)?;
+    let pins = RuntimePins::from_exact_profiles(profile, &base, &child)?;
     let mut spec = super::resolve_launch_spec(instance, profile.version_id())
         .map_err(|_| Error::UnsupportedRuntime)?;
     connect_quick_play::apply_guest_entry(
@@ -361,35 +382,30 @@ pub fn verify_installed_copy_runtime(
             return Err(Error::UnsupportedRuntime);
         }
         let bytes = reader.instance(instance, &relative, 256 * 1024 * 1024)?;
-        if let Some(pins) = &pins {
-            let expected = if path == &spec.client_jar {
-                &pins.client_sha1
-            } else {
-                pins.library_sha1
-                    .get(&relative)
-                    .ok_or(Error::UnsupportedRuntime)?
-            };
-            verify_sha1(&bytes, expected)?;
-        }
+        let expected = if path == &spec.client_jar {
+            &pins.client_sha1
+        } else {
+            pins.library_sha1
+                .get(&relative)
+                .ok_or(Error::UnsupportedRuntime)?
+        };
+        verify_sha1(&bytes, expected)?;
     }
-    if let Some(pins) = &pins {
-        for (relative, expected) in &pins.additional_libraries {
-            let bytes = reader.instance(instance, relative, 256 * 1024 * 1024)?;
-            verify_sha1(&bytes, expected)?;
-        }
-        for (name, expected) in &pins.extracted_natives {
-            let bytes = reader.instance(instance, &format!("natives/{name}"), 64 * 1024 * 1024)?;
-            verify_sha1(&bytes, expected)?;
-        }
+    for (relative, expected) in &pins.additional_libraries {
+        let bytes = reader.instance(instance, relative, 256 * 1024 * 1024)?;
+        verify_sha1(&bytes, expected)?;
     }
+    for (name, expected) in &pins.extracted_natives {
+        let bytes = reader.instance(instance, &format!("natives/{name}"), 64 * 1024 * 1024)?;
+        verify_sha1(&bytes, expected)?;
+    }
+    validate_assets_path(&spec, instance)?;
     let asset_index = reader.instance(
         instance,
         &format!("assets/indexes/{}.json", spec.asset_index),
         16 * 1024 * 1024,
     )?;
-    if let Some(pins) = &pins {
-        verify_sha1(&asset_index, &pins.asset_index_sha1)?;
-    }
+    verify_sha1(&asset_index, &pins.asset_index_sha1)?;
     let managed =
         connect_ready_files::verify_managed_files_for_profile(instance, profile, &cancelled)
             .map_err(|error| match error {
@@ -438,12 +454,12 @@ pub fn inspect_ready_runtime_for_voice(
         .parent()
         .and_then(Path::parent)
         .ok_or(Error::InstanceNotReady)?;
-    if diagnostic_lab::origin_instance(data, instance)
-        .map_err(|_| Error::InstanceNotReady)?
-        .id()
-        .as_str()
-        != source_id
-    {
+    let origin =
+        diagnostic_lab::origin_instance(data, instance).map_err(|_| Error::InstanceNotReady)?;
+    let canonical_source = origin.id().as_str();
+    // The launcher can already be focused on this exact diagnostic copy.
+    // Its recorded origin is still resolved and pinned for both selections.
+    if source_id != canonical_source && source_id != instance.id().as_str() {
         return Err(Error::InstanceNotReady);
     }
     let observation =
@@ -487,8 +503,6 @@ pub fn inspect_ready_runtime_for_voice(
         let path = recovery::path(data, &relative).map_err(|_| Error::InstanceNotReady)?;
         reader.read(&path, format!("provenance/{marker}"), 64 * 1024 * 1024)?;
     }
-    let origin =
-        diagnostic_lab::origin_instance(data, instance).map_err(|_| Error::InstanceNotReady)?;
     let origin_identity = recovery::path(origin.root(), ".aurora/recovery-identity.json")
         .map_err(|_| Error::InstanceNotReady)?;
     reader.read(
@@ -535,13 +549,8 @@ pub fn inspect_ready_runtime_for_voice(
     }
     let profile = connect_ready_profile::profile_from_metadata(&root_profiles)?;
     let voice_pins = match voice {
-        None => &[][..],
-        Some(profile_voice) => {
-            if profile != ReadyProfile::Fabric1211 {
-                return Err(Error::UnsupportedRuntime);
-            }
-            voice_artifact_pins(profile_voice)?
-        }
+        None => Vec::new(),
+        Some(profile_voice) => voice_artifact_pins(profile, profile_voice)?,
     };
     let mut read_profile = |version: &str| {
         let bytes = reader.instance(
@@ -557,7 +566,13 @@ pub fn inspect_ready_runtime_for_voice(
     // two retained files first, so it cannot read a third or external profile.
     connect_quick_play::validate_profile_chain(&base, &child, profile)
         .map_err(|_| Error::UnsupportedRuntime)?;
-    let pins = RuntimePins::from_profiles(profile, &base, &child)?;
+    let managed_java =
+        diagnostic_lab::installed_runtime_java(instance).map_err(|_| Error::JavaUnavailable)?;
+    let pins = if managed_java.is_some() {
+        Some(RuntimePins::from_exact_profiles(profile, &base, &child)?)
+    } else {
+        RuntimePins::from_profiles(profile, &base, &child)?
+    };
     let mut spec = super::resolve_launch_spec(instance, profile.version_id())
         .map_err(|_| Error::UnsupportedRuntime)?;
     connect_quick_play::apply_guest_entry(instance, &mut spec, profile, observed_java, endpoint)
@@ -566,7 +581,11 @@ pub fn inspect_ready_runtime_for_voice(
             _ => Error::UnsupportedRuntime,
         })?;
     let managed = connect_ready_files::verify_managed_files_with_voice(
-        instance, profile, voice, voice_pins, &cancelled,
+        instance,
+        profile,
+        voice,
+        &voice_pins,
+        &cancelled,
     )
     .map_err(|e| match e {
         connect_ready_files::ReadyFilesError::Cancelled => Error::Cancelled,
@@ -625,16 +644,7 @@ pub fn inspect_ready_runtime_for_voice(
             verify_sha1(&bytes, expected)?;
         }
     }
-    if spec.assets_dir != instance.root().join("assets")
-        || spec.asset_index.is_empty()
-        || spec.asset_index.len() > 64
-        || !spec
-            .asset_index
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
-    {
-        return Err(Error::UnsupportedRuntime);
-    }
+    validate_assets_path(&spec, instance)?;
     let index = reader.instance(
         instance,
         &format!("assets/indexes/{}.json", spec.asset_index),
@@ -692,8 +702,6 @@ pub fn inspect_ready_runtime_for_voice(
             verify_sha1(&bytes, expected)?;
         }
     }
-    let managed_java =
-        diagnostic_lab::installed_runtime_java(instance).map_err(|_| Error::JavaUnavailable)?;
     if let Some((expected_path, expected_sha256)) = managed_java {
         if expected_path != java
             || pin_and_measure_java(&mut reader, java, observed_java)? != expected_sha256
@@ -736,7 +744,7 @@ pub fn inspect_ready_runtime_for_voice(
         serde_json::to_vec(&(
             observation.instance_uuid,
             observation.fingerprint,
-            source_id,
+            canonical_source,
             profile.descriptor(),
             reader.hashes,
             &managed,
@@ -763,15 +771,22 @@ pub fn inspect_ready_runtime_for_voice(
 
 type VoiceArtifactPin = (&'static str, u64, &'static str);
 
-fn voice_artifact_pins(profile: NativeVoiceProfile) -> Result<&'static [VoiceArtifactPin], Error> {
+fn voice_artifact_pins(
+    runtime: ReadyProfile,
+    profile: NativeVoiceProfile,
+) -> Result<Vec<VoiceArtifactPin>, Error> {
     #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
     {
         use super::connect_voice::dedicated as voice;
-        Ok(voice::client_voice_pins(dedicated_voice_profile(profile)))
+        let profile = dedicated_voice_profile(profile);
+        if runtime == ReadyProfile::Fabric1211 {
+            return Ok(voice::client_voice_pins(profile).to_vec());
+        }
+        voice::client_voice_pins_for(runtime, profile).ok_or(Error::UnsupportedRuntime)
     }
     #[cfg(not(all(windows, feature = "connect-lab", feature = "connect-voice-lab")))]
     {
-        let _ = profile;
+        let _ = (runtime, profile);
         Err(Error::Disabled)
     }
 }

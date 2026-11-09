@@ -39,6 +39,7 @@ pub(crate) struct ReviewData {
 }
 #[derive(Clone, Debug)]
 pub(crate) struct NativeReview {
+    pub(crate) deadline: Instant,
     pub(crate) digest: String,
     pub(crate) data: ReviewData,
     pub(crate) original_copy_id: String,
@@ -194,6 +195,7 @@ fn issue(
         expires_at_ms: expires,
     };
     let result = NativeReview {
+        deadline,
         digest: digest(owner, &operation.binding, &data)?,
         data,
         original_copy_id: operation.binding.copy_id()?,

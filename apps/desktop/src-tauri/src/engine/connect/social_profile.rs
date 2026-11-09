@@ -42,6 +42,56 @@ pub struct SocialParticipant {
     pub account_id: String,
     pub state: &'static str,
 }
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SocialFailureStage {
+    Authentication,
+    Bootstrap,
+    Identity,
+    KeyChallenge,
+    HostReview,
+    HostRegistration,
+    GuestAdmission,
+    SessionContinuity,
+    Relay,
+    SessionControl,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SocialFailureReason {
+    Authentication,
+    AccountNotRegistered,
+    NotAuthorized,
+    AuthorityChanged,
+    ClockUncertain,
+    ClockUnverified,
+    ServiceUnavailable,
+    RequestRejected,
+    RequestTimedOut,
+    Quota,
+}
+impl SocialFailureReason {
+    pub(super) fn code(self) -> &'static str {
+        match self {
+            Self::Authentication => "connect_social_auth_failed",
+            Self::AccountNotRegistered => "connect_social_account_not_registered",
+            Self::NotAuthorized => "connect_social_not_authorized",
+            Self::AuthorityChanged => "connect_social_authority_changed",
+            Self::ClockUncertain => "connect_social_clock_uncertain",
+            Self::ClockUnverified => "connect_social_clock_unverified",
+            Self::ServiceUnavailable => "connect_social_service_unavailable",
+            Self::RequestRejected => "connect_social_request_rejected",
+            Self::RequestTimedOut => "connect_social_request_timed_out",
+            Self::Quota => "connect_social_quota",
+        }
+    }
+}
+impl std::fmt::Display for SocialFailureReason {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SocialSnapshot {
@@ -68,6 +118,10 @@ pub struct SocialSnapshot {
     pub participants: Option<Vec<SocialParticipant>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_transport_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_stage: Option<SocialFailureStage>,
 }
 
 /// Supplied by the trusted process launcher or the compiled HTTPS origin.
@@ -264,6 +318,24 @@ impl ConnectManager {
         {
             self.live
                 .social_confirm_host(owner, operation_id, generation, digest)
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, operation_id, generation, digest);
+            Err(ConnectError::Disabled)
+        }
+    }
+    pub fn social_confirm_guest(
+        &self,
+        owner: &str,
+        operation_id: &str,
+        generation: u64,
+        digest: &str,
+    ) -> Result<ConnectSnapshot, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live
+                .social_confirm_guest(owner, operation_id, generation, digest)
         }
         #[cfg(not(feature = "connect-lab"))]
         {

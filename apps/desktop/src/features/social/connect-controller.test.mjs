@@ -17,15 +17,64 @@ async function moduleUrl(url) {
 }
 const { createSocialConnectController } = await import(await moduleUrl(new URL("./connect-controller.ts", import.meta.url)));
 const { snapshotFrom } = await import(await moduleUrl(new URL("../connect/types.ts", import.meta.url)));
-const { socialConnectCapabilitiesFrom, socialRuntimeLabels } = await import(await moduleUrl(new URL("./connect-types.ts", import.meta.url)));
+const { socialConnectCapabilitiesFrom, socialConnectError, socialRuntimeLabels } = await import(await moduleUrl(new URL("./connect-types.ts", import.meta.url)));
+const { socialAvailabilitiesFrom } = await import(await moduleUrl(new URL("./availability.ts", import.meta.url)));
 const session = "11111111-2222-4333-8444-555555555555", operation = "22222222-2222-4333-8444-555555555555";
 const idle = () => ({ available: true, operationId: null, generation: 0, role: null, phase: "idle", transportState: "notStarted", statusState: "notChecked", tcpAddress: null, expiresAtMs: null, statusSummary: null, errorCode: null, worldState: "notVerified", simpleVoiceChatState: "disabled", plasmoVoiceState: "disabled", relayEnabled: false, pathState: "notVerified", preparation: null, review: null, cleanupState: "notStarted" });
 const active = (role = "guest", stage = "authenticating") => ({ ...idle(), operationId: operation, generation: 1, role, phase: "starting", cleanupState: "pending", social: { sessionId: session, role, stage, digest: null, gameTarget: role === "host" ? "127.0.0.1:43001" : null, visibility: role === "host" ? "public" : null, expiresAtMs: Date.now() + 60_000 } });
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const tick = async () => { await new Promise(resolve => setImmediate(resolve)); };
 const owners = [];
-const readyVoice = () => ({ revision: 1, available: true, phase: "ready", profile: "simpleVoiceChat", review: null, operationId: null, hostPublicId: null, participants: [], udpState: "notStarted", tcpAddress: null, negotiatedDatagramBytes: null, recoveryPending: false, recoverableCopies: [], eulaState: "ownedBySource", errorCode: null, exportedInvitation: null, audioState: "notVerified" });
+const readyVoice = () => ({ revision: 1, available: true, phase: "ready", profile: "simpleVoiceChat", review: null, operationId: null, hostPublicId: null, participants: [], udpState: "notStarted", tcpAddress: null, negotiatedDatagramBytes: null, recoveryPending: false, eulaRecoveryAvailable: false, recoverableCopies: [], eulaState: "ownedBySource", errorCode: null, exportedInvitation: null, audioState: "notVerified" });
 afterEach(() => { owners.splice(0).forEach(owner => owner.invalidate()); });
+const availableSession = () => ({ sessionId: session, state: "ready", validForMs: 2200, admittedGuests: 2, connectedGuests: 1, hostPlayerConnected: true, maxGuests: 7 });
+
+test("Social failures expose only a closed terminal stage and localized reason", async () => {
+  const f = await fixture({ online: true });
+  const failure = {
+    ...active("host", "failed"), phase: "failed", transportState: "closed", cleanupState: "complete",
+    errorCode: "connect_social_clock_uncertain",
+  };
+  failure.social.failureStage = "bootstrap";
+  f.setSnapshot(failure);
+  await f.controller.refresh();
+  assert.equal(f.published.at(-1).snapshot.social.failureStage, "bootstrap");
+  assert.match(socialConnectError(f.published.at(-1).snapshot.errorCode), /horário do serviço/);
+  assert.match(socialConnectError("connect_social_not_authorized"), /não tem acesso/);
+  assert.match(socialConnectError("connect_social_service_unavailable"), /resposta do serviço/);
+  assert.equal(socialConnectError("connect_social_request_timed_out"), "O serviço online não respondeu dentro do prazo. A tentativa foi encerrada; prepare uma nova sessão.");
+  assert.doesNotMatch(socialConnectError("untrusted-private-response"), /untrusted-private-response/);
+  assert.equal(typeof socialConnectError("constructor"), "string");
+  for (const stage of ["https://untrusted.invalid", "constructor", "authenticating"]) {
+    assert.throws(() => snapshotFrom({ ...failure, social: { ...failure.social, failureStage: stage } }));
+  }
+  assert.throws(() => snapshotFrom({ ...failure, social: { ...failure.social, stage: "authenticating" } }));
+});
+
+test("catalog observation uses scoped credentials without reserving, starting or renewing an attempt", async () => {
+  const f = await fixture({ online: true }); f.handlers.connect_social_observe_sessions = () => [availableSession()];
+  const before = performance.now(), values = await f.controller.observeSessions([session]);
+  assert.deepEqual(f.calls.find(([name]) => name === "connect_social_observe_sessions")[1], { request: { accountEpoch: 7, accountId: "own-account", sessionIds: [session] }, idToken: "LOCAL_TEST_TOKEN" });
+  assert.equal(values[0].connectedGuests, 1); assert.ok(values[0].validUntil >= before + 2200);
+  assert.equal(f.calls.filter(([name]) => name.includes("reserve") || name.includes("authenticate")).length, 0);
+  assert.doesNotMatch(JSON.stringify(f.published), /LOCAL_TEST_TOKEN/);
+});
+
+test("catalog observation cannot forward a delayed token or result after account scope changes", async () => {
+  const token = deferred(), f = await fixture({ online: true, token: token.promise });
+  const pending = f.controller.observeSessions([session]); f.setUser({ uid: "other" }); token.resolve("LATE_TOKEN");
+  await assert.rejects(pending); assert.equal(f.calls.filter(([name]) => name === "connect_social_observe_sessions").length, 0);
+  const g = await fixture({ online: true }), response = deferred(); g.handlers.connect_social_observe_sessions = () => response.promise;
+  const observing = g.controller.observeSessions([session]); await tick(); g.controller.invalidate(); response.resolve([availableSession()]);
+  await assert.rejects(observing);
+});
+
+test("catalog count parser rejects unrelated sessions, world claims, extended freshness and invented connections", () => {
+  const valid = availableSession(); assert.equal(socialAvailabilitiesFrom([valid], [session], 100)[0].validUntil, 2300);
+  for (const change of [{ sessionId: operation }, { worldPlayers: 2 }, { validForMs: 3001 }, { connectedGuests: 3 }, { hostPlayerConnected: true, maxGuests: 8 }, { state: "unavailable" }])
+    assert.throws(() => socialAvailabilitiesFrom([{ ...valid, ...change }], [session], 100));
+  assert.throws(() => socialAvailabilitiesFrom([valid, valid], [session, session], 100));
+});
 async function fixture(options = {}) {
   const calls = [], published = [], handlers = {};
   let snapshot = idle(), tokenCalls = 0;
@@ -69,6 +118,36 @@ test("online native voice host uses the same reservation/authentication flow wit
   assert.equal(names.filter(name => name === "connect_social_authenticate").length, 1);
   assert.equal(names.filter(name => name === "connect_social_reserve").length, 0);
   assert.equal(names.filter(name => name === "connect_social_confirm_host").length, 0);
+});
+
+test("wall-clock jumps neither defer nor advance online token renewal and voice observation", async t => {
+  let wall = Date.now(), monotonic = 1000;
+  t.mock.method(Date, "now", () => wall);
+  t.mock.method(performance, "now", () => monotonic);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = await fixture({ online: true });
+  f.setSnapshot(active());
+  f.handlers.connect_social_refresh_authentication = () => null;
+  const count = name => f.calls.filter(([command]) => command === name).length;
+  assert.equal(count("native_voice_snapshot"), 1);
+
+  wall += 60 * 60_000;
+  monotonic += 1000;
+  t.mock.timers.tick(500); await tick();
+  assert.equal(count("native_voice_snapshot"), 1);
+  assert.equal(f.tokenCalls(), 0);
+
+  wall -= 2 * 60 * 60_000;
+  monotonic += 1000;
+  t.mock.timers.tick(500); await tick();
+  assert.equal(count("native_voice_snapshot"), 2);
+  assert.equal(f.tokenCalls(), 0);
+
+  monotonic = 1000 + 20 * 60_000;
+  t.mock.timers.tick(500); await tick();
+  assert.equal(f.tokenCalls(), 1);
+  assert.deepEqual(f.calls.find(([name]) => name === "connect_social_refresh_authentication")?.[1],
+    { operationId: operation, accountEpoch: 7, idToken: "LOCAL_TEST_TOKEN" });
 });
 
 test("unready or legacy native voice never reserves or reads credentials", async () => {
@@ -235,5 +314,37 @@ test("host removal sends only current operation, account epoch and a listed opaq
   assert.deepEqual(f.calls.find(([name]) => name === "connect_social_revoke_participant")[1], { operationId: operation, accountEpoch: 7, grantId });
   for (const participants of [[{ grantId, accountId: "email@example.test", state: "connected" }], [{ grantId, accountId: "guest", state: "worldJoined" }], [...host.social.participants, ...host.social.participants]]) {
     assert.throws(() => snapshotFrom({ ...host, social: { ...host.social, participants } }));
+  }
+});
+
+function nativeVoiceGuestReview() {
+  const value = active("guest", "guestReview"); value.phase = "reviewed";
+  Object.assign(value.social, { digest: "b".repeat(64), voiceProfile: "svc", voiceTransportProfile: "nativeVoice8V1", hostPlayer: false, runtimeProfile: "fabric-loader-0.16.14-1.21.1" });
+  return value;
+}
+test("native voice transport review requires the closed original profile, runtime and guest digest", () => {
+  const value = nativeVoiceGuestReview(); assert.equal(snapshotFrom(value).social.voiceTransportProfile, "nativeVoice8V1");
+  for (const extra of [{voiceTransportProfile: null}, {voiceTransportProfile: "unknown"}, {runtimeProfile: undefined}, {voiceProfile: undefined}, {hostPlayer: undefined}, {digest: null}, {role: "host"}, {gameTarget: "127.0.0.1:43001"}, {visibility: "public"}])
+    assert.throws(() => snapshotFrom({...value, social: {...value.social, ...extra}}));
+  assert.throws(() => snapshotFrom({...value, social: {...value.social, stage: "connected"}}), "guest digest is limited to the original review stage");
+});
+test("native guest review never auto-confirms and sends only the original operation generation and digest", async () => {
+  const f = await fixture({online: true}); const reviewed = nativeVoiceGuestReview();
+  f.setSnapshot(reviewed); await f.controller.refresh();
+  assert.equal(f.calls.filter(([name]) => name === "connect_social_confirm_guest").length, 0);
+  f.handlers.connect_social_confirm_guest = () => ({...reviewed, phase: "starting", social: {...reviewed.social, stage: "connecting", digest: null}});
+  await f.controller.confirmGuest();
+  assert.deepEqual(f.calls.find(([name]) => name === "connect_social_confirm_guest")[1], { operationId: operation, generation: reviewed.generation, digest: reviewed.social.digest });
+  assert.equal(f.tokenCalls(), 0);
+});
+test("guest confirmation cannot use an expired, replaced-account or host review", async () => {
+  for (const mode of ["expired", "account", "host"]) {
+    const f = await fixture({online: true}), reviewed = nativeVoiceGuestReview();
+    if (mode === "expired") reviewed.social.expiresAtMs = Date.now() - 1;
+    if (mode === "host") { reviewed.role = "host"; Object.assign(reviewed.social, {role:"host",stage:"hostReview",gameTarget:"127.0.0.1:43001",visibility:"public"}); }
+    f.setSnapshot(reviewed); await f.controller.refresh();
+    if (mode === "account") f.setUser({uid:"other-account"});
+    await f.controller.confirmGuest();
+    assert.equal(f.calls.filter(([name]) => name === "connect_social_confirm_guest").length, 0, mode);
   }
 });

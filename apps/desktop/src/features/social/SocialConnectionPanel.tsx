@@ -1,14 +1,24 @@
 import { useEffect, useState } from "react";
 import type { SocialService, SocialSession } from "../../shared/social";
-import { socialConnectError, socialGameTarget, socialRuntimeLabels, socialStageText } from "./connect-types";
+import { socialConnectError, socialFailureStageText, socialGameTarget, socialRuntimeLabels, socialStageText } from "./connect-types";
 import { DiscoveryPicker, type DiscoveredTarget } from "../connect/DiscoveryPicker";
 import type { SocialConnectController, SocialConnectState } from "./connect-controller";
 
 export type SocialConnectionControls = { state: SocialConnectState; controller: SocialConnectController };
 
+function NativeVoiceLimits() {
+  return <div className="social-voice-limits">
+    <p>Voz para até 8 participantes, incluindo o anfitrião quando jogar neste computador. O limite do anúncio pode ser menor.</p>
+    <ul><li>Mensagens de voz de até 4.096 bytes.</li>
+      <li>Retorno por participante: até 524.288 bytes/s (512 KiB/s) e 1.600 fragmentos/s.</li>
+      <li>Tráfego agregado da sessão (TCP e UDP, nos dois sentidos): até 5.000.000 bytes/s, com rajada compartilhada de 128 KiB.</li></ul>
+    <small>A disponibilidade também depende das cotas gratuitas do serviço. Estes limites não comprovam áudio dentro do jogo.</small>
+  </div>;
+}
+
 /** Presentation only: the App-owned controller and native manager survive tabs. */
-export function SocialConnectionPanel({ connection, ownSession, now, onOpenConnectedGame, service }: {
-  connection: SocialConnectionControls; ownSession?: SocialSession | null; now: number; onOpenConnectedGame?: () => void; service?: SocialService | null;
+export function SocialConnectionPanel({ connection, ownSession, now, catalogNow = now, onOpenConnectedGame, onPrepareDedicatedServer, service }: {
+  connection: SocialConnectionControls; ownSession?: SocialSession | null; now: number; catalogNow?: number; onOpenConnectedGame?: () => void; onPrepareDedicatedServer?: () => void; service?: SocialService | null;
 }) {
   const { state, controller } = connection;
   const snapshot = state.snapshot, social = snapshot?.social;
@@ -44,12 +54,14 @@ export function SocialConnectionPanel({ connection, ownSession, now, onOpenConne
   useEffect(() => { if ((ownSession?.maxPlayers ?? 0) < 2) setHostPlayer(false); }, [ownSession?.maxPlayers]);
   useEffect(() => { setConsent(false); setCopyMessage(""); }, [snapshot?.operationId, social?.digest]);
   useEffect(() => { setSelected(undefined); setSelectionEpoch(value => value + 1); }, [ownSession?.id, ownSession?.visibility, ownSession?.joinPolicy]);
-  const hostEligible = !!ownSession && ownSession.expiresAtMs > now
+  const hostEligible = !!ownSession && ownSession.expiresAtMs > catalogNow
     && ["public", "friends"].includes(ownSession.visibility);
   const retiredOwnSession = state.maxSessionSeconds === 14400 && snapshot?.cleanupState === "complete"
     && ["closed", "failed"].includes(snapshot.phase) && social?.role === "host" && social.sessionId === ownSession?.id;
   const expired = social?.expiresAtMs !== null && social?.expiresAtMs !== undefined && social.expiresAtMs <= now;
   const canReview = snapshot?.phase === "reviewed" && social?.stage === "hostReview" && !!social.digest && !expired && !state.pending;
+  const canReviewGuest = snapshot?.phase === "reviewed" && social?.role === "guest" && social.stage === "guestReview"
+    && social.voiceTransportProfile === "nativeVoice8V1" && !!social.digest && !expired && !state.pending;
   const discovery = state.ownedGameTcpDiscovery === true;
   const voiceReady = state.maxSessionSeconds === 14400 && !!state.nativeVoiceReady;
   const sourceReady = useVoice ? voiceReady && (!hostPlayer || (ownSession?.maxPlayers ?? 0) >= 2) : !!selected && selected.expiresAtMs > now && socialGameTarget(selected.target);
@@ -63,11 +75,18 @@ export function SocialConnectionPanel({ connection, ownSession, now, onOpenConne
     <div className="social-community-heading"><div><h3>{snapshot?.phase === "closing" ? "Desconectando…" : social ? socialStageText[social.stage] : active ? "Há outra conexão em andamento" : "Sua conexão multiplayer"}</h3>
       <p>{state.maxSessionSeconds === 14400 ? "Compartilhamento por até 4 horas, limitado ao prazo da origem e à disponibilidade das cotas gratuitas." : "Uma pessoa convidada, somente jogo, por até 60 segundos. Voz desativada."}</p></div><span className="social-tag">Experimental</span></div>
     {state.error && <p className="social-notice" role="alert">{state.error}</p>}
-    {snapshot?.errorCode && <p className="social-notice" role="alert">{socialConnectError(snapshot.errorCode)}</p>}
+    {snapshot?.errorCode && <p className="social-notice" role="alert">
+      {social?.failureStage && <><strong>{socialFailureStageText[social.failureStage]}.</strong>{" "}</>}
+      {socialConnectError(snapshot.errorCode)}
+    </p>}
     {active && !social && <p>Encerre a conexão anterior para compartilhar ou entrar em uma sessão.</p>}
+    {!active && !voiceReady && state.available && onPrepareDedicatedServer && <div className="social-notice">
+      <p>Para hospedar uma cópia dedicada, revise o preparo do servidor e depois escolha a origem pronta aqui.</p>
+      <button type="button" className="secondary" disabled={state.pending} onClick={() => { if (!state.pending) onPrepareDedicatedServer(); }}>Preparar servidor dedicado</button>
+    </div>}
     {!active && hostEligible && voiceReady && <div className="social-notice">
-      <label><input type="checkbox" checked={useVoice} disabled={state.pending} onChange={event => setUseVoice(event.target.checked)} />Compartilhar a origem de voz pronta ({state.nativeVoiceReady === "simpleVoiceChat" ? "Simple Voice Chat" : "Plasmo Voice"})</label>
-      {useVoice && <label><input type="checkbox" checked={hostPlayer} disabled={state.pending || (ownSession?.maxPlayers ?? 0) < 2} onChange={event => setHostPlayer(event.target.checked)} />Também jogar neste computador (até 7 convidados e 1 vaga local, dentro do limite do anúncio)</label>}
+      <label className="social-consent"><input type="checkbox" checked={useVoice} disabled={state.pending} onChange={event => setUseVoice(event.target.checked)} />Compartilhar a origem de voz pronta ({state.nativeVoiceReady === "simpleVoiceChat" ? "Simple Voice Chat" : "Plasmo Voice"})</label>
+      {useVoice && <label className="social-consent"><input type="checkbox" checked={hostPlayer} disabled={state.pending || (ownSession?.maxPlayers ?? 0) < 2} onChange={event => setHostPlayer(event.target.checked)} />Também jogar neste computador (até 7 convidados e 1 vaga local, dentro do limite do anúncio)</label>}
     </div>}
     {!active && hostEligible && discovery && !useVoice && <>
       <DiscoveryPicker key={selectionEpoch} disabled={!state.available || state.pending} onSelect={setSelected} />
@@ -78,9 +97,20 @@ export function SocialConnectionPanel({ connection, ownSession, now, onOpenConne
       <strong>Compartilhar o servidor deste computador</strong>
       <p>Servidor: {social.gameTarget}. Acesso {social.visibility === "friends" ? "somente para seus amigos" : "para a comunidade"}, com {maxGuests} {maxGuests === 1 ? "vaga" : "vagas para convidados"}{social.hostPlayer ? " e uma vaga local" : ""}.</p>
       <p>O Aurora encaminhará a conexão de jogo{social.voiceProfile ? ` e ${social.voiceProfile === "svc" ? "Simple Voice Chat" : "Plasmo Voice"}` : ""}. Isso não inicia Minecraft.</p>
+      {social.voiceTransportProfile === "nativeVoice8V1" && <NativeVoiceLimits />}
       <label className="social-consent"><input type="checkbox" checked={consent} disabled={!canReview} onChange={event => setConsent(event.target.checked)} />Autorizo compartilhar este servidor {social.voiceProfile ? `por até ${reviewMinutes} minutos, dentro do prazo da origem` : state.maxSessionSeconds === 14400 ? "por até 4 horas" : "por até 60 segundos"}.</label>
       <button disabled={!canReview || !consent} onClick={() => { if (canReview && consent) void controller.confirmHost(); }}>Compartilhar agora</button>
       {expired && <p>Esta revisão expirou. Encerre a tentativa para preparar outra.</p>}
+    </div>}
+    {social?.stage === "guestReview" && <div className="social-notice">
+      <strong>Entrar nesta sessão com {social.voiceProfile === "svc" ? "Simple Voice Chat" : "Plasmo Voice"}</strong>
+      <NativeVoiceLimits />
+      <p>O Aurora abrirá o transporte de jogo e voz após sua confirmação. Isso não inicia Minecraft.</p>
+      <p>Esta revisão usa o prazo original da entrada: {Math.max(0, Math.ceil(((social.expiresAtMs ?? now) - now) / 1000))} segundos restantes.</p>
+      <label className="social-consent"><input type="checkbox" checked={consent} disabled={!canReviewGuest} onChange={event => setConsent(event.target.checked)} />Autorizo a entrada com jogo e voz dentro destes limites.</label>
+      <button disabled={!canReviewGuest || !consent} onClick={() => { if (canReviewGuest && consent && social.expiresAtMs !== null && social.expiresAtMs > Date.now()) void controller.confirmGuest(); }}>Confirmar entrada com voz</button>
+      <button className="secondary" disabled={snapshot?.phase === "closing"} onClick={() => void controller.stop()}>Cancelar entrada</button>
+      {expired && <p>Esta revisão expirou. Cancele a entrada para iniciar uma nova tentativa.</p>}
     </div>}
     {social?.stage === "waitingGuest" && snapshot?.phase === "hostListening" && <p>A sessão está disponível para entrada autorizada. Mantenha o servidor aberto.</p>}
     {social?.stage === "connected" && snapshot && ["hostListening", "guestConnected"].includes(snapshot.phase) && <p>A conexão foi autenticada. Entrada no mundo e disponibilidade do jogo ainda não verificadas.</p>}
@@ -110,7 +140,7 @@ export function SocialConnectionPanel({ connection, ownSession, now, onOpenConne
         if (canOpenGame && social?.expiresAtMs && social.expiresAtMs > Date.now()) onOpenConnectedGame?.();
       }}>Abrir Minecraft</button>}
       {!active && <button disabled={!state.available || state.pending || !hostEligible || retiredOwnSession || ((discovery || useVoice || state.maxSessionSeconds === 14400) && !sourceReady)} onClick={() => {
-        if (!hostEligible || retiredOwnSession || !ownSession || ownSession.visibility === "private") return;
+        if (!hostEligible || retiredOwnSession || !ownSession || ownSession.visibility === "private" || !(ownSession.expiresAtMs > (service?.now ? service.now() : Date.now()))) return;
         if (useVoice) { if (voiceReady) void controller.prepareHostNativeVoice(ownSession.id, ownSession.visibility, hostPlayer); }
         else if (discovery) {
           if (!selected || selected.expiresAtMs <= Date.now() || !socialGameTarget(selected.target)) return;

@@ -35,8 +35,9 @@ export function readyCopyIdsFrom(value: unknown): string[] {
 const profileId = (runtime: ReadyGameRuntime) => runtime.loader === "fabric"
   ? `fabric-loader-${runtime.loaderVersion}-${runtime.minecraftVersion}`
   : `${runtime.minecraftVersion}-forge-${runtime.loaderVersion}`;
-type Props = { sourceInstanceId: string; contextKey?: string; disabled: boolean; selectedId: string; onSelect: (id: string, java?: string) => void; runtimes?: readonly ReadyGameRuntime[] };
-export function ReadyCopyPicker({ sourceInstanceId, contextKey, disabled, selectedId, onSelect, runtimes = [] }: Props) {
+type Props = { sourceInstanceId: string; contextKey?: string; connectOperationId?: string; requiredProfile?: string;
+  disabled: boolean; selectedId: string; onSelect: (id: string, java?: string) => void; runtimes?: readonly ReadyGameRuntime[] };
+export function ReadyCopyPicker({ sourceInstanceId, contextKey, connectOperationId, requiredProfile, disabled, selectedId, onSelect, runtimes = [] }: Props) {
   const [copies, setCopies] = useState<ReadyCopy[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -47,19 +48,21 @@ export function ReadyCopyPicker({ sourceInstanceId, contextKey, disabled, select
   const [cancelRequested, setCancelRequested] = useState(false);
   const epoch = useRef(0);
   const mounted = useRef(false);
-  const current = useRef({ sourceInstanceId, disabled, onSelect });
-  current.current = { sourceInstanceId, disabled, onSelect };
+  const current = useRef({ sourceInstanceId, connectOperationId, requiredProfile, disabled, onSelect });
+  current.current = { sourceInstanceId, connectOperationId, requiredProfile, disabled, onSelect };
   useEffect(() => {
     mounted.current = true; epoch.current++; setCopies([]); setLoaded(false); setBusy(false); setError(""); setTarget(""); setApproved(false);
     current.current.onSelect("");
     return () => { mounted.current = false; epoch.current++; };
-  }, [sourceInstanceId, contextKey]);
+  }, [sourceInstanceId, contextKey, connectOperationId, requiredProfile]);
   async function load() {
     if (disabled || busy || install || !sourceInstanceId) return;
     const request = ++epoch.current;
     const source = sourceInstanceId;
     setBusy(true); setError(""); setCopies([]); setLoaded(false); onSelect("");
-    const live = () => mounted.current && request === epoch.current && current.current.sourceInstanceId === source && !current.current.disabled;
+    const live = () => mounted.current && request === epoch.current && current.current.sourceInstanceId === source
+      && current.current.connectOperationId === connectOperationId && current.current.requiredProfile === requiredProfile
+      && !current.current.disabled;
     try {
       const next = readyCopiesFrom(await invoke<unknown>("diagnostic_lab_list", { id: source }));
       if (live()) { setCopies(next); setLoaded(true); }
@@ -67,17 +70,21 @@ export function ReadyCopyPicker({ sourceInstanceId, contextKey, disabled, select
       if (live()) setError("Não foi possível conferir as cópias de teste. Atualize a lista antes de selecionar.");
     } finally { if (mounted.current && request === epoch.current) setBusy(false); }
   }
-  const targetRuntime = runtimes.find(runtime => profileId(runtime) === target);
+  const offered = requiredProfile ? runtimes.filter(runtime => profileId(runtime) === requiredProfile) : runtimes;
+  const selectedProfile = requiredProfile && offered.length ? requiredProfile : target;
+  const targetRuntime = offered.find(runtime => profileId(runtime) === selectedProfile);
+  const originalSelected = !idPattern.test(sourceInstanceId);
   async function prepareRuntime() {
-    if (disabled || busy || install || !targetRuntime || !approved || !sourceInstanceId) return;
+    if (disabled || busy || install || !targetRuntime || !approved || !sourceInstanceId || !connectOperationId || !originalSelected) return;
     const operationId = crypto.randomUUID();
     const source = sourceInstanceId;
     const request = ++epoch.current;
     setInstall(operationId); setApproved(false); setCancelRequested(false); setError("");
-    const live = () => mounted.current && request === epoch.current && current.current.sourceInstanceId === source;
+    const live = () => mounted.current && request === epoch.current && current.current.sourceInstanceId === source
+      && current.current.connectOperationId === connectOperationId && current.current.requiredProfile === requiredProfile;
     try {
       const value = await invoke<unknown>("connect_install_ready_copy", {
-        request: { operationId, sourceInstanceId: source, profileId: profileId(targetRuntime), approved: true },
+        request: { operationId, connectOperationId, sourceInstanceId: source, profileId: profileId(targetRuntime), approved: true },
       });
       const [copy] = readyCopiesFrom([value]);
       if (!copy?.java || copy.originInstanceId !== source) throw new Error("Wrong prepared copy");
@@ -109,12 +116,14 @@ export function ReadyCopyPicker({ sourceInstanceId, contextKey, disabled, select
       if (copy || id === "") onSelect(id, copy?.java);
     }}><option value="">Selecione uma cópia</option>{copies.map(copy => <option value={copy.id} key={copy.id}>{copy.id}{copy.java ? " · runtime oficial" : ""}</option>)}</select></label>}
     <small>A seleção não instala arquivos. Minecraft, loader, Java, Core e Skins serão conferidos na revisão.</small>
-    {runtimes.length > 0 && <details>
+    {requiredProfile && runtimes.length > 0 && !offered.length && <p>Esta versão do Connect não oferece o perfil assinado da sessão.</p>}
+    {offered.length > 0 && !originalSelected && !install && <p>Selecione a instância de origem para preparar outra cópia de runtime.</p>}
+    {(offered.length > 0 && originalSelected || !!install) && <details>
       <summary>Preparar uma nova cópia de runtime</summary>
-      <fieldset disabled={disabled || busy || !!install}>
-        <label>Perfil oficial da nova cópia<select value={target} onChange={event => { setTarget(event.target.value); setApproved(false); }}>
+      <fieldset disabled={disabled || busy || !!install || !originalSelected}>
+        <label>Perfil oficial da nova cópia<select value={selectedProfile} disabled={!!requiredProfile} onChange={event => { setTarget(event.target.value); setApproved(false); }}>
           <option value="">Selecione o perfil</option>
-          {runtimes.map(runtime => <option key={profileId(runtime)} value={profileId(runtime)}>
+          {offered.map(runtime => <option key={profileId(runtime)} value={profileId(runtime)}>
             Minecraft {runtime.minecraftVersion} · {runtime.loader === "forge" ? "Forge" : "Fabric"} {runtime.loaderVersion}
           </option>)}
         </select></label>
@@ -122,7 +131,7 @@ export function ReadyCopyPicker({ sourceInstanceId, contextKey, disabled, select
           <p>A cópia será criada com Java {targetRuntime.javaMajor}, Core {targetRuntime.coreVersion}, Skins {targetRuntime.skinsVersion} e os arquivos oficiais do perfil selecionado. Mundos, mods e configurações do modpack ficam na origem.</p>
           {targetRuntime.loader === "forge" && <p>O preparo executa o instalador oficial do Forge com o Java da cópia.</p>}
           <label><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)} />Autorizo baixar e instalar o perfil acima em uma nova cópia de teste.</label>
-          <button type="button" disabled={!approved} onClick={() => { void prepareRuntime(); }}>Criar cópia com este runtime</button>
+          <button type="button" disabled={!approved || !connectOperationId} onClick={() => { void prepareRuntime(); }}>Criar cópia com este runtime</button>
         </>}
       </fieldset>
       {install && <><p role="status">Preparando a cópia de runtime…</p><button type="button" disabled={cancelRequested} onClick={() => { void cancelInstall(); }}>Cancelar instalação da cópia</button></>}

@@ -5,9 +5,12 @@ use super::*;
 use crate::engine::{
     connect::{ConnectManager, GroupParticipantRequest},
     connect_native_voice::*,
+    connect_owned_run::OwnedRunFailure,
 };
 use aurora_connect_lab as lab;
-use producer::{DedicatedPhase, DedicatedPlan, DedicatedRun, EulaDisposition};
+use producer::{
+    DedicatedFailure, DedicatedPhase, DedicatedPlan, DedicatedReport, DedicatedRun, EulaDisposition,
+};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -20,6 +23,9 @@ use tokio_util::sync::CancellationToken;
 
 type Outcome = std::result::Result<NativeVoiceSnapshot, &'static str>;
 type Message = (NativeVoiceRequest, oneshot::Sender<Outcome>);
+const TRANSPORT_CLEANUP_FAILED: &str = "native_voice_transport_cleanup_failed";
+const FORCED_STOP: &str = "native_voice_stop_forced";
+const FORCED_STOP_CLEANUP_FAILED: &str = "native_voice_stop_forced_cleanup_failed";
 struct Client {
     sender: mpsc::Sender<Message>,
     snapshot: Arc<Mutex<NativeVoiceSnapshot>>,
@@ -49,7 +55,8 @@ impl DesktopVoiceManager {
                 .snapshot
                 .lock()
                 .map_err(|_| "native_voice_internal")?
-                .clone()),
+                .clone()
+                .projected()),
             None => Ok(NativeVoiceSnapshot::default()),
         }
     }
@@ -77,7 +84,9 @@ impl DesktopVoiceManager {
             if current.is_none() {
                 if !matches!(
                     request,
-                    NativeVoiceRequest::Prepare { .. } | NativeVoiceRequest::InspectRecovery
+                    NativeVoiceRequest::Prepare { .. }
+                        | NativeVoiceRequest::PrepareRuntime { .. }
+                        | NativeVoiceRequest::InspectRecovery {}
                 ) {
                     return Err("native_voice_no_session");
                 }
@@ -121,9 +130,13 @@ impl DesktopVoiceManager {
         if client.cancel.is_cancelled() {
             return Err("native_voice_closed");
         }
-        let stopping = matches!(request, NativeVoiceRequest::Stop);
+        let stopping = matches!(request, NativeVoiceRequest::Stop {});
         if stopping {
             client.stop.store(true, Ordering::Release);
+            if let Ok(mut view) = client.snapshot.lock() {
+                view.phase = "stopping";
+                view.revision = view.revision.saturating_add(1);
+            }
         }
         if !stopping
             && client
@@ -223,10 +236,12 @@ struct Actor {
     view: NativeVoiceSnapshot,
     stop: Arc<AtomicBool>,
     factory: Option<FactoryPlan>,
+    server_preparation: Option<server_preparation::ServerPreparationPlan>,
     execution: Option<DedicatedPlan>,
     source: Option<DedicatedRun>,
     recovery: Option<(Instance, DurableRestorationController)>,
-    review_deadline: Option<Instant>,
+    eula_recovery: Option<EulaRecoveryPlan>,
+    bundle_id: Option<BundleId>,
     host_generation: Option<u64>,
     host_bind: Option<std::net::UdpSocket>,
     local_key: Option<lab::SecretKey>,
@@ -255,10 +270,12 @@ impl Actor {
             view,
             stop,
             factory: None,
+            server_preparation: None,
             execution: None,
             source: None,
             recovery: None,
-            review_deadline: None,
+            eula_recovery: None,
+            bundle_id: None,
             host_generation: None,
             host_bind: None,
             local_key: None,
@@ -268,19 +285,33 @@ impl Actor {
         }
     }
     fn publish(&mut self) {
-        self.view.revision = self.view.revision.saturating_add(1);
         if let Ok(mut target) = self.shared.lock() {
-            *target = self.view.clone();
+            self.view.revision = self.view.revision.max(target.revision).saturating_add(1);
+            *target = self.view.clone().projected();
         }
     }
-    fn review(&mut self, kind: &'static str, review: &Review) {
-        self.view.review = Some(NativeVoiceApproval { kind, digest: review.digest.clone(), before: review.before.clone(), after: review.after.clone(), details: vec![
-            "Minecraft 1.21.1 / Fabric 0.16.14 / Java 21 em uma cópia dedicada nova. A origem pode ficar ativa por até 4 horas. Cada sessão respeita seu prazo original aprovado.".into(),
-            "Servidor privado loopback43001; login Minecraft offline; whitelist desligada; máximo de 8 jogadores; transporte Aurora autenticado. A execução aplica a EULA revisada e recolhe o mesmo processo antes de restaurá-la.".into(),
-            "Endereço do anúncio 127.0.0.1:35554; mod e porta de origem verificados nativamente; áudio ainda precisa de teste.".into(),
-            "Recibo Recovery durável. Encerrar o transporte não encerra a origem. Restaurar anúncio exige outra confirmação após encerrar Java.".into(),
-        ] });
-        self.review_deadline = Some(Instant::now() + REVIEW_TTL);
+    fn review(&mut self, kind: &'static str, review: &Review, deadline: Instant) {
+        let runtime = self
+            .view
+            .runtime_profile
+            .unwrap_or(NativeVoiceRuntime::Fabric1211)
+            .ready()
+            .descriptor();
+        let mut details = vec![
+            format!("Minecraft {} / {} {} / Java {} em cópia dedicada nova. Prazo original de até4h.", runtime.minecraft_version, runtime.loader, runtime.loader_version, runtime.java_major),
+            "Servidor privado loopback43001; login Minecraft offline; whitelist desligada; máximo8jogadores; transporteAurora autenticado. EULA e execução têm revisão separada.".into(),
+            "Anúncio127.0.0.1:35554 comRecoverydurável. Mod/porta originais verificados; áudio ainda requer teste.".into(),
+        ];
+        details.extend(review.details.iter().cloned());
+        self.view.review = Some(NativeVoiceApproval {
+            kind,
+            digest: review.digest.clone(),
+            before: review.before.clone(),
+            after: review.after.clone(),
+            details,
+            remaining_ms: 0,
+        });
+        self.view.native_review_deadline = Some(deadline);
     }
     async fn run(
         mut self,
@@ -296,14 +327,20 @@ impl Actor {
                 _ = tick.tick() => { self.maintain().await; self.publish(); },
                 message = receiver.recv() => {
                     let Some((request, result)) = message else { break; };
-                    let stopping = matches!(request, NativeVoiceRequest::Stop);
+                    let stopping = matches!(request, NativeVoiceRequest::Stop {});
                     let outcome = match catch_future(self.handle(request, &cancel)).await {
                         Ok(result) => result,
                         Err(()) => { self.stop.store(true, Ordering::Release); let _ = self.stop_all().await; Err("native_voice_worker_failed") }
                     };
-                    if let Err(code) = outcome { self.view.error_code = Some(code); }
+                    let outcome = match outcome {
+                        Err(code) => {
+                            self.settle_failure().await;
+                            Err(*self.view.error_code.get_or_insert(code))
+                        }
+                        Ok(value) => Ok(value),
+                    };
                     self.publish();
-                    let response = outcome.map(|invitation| { let mut snapshot = self.view.clone(); snapshot.exported_invitation = invitation; snapshot });
+                    let response = outcome.map(|invitation| { let mut snapshot = self.view.clone().projected(); snapshot.exported_invitation = invitation; snapshot });
                     let _ = result.send(response);
                     if !stopping { busy.store(false, Ordering::Release); }
                 }
@@ -324,7 +361,10 @@ impl Actor {
             self.view.phase = "socialSource";
         }
         if self.stop.load(Ordering::Acquire)
-            && (self.source.is_some() || self.factory.is_some() || self.execution.is_some())
+            && (self.source.is_some()
+                || self.factory.is_some()
+                || self.server_preparation.is_some()
+                || self.execution.is_some())
         {
             if let Err(code) = self.stop_all().await {
                 self.view.error_code = Some(code);
@@ -332,13 +372,19 @@ impl Actor {
             return;
         }
         if self
-            .review_deadline
+            .view
+            .native_review_deadline
             .is_some_and(|deadline| Instant::now() >= deadline)
         {
+            self.server_preparation.take();
             self.factory.take();
             self.execution.take();
+            self.eula_recovery.take();
+            if let Some((_, receipt)) = &mut self.recovery {
+                receipt.cancel_review();
+            }
             self.view.review = None;
-            self.review_deadline = None;
+            self.view.native_review_deadline = None;
             if self.source.is_none() {
                 self.view.phase = "reviewExpired";
             } else if self.view.operation_id.is_some() {
@@ -413,33 +459,156 @@ impl Actor {
             .as_ref()
             .is_none_or(|review| review.kind != kind || review.digest != digest)
             || self
-                .review_deadline
+                .view
+                .native_review_deadline
                 .is_none_or(|deadline| Instant::now() >= deadline)
         {
             return Err("native_voice_stale_review");
         }
         Ok(())
     }
+    async fn settle_failure(&mut self) {
+        if matches!(
+            self.view.phase,
+            "preparing" | "preparingServer" | "creating" | "starting" | "restoringEula"
+        ) {
+            // handle() awaits the original blocking task before reaching here.
+            // A failure never frees a live installer/source or drops receipts.
+            if self.source.is_some() {
+                let _ = self.stop_all().await;
+            }
+            self.server_preparation.take();
+            self.factory.take();
+            self.execution.take();
+            self.eula_recovery.take();
+            self.view.review = None;
+            self.view.native_review_deadline = None;
+            self.view.phase = if self.view.eula_state == "needsRecovery" {
+                "needsRecovery"
+            } else {
+                "failed"
+            };
+        }
+        self.view.eula_recovery_available = self.bundle_id.is_some()
+            && self.source.is_none()
+            && self.view.eula_state == "needsRecovery";
+    }
     async fn handle(
         &mut self,
         request: NativeVoiceRequest,
         cancel: &CancellationToken,
     ) -> std::result::Result<Option<String>, &'static str> {
-        self.view.error_code = None;
+        // An explicit Stop can arrive after maintain() already collected the
+        // same source. Keep its terminal warning visible on repeated Stop.
+        if !matches!(request, NativeVoiceRequest::Stop {}) {
+            self.view.error_code = None;
+        }
         match request {
-            NativeVoiceRequest::Prepare { profile } => {
+            NativeVoiceRequest::PrepareRuntime {
+                profile,
+                runtime_profile,
+            } => {
                 if self.source.is_some()
+                    || self.eula_recovery.is_some()
+                    || self.view.eula_state == "needsRecovery"
                     || self.view.recovery_pending
                     || self.factory.is_some()
+                    || self.server_preparation.is_some()
+                    || self.execution.is_some()
+                {
+                    return Err("native_voice_busy");
+                }
+                if voice_catalog::artifacts(runtime_profile.ready(), resource_profile(profile))
+                    .is_none()
+                {
+                    return Err("native_voice_runtime_unsupported");
+                }
+                self.stop.store(false, Ordering::Release);
+                self.bundle_id = None;
+                self.claimed.store(false, Ordering::Release);
+                self.view = NativeVoiceSnapshot {
+                    revision: self.view.revision,
+                    profile: Some(profile),
+                    runtime_profile: Some(runtime_profile),
+                    phase: "preparing",
+                    ..NativeVoiceSnapshot::default()
+                };
+                self.publish();
+                let lab = self.lab.clone();
+                let stop = self.stop.clone();
+                let cancel = cancel.clone();
+                let plan = tokio::task::spawn_blocking(move || {
+                    server_preparation::ServerPreparationPlan::prepare(
+                        &lab,
+                        runtime_profile.ready(),
+                        resource_profile(profile),
+                        &|| stop.load(Ordering::Acquire) || cancel.is_cancelled(),
+                    )
+                })
+                .await
+                .map_err(|_| "native_voice_worker_failed")?
+                .map_err(file_error)?;
+                if self.stop.load(Ordering::Acquire) {
+                    self.view.phase = "stopped";
+                    return Err("native_voice_cancelled");
+                }
+                self.review("preparation", plan.review(), plan.approval_deadline());
+                self.server_preparation = Some(plan);
+                self.view.phase = "preparationReviewed";
+            }
+            NativeVoiceRequest::ApprovePreparation { digest } => {
+                self.approval("preparation", &digest)?;
+                let plan = self
+                    .server_preparation
+                    .take()
+                    .ok_or("native_voice_stale_review")?;
+                self.view.review = None;
+                self.view.phase = "preparingServer";
+                self.publish();
+                let lab = self.lab.clone();
+                let stop = self.stop.clone();
+                let cancel = cancel.clone();
+                let plan = tokio::task::spawn_blocking(move || {
+                    let cancelled = || stop.load(Ordering::Acquire) || cancel.is_cancelled();
+                    let proof = plan.execute(&digest, &cancelled)?;
+                    if cancelled() {
+                        return Err(Error::Cancelled);
+                    }
+                    let plan = factory::plan_voice_server_factory_at(&lab, proof)?;
+                    if cancelled() {
+                        return Err(Error::Cancelled);
+                    }
+                    Ok(plan)
+                })
+                .await
+                .map_err(|_| "native_voice_worker_failed")?
+                .map_err(file_error)?;
+                if self.stop.load(Ordering::Acquire) {
+                    self.view.phase = "stopped";
+                    return Err("native_voice_cancelled");
+                }
+                self.review("files", plan.review(), plan.approval_deadline());
+                self.factory = Some(plan);
+                self.view.phase = "filesReviewed";
+            }
+            NativeVoiceRequest::Prepare { profile } => {
+                if self.source.is_some()
+                    || self.eula_recovery.is_some()
+                    || self.view.eula_state == "needsRecovery"
+                    || self.view.recovery_pending
+                    || self.factory.is_some()
+                    || self.server_preparation.is_some()
                     || self.execution.is_some()
                 {
                     return Err("native_voice_busy");
                 }
                 self.stop.store(false, Ordering::Release);
+                self.bundle_id = None;
                 self.claimed.store(false, Ordering::Release);
                 self.view = NativeVoiceSnapshot {
                     revision: self.view.revision,
                     profile: Some(profile),
+                    runtime_profile: Some(NativeVoiceRuntime::Fabric1211),
                     phase: "preparing",
                     ..NativeVoiceSnapshot::default()
                 };
@@ -471,14 +640,16 @@ impl Actor {
                         });
                     }
                 };
-                self.review("files", plan.review());
+                self.review("files", plan.review(), plan.approval_deadline());
                 self.factory = Some(plan);
                 self.view.phase = "filesReviewed";
             }
-            NativeVoiceRequest::InspectRecovery => {
+            NativeVoiceRequest::InspectRecovery {} => {
                 if self.source.is_some()
+                    || self.eula_recovery.is_some()
                     || self.execution.is_some()
                     || self.factory.is_some()
+                    || self.server_preparation.is_some()
                     || self.view.recovery_pending
                 {
                     return Err("native_voice_busy");
@@ -494,8 +665,11 @@ impl Actor {
                 receipt_id,
             } => {
                 if self.source.is_some()
+                    || self.eula_recovery.is_some()
+                    || self.view.eula_state == "needsRecovery"
                     || self.execution.is_some()
                     || self.factory.is_some()
+                    || self.server_preparation.is_some()
                     || self.view.recovery_pending
                 {
                     return Err("native_voice_busy");
@@ -510,17 +684,34 @@ impl Actor {
                     .cloned()
                     .ok_or("native_voice_recovery_selection_stale")?;
                 let lab = self.lab.clone();
+                let selected_id = Uuid::parse_str(&bundle_id)
+                    .map_err(|_| "native_voice_recovery_selection_stale")?;
                 let recovery = tokio::task::spawn_blocking(move || {
                     resume_recovery(&lab, &bundle_id, &receipt_id)
                 })
                 .await
                 .map_err(|_| "native_voice_worker_failed")??;
-                self.recovery = Some(recovery);
+                self.view.recovery_pending = recovery
+                    .announcement
+                    .as_ref()
+                    .is_some_and(|(_, receipt)| receipt.state() != RestorationState::Restored);
+                self.recovery = recovery.announcement;
+                self.bundle_id = Some(BundleId(selected_id));
                 self.view.profile = Some(candidate.profile);
-                self.view.recovery_pending = true;
-                self.view.phase = "stopped";
+                self.view.runtime_profile = Some(recovery.runtime);
+                self.view.eula_state = if recovery.eula_pending {
+                    "needsRecovery"
+                } else {
+                    "unchanged"
+                };
+                self.view.eula_recovery_available = recovery.eula_pending;
+                self.view.phase = if recovery.eula_pending {
+                    "needsRecovery"
+                } else {
+                    "stopped"
+                };
                 self.view.review = None;
-                self.review_deadline = None;
+                self.view.native_review_deadline = None;
             }
             NativeVoiceRequest::ApproveFiles { digest } => {
                 self.approval("files", &digest)?;
@@ -528,6 +719,7 @@ impl Actor {
                     return Err("native_voice_cancelled");
                 }
                 let plan = self.factory.take().ok_or("native_voice_stale_review")?;
+                self.bundle_id = Some(plan.review().bundle_id);
                 self.view.review = None;
                 self.view.phase = "creating";
                 self.publish();
@@ -546,7 +738,7 @@ impl Actor {
                     .await
                     .map_err(|_| "native_voice_worker_failed")?
                     .map_err(run_error)?;
-                self.review("execution", plan.review());
+                self.review("execution", plan.review(), plan.approval_deadline());
                 self.execution = Some(plan);
                 self.view.phase = "executionReviewed";
             }
@@ -557,7 +749,9 @@ impl Actor {
                 }
                 let plan = self.execution.take().ok_or("native_voice_stale_review")?;
                 self.view.review = None;
-                self.review_deadline = None;
+                self.view.native_review_deadline = None;
+                self.view.phase = "starting";
+                self.publish();
                 let run = tokio::task::spawn_blocking(move || {
                     plan.start(&digest, CancellationToken::new())
                 })
@@ -686,8 +880,8 @@ impl Actor {
                         local_player: local_id.as_ref() == Some(&participant.guest_public_id),
                     })
                     .collect();
-                self.view.review = Some(NativeVoiceApproval { kind: "host", digest: review.digest, before: "Origem dedicada própria; nenhum Host Connect".into(), after: format!("Host de {} participantes explícitos; TCP game + UDP aux; anúncio {}", self.view.participants.len(), review.data.announcement_policy), details: vec![format!("Origem nativa {} / {}; destinos fixados pelo mesmo processo; nenhuma porta recebida da interface.", review.profile, review.artifact_version), "Cada falha de observação retira UDP terminalmente; TCP conserva seus gates próprios. O Host jogador ocupa uma vaga e 127.0.0.1:35554.".into(), "Transporte local experimental; áudio/auth do mod precisam de validação manual.".into()] });
-                self.review_deadline = Some(Instant::now() + REVIEW_TTL);
+                self.view.review = Some(NativeVoiceApproval { kind: "host", digest: review.digest, before: "Origem dedicada própria; nenhum Host Connect".into(), after: format!("Host de {} participantes explícitos; TCP game + UDP aux; anúncio {}", self.view.participants.len(), review.data.announcement_policy), remaining_ms: 0, details: vec![format!("Origem nativa {} / {}; destinos fixados pelo mesmo processo; nenhuma porta recebida da interface.", review.profile, review.artifact_version), "Cada falha de observação retira UDP terminalmente; TCP conserva seus gates próprios. O Host jogador ocupa uma vaga e 127.0.0.1:35554.".into(), "Transporte local experimental; áudio/auth do mod precisam de validação manual.".into()] });
+                self.view.native_review_deadline = Some(review.deadline);
                 self.view.phase = "hostReviewed";
             }
             NativeVoiceRequest::ApproveHost { digest } => {
@@ -703,7 +897,7 @@ impl Actor {
                 let generation = self.host_generation.ok_or("native_voice_stale_review")?;
                 self.host_bind.take();
                 self.view.review = None;
-                self.review_deadline = None;
+                self.view.native_review_deadline = None;
                 self.view.phase = "binding";
                 self.publish();
                 self.connect
@@ -746,12 +940,17 @@ impl Actor {
                     .map(Some)
                     .map_err(|error| error.code());
             }
-            NativeVoiceRequest::Stop => {
+            NativeVoiceRequest::Stop {} => {
                 self.stop.store(true, Ordering::Release);
                 self.stop_all().await?;
             }
             NativeVoiceRequest::PrepareRestore { reconciled } => {
-                if self.source.is_some() || self.execution.is_some() || self.factory.is_some() {
+                if self.source.is_some()
+                    || self.eula_recovery.is_some()
+                    || self.execution.is_some()
+                    || self.factory.is_some()
+                    || self.server_preparation.is_some()
+                {
                     return Err("native_voice_source_running");
                 }
                 let (instance, mut receipt) =
@@ -782,8 +981,12 @@ impl Actor {
                     before: review.before,
                     after: review.after,
                     details: vec![review.warning],
+                    remaining_ms: 0,
                 });
-                self.review_deadline = Some(Instant::now() + REVIEW_TTL);
+                self.view.native_review_deadline = self
+                    .recovery
+                    .as_ref()
+                    .and_then(|(_, receipt)| receipt.review_deadline());
                 self.view.phase = "restoreReviewed";
             }
             NativeVoiceRequest::ApproveRestore { digest } => {
@@ -801,8 +1004,71 @@ impl Actor {
                 result.map_err(|_| "native_voice_restore_failed")?;
                 self.view.recovery_pending = false;
                 self.view.review = None;
-                self.review_deadline = None;
-                self.view.phase = "restored";
+                self.view.native_review_deadline = None;
+                self.view.phase = if self.view.eula_state == "needsRecovery" {
+                    "needsRecovery"
+                } else {
+                    "restored"
+                };
+            }
+            NativeVoiceRequest::PrepareEulaRestore {} => {
+                if self.source.is_some()
+                    || self.execution.is_some()
+                    || self.factory.is_some()
+                    || self.server_preparation.is_some()
+                    || self.eula_recovery.is_some()
+                {
+                    return Err("native_voice_source_running");
+                }
+                let id = self.bundle_id.ok_or("native_voice_no_receipt")?;
+                if let Some((_, receipt)) = &mut self.recovery {
+                    receipt.cancel_review();
+                }
+                self.view.review = None;
+                self.view.native_review_deadline = None;
+                let lab = self.lab.clone();
+                let plan = tokio::task::spawn_blocking(move || {
+                    #[cfg(test)]
+                    {
+                        eula::prepare_recovery(&lab, id, None, Hooks::default())
+                    }
+                    #[cfg(not(test))]
+                    {
+                        eula::prepare_recovery(&lab, id, Hooks)
+                    }
+                })
+                .await
+                .map_err(|_| "native_voice_worker_failed")?
+                .map_err(|_| "native_voice_eula_restore_review_failed")?;
+                self.view.eula_recovery_available = true;
+                self.review("eulaRestore", plan.review(), plan.approval_deadline());
+                self.eula_recovery = Some(plan);
+                self.view.phase = "eulaRestoreReviewed";
+            }
+            NativeVoiceRequest::ApproveEulaRestore { digest } => {
+                self.approval("eulaRestore", &digest)?;
+                let plan = self
+                    .eula_recovery
+                    .take()
+                    .ok_or("native_voice_stale_review")?;
+                self.view.review = None;
+                self.view.native_review_deadline = None;
+                self.view.phase = "restoringEula";
+                self.publish();
+                let outcome = tokio::task::spawn_blocking(move || plan.confirm(&digest))
+                    .await
+                    .map_err(|_| "native_voice_worker_failed")?
+                    .map_err(|_| "native_voice_eula_restore_failed")?;
+                self.view.eula_state = match outcome {
+                    eula::EulaOutcome::Restored => "restored",
+                    eula::EulaOutcome::Unchanged => "unchanged",
+                };
+                self.view.eula_recovery_available = false;
+                self.view.phase = if self.view.recovery_pending {
+                    "stopped"
+                } else {
+                    "restored"
+                };
             }
         }
         Ok(None)
@@ -877,10 +1143,15 @@ impl Actor {
         self.view.tcp_address = None;
         self.view.negotiated_datagram_bytes = None;
         if let Some(id) = &self.view.operation_id {
-            self.connect
+            if !self
+                .connect
                 .stop("main", id)
                 .await
-                .map_err(|error| error.code())?;
+                .is_ok_and(|snapshot| snapshot.cleanup_state == "complete")
+            {
+                self.view.udp_state = "cleanupFailed";
+                return Err(TRANSPORT_CLEANUP_FAILED);
+            }
         }
         self.view.udp_state = "closed";
         Ok(())
@@ -888,10 +1159,15 @@ impl Actor {
     async fn stop_all(&mut self) -> std::result::Result<(), &'static str> {
         self.view.phase = "stopping";
         self.view.review = None;
-        self.review_deadline = None;
+        self.view.native_review_deadline = None;
         self.publish();
+        self.server_preparation.take();
         self.factory.take();
         self.execution.take();
+        self.eula_recovery.take();
+        if let Some((_, receipt)) = &mut self.recovery {
+            receipt.cancel_review();
+        }
         if let Ok(mut source) = self.shared_source.lock() {
             *source = None;
         }
@@ -903,18 +1179,64 @@ impl Actor {
                 EulaDisposition::Unchanged => "unchanged",
                 EulaDisposition::NeedsRecovery => "needsRecovery",
             };
+            self.view.error_code = source_completion_error(&report);
             self.source.take();
         }
+        let transport = match transport {
+            Ok(()) => {
+                self.view.error_code = match self.view.error_code {
+                    Some(FORCED_STOP_CLEANUP_FAILED) => Some(FORCED_STOP),
+                    Some(TRANSPORT_CLEANUP_FAILED) => None,
+                    previous => previous,
+                };
+                Ok(())
+            }
+            Err(code) => {
+                let code = if matches!(
+                    self.view.error_code,
+                    Some(FORCED_STOP | FORCED_STOP_CLEANUP_FAILED)
+                ) {
+                    FORCED_STOP_CLEANUP_FAILED
+                } else {
+                    code
+                };
+                self.view.error_code = Some(code);
+                Err(code)
+            }
+        };
         self.view.recovery_pending = self
             .recovery
             .as_ref()
             .is_some_and(|(_, receipt)| receipt.state() != RestorationState::Restored);
         self.view.phase = if self.view.eula_state == "needsRecovery" {
             "needsRecovery"
+        } else if transport.is_err() {
+            "failed"
         } else {
             "stopped"
         };
+        self.view.eula_recovery_available =
+            self.bundle_id.is_some() && self.view.eula_state == "needsRecovery";
         transport
+    }
+}
+fn source_completion_error(report: &DedicatedReport) -> Option<&'static str> {
+    if report
+        .process
+        .as_ref()
+        .is_some_and(|process| process.forced)
+        || report.failure == Some(DedicatedFailure::Child(OwnedRunFailure::Forced))
+    {
+        return Some(FORCED_STOP);
+    }
+    match report.failure {
+        Some(DedicatedFailure::Deadline) => Some("native_voice_source_expired"),
+        Some(DedicatedFailure::Cancelled) => Some("native_voice_source_cancelled"),
+        Some(DedicatedFailure::Preparation(_)) if report.eula == EulaDisposition::NeedsRecovery => {
+            Some("native_voice_recovery_required")
+        }
+        Some(_) => Some("native_voice_source_failed"),
+        None => None,
     }
 }
 fn resource_profile(
@@ -1034,7 +1356,7 @@ fn inspect_recovery(
         let Ok(bundle) = factory::Bundle::reopen(lab, BundleId(id)) else {
             continue;
         };
-        let Ok(voice) = bundle.manifest.voice_v2() else {
+        let Ok(voice) = bundle.manifest.voice() else {
             continue;
         };
         if voice.observation_policy != manifest::ObservationPolicyV2::LiteralLoopback35554Durable {
@@ -1050,14 +1372,28 @@ fn inspect_recovery(
         };
         let guard = super::super::acquire_voice_mutation_guard(&bundle.copy)
             .map_err(|_| "native_voice_recovery_probe_failed")?;
+        let eula_pending = eula::recovery_needed(&bundle).map_err(file_error)?;
+        let runtime = NativeVoiceRuntime::from_ready(
+            bundle
+                .manifest
+                .server_v3()
+                .map(|server| server.server.runtime())
+                .transpose()
+                .map_err(file_error)?
+                .unwrap_or(crate::engine::connect_ready_profile::ReadyProfile::Fabric1211),
+        );
         let receipts = super::super::list_restoration_receipts(&bundle.copy, &guard)
             .map_err(|_| "native_voice_recovery_inventory_failed")?;
         for receipt in receipts {
-            if receipt.state == super::super::DurableReceiptState::Ready {
+            let announcement_pending = receipt.state == super::super::DurableReceiptState::Ready;
+            if announcement_pending || eula_pending {
                 candidates.push(NativeVoiceRecoveryCandidate {
                     bundle_id: id.to_string(),
                     receipt_id: receipt.receipt_id,
                     profile,
+                    runtime_profile: runtime,
+                    eula_recovery_pending: eula_pending,
+                    announcement_recovery_pending: announcement_pending,
                 });
                 if candidates.len() >= 64 {
                     return Ok(candidates);
@@ -1067,11 +1403,16 @@ fn inspect_recovery(
     }
     Ok(candidates)
 }
+struct Recovered {
+    announcement: Option<(Instance, DurableRestorationController)>,
+    eula_pending: bool,
+    runtime: NativeVoiceRuntime,
+}
 fn resume_recovery(
     lab: &Path,
     id: &str,
     receipt_id: &str,
-) -> std::result::Result<(Instance, DurableRestorationController), &'static str> {
+) -> std::result::Result<Recovered, &'static str> {
     let id = Uuid::parse_str(id).map_err(|_| "native_voice_recovery_selection_stale")?;
     if receipt_id.len() > 128 {
         return Err("native_voice_recovery_selection_stale");
@@ -1079,7 +1420,7 @@ fn resume_recovery(
     let bundle = factory::Bundle::reopen(lab, BundleId(id)).map_err(file_error)?;
     if bundle
         .manifest
-        .voice_v2()
+        .voice()
         .map_err(file_error)?
         .observation_policy
         != manifest::ObservationPolicyV2::LiteralLoopback35554Durable
@@ -1088,10 +1429,43 @@ fn resume_recovery(
     }
     let guard = super::super::acquire_voice_mutation_guard(&bundle.copy)
         .map_err(|_| "native_voice_recovery_probe_failed")?;
-    let receipt = super::super::resume_restoration(&bundle.copy, &guard, receipt_id)
-        .map_err(|_| "native_voice_recovery_resume_failed")?;
-    Ok((bundle.copy.clone(), receipt))
+    let eula_pending = eula::recovery_needed(&bundle).map_err(file_error)?;
+    let runtime = NativeVoiceRuntime::from_ready(
+        bundle
+            .manifest
+            .server_v3()
+            .map(|server| server.server.runtime())
+            .transpose()
+            .map_err(file_error)?
+            .unwrap_or(crate::engine::connect_ready_profile::ReadyProfile::Fabric1211),
+    );
+    let summary = super::super::list_restoration_receipts(&bundle.copy, &guard)
+        .map_err(|_| "native_voice_recovery_inventory_failed")?
+        .into_iter()
+        .find(|receipt| receipt.receipt_id == receipt_id)
+        .ok_or("native_voice_recovery_selection_stale")?;
+    let announcement = match summary.state {
+        super::super::DurableReceiptState::Ready => {
+            let receipt = super::super::resume_restoration(&bundle.copy, &guard, receipt_id)
+                .map_err(|_| "native_voice_recovery_resume_failed")?;
+            Some((bundle.copy.clone(), receipt))
+        }
+        super::super::DurableReceiptState::Restored
+        | super::super::DurableReceiptState::Retired => None,
+    };
+    if !eula_pending && summary.state != super::super::DurableReceiptState::Ready {
+        return Err("native_voice_recovery_selection_stale");
+    }
+    Ok(Recovered {
+        announcement,
+        eula_pending,
+        runtime,
+    })
 }
+
+#[cfg(test)]
+#[path = "desktop_tests.rs"]
+pub(super) mod actor_tests;
 
 #[cfg(test)]
 mod tests {

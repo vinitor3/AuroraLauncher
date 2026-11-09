@@ -131,6 +131,7 @@ pub(super) struct ApprovedFilesV2 {
 pub(super) enum ApprovedFiles {
     StatusV1(ApprovedFilesV1),
     VoiceV2(ApprovedFilesV2),
+    VoiceV3(ApprovedFilesV2),
 }
 impl Serialize for ApprovedFiles {
     fn serialize<S: serde::Serializer>(
@@ -139,7 +140,7 @@ impl Serialize for ApprovedFiles {
     ) -> std::result::Result<S::Ok, S::Error> {
         match self {
             Self::StatusV1(files) => files.serialize(serializer),
-            Self::VoiceV2(files) => files.serialize(serializer),
+            Self::VoiceV2(files) | Self::VoiceV3(files) => files.serialize(serializer),
         }
     }
 }
@@ -147,7 +148,8 @@ impl ApprovedFiles {
     pub(super) fn require_manifest_kind(&self, manifest: &Manifest) -> Result<()> {
         match (manifest, self) {
             (Manifest::StatusV1(_), Self::StatusV1(_))
-            | (Manifest::VoiceV2(_), Self::VoiceV2(_)) => Ok(()),
+            | (Manifest::VoiceV2(_), Self::VoiceV2(_))
+            | (Manifest::VoiceV3(_), Self::VoiceV3(_)) => Ok(()),
             _ => Err(Error::Identity),
         }
     }
@@ -155,14 +157,14 @@ impl ApprovedFiles {
     fn original(&self) -> &Observation {
         match self {
             Self::StatusV1(files) => &files.original,
-            Self::VoiceV2(files) => &files.original,
+            Self::VoiceV2(files) | Self::VoiceV3(files) => &files.original,
         }
     }
 
     fn properties(&self) -> &Observation {
         match self {
             Self::StatusV1(files) => &files.properties,
-            Self::VoiceV2(files) => &files.properties,
+            Self::VoiceV2(files) | Self::VoiceV3(files) => &files.properties,
         }
     }
 }
@@ -191,11 +193,16 @@ fn execution_observations(bundle: &Bundle) -> Result<ApprovedFiles> {
             properties,
             voice_configuration: initial_voice_configuration(bundle)?,
         })),
+        Manifest::VoiceV3(_) => Ok(ApprovedFiles::VoiceV3(ApprovedFilesV2 {
+            original: eula,
+            properties,
+            voice_configuration: initial_voice_configuration(bundle)?,
+        })),
     }
 }
 
 fn initial_voice_configuration(bundle: &Bundle) -> Result<Observation> {
-    let voice = bundle.manifest.voice_v2()?;
+    let voice = bundle.manifest.voice()?;
     // The closed profile selects the compiled path. The persisted name never
     // chooses a join, and the persisted observation never approves a new file.
     if voice.initial_voice_configuration.name != voice.profile.configuration_name() {
@@ -237,6 +244,14 @@ fn eula_digest_input(
             observations,
             digest(EULA_TRUE),
         )),
+        (Manifest::VoiceV3(_), ApprovedFiles::VoiceV3(_)) => encode(&(
+            3,
+            "native_voice_eula_v3",
+            review_id,
+            digest(&manifest.encode_bounded()?),
+            observations,
+            digest(EULA_TRUE),
+        )),
         (Manifest::VoiceV2(_), ApprovedFiles::VoiceV2(_)) => encode(&(
             2,
             "native_voice_eula_v2",
@@ -262,6 +277,7 @@ pub(super) fn execution_review(
             purpose: match &bundle.manifest {
                 Manifest::StatusV1(_) => "native_status_eula",
                 Manifest::VoiceV2(_) => "native_voice_eula_v2",
+                Manifest::VoiceV3(_) => "native_voice_eula_v3",
             },
             bundle_id: bundle.manifest.id(),
             before: String::from_utf8_lossy(EULA_FALSE).into(),
@@ -274,7 +290,7 @@ pub(super) fn execution_review(
                     bundle.copy.root().display().to_string(),
                     "Uso único; revisão EULA; nenhuma execução Java neste checkpoint".into(),
                 ];
-                if let Manifest::VoiceV2(voice) = &bundle.manifest {
+                if let Ok(voice) = bundle.manifest.voice() {
                     details.push(match voice.profile {
                         manifest::StoredVoiceProfileV2::Svc => {
                             "Perfil: Simple Voice Chat 2.6.22".into()
@@ -371,7 +387,7 @@ fn read_state(bundle: &Bundle) -> Result<State> {
     let claim: Claim = read_json(&bundle.transaction.join(CLAIM))?;
     if claim.schema != 1
         || claim.bundle != bundle.manifest.id()
-        || claim.manifest_sha256 != digest(&encode(&bundle.manifest)?)
+        || claim.manifest_sha256 != digest(&bundle.manifest.encode_bounded()?)
         || claim.original.bytes != EULA_FALSE.len() as u64
         || claim.original.sha256 != digest(EULA_FALSE)
         || claim.review_digest.len() != 64
@@ -534,6 +550,13 @@ fn read_state(bundle: &Bundle) -> Result<State> {
         may_have_spawned: spawned,
     })
 }
+
+pub(super) fn recovery_needed(bundle: &Bundle) -> Result<bool> {
+    if !bundle.transaction.join(CLAIM).try_exists()? {
+        return Ok(false);
+    }
+    Ok(read_state(bundle)?.terminal.is_none())
+}
 fn write_marker(bundle: &Bundle, transaction: Uuid, name: &str, phase: Phase) -> Result<()> {
     publish(
         &bundle.transaction.join(name),
@@ -600,7 +623,7 @@ fn apply_reviewed(prepared: PreparedStatus, review: ApplyReview<'_>) -> Result<A
         schema: 1,
         bundle: bundle.manifest.id(),
         transaction,
-        manifest_sha256: digest(&encode(&bundle.manifest)?),
+        manifest_sha256: digest(&bundle.manifest.encode_bounded()?),
         review_digest: review.digest().into(),
         original,
     };
@@ -673,7 +696,9 @@ impl AppliedEula {
         {
             return Err(Error::Changed);
         }
-        if let ApprovedFiles::VoiceV2(files) = &self.prepared.approved_files {
+        if let ApprovedFiles::VoiceV2(files) | ApprovedFiles::VoiceV3(files) =
+            &self.prepared.approved_files
+        {
             if initial_voice_configuration(bundle)? != files.voice_configuration {
                 return Err(Error::Changed);
             }
@@ -731,12 +756,31 @@ enum Authority<'a> {
     // Only the private worker descendant constructs this after awaiting the
     // completion it obtained from its own supervisor83 call and all84 jobs.
     CompletedOriginalRun(&'a InstanceMutationGuard),
+    OriginalSpawnRefused {
+        guard: &'a InstanceMutationGuard,
+        receipt: crate::engine::connect_owned_run::SpawnRefusal,
+        instance: &'a str,
+        attempt: Uuid,
+    },
     Recovery(&'a VoiceMutationGuard),
 }
 impl Authority<'_> {
     fn check(&self, bundle: &Bundle) -> Result<()> {
         match self {
             Self::NeverSpawned(guard) | Self::CompletedOriginalRun(guard) => bundle.validate(guard),
+            Self::OriginalSpawnRefused {
+                guard,
+                receipt,
+                instance,
+                attempt,
+            } => {
+                if bundle.manifest.server_v3().is_none()
+                    || !receipt.authorized_for(instance, *attempt)
+                {
+                    return Err(Error::Identity);
+                }
+                bundle.validate(guard)
+            }
             Self::Recovery(guard) => {
                 guard.recheck()?;
                 bundle.validate(guard.inner())?;
@@ -875,6 +919,14 @@ fn recovery_digest_input(
             manifest.id(),
             state_digest,
         )),
+        Manifest::VoiceV3(voice) => encode(&(
+            3,
+            "native_voice_eula_recovery_v3",
+            review_id,
+            voice.voice.profile,
+            manifest.id(),
+            state_digest,
+        )),
         Manifest::VoiceV2(voice) => encode(&(
             2,
             "native_voice_eula_recovery_v2",
@@ -910,6 +962,7 @@ fn prepare_recovery_bundle(
         purpose: match &bundle.manifest {
             Manifest::StatusV1(_) => "native_status_eula_recovery",
             Manifest::VoiceV2(_) => "native_voice_eula_recovery_v2",
+            Manifest::VoiceV3(_) => "native_voice_eula_recovery_v3",
         },
         bundle_id: bundle.manifest.id(),
         before: format!("{:?}", state.physical),
@@ -931,6 +984,9 @@ fn prepare_recovery_bundle(
 }
 #[allow(dead_code)] // Explicit guarded recovery API, with no automatic caller.
 impl EulaRecoveryPlan {
+    pub(super) fn approval_deadline(&self) -> Instant {
+        self.deadline
+    }
     pub(crate) fn review(&self) -> &Review {
         &self.review
     }

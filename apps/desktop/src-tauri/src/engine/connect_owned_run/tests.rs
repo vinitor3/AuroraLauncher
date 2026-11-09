@@ -10,6 +10,175 @@ mod udp_loopback_fixture;
 mod udp_loopback_queries;
 use fixture::{Action, Harness, WAIT};
 
+#[cfg(feature = "connect-voice-lab")]
+#[tokio::test]
+async fn native_v3_real_stop_grace_waits_beyond_five_seconds_and_remains_bounded() {
+    // Same real child/pipe/observer/completion as supervisor83. The child holds
+    // its stop acknowledgement past the legacy cap, then exits by its own gate.
+    let mut harness = Harness::new();
+    let run = worker::start_receipted(
+        harness.command("hold-stop"),
+        "native-v3-grace",
+        uuid::Uuid::new_v4(),
+        OwnedRunLimits {
+            lifetime: Duration::from_secs(20),
+            stop_grace: Duration::from_secs(12),
+            output_bytes: 4 * 1024 * 1024,
+        },
+        CancellationToken::new(),
+        Arc::new(test_support::TestHooks::default()),
+    )
+    .unwrap_or_else(|_| panic!("native_v3_original_spawn"));
+    let bindings = harness.ready();
+    let completion = run.request_stop();
+    harness.stop_observed();
+    tokio::time::sleep(Duration::from_millis(5_500)).await;
+    pending(&completion).await;
+    assert_eq!(
+        run.observer().observe_udp(bindings.udp4),
+        Err(OwnedRunError::Closed)
+    );
+    let repeated = run.request_stop();
+    harness.send(Action::ReleaseStop);
+    let result = report(&completion).await;
+    normal(&result);
+    assert_eq!(result, report(&repeated).await);
+    bindings.assert_released();
+    harness.finish();
+
+    // A stubborn original child is still forced and fully collected. Repeated
+    // Stop does not restart either the selected grace or the original lifetime.
+    for deadline_case in [false, true] {
+        let mut harness = Harness::new();
+        let bounded = OwnedRunLimits {
+            lifetime: if deadline_case {
+                Duration::from_secs(2)
+            } else {
+                Duration::from_secs(10)
+            },
+            stop_grace: if deadline_case {
+                Duration::from_secs(1)
+            } else {
+                Duration::from_millis(200)
+            },
+            output_bytes: 4 * 1024 * 1024,
+        };
+        let started = Instant::now();
+        let run = worker::start_receipted(
+            harness.command("ignore-stop"),
+            "native-v3-bounded-stop",
+            uuid::Uuid::new_v4(),
+            bounded,
+            CancellationToken::new(),
+            Arc::new(test_support::TestHooks::default()),
+        )
+        .unwrap_or_else(|_| panic!("native_v3_original_spawn"));
+        let bindings = harness.ready();
+        if deadline_case {
+            tokio::time::sleep_until(tokio::time::Instant::from_std(
+                started + Duration::from_millis(1_500),
+            ))
+            .await;
+        }
+        let stopped = Instant::now();
+        let completion = run.request_stop();
+        harness.stop_observed();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let repeated = run.request_stop();
+        let result = report(&completion).await;
+        clean(&result);
+        assert!(result.forced);
+        assert_eq!(
+            result.failure,
+            Some(if deadline_case {
+                OwnedRunFailure::Deadline
+            } else {
+                OwnedRunFailure::Forced
+            })
+        );
+        assert_eq!(result, report(&repeated).await);
+        assert!(stopped.elapsed() < Duration::from_millis(if deadline_case { 900 } else { 1_500 }));
+        bindings.assert_released();
+        harness.finish();
+    }
+}
+
+#[cfg(feature = "connect-voice-lab")]
+#[test]
+fn original_spawn_refusal_receipt_is_scoped_consumed_and_never_minted_after_child() {
+    let root = std::env::temp_dir().join(format!("aurora-refused-spawn-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    for foreign in [0, 1, 2] {
+        let attempt = uuid::Uuid::new_v4();
+        let mut command = Command::new(root.join("absent.exe"));
+        command.current_dir(&root);
+        let failure = match worker::start_receipted(
+            command,
+            "original-instance",
+            attempt,
+            limits(),
+            CancellationToken::new(),
+            Arc::new(test_support::TestHooks::default()),
+        ) {
+            Err(failure) => failure,
+            Ok(_) => panic!("nonexistent original program cannot create a Child"),
+        };
+        let (error, receipt) = failure.into_parts();
+        assert_eq!(error, OwnedRunError::Spawn);
+        let mut receipt = receipt.expect("only this actual refused call issues a receipt");
+        let accepted = receipt.consume(
+            if foreign == 1 {
+                "foreign-instance"
+            } else {
+                "original-instance"
+            },
+            if foreign == 2 {
+                uuid::Uuid::new_v4()
+            } else {
+                attempt
+            },
+        );
+        assert_eq!(accepted, foreign == 0);
+        assert_eq!(
+            receipt.authorized_for("original-instance", attempt),
+            foreign == 0
+        );
+        assert!(
+            !receipt.consume("original-instance", attempt),
+            "foreign and accepted attempts both consume this one-shot receipt"
+        );
+        assert!(!receipt.authorized_for("original-instance", attempt));
+    }
+    let harness = Harness::new();
+    let hooks = Arc::new(test_support::TestHooks {
+        init_failure: Some(test_support::InitStage::Spawned),
+        ..test_support::TestHooks::default()
+    });
+    let failure = match worker::start_receipted(
+        harness.command("normal"),
+        "original-instance",
+        uuid::Uuid::new_v4(),
+        limits(),
+        CancellationToken::new(),
+        hooks.clone(),
+    ) {
+        Err(failure) => failure,
+        Ok(_) => panic!("forced original post-spawn initialization failure"),
+    };
+    let (error, receipt) = failure.into_parts();
+    assert_eq!(error, OwnedRunError::Initialization);
+    assert!(
+        receipt.is_none(),
+        "a created-and-collected Child is never relabelled as refused spawn"
+    );
+    assert!(hooks.child_reaped.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(
+        root.canonicalize().unwrap().parent(),
+        Some(std::env::temp_dir().canonicalize().unwrap().as_path())
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 struct ReleaseGate(Arc<test_support::TestGate>);
 impl Drop for ReleaseGate {
     fn drop(&mut self) {

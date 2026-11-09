@@ -17,6 +17,7 @@ use tokio::{runtime::Runtime, sync::watch};
 enum Invocation {
     NeverCalled,
     MayHaveSpawned,
+    SpawnRefused(Option<crate::engine::connect_owned_run::SpawnRefusal>),
     Owned {
         control: Arc<OwnedRun>,
         completion: OwnedRunCompletion,
@@ -127,8 +128,7 @@ impl Worker {
         let applied = self.applied.as_mut().ok_or(DedicatedFailure::Internal)?;
         applied
             .prepared
-            .resources
-            .recheck()
+            .recheck_resources()
             .map_err(DedicatedFailure::Preparation)?;
         applied
             .prepared
@@ -191,38 +191,58 @@ impl Worker {
             }
         };
         let id = applied.prepared.bundle.copy.id().as_str();
-        let voice_bridge = applied
-            .prepared
-            .bundle
-            .manifest
-            .voice_v2()
-            .is_ok_and(|voice| {
-                voice.observation_policy
-                    == super::super::manifest::ObservationPolicyV2::LiteralLoopback35554Durable
-            });
-        #[cfg(not(test))]
-        let result = if voice_bridge {
-            start_owned_voice_bridge(command, id, limits, self.shared.child_cancel.clone())
-        } else {
-            start_owned_run(command, id, limits, self.shared.child_cancel.clone())
-        };
-        #[cfg(test)]
-        let result = if voice_bridge {
-            crate::engine::connect_owned_run::start_owned_voice_bridge_test(
+        let voice_bridge = applied.prepared.bundle.manifest.voice().is_ok_and(|voice| {
+            voice.observation_policy
+                == super::super::manifest::ObservationPolicyV2::LiteralLoopback35554Durable
+        });
+        let result = if applied.prepared.bundle.manifest.server_v3().is_some() {
+            crate::engine::connect_owned_run::start_owned_voice_bridge_receipted(
                 command,
                 id,
+                self.shared.native_nonce,
                 limits,
                 self.shared.child_cancel.clone(),
+                #[cfg(test)]
                 self.hooks.owned.clone(),
             )
+            .map_err(|failure| {
+                let (error, refusal) = failure.into_parts();
+                if let Some(mut receipt) = refusal {
+                    if receipt.consume(id, self.shared.native_nonce) {
+                        self.invocation = Invocation::SpawnRefused(Some(receipt));
+                    }
+                }
+                error
+            })
         } else {
-            crate::engine::connect_owned_run::start_owned_run_dedicated_test(
-                command,
-                id,
-                limits,
-                self.shared.child_cancel.clone(),
-                self.hooks.owned.clone(),
-            )
+            #[cfg(not(test))]
+            {
+                if voice_bridge {
+                    start_owned_voice_bridge(command, id, limits, self.shared.child_cancel.clone())
+                } else {
+                    start_owned_run(command, id, limits, self.shared.child_cancel.clone())
+                }
+            }
+            #[cfg(test)]
+            {
+                if voice_bridge {
+                    crate::engine::connect_owned_run::start_owned_voice_bridge_test(
+                        command,
+                        id,
+                        limits,
+                        self.shared.child_cancel.clone(),
+                        self.hooks.owned.clone(),
+                    )
+                } else {
+                    crate::engine::connect_owned_run::start_owned_run_dedicated_test(
+                        command,
+                        id,
+                        limits,
+                        self.shared.child_cancel.clone(),
+                        self.hooks.owned.clone(),
+                    )
+                }
+            }
         };
         let run = Arc::new(result.map_err(DedicatedFailure::Spawn)?);
         let completion = run.completion();
@@ -310,7 +330,7 @@ impl Worker {
                         endpoint: ENDPOINT,
                         handshake_host: "127.0.0.1".into(),
                         handshake_port: 43001,
-                        protocol: PROTOCOL,
+                        protocol: self.approval.recipe.protocol(),
                         timeout,
                     }) => Some(result),
                 }
@@ -321,10 +341,22 @@ impl Worker {
             match status {
                 Ok(summary)
                     if summary.protocol_matches_requested
-                        && summary.requested_protocol == PROTOCOL
-                        && summary.reported_protocol == PROTOCOL => {}
+                        && summary.requested_protocol == self.approval.recipe.protocol()
+                        && summary.reported_protocol == self.approval.recipe.protocol() => {}
                 Ok(_) => return Err(DedicatedFailure::Protocol),
                 Err(MinecraftStatusError::ConnectionFailed | MinecraftStatusError::Truncated) => {
+                    drop(job);
+                    self.pause_attempt(runtime);
+                    continue;
+                }
+                Err(MinecraftStatusError::MetadataIncomplete)
+                    if self.applied.as_ref().is_some_and(|applied| {
+                        applied.prepared.bundle.manifest.server_v3().is_some()
+                    }) =>
+                {
+                    // Legacy Minecraft exposes its listener before filling
+                    // STATUS metadata. Retry only this typed boot state, on
+                    // the same original process and remaining deadline.
                     drop(job);
                     self.pause_attempt(runtime);
                     continue;
@@ -345,6 +377,23 @@ impl Worker {
                 return Ok(());
             }
             after.map_err(|_| DedicatedFailure::Source)?;
+            if self
+                .applied
+                .as_ref()
+                .is_some_and(|applied| applied.prepared.bundle.manifest.server_v3().is_some())
+            {
+                match observe_v3_readiness(&job) {
+                    Ok(_) => {}
+                    Err(VoiceRuntimeError::Source(OwnedRunError::Discovery(
+                        crate::engine::connect_discovery::DiscoveryError::ListenerChanged,
+                    ))) => {
+                        drop(job);
+                        self.pause_attempt(runtime);
+                        continue;
+                    }
+                    Err(error) => return Err(DedicatedFailure::VoiceReadiness(error)),
+                }
+            }
             self.hooks.at(ProducerPoint::BeforeReady);
             let mut state = self.shared.lock();
             self.shared.refresh(&mut state);
@@ -452,12 +501,22 @@ impl Worker {
                     && state.claim.review_digest == self.approval.review.digest
                     && applied.reviewed_digest == self.approval.review.digest
             });
-            let authority = match &self.invocation {
+            let authority = match &mut self.invocation {
                 Invocation::NeverCalled if !applied.may_have_spawned => {
                     Some(Authority::NeverSpawned(&applied.prepared.guard))
                 }
                 Invocation::Completed(report) if report.reaped && report.readers_complete => {
                     Some(Authority::CompletedOriginalRun(&applied.prepared.guard))
+                }
+                Invocation::SpawnRefused(receipt) => {
+                    receipt
+                        .take()
+                        .map(|receipt| Authority::OriginalSpawnRefused {
+                            guard: &applied.prepared.guard,
+                            receipt,
+                            instance: applied.prepared.bundle.copy.id().as_str(),
+                            attempt: self.shared.native_nonce,
+                        })
                 }
                 _ => None,
             };

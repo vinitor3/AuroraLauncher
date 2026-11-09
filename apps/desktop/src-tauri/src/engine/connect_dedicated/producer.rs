@@ -20,6 +20,7 @@ mod binding;
 mod voice;
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use binding::NativeVoiceHostBinding;
+pub(super) use voice::observe_v3_readiness;
 #[cfg(test)]
 pub(super) use voice::plan_voice_for_test;
 #[cfg_attr(not(test), allow(unused_imports))]
@@ -71,6 +72,7 @@ pub(crate) enum DedicatedFailure {
     Spawn(OwnedRunError),
     Child(OwnedRunFailure),
     Source,
+    VoiceReadiness(VoiceRuntimeError),
     Readiness,
     Protocol,
     Status(MinecraftStatusError),
@@ -129,11 +131,23 @@ impl Limits {
             ..Self::production()
         }
     }
+    fn native_server_production() -> Self {
+        Self {
+            // A real first-save on Fabric1192/Plasmo exceeded the legacy5s.
+            // This remains part of the V3 recipe/review digest; the original
+            // run deadline still caps the actual grace in supervisor83.
+            stop_ms: 30_000,
+            ..Self::bridge_production()
+        }
+    }
     fn valid(self) -> bool {
         self.valid_capped(300_000)
     }
     fn valid_for(self, manifest: &factory::Manifest) -> bool {
-        if manifest.voice_v2().is_ok_and(|voice| {
+        if manifest.server_v3().is_some() {
+            return self.valid_with_stop_cap(14_400_000, 30_000);
+        }
+        if manifest.voice().is_ok_and(|voice| {
             voice.observation_policy == manifest::ObservationPolicyV2::LiteralLoopback35554Durable
         }) {
             self.valid_capped(14_400_000)
@@ -142,10 +156,13 @@ impl Limits {
         }
     }
     fn valid_capped(self, lifetime_cap: u64) -> bool {
+        self.valid_with_stop_cap(lifetime_cap, 5_000)
+    }
+    fn valid_with_stop_cap(self, lifetime_cap: u64, stop_cap: u64) -> bool {
         (1..=lifetime_cap).contains(&self.lifetime_ms)
             && (1..=180_000).contains(&self.readiness_ms)
             && self.readiness_ms <= self.lifetime_ms
-            && (1..=5_000).contains(&self.stop_ms)
+            && (1..=stop_cap).contains(&self.stop_ms)
             && self.stop_ms <= self.lifetime_ms
             && (1..=4 * 1024 * 1024).contains(&self.output_bytes)
             && (1..=180).contains(&self.attempts)
@@ -176,11 +193,21 @@ impl Recipe {
         )
     }
     fn voice_production(prepared: &factory::PreparedStatus) -> Result<Self> {
-        prepared.bundle.manifest.voice_v2()?;
+        prepared.bundle.manifest.voice()?;
         let mut recipe = Self::production_paths(
             &prepared.resources,
             prepared.bundle.copy.root().to_path_buf(),
         )?;
+        if let Some(manifest) = prepared.bundle.manifest.server_v3() {
+            // Only the original factory proof can authorize V3 execution.
+            prepared.resources.verify_server_proof()?;
+            validate_v3_launch_paths(&recipe.cwd, manifest.server.runtime()?)?;
+            recipe.args.truncate(5);
+            recipe.args.extend(manifest.server.recipe_args.clone());
+            recipe.protocol = manifest.voice.runtime.protocol;
+            recipe.limits = Limits::native_server_production();
+            return Ok(recipe);
+        }
         // The pinned Minecraft bundler extracts its own libraries at boot.
         // Keep that mutable output in the fresh, pinned run temp, preserving
         // the exact immutable libraries catalog. V1's builder stays unchanged;
@@ -188,7 +215,7 @@ impl Recipe {
         recipe
             .args
             .insert(5, "-DbundlerRepoDir=.connect-run-temp".into());
-        if prepared.bundle.manifest.voice_v2()?.observation_policy
+        if prepared.bundle.manifest.voice()?.observation_policy
             == manifest::ObservationPolicyV2::LiteralLoopback35554Durable
         {
             recipe.limits = Limits::bridge_production();
@@ -233,6 +260,9 @@ impl Recipe {
             synthetic: false,
         })
     }
+    pub(super) fn protocol(&self) -> i32 {
+        self.protocol
+    }
     pub(super) fn command(&self) -> Command {
         let mut command = Command::new(&self.executable);
         command
@@ -247,6 +277,52 @@ impl Recipe {
         fs::create_dir(&self.temp)?;
         Ok(recovery::pin_directory(&self.temp)?)
     }
+}
+
+pub(super) fn validate_v3_process_directory(directory: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    // CreateProcessW rejects overlong current directories even when file IO
+    // accepts verbatim paths. Refuse before execution review/EULA mutation.
+    if directory.as_os_str().encode_wide().count() > 258 {
+        return Err(Error::UnsafePath);
+    }
+    Ok(())
+}
+
+pub(super) fn validate_v3_launch_paths(
+    directory: &Path,
+    runtime: crate::engine::connect_ready_profile::ReadyProfile,
+) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    validate_v3_process_directory(directory)?;
+    // Factory paths acquire the internal verbatim-disk prefix after the initial
+    // path check. Reserve those four UTF-16 units during preflight as well.
+    let final_path_units = |path: &Path| {
+        let prefix = if matches!(
+            path.components().next(),
+            Some(std::path::Component::Prefix(prefix))
+                if matches!(prefix.kind(), std::path::Prefix::VerbatimDisk(_))
+        ) {
+            0
+        } else {
+            4
+        };
+        path.as_os_str().encode_wide().count() + prefix
+    };
+    if final_path_units(directory) > 258 {
+        return Err(Error::UnsafePath);
+    }
+    // The pinned Windows launchers parse a -jar manifest before starting the
+    // JVM. JLI_Open chooses its short-path CRT branch from the argument length,
+    // so a short relative JAR name can still exceed MAX_PATH after adding cwd.
+    // Inspect only the closed compiled recipe, before resources or EULA exist.
+    // V1/V2 recipes and JVM classpath loading retain their original contracts.
+    for args in super::server_catalog::launch_args(runtime).windows(2) {
+        if args[0] == "-jar" && final_path_units(&directory.join(&args[1])) > 258 {
+            return Err(Error::UnsafePath);
+        }
+    }
+    Ok(())
 }
 
 fn windows_directory() -> Result<String> {
@@ -303,7 +379,7 @@ impl ExecutionApproval {
         }
         self.check_fresh()?;
         prepared.confirm_fresh(&self.file_digest)?;
-        prepared.resources.recheck()?;
+        prepared.recheck_resources()?;
         prepared.bundle.validate(&prepared.guard)?;
         if eula::execution_digest(&prepared.bundle, self.file_review_id)? != self.file_digest
             || self.digest_for(prepared)? != self.review.digest
@@ -323,6 +399,14 @@ fn execution_digest_input(
         manifest::ManifestKind::StatusV1 => {
             encode(&(1, PURPOSE, review_id, manifest, file_digest, recipe))
         }
+        manifest::ManifestKind::VoiceV3(_) => encode(&(
+            3,
+            "native_voice_execution_v3",
+            review_id,
+            digest(&manifest.encode_bounded()?),
+            file_digest,
+            recipe,
+        )),
         manifest::ManifestKind::VoiceV2(_) => encode(&(
             2,
             "native_voice_execution_v2",
@@ -346,7 +430,7 @@ pub(crate) fn plan(prepared: factory::PreparedStatus) -> RunResult<DedicatedPlan
 }
 #[allow(dead_code)] // Separate closed V2 entry point, never a STATUS relabeling.
 pub(crate) fn plan_voice(prepared: factory::PreparedStatus) -> RunResult<DedicatedPlan> {
-    prepared.bundle.manifest.voice_v2()?;
+    prepared.bundle.manifest.voice()?;
     let recipe = Recipe::voice_production(&prepared)?;
     #[cfg(test)]
     let hooks = Arc::new(TestHooks::default());
@@ -376,13 +460,14 @@ fn make_plan(
             purpose: match expected_kind {
                 manifest::ManifestKind::StatusV1 => PURPOSE,
                 manifest::ManifestKind::VoiceV2(_) => "native_voice_execution_v2",
+                manifest::ManifestKind::VoiceV3(_) => "native_voice_execution_v3",
             },
             bundle_id: prepared.bundle_id(),
             before: match expected_kind {
                 manifest::ManifestKind::StatusV1 => {
                     "Cópia STATUS privada; EULA false; nenhum processo".into()
                 }
-                manifest::ManifestKind::VoiceV2(_) => {
+                manifest::ManifestKind::VoiceV2(_) | manifest::ManifestKind::VoiceV3(_) => {
                     "Cópia de voz privada; EULA false; nenhum processo".into()
                 }
             },
@@ -391,7 +476,7 @@ fn make_plan(
                     "Executar dedicado STATUS767 próprio e restaurar EULA após recolher o processo"
                         .into()
                 }
-                manifest::ManifestKind::VoiceV2(_) => {
+                manifest::ManifestKind::VoiceV2(_) | manifest::ManifestKind::VoiceV3(_) => {
                     #[cfg(test)]
                     if recipe.synthetic {
                         "Executar fixture própria sem Java; observar STATUS/configuração/UDP; restaurar EULA após a completion original".into()
@@ -411,13 +496,13 @@ fn make_plan(
                         recipe_detail,
                         "Sem mods/LOGIN/voz; observação não autoriza Host ou convites".into(),
                     ],
-                    manifest::ManifestKind::VoiceV2(_) => {
+                    manifest::ManifestKind::VoiceV2(_) | manifest::ManifestKind::VoiceV3(_) => {
                         let mut details = vec![recipe_detail, "Observação limitada; binding IPv4 literal; anúncio padrão; sem áudio/Host/convites".into()];
                         details.push(format!("Limites aprovados: lifetime {}ms; readiness {}ms; stop {}ms; stdout+stderr {} bytes; {} tentativas; heap máximo 1536MiB; prazo original da preparação sem renovação", recipe.limits.lifetime_ms, recipe.limits.readiness_ms, recipe.limits.stop_ms, recipe.limits.output_bytes, recipe.limits.attempts));
                         // Execution presents immutable profile metadata from
                         // the manifest; it must not inherit the file-only
                         // EULA review's "no Java in this checkpoint" wording.
-                        let voice = prepared.bundle.manifest.voice_v2()?;
+                        let voice = prepared.bundle.manifest.voice()?;
                         if voice.observation_policy
                             == super::manifest::ObservationPolicyV2::LiteralLoopback35554Durable
                         {
@@ -428,12 +513,13 @@ fn make_plan(
                                 "Perfil: Simple Voice Chat 2.6.22".into()
                             }
                             manifest::StoredVoiceProfileV2::Plasmo => {
-                                "Perfil: Plasmo Voice 2.1.17; Fabric API 0.116.10+1.21.1".into()
+                                if prepared.bundle.manifest.server_v3().is_some() { "Perfil: Plasmo Voice 2.1.17; dependências exatas do runtime revisado".into() } else { "Perfil: Plasmo Voice 2.1.17; Fabric API 0.116.10+1.21.1".into() }
                             }
                         });
                         details.push(format!(
-                            "Runtime aprovado: Minecraft {}; Fabric {}; protocolo {}",
+                            "Runtime aprovado: Minecraft {}; {} {}; protocolo {}",
                             voice.runtime.minecraft,
+                            voice.runtime.loader,
                             voice.runtime.loader_version,
                             voice.runtime.protocol
                         ));
@@ -472,6 +558,13 @@ fn make_plan(
 }
 #[allow(dead_code)] // Consumes only the separately reviewed execution plan.
 impl DedicatedPlan {
+    #[cfg(test)]
+    pub(super) fn owned_test_hooks(&self) -> crate::engine::connect_owned_run::DedicatedTestHooks {
+        self.hooks.owned.clone()
+    }
+    pub(super) fn approval_deadline(&self) -> Instant {
+        self.approval.deadline
+    }
     pub(crate) fn review(&self) -> &Review {
         &self.approval.review
     }
@@ -492,7 +585,7 @@ impl DedicatedPlan {
         let native_nonce = Uuid::new_v4();
         let voice_context = match self.prepared.bundle.manifest.kind() {
             manifest::ManifestKind::StatusV1 => None,
-            manifest::ManifestKind::VoiceV2(_) => Some(
+            manifest::ManifestKind::VoiceV2(_) | manifest::ManifestKind::VoiceV3(_) => Some(
                 factory::ImmutableVoiceContext::from_prepared(&self.prepared, native_nonce)?,
             ),
         };

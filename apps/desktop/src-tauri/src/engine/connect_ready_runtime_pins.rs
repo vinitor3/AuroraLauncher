@@ -67,6 +67,14 @@ impl RuntimePins {
         if matches!(profile, ReadyProfile::Fabric1211 | ReadyProfile::Fabric1201) {
             return Ok(None);
         }
+        Self::from_exact_profiles(profile, base, child).map(Some)
+    }
+
+    pub(super) fn from_exact_profiles(
+        profile: ReadyProfile,
+        base: &Value,
+        child: &Value,
+    ) -> Result<Self, Error> {
         let mut targets: BTreeMap<String, ProfilePins> =
             serde_json::from_str(include_str!("connect_ready_runtime_pins.json"))
                 .map_err(|_| Error::Internal)?;
@@ -96,7 +104,7 @@ impl RuntimePins {
                 }
             }
         }
-        Ok(Some(Self {
+        Ok(Self {
             library_sha1,
             additional_libraries: target.additional_libraries,
             extracted_natives: target.extracted_natives,
@@ -108,7 +116,7 @@ impl RuntimePins {
                 .as_str()
                 .ok_or(Error::Internal)?
                 .to_owned(),
-        }))
+        })
     }
 }
 

@@ -7,8 +7,10 @@ mod path_observation;
 pub use path_observation::{ConnectPathObservation, ConnectPathState};
 mod ready_game_caller;
 mod ready_game_profile;
+mod social_presence_profile;
 mod social_profile;
 pub use ready_game_profile::*;
+pub use social_presence_profile::*;
 pub use social_profile::*;
 #[cfg(feature = "connect-lab")]
 mod ready_game_backend;
@@ -356,6 +358,8 @@ pub enum ConnectError {
     SocialQuota,
     #[error("connect_social_unavailable")]
     SocialUnavailable,
+    #[error("{1}")]
+    SocialFailure(SocialFailureStage, SocialFailureReason),
 }
 impl ConnectError {
     pub fn code(self) -> &'static str {
@@ -377,6 +381,7 @@ impl ConnectError {
             Self::CleanupFailed => "connect_cleanup_failed",
             Self::SocialQuota => "connect_social_quota",
             Self::SocialUnavailable => "connect_social_unavailable",
+            Self::SocialFailure(_, reason) => reason.code(),
         }
     }
 }

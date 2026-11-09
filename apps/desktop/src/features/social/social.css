@@ -96,3 +96,6 @@
 .social-connection p { color: var(--muted, #a8b4c6); }
 .social-connect-address { display: grid; gap: 8px; margin-top: 14px; }
 .social-connect-address input { width: 100%; }
+.social-availability { display: grid; gap: .2rem; margin-top: .45rem; color: var(--muted, #a8b4c6); font-size: .75rem; }
+.social-availability[data-state="ready"] strong { color: #a7d5c1; }
+.social-availability[data-state="unavailable"] strong { color: #dec6a1; }

@@ -53,6 +53,7 @@ import { ConnectView } from "./features/connect/ConnectView";
 import { NativeVoicePanel } from "./features/connect-native-voice/NativeVoicePanel";
 import { ExitLauncherButton } from "./features/connect/ExitLauncherButton";
 import { SocialView } from "./features/social/SocialView";
+import { SocialBuildBanner } from "./features/social/SocialBuildBanner";
 import { createSocialConnectController, emptySocialConnectState, type SocialConnectController, type SocialConnectState } from "./features/social/connect-controller";
 import { createSocialFirebaseService } from "./lib/socialFirebase";
 import { createAccountTransition, stopConnectForAccountTransition } from "./features/connect/account-transition";
@@ -1104,6 +1105,8 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     };
   }, [baseSocialService, services, profile?.uid, socialConnectState.accountId, socialConnectState.value.available]);
   const [connectVisited, setConnectVisited] = useState(false);
+  const [dedicatedRevealRequest, setDedicatedRevealRequest] = useState(0);
+  const [connectViewReady, setConnectViewReady] = useState(false);
   useEffect(() => { if (activeSection === "connect") setConnectVisited(true); }, [activeSection]);
   const [connectAvailable, setConnectAvailable] = useState(false);
   const voice = useVoiceAnnouncement();
@@ -3687,11 +3690,12 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         </aside>}
         <section className="workspace-grid">
           <div className="workspace-main">
-        {socialService && activeSection === "social" && !signingOut && <div className="section-social"><p className="eyebrow">TESTE LOCAL · CONTAS DESCARTÁVEIS · SEM PUBLICAÇÃO NA COMUNIDADE REAL</p><SocialView key={profile.uid} service={socialService} accountId={profile.uid} nickname={profile.username}
+        {socialService && activeSection === "social" && !signingOut && <div className="section-social"><SocialBuildBanner /><SocialView key={profile.uid} service={socialService} accountId={profile.uid} nickname={profile.username}
           connection={socialConnection}
           onOpenConnectedGame={connectAvailable ? () => setActiveSection("connect") : undefined}
+          onPrepareDedicatedServer={connectAvailable && socialConnection?.state.maxSessionSeconds === 14400 ? () => { setDedicatedRevealRequest(value => value + 1); setActiveSection("connect"); } : undefined}
           currentModpack={runningInstances.length === 1 ? instances.find(item => item.id === runningInstances[0].instanceId)?.displayName || runningInstances[0].instanceId : undefined} /></div>}
-        {connectAvailable && (connectVisited || activeSection === "connect") && <div className="section-connect" hidden={activeSection !== "connect"} inert={signingOut || activeSection !== "connect"}><ConnectView launchContext={connectLaunchContext} /><NativeVoicePanel disabled={signingOut} /></div>}
+        {connectAvailable && (connectVisited || activeSection === "connect") && <div className="section-connect" hidden={activeSection !== "connect"} inert={signingOut || activeSection !== "connect"}><ConnectView launchContext={connectLaunchContext} onInitialReadReady={setConnectViewReady} /><NativeVoicePanel disabled={signingOut} revealRequest={dedicatedRevealRequest} revealReady={connectViewReady && activeSection === "connect"} /></div>}
         <article className="panel instances section-instances">
           <div className="panel-heading">
             <div>

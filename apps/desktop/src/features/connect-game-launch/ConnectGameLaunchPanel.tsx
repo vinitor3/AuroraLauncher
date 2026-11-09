@@ -5,7 +5,7 @@ import { ReadyCopyPicker } from "./ReadyCopyPicker";
 import {
   isReadyGameError, readyGameCapabilitySupports, readyGameContextFingerprint, readyGameError, readyGameSnapshotFrom,
   sameReadyGameContext, validReadyGameContext, type ReadyGameLaunchCapability, type ReadyGameLaunchContext,
-  type ReadyGameLaunchSnapshot,
+  type ReadyGameLaunchReview, type ReadyGameLaunchSnapshot,
 } from "./types";
 
 type Props = { capability?: ReadyGameLaunchCapability; session?: ConnectSnapshot; launchContext?: ReadyGameLaunchContext; observeExisting?: boolean; sessionStale?: boolean };
@@ -20,6 +20,7 @@ const connected = (session?: ConnectSnapshot) => !!session?.tcpAddress
     || hostPlayer(session) && session.phase === "hostListening" && session.social?.readyGameLaunchAvailable
       && ["authenticated", "admitted"].includes(session.transportState));
 const date = (value: number) => new Date(value).toLocaleTimeString("pt-BR");
+const readClocks = () => ({ wall: Date.now(), monotonic: performance.now() });
 
 export function ConnectGameLaunchPanel({ capability, session, launchContext: sourceLaunchContext, observeExisting = false, sessionStale = false }: Props) {
   const operationId = session?.operationId ?? undefined;
@@ -36,8 +37,9 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
   const [error, setError] = useState("");
   const [warning, setWarning] = useState("");
   const [contextChanged, setContextChanged] = useState(false);
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(readClocks);
   const observed = useRef<ReadyGameLaunchSnapshot | undefined>(undefined);
+  const reviewClock = useRef<{ operationId: string; planId: string; digest: string; deadline: number } | undefined>(undefined);
   const watchedOperation = useRef<string | undefined>(undefined);
   if (operationId && launchParticipant(session) && (capability || observeExisting)) watchedOperation.current = operationId;
   const watch = !!operationId && watchedOperation.current === operationId;
@@ -54,6 +56,18 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
   const automaticCancellation = useRef(new Set<string>());
   const requestedInstance = useRef<string | undefined>(undefined);
 
+  function anchoredDeadline(review: ReadyGameLaunchReview) {
+    const anchor = reviewClock.current;
+    return anchor?.operationId === review.operationId && anchor.planId === review.planId && anchor.digest === review.digest
+      ? anchor.deadline : undefined;
+  }
+
+  function reviewCurrent(review: ReadyGameLaunchReview, source: ConnectSnapshot | undefined, time: ReturnType<typeof readClocks>) {
+    const deadline = anchoredDeadline(review);
+    if (deadline !== undefined) return time.monotonic < deadline;
+    return !source?.social && time.wall < review.expiresAtMs && time.wall < review.sessionExpiresAtMs;
+  }
+
   function accept(value: unknown, expectedOperation: string) {
     const next = readyGameSnapshotFrom(value);
     if (next.operationId !== expectedOperation || current.current.operationId !== expectedOperation) throw new Error("Wrong ready launch operation");
@@ -62,7 +76,17 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
     if (previous && next.generation === previous.generation && JSON.stringify(next) !== JSON.stringify(previous)) throw new Error("Changed ready launch generation");
     if (requestedInstance.current && (next.review && next.review.instanceId !== requestedInstance.current
       || next.result && next.result.instanceId !== requestedInstance.current)) throw new Error("Changed ready launch instance");
-    observed.current = next; setSnapshot(next); setWarning("");
+    const time = readClocks();
+    if (!next.review) reviewClock.current = undefined;
+    else if (current.current.session?.social && anchoredDeadline(next.review) === undefined) {
+      const remaining = Math.min(
+        (current.current.capability?.maxPlanSeconds ?? 60) * 1000,
+        Math.min(next.review.expiresAtMs, next.review.sessionExpiresAtMs) - time.wall,
+      );
+      reviewClock.current = { operationId: next.operationId, planId: next.review.planId,
+        digest: next.review.digest, deadline: time.monotonic + Math.max(0, remaining) };
+    }
+    observed.current = next; setSnapshot(next); setNow(time); setWarning("");
     if (previous?.review?.digest !== next.review?.digest || previous?.planId !== next.planId) setAcknowledged(false);
     if (uncertainAfter.current !== undefined && (next.generation > uncertainAfter.current || !active(next) && next.phase !== "idle")) {
       uncertainAfter.current = undefined; setUncertain(false);
@@ -130,7 +154,7 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
   useEffect(() => {
     mounted.current = true;
     const localEpoch = ++epoch.current;
-    observed.current = undefined; mutation.current = undefined; uncertainAfter.current = undefined;
+    observed.current = undefined; reviewClock.current = undefined; mutation.current = undefined; uncertainAfter.current = undefined;
     invalidated.current = false; cancelling.current = undefined;
     automaticCancellation.current.clear();
     requestedInstance.current = undefined;
@@ -141,7 +165,7 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
     async function poll() {
       if (disposed) return;
       if (operationId) await read(localEpoch);
-      if (!disposed) timer = window.setTimeout(() => { setNow(Date.now()); void poll(); }, 1_000);
+      if (!disposed) timer = window.setTimeout(() => { setNow(readClocks()); void poll(); }, 1_000);
     }
     // Capability gates new work. Observation/cancellation remain available
     // when recovering a native operation after navigation or a failed query.
@@ -169,7 +193,7 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
   useEffect(() => {
     if (sessionStale || !capability || !connected(session) || !supportedReview) setAcknowledged(false);
   }, [sessionStale, capability, supportedReview, session?.phase, session?.transportState, session?.cleanupState, session?.tcpAddress]);
-  const currentReview = review && supportedReview && review.instanceId === selectedId && review.expiresAtMs > now && review.sessionExpiresAtMs > now;
+  const currentReview = review && supportedReview && review.instanceId === selectedId && reviewCurrent(review, session, now);
   const canConfirm = !!capability && connected(session) && !sessionStale && !!currentReview && acknowledged && !pending && !uncertain && !warning;
 
   function prepare() {
@@ -185,8 +209,8 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
   function confirm() {
     const latest = observed.current?.review;
     if (!canConfirm || !latest || latest.digest !== review?.digest || latest.instanceId !== selectedId
-      || !sameReadyGameContext(latest, current.current.launchContext) || Date.now() >= latest.expiresAtMs
-      || Date.now() >= latest.sessionExpiresAtMs || !connected(current.current.session) || current.current.sessionStale
+      || !sameReadyGameContext(latest, current.current.launchContext) || !reviewCurrent(latest, current.current.session, readClocks())
+      || !connected(current.current.session) || current.current.sessionStale
       || !readyGameCapabilitySupports(current.current.capability, latest)) {
       setAcknowledged(false); return;
     }
@@ -208,7 +232,7 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
     {uncertain && <p role="status">Aguardando uma observação que confirme o resultado. Nenhum lançamento será repetido automaticamente.</p>}
     {pending && <p role="status">{pending === "prepare" ? "Conferindo a cópia…" : pending === "confirm" ? "Iniciando a cópia…" : "Cancelando o preparo…"}</p>}
     {launchContext && <ReadyCopyPicker sourceInstanceId={launchContext.sourceInstanceId} contextKey={launchContext.contextKey}
-      disabled={!canChooseCopy} selectedId={selectedId}
+      connectOperationId={operationId} requiredProfile={session?.social?.runtimeProfile} disabled={!canChooseCopy} selectedId={selectedId}
       runtimes={capability && (capability.schemaVersion === 1 ? [capability] : capability.runtimes)}
       onSelect={(id, java) => {
         setSelectedId(id);

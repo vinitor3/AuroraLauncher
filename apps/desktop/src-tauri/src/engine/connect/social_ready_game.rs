@@ -19,7 +19,6 @@ pub(in crate::engine::connect::live) struct LaunchAuthority {
     grant: lab::VerifiedSocialGrant,
     cancel: CancellationToken,
     deadline: Instant,
-    expiry: u64,
     account_epoch: u64,
 }
 
@@ -45,7 +44,6 @@ impl LaunchAuthority {
             grant,
             cancel: run.cancel.clone(),
             deadline: run.deadline,
-            expiry: run.expiry,
             account_epoch: run.request.account_epoch,
         }))
     }
@@ -58,7 +56,6 @@ impl LaunchAuthority {
         let result = if current.terminal || self.cancel.is_cancelled() {
             Err(ConnectError::Cancelled)
         } else if Instant::now() >= self.deadline
-            || lab::unix_millis() >= self.expiry
             || self.grant.check_session().is_err()
             || current.continuity.check().is_err()
         {
@@ -106,6 +103,8 @@ impl LaunchAuthority {
         let mut current = self.current.lock().map_err(|_| ConnectError::Internal)?;
         self.validate(&mut current, false)?;
         if current.invitation.is_some()
+            || invitation.is_online_native_voice()
+                != (self.grant.voice_transport_profile() == Some("nativeVoice8V1"))
             || invitation.session_id() != self.grant.session_id()
             || invitation.host_key() != self.grant.host_key()
             || invitation.guest_key() != self.grant.guest_key()
@@ -222,6 +221,7 @@ pub(in crate::engine::connect::live) struct HostPlayerLaunchAuthority {
     cancel: CancellationToken,
     deadline: Instant,
     expiry: u64,
+    clock: Option<lab::OnlineClock>,
     account_epoch: u64,
 }
 #[cfg(all(windows, feature = "connect-voice-lab"))]
@@ -270,6 +270,8 @@ impl HostPlayerLaunchAuthority {
             .map_err(|_| ConnectError::InvitationRejected)?
                 != Some(runtime)
             || host.id() != run.key.public()
+            || invitation.is_online_native_voice()
+                != (policy.body().voice_transport_profile() == Some("nativeVoice8V1"))
             || invitation.host_key() != host.id()
             || invitation.guest_key() != local.public()
             || invitation.session_id() != run.request.session_id
@@ -284,11 +286,40 @@ impl HostPlayerLaunchAuthority {
         }
         // Re-verify only the invitation's strict profile, while retaining the
         // original invitation and all of its monotonic deadlines below.
-        lab::SessionInvitation::verify_online_fragmented(
-            &invitation.encode(),
-            host.id(),
-            local.public(),
-        )
+        let encoded = invitation.encode();
+        match &run.clock {
+            Some(clock) if policy.body().voice_transport_profile() == Some("nativeVoice8V1") => {
+                lab::SessionInvitation::verify_online_native_voice_with_clock(
+                    &encoded,
+                    host.id(),
+                    local.public(),
+                    clock,
+                )
+            }
+            Some(clock) => lab::SessionInvitation::verify_online_with_clock(
+                &encoded,
+                host.id(),
+                local.public(),
+                true,
+                clock,
+            ),
+            #[cfg(test)]
+            None if policy.body().voice_transport_profile() == Some("nativeVoice8V1") => {
+                lab::SessionInvitation::verify_online_native_voice(
+                    &encoded,
+                    host.id(),
+                    local.public(),
+                )
+            }
+            #[cfg(test)]
+            None => lab::SessionInvitation::verify_online_fragmented(
+                &encoded,
+                host.id(),
+                local.public(),
+            ),
+            #[cfg(not(test))]
+            None => return Err(ConnectError::InvitationRejected),
+        }
         .map_err(|_| ConnectError::InvitationRejected)?;
         Ok(Arc::new(Self {
             current: Mutex::new(HostPlayerCurrent {
@@ -303,6 +334,7 @@ impl HostPlayerLaunchAuthority {
             ticket: ticket.clone(),
             cancel: run.cancel.clone(),
             expiry: run.expiry,
+            clock: run.clock.clone(),
             account_epoch: run.request.account_epoch,
         }))
     }
@@ -311,7 +343,10 @@ impl HostPlayerLaunchAuthority {
         current: &mut HostPlayerCurrent,
         require_poll: bool,
     ) -> Result<(), ReadyGameLaunchError> {
-        let now = lab::unix_millis();
+        let now = self
+            .clock
+            .as_ref()
+            .map_or_else(lab::unix_millis, lab::OnlineClock::upper_now);
         if current.terminal
             || self.cancel.is_cancelled()
             || Instant::now() >= self.deadline
@@ -342,7 +377,10 @@ impl HostPlayerLaunchAuthority {
         let mut current = self.current.lock().map_err(|_| ConnectError::Internal)?;
         self.valid(&mut current, false)
             .map_err(|_| ConnectError::PlanExpired)?;
-        let now = lab::unix_millis();
+        let now = self
+            .clock
+            .as_ref()
+            .map_or_else(lab::unix_millis, lab::OnlineClock::upper_now);
         if checked_at_unix_ms > now
             || now.saturating_sub(checked_at_unix_ms) >= 3000
             || current
@@ -352,7 +390,13 @@ impl HostPlayerLaunchAuthority {
             current.terminal = true;
             return Err(ConnectError::PlanExpired);
         }
-        let deadline = Instant::now() + Duration::from_millis(checked_at_unix_ms + 3000 - now);
+        let freshness = checked_at_unix_ms.saturating_add(3000).min(self.expiry);
+        let deadline = match &self.clock {
+            Some(clock) => clock
+                .deadline_for(freshness)
+                .map_err(|_| ConnectError::PlanExpired)?,
+            None => Instant::now() + Duration::from_millis(freshness.saturating_sub(now)),
+        };
         // A cached response keeps the earlier monotonic cap as well as its wall expiry.
         let deadline = current
             .host_poll

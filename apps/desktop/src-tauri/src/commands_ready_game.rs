@@ -27,11 +27,15 @@ static COPY_INSTALL: Mutex<Option<CopyInstall>> = Mutex::new(None);
 static COPY_INSTALL_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 static COPY_INSTALL_ACCOUNT_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 
-struct CopyInstallOwner(uuid::Uuid);
+struct CopyInstallOwner {
+    id: uuid::Uuid,
+    watchdog: tokio::task::JoinHandle<()>,
+}
 impl Drop for CopyInstallOwner {
     fn drop(&mut self) {
+        self.watchdog.abort();
         if let Ok(mut active) = COPY_INSTALL.lock() {
-            if active.as_ref().is_some_and(|job| job.id == self.0) {
+            if active.as_ref().is_some_and(|job| job.id == self.id) {
                 *active = None;
             }
         }
@@ -85,6 +89,8 @@ pub(crate) async fn wait_ready_copy_install() {
 
 pub(crate) async fn install_ready_copy(
     app: AppHandle,
+    connect: &aurora_launcher_core::engine::connect::ConnectManager,
+    owner: &str,
     request: crate::connect_commands::ReadyCopyInstallRequest,
 ) -> Result<diagnostic_lab::LabEnvironment, &'static str> {
     if !request.approved {
@@ -108,12 +114,25 @@ pub(crate) async fn install_ready_copy(
         if active.is_some() {
             return Err("connect_ready_game_busy");
         }
+        // Register against the original native connection while holding the
+        // install lock also used by the account transition cancellation.
+        connect
+            .authorize_ready_copy_install(owner, &request.connect_operation_id, profile)
+            .map_err(Error::code)?;
         *active = Some(CopyInstall {
             id: operation,
             cancel: cancel.clone(),
         });
     }
-    let owner = CopyInstallOwner(operation);
+    let deadline_token = cancel.clone();
+    let watchdog = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(20 * 60)).await;
+        deadline_token.store(true, Ordering::Release);
+    });
+    let owner = CopyInstallOwner {
+        id: operation,
+        watchdog,
+    };
     tauri::async_runtime::spawn_blocking(move || {
         let _owner = owner;
         let cancelled = || cancel.load(Ordering::Acquire);
@@ -359,6 +378,9 @@ impl ReadyGameBackend for DesktopReadyGameBackend {
         runtime_profile: Option<ReadyProfile>,
         cancel: &CancellationToken,
     ) -> Result<Box<dyn PreparedReadyGame>, Error> {
+        if voice_profile.is_some() && runtime_profile.is_none() {
+            return Err(Error::Unavailable);
+        }
         let (_, _guard, proof, _, _) = inspect(
             &self.app,
             request,

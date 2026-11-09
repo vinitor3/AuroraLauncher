@@ -253,7 +253,7 @@ fn inspect_extra_jar(
         read_nested_paths(&metadata, "file", &mut nested_jars)?;
     }
     if forge {
-        inspect_forge_identities(&mut archive)?;
+        inspect_forge_identities(&mut archive, voice)?;
         if let Some(metadata) = optional_metadata(&mut archive, "META-INF/jarjar/metadata.json")? {
             let metadata: Value =
                 serde_json::from_slice(&metadata).map_err(|_| ReadyFilesError::InvalidJar)?;
@@ -333,6 +333,7 @@ fn read_nested_paths(
 
 fn inspect_forge_identities(
     archive: &mut ZipArchive<Cursor<&[u8]>>,
+    voice: Option<NativeVoiceProfile>,
 ) -> Result<(), ReadyFilesError> {
     if let Some(metadata) = optional_metadata(archive, "META-INF/mods.toml")? {
         let contents = std::str::from_utf8(&metadata).map_err(|_| ReadyFilesError::InvalidJar)?;
@@ -344,7 +345,7 @@ fn inspect_forge_identities(
                     .get("modId")
                     .and_then(toml::Value::as_str)
                     .ok_or(ReadyFilesError::InvalidJar)?;
-                if protected_identity(id) {
+                if protected_identity(id) || protected_voice_identity(id, voice) {
                     return Err(ReadyFilesError::Conflict);
                 }
             }
@@ -359,7 +360,7 @@ fn inspect_forge_identities(
             .ok_or(ReadyFilesError::InvalidJar)?;
         for item in mods {
             let id = item["modid"].as_str().ok_or(ReadyFilesError::InvalidJar)?;
-            if protected_identity(id) {
+            if protected_identity(id) || protected_voice_identity(id, voice) {
                 return Err(ReadyFilesError::Conflict);
             }
         }
@@ -538,6 +539,35 @@ modId = 'aurora_core'
                     assert_eq!(verify(), Err(ReadyFilesError::Conflict));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn connect_ready_files_rejects_unpinned_forge_voice_ids() {
+        for (runtime, name, metadata) in [
+            (
+                ReadyProfile::Forge1122,
+                "mcmod.info",
+                br#"[{"modid":"voicechat"}]"#.as_slice(),
+            ),
+            (
+                ReadyProfile::Forge1211,
+                "META-INF/mods.toml",
+                b"[[mods]]\nmodId = 'plasmovoice'\n".as_slice(),
+            ),
+        ] {
+            let fixture = Fixture::with_profile(runtime);
+            fixture.add("renamed.jar", &jar(&[(name, metadata)]));
+            assert_eq!(
+                verify_managed_files_with_voice(
+                    &fixture.instance,
+                    runtime,
+                    Some(NativeVoiceProfile::SimpleVoiceChat),
+                    &[],
+                    || false,
+                ),
+                Err(ReadyFilesError::Conflict)
+            );
         }
     }
 

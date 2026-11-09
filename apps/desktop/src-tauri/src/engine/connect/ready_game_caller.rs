@@ -1,6 +1,17 @@
 use super::*;
 impl ConnectManager {
     #[cfg(feature = "connect-lab")]
+    pub fn authorize_ready_copy_install(
+        &self,
+        owner: &str,
+        operation: &str,
+        profile: crate::engine::connect_ready_profile::ReadyProfile,
+    ) -> Result<(), ReadyGameLaunchError> {
+        self.live
+            .authorize_ready_copy_install(owner, operation, profile)
+    }
+
+    #[cfg(feature = "connect-lab")]
     pub fn prepare_ready_game_launch(
         &self,
         owner: &str,

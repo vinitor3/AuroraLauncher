@@ -14,6 +14,57 @@ const PROFILES: [NativeVoiceProfile; 2] = [
     NativeVoiceProfile::PlasmoVoice,
 ];
 
+#[test]
+fn voice_context_policy2_retains_actual_immutable_handles_until_last_context() {
+    use std::fs::OpenOptions;
+    for profile in PROFILES {
+        let fixture = Fixture::new(profile);
+        let plan = super::super::fixture_voice_bridge_plan(
+            &fixture.lab,
+            &fixture.stage,
+            &fixture.jdk,
+            profile,
+        )
+        .unwrap();
+        let approval = plan.review().digest.clone();
+        let prepared = plan.create(&approval).unwrap();
+        let context = ImmutableVoiceContext::from_prepared(&prepared, Uuid::new_v4()).unwrap();
+        let duplicate = context.clone();
+        let name = resources::fixture_voice_artifacts(profile)[0].0;
+        let paths = [
+            fixture.stage.join(name),
+            prepared.bundle.copy.root().join(name),
+            prepared.bundle.path.join("bundle.json"),
+        ];
+        drop(prepared);
+        drop(context);
+        for path in &paths {
+            assert!(
+                OpenOptions::new().write(true).open(path).is_err(),
+                "original immutable bytes must remain write-denied"
+            );
+            let moved = path.with_extension("parked");
+            assert!(
+                fs::rename(path, &moved).is_err(),
+                "original immutable identity must remain delete-denied"
+            );
+        }
+        duplicate.validate_for_query().unwrap();
+        drop(duplicate);
+        for path in &paths {
+            drop(
+                OpenOptions::new()
+                    .write(true)
+                    .open(path)
+                    .expect("last context releases the original handle"),
+            );
+            let moved = path.with_extension("parked");
+            fs::rename(path, &moved).unwrap();
+            fs::rename(moved, path).unwrap();
+        }
+    }
+}
+
 struct Fixture {
     root: files::TestRoot,
     lab: PathBuf,

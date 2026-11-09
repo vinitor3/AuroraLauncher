@@ -922,7 +922,7 @@ async fn child_exit_and_aggregate_output_failure_stay_failures_after_eula_restor
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_forced_child_stop_is_not_promoted_to_success_by_restored_eula() {
     let fixture = Fixture::new();
     let mut harness = Harness::new();
@@ -940,6 +940,17 @@ async fn a_forced_child_stop_is_not_promoted_to_success_by_restored_eula() {
     harness.ready();
     ready(&run.observer()).await;
     harness.status_observed(true);
+    #[cfg(feature = "connect-voice-lab")]
+    let (completion, actor) = (
+        run.completion(),
+        tokio::spawn(
+            super::super::desktop::actor_tests::assert_actor_collects_forced_stop(
+                run,
+                fixture.lab.clone(),
+            ),
+        ),
+    );
+    #[cfg(not(feature = "connect-voice-lab"))]
     let completion = run.request_stop();
     harness.stop_observed();
     assert_eq!(bytes(&target(&paths)), EULA_TRUE);
@@ -958,6 +969,12 @@ async fn a_forced_child_stop_is_not_promoted_to_success_by_restored_eula() {
             .forced
     );
     restored(&paths, &report);
+    #[cfg(feature = "connect-voice-lab")]
+    tokio::time::timeout(WAIT, actor)
+        .await
+        .expect("actor_completion_deadline")
+        .expect("actor_forced_stop");
+    #[cfg(not(feature = "connect-voice-lab"))]
     drop(run);
     harness.finish();
 }

@@ -693,6 +693,29 @@ async fn ready_game_post_spawn_panic_preserves_tracked_child_result_and_never_re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ready_copy_install_rejects_delayed_requests_after_the_original_connection_closes() {
+    use crate::engine::connect_ready_profile::ReadyProfile;
+    let pair = Pair::new().await;
+    for profile in ReadyProfile::ALL {
+        pair.guest
+            .authorize_ready_copy_install("main", &pair.guest_id, profile)
+            .unwrap();
+    }
+    assert_eq!(
+        pair.guest
+            .authorize_ready_copy_install("main", &pair.host_id, ReadyProfile::Fabric1211),
+        Err(Error::StaleOperation),
+    );
+    let stopped = pair.guest.account_transition_stop("main").await.unwrap();
+    assert_eq!(stopped.cleanup_state, "complete");
+    assert!(pair
+        .guest
+        .authorize_ready_copy_install("main", &pair.guest_id, ReadyProfile::Fabric1211)
+        .is_err());
+    pair.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ready_game_original_session_deadline_expires_before_spawn_without_renewal() {
     let pair = Pair::with_duration(5).await;
     let gate = Arc::new(Gate::default());

@@ -159,5 +159,21 @@
       "libraries/net/fabricmc/intermediary/1.19.2/intermediary-1.19.2.jar": "9264b892918b70d28a1cf8bc4c07fdc6a1463628"
     },
     "loaderProfileSha256": "08aae68ef2b04fa87f0c5761dfeab7e15498dea69d45933eede289d925af433c"
+  },
+  "fabric-loader-0.16.14-1.20.1": {
+    "baseProfileSha256": "68cc12dd03c6fb26af49a6ad13115f22610a0bd4e5b564be1013970ea3a89095",
+    "fabricLibrarySha1": {
+      "libraries/net/fabricmc/fabric-loader/0.16.14/fabric-loader-0.16.14.jar": "05778d47f536bf2c63ed2abc1a56f5a1c129e34a",
+      "libraries/net/fabricmc/intermediary/1.20.1/intermediary-1.20.1.jar": "97d0bff94981e37bd7a4362deee53c9a84e3fb21"
+    },
+    "loaderProfileSha256": "503e144548d50fa99aa542638a6cd3f8807c9e6989257f7b9a7da3bb96c2fb79"
+  },
+  "fabric-loader-0.16.14-1.21.1": {
+    "baseProfileSha256": "0cc04bf674bc99292c55d70f376066a9c4cfcc6dafa62eefed714dfd09fdef52",
+    "fabricLibrarySha1": {
+      "libraries/net/fabricmc/fabric-loader/0.16.14/fabric-loader-0.16.14.jar": "05778d47f536bf2c63ed2abc1a56f5a1c129e34a",
+      "libraries/net/fabricmc/intermediary/1.21.1/intermediary-1.21.1.jar": "4b96f58657aa282efa6bb8ae9369c2d42cf96e8c"
+    },
+    "loaderProfileSha256": "594def47525ba3f8765e3c1b3fe20784de80fa1f5f0ebd02f638e2244e571648"
   }
 }

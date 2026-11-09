@@ -212,7 +212,7 @@ test("a reviewed official runtime copy supplies its own Java on a fresh launcher
   const install = calls.find(call => call.command === "connect_install_ready_copy").args.request;
   assert.match(install.operationId, /^[a-f0-9-]{36}$/);
   assert.deepEqual({ ...install, operationId: undefined }, {
-    operationId: undefined, sourceInstanceId: context.sourceInstanceId, profileId: "fabric-loader-0.16.14-1.21.1", approved: true,
+    operationId: undefined, connectOperationId: operationId, sourceInstanceId: context.sourceInstanceId, profileId: "fabric-loader-0.16.14-1.21.1", approved: true,
   });
   assert.equal(count("connect_prepare_ready_game_launch"), 0);
   await click("Revisar entrada no servidor");
@@ -223,6 +223,32 @@ test("a reviewed official runtime copy supplies its own Java on a fresh launcher
 const profile1211 = { minecraftVersion: "1.21.1", loader: "fabric", loaderVersion: "0.16.14", javaMajor: 21, coreVersion: "1.1.5", skinsVersion: "0.3.1" };
 const profile1201 = { ...profile1211, minecraftVersion: "1.20.1", javaMajor: 17 };
 const capability93 = { schemaVersion: 2, instanceScope: "diagnosticCopy", maxPlanSeconds: 60, runtimes: [profile1211, profile1201] };
+test("a signed session preselects its only compatible runtime and ignores old install completion after account change", async () => {
+  fixtures();
+  let complete;
+  handlers.set("connect_install_ready_copy", () => new Promise(resolve => { complete = resolve; }));
+  const profileId = "fabric-loader-0.16.14-1.20.1";
+  const signed = { ...connection, social: { sessionId: operationId, role: "guest", stage: "connected",
+    runtimeProfile: profileId } };
+  await panel({ capability: capability93, session: signed });
+  const select = container.querySelector(".connect-fields details select");
+  assert.ok(select.disabled);
+  assert.deepEqual([...select.querySelectorAll("option")].map(option => option.value), ["", profileId]);
+  const approval = container.querySelector(".connect-fields details input[type=checkbox]");
+  assert.ok(approval);
+  await act(async () => { approval.checked = true; approval.dispatchEvent(new window.Event("click", { bubbles: true })); });
+  await click("Criar cópia com este runtime");
+  const request = calls.find(call => call.command === "connect_install_ready_copy").args.request;
+  assert.equal(request.connectOperationId, operationId);
+  assert.equal(request.profileId, profileId);
+  nativeSnapshot = { ...idle(), operationId: otherOperation };
+  await panel({ capability: capability93, session: { ...signed, operationId: otherOperation } });
+  const java = `C:/fixture/instances/${copyId}/installers/aurora-managed/runtimes/java-17/jre/bin/java.exe`;
+  await act(async () => complete({ ...copy(), originInstanceId: context.sourceInstanceId, runtimeJavaExecutable: java }));
+  assert.equal(button("Revisar entrada no servidor").disabled, true);
+  assert.equal(count("connect_prepare_ready_game_launch"), 0);
+});
+
 test("Fabric1201 review requires schema2 and fresh consent without adding runtime input to IPC", async () => {
   fixtures();
   handlers.set("connect_prepare_ready_game_launch", ({ request }) => {
@@ -359,6 +385,33 @@ test("expiration is rechecked on confirm even before the UI polling clock update
   const originalNow = Date.now; Date.now = () => nativeSnapshot.review.expiresAtMs;
   try { await click("Iniciar cópia e tentar entrar"); } finally { Date.now = originalNow; }
   assert.equal(count("connect_confirm_ready_game_launch"), 0); assert.equal(button("Iniciar cópia e tentar entrar").disabled, true);
+});
+
+const socialConnection = { ...connection, social: { sessionId: "11111111-2222-4333-8444-555555555555",
+  role: "guest", stage: "connected", digest: null, gameTarget: null, visibility: null, expiresAtMs: null } };
+
+test("a forward wall-clock jump after observing a Social review preserves its original consent and confirm window", async t => {
+  fixtures(reviewed()); await panel({ session: socialConnection }); await consent();
+  const expiresAt = nativeSnapshot.review.expiresAtMs;
+  t.mock.method(Date, "now", () => expiresAt + 120_000);
+  await click("Atualizar preparo do jogo");
+  await click("Iniciar cópia e tentar entrar");
+  assert.equal(count("connect_confirm_ready_game_launch"), 1);
+});
+
+test("polling the same Social review after a wall rollback never resets its monotonic deadline", async t => {
+  let monotonic = 10_000;
+  t.mock.method(performance, "now", () => monotonic);
+  fixtures(reviewed()); await panel({ session: socialConnection }); await consent();
+  const wall = Date.now();
+  t.mock.method(Date, "now", () => wall - 120_000);
+  monotonic += 49_000;
+  await click("Atualizar preparo do jogo");
+  assert.equal(button("Iniciar cópia e tentar entrar").disabled, false);
+  monotonic += 2_000;
+  await click("Atualizar preparo do jogo");
+  assert.equal(button("Iniciar cópia e tentar entrar").disabled, true);
+  assert.equal(count("connect_confirm_ready_game_launch"), 0);
 });
 
 test("TCP remains sufficient when UDP failed but closed TCP cannot authorize launch", async () => {

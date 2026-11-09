@@ -32,6 +32,83 @@ fn names(records: &[resources::ResourceRecord]) -> BTreeSet<&str> {
 }
 
 #[test]
+fn retained_voice_policy2_pins_deny_mutation_keep_inventory_and_do_not_extend_review() {
+    for profile in PROFILES {
+        let fixture = VoiceFixture::new(profile);
+        let plan = factory::fixture_voice_bridge_plan(
+            &fixture.fixture.lab,
+            &fixture.fixture.stage,
+            &fixture.fixture.jdk,
+            profile,
+        )
+        .unwrap();
+        let approval = plan.review().digest.clone();
+        let mut prepared = plan.create(&approval).unwrap();
+        let paths = prepared.test_paths();
+        prepared.recheck_resources().unwrap();
+        prepared.bundle.validate(&prepared.guard).unwrap();
+        for path in [
+            fixture.fixture.stage.join("server.jar"),
+            paths.copy.join("server.jar"),
+            paths.bundle.join("bundle.json"),
+        ] {
+            assert!(
+                fs::OpenOptions::new().write(true).open(&path).is_err(),
+                "retained files reject write handles"
+            );
+            assert!(
+                fs::remove_file(&path).is_err(),
+                "retained files reject deletion"
+            );
+        }
+        let unexpected = paths.copy.join("mods/unreviewed.jar");
+        fs::write(&unexpected, b"unreviewed").unwrap();
+        assert!(
+            prepared.bundle.validate(&prepared.guard).is_err(),
+            "pins cannot hide an added mod"
+        );
+        fs::remove_file(&unexpected).unwrap();
+        prepared.bundle.validate(&prepared.guard).unwrap();
+        let execution = prepared.review().digest.clone();
+        prepared.expire_for_test();
+        prepared.recheck_resources().unwrap();
+        assert_eq!(prepared.confirm_fresh(&execution), Err(Error::Expired));
+        no_claim(&paths);
+    }
+}
+
+#[test]
+fn retained_voice_policy2_reopen_rehashes_after_original_pins_are_released() {
+    for profile in PROFILES {
+        let fixture = VoiceFixture::new(profile);
+        let plan = factory::fixture_voice_bridge_plan(
+            &fixture.fixture.lab,
+            &fixture.fixture.stage,
+            &fixture.fixture.jdk,
+            profile,
+        )
+        .unwrap();
+        let approval = plan.review().digest.clone();
+        let prepared = plan.create(&approval).unwrap();
+        let id = prepared.bundle_id();
+        let path = prepared.test_paths().copy.join("server.jar");
+        let (before, mut bytes) = observe_file(&path, 1024).unwrap();
+        drop(prepared);
+        drop(fixture.reopen(id).unwrap());
+        bytes[0] ^= 1;
+        fs::write(&path, &bytes).unwrap();
+        let after = observe_file(&path, 1024).unwrap().0;
+        assert_eq!(before.identity, after.identity);
+        assert_eq!(before.bytes, after.bytes);
+        assert_ne!(before.sha256, after.sha256);
+        assert!(
+            fixture.reopen(id).is_err(),
+            "serialized metadata cannot carry a retained verification into a new owner"
+        );
+    }
+}
+
+#[test]
 fn both_voice_factories_create_exact_profiles_baselines_and_real_private_provenance() {
     for profile in PROFILES {
         let fixture = VoiceFixture::new(profile);

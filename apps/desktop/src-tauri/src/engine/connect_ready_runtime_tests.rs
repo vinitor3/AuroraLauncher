@@ -271,6 +271,42 @@ fn ready_runtime_install_downloads_exact_official_profile() {
 
 #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
 #[test]
+fn ready_voice_catalog_resolves_exact_supported_client_pairs() {
+    for runtime in ReadyProfile::ALL {
+        let target = runtime.descriptor();
+        for profile in [
+            NativeVoiceProfile::SimpleVoiceChat,
+            NativeVoiceProfile::PlasmoVoice,
+        ] {
+            let simple = profile == NativeVoiceProfile::SimpleVoiceChat;
+            let pins = voice_artifact_pins(runtime, profile);
+            if runtime == ReadyProfile::Forge1122 && !simple {
+                assert_eq!(pins, Err(Error::UnsupportedRuntime));
+                continue;
+            }
+            let pins = pins.unwrap();
+            let (prefix, version) = if simple {
+                ("voicechat", "2.6.22")
+            } else {
+                ("plasmovoice", "2.1.17")
+            };
+            assert_eq!(
+                pins[0].0,
+                format!(
+                    "mods/{prefix}-{}-{}-{version}.jar",
+                    target.loader, target.minecraft_version
+                )
+            );
+            assert_eq!(
+                pins.len(),
+                1 + usize::from(!simple && target.loader == "fabric")
+            );
+        }
+    }
+}
+
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+#[test]
 fn ready_voice_install_is_copy_only_and_uses_transactional_undo() {
     use std::cell::Cell;
     let f = Fixture::new();
@@ -431,6 +467,9 @@ fn ready_runtime_verified_copy_is_readonly_and_pins_effective_inputs_through_spa
     let second = f.inspect(&f.copy, "source-fixture").unwrap();
     assert_eq!(digest, second.fingerprint);
     drop(second);
+    let already_selected_copy = f.inspect(&f.copy, f.copy.id().as_str()).unwrap();
+    assert_eq!(digest, already_selected_copy.fingerprint);
+    drop(already_selected_copy);
     assert_eq!(
         fs::read(f.source.root().join("aurora-instance.json")).unwrap(),
         before

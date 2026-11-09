@@ -10,6 +10,10 @@ use serde::{
 };
 use std::{fmt, marker::PhantomData, path::Path};
 
+#[path = "manifest_v3.rs"]
+mod v3;
+pub(super) use v3::{ServerRuntimeV3, VoiceManifestV3, MAX_V3_MANIFEST_BYTES};
+
 // Copy of the original factory Manifest. Keep fields/order/serde attributes
 // identical: old claims and review preimages bind these exact serialized bytes.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -167,7 +171,7 @@ pub(super) struct VoiceManifestV2 {
 // Only V2 uses these object guards. They forward MapAccess directly to the
 // strict derive, retaining duplicate tokens without a Value/map or re-encoding.
 // The shared V1 identity/observation/resource derives remain unchanged.
-fn object_only<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+pub(super) fn object_only<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,
@@ -317,18 +321,21 @@ impl VoiceManifestV2 {
 pub(super) enum ManifestKind {
     StatusV1,
     VoiceV2(StoredVoiceProfileV2),
+    VoiceV3(StoredVoiceProfileV2),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Manifest {
     StatusV1(ManifestV1),
     VoiceV2(VoiceManifestV2),
+    VoiceV3(Box<VoiceManifestV3>),
 }
 impl Serialize for Manifest {
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         match self {
             Self::StatusV1(value) => value.serialize(serializer),
             Self::VoiceV2(value) => value.serialize(serializer),
+            Self::VoiceV3(value) => value.serialize(serializer),
         }
     }
 }
@@ -337,103 +344,145 @@ impl Manifest {
         match self {
             Self::StatusV1(_) => ManifestKind::StatusV1,
             Self::VoiceV2(value) => ManifestKind::VoiceV2(value.profile),
+            Self::VoiceV3(value) => ManifestKind::VoiceV3(value.voice.profile),
         }
     }
     pub(super) fn schema(&self) -> u32 {
         match self {
             Self::StatusV1(value) => value.schema,
             Self::VoiceV2(value) => value.schema,
+            Self::VoiceV3(value) => value.schema,
         }
     }
     pub(super) fn id(&self) -> BundleId {
         match self {
             Self::StatusV1(value) => value.id,
             Self::VoiceV2(value) => value.id,
+            Self::VoiceV3(value) => value.voice.id,
         }
     }
     pub(super) fn lab_identity(&self) -> &FileIdentity {
         match self {
             Self::StatusV1(value) => &value.lab_identity,
             Self::VoiceV2(value) => &value.lab_identity,
+            Self::VoiceV3(value) => &value.voice.lab_identity,
         }
     }
     pub(super) fn bundle_identity(&self) -> &FileIdentity {
         match self {
             Self::StatusV1(value) => &value.bundle_identity,
             Self::VoiceV2(value) => &value.bundle_identity,
+            Self::VoiceV3(value) => &value.voice.bundle_identity,
         }
     }
     pub(super) fn native_identity(&self) -> &FileIdentity {
         match self {
             Self::StatusV1(value) => &value.native_identity,
             Self::VoiceV2(value) => &value.native_identity,
+            Self::VoiceV3(value) => &value.voice.native_identity,
         }
     }
     pub(super) fn copy_id(&self) -> &str {
         match self {
             Self::StatusV1(value) => &value.copy_id,
             Self::VoiceV2(value) => &value.copy_id,
+            Self::VoiceV3(value) => &value.voice.copy_id,
         }
     }
     pub(super) fn copy_uuid(&self) -> &str {
         match self {
             Self::StatusV1(value) => &value.copy_uuid,
             Self::VoiceV2(value) => &value.copy_uuid,
+            Self::VoiceV3(value) => &value.voice.copy_uuid,
         }
     }
     pub(super) fn origin_uuid(&self) -> &str {
         match self {
             Self::StatusV1(value) => &value.origin_uuid,
             Self::VoiceV2(value) => &value.origin_uuid,
+            Self::VoiceV3(value) => &value.voice.origin_uuid,
         }
     }
     pub(super) fn copy_identity(&self) -> &str {
         match self {
             Self::StatusV1(value) => &value.copy_identity,
             Self::VoiceV2(value) => &value.copy_identity,
+            Self::VoiceV3(value) => &value.voice.copy_identity,
         }
     }
     pub(super) fn origin_identity(&self) -> &str {
         match self {
             Self::StatusV1(value) => &value.origin_identity,
             Self::VoiceV2(value) => &value.origin_identity,
+            Self::VoiceV3(value) => &value.voice.origin_identity,
         }
     }
     pub(super) fn origin_fingerprint(&self) -> &str {
         match self {
             Self::StatusV1(value) => &value.origin_fingerprint,
             Self::VoiceV2(value) => &value.origin_fingerprint,
+            Self::VoiceV3(value) => &value.voice.origin_fingerprint,
         }
     }
     pub(super) fn resources(&self) -> &[resources::ResourceRecord] {
         match self {
             Self::StatusV1(value) => &value.resources,
             Self::VoiceV2(value) => &value.resources,
+            Self::VoiceV3(value) => &value.voice.resources,
         }
     }
     pub(super) fn installed(&self) -> &[resources::ResourceRecord] {
         match self {
             Self::StatusV1(value) => &value.installed,
             Self::VoiceV2(value) => &value.installed,
+            Self::VoiceV3(value) => &value.voice.installed,
         }
     }
     pub(super) fn provenance(&self) -> &[resources::ResourceRecord] {
         match self {
             Self::StatusV1(value) => &value.provenance,
             Self::VoiceV2(value) => &value.provenance,
+            Self::VoiceV3(value) => &value.voice.provenance,
         }
     }
     pub(super) fn status_v1(&self) -> Result<&ManifestV1> {
         match self {
             Self::StatusV1(value) => Ok(value),
-            Self::VoiceV2(_) => Err(Error::Identity),
+            Self::VoiceV2(_) | Self::VoiceV3(_) => Err(Error::Identity),
         }
     }
     pub(super) fn voice_v2(&self) -> Result<&VoiceManifestV2> {
         match self {
             Self::VoiceV2(value) => Ok(value),
+            Self::StatusV1(_) | Self::VoiceV3(_) => Err(Error::Identity),
+        }
+    }
+    pub(super) fn voice(&self) -> Result<&VoiceManifestV2> {
+        match self {
+            Self::VoiceV2(value) => Ok(value),
+            Self::VoiceV3(value) => Ok(&value.voice),
             Self::StatusV1(_) => Err(Error::Identity),
         }
+    }
+    pub(super) fn server_v3(&self) -> Option<&VoiceManifestV3> {
+        match self {
+            Self::VoiceV3(value) => Some(value),
+            _ => None,
+        }
+    }
+    pub(super) fn byte_limit(&self) -> u64 {
+        if self.server_v3().is_some() {
+            MAX_V3_MANIFEST_BYTES
+        } else {
+            MAX_JOURNAL
+        }
+    }
+    pub(super) fn encode_bounded(&self) -> Result<Vec<u8>> {
+        let bytes = serde_json::to_vec(self).map_err(|_| Error::Identity)?;
+        if bytes.len() as u64 > self.byte_limit() {
+            return Err(Error::Limit);
+        }
+        Ok(bytes)
     }
 }
 
@@ -490,11 +539,14 @@ impl<'de> Deserialize<'de> for SchemaProbe {
 }
 
 pub(super) fn decode_manifest(original_bytes: &[u8]) -> Result<Manifest> {
-    if original_bytes.len() as u64 > MAX_JOURNAL {
+    if original_bytes.len() as u64 > MAX_V3_MANIFEST_BYTES {
         return Err(Error::Limit);
     }
     let probe: SchemaProbe =
         serde_json::from_slice(original_bytes).map_err(|_| Error::NeedsRecovery)?;
+    if probe.schema != 3 && original_bytes.len() as u64 > MAX_JOURNAL {
+        return Err(Error::Limit);
+    }
     let decoded = match probe.schema {
         1 => Manifest::StatusV1(
             serde_json::from_slice(original_bytes).map_err(|_| Error::NeedsRecovery)?,
@@ -502,9 +554,15 @@ pub(super) fn decode_manifest(original_bytes: &[u8]) -> Result<Manifest> {
         2 => Manifest::VoiceV2(
             serde_json::from_slice(original_bytes).map_err(|_| Error::NeedsRecovery)?,
         ),
+        3 => Manifest::VoiceV3(
+            serde_json::from_slice(original_bytes).map_err(|_| Error::NeedsRecovery)?,
+        ),
         _ => return Err(Error::Identity),
     };
     if let Ok(voice) = decoded.voice_v2() {
+        voice.validate_wire()?;
+    }
+    if let Some(voice) = decoded.server_v3() {
         voice.validate_wire()?;
     }
     // No new lexical/canonical/value constraints are imposed on V1. Its old
@@ -513,7 +571,7 @@ pub(super) fn decode_manifest(original_bytes: &[u8]) -> Result<Manifest> {
 }
 
 pub(super) fn read_manifest(path: &Path) -> Result<Manifest> {
-    let original_bytes = recovery::read_bounded(path, MAX_JOURNAL)?;
+    let original_bytes = recovery::read_bounded(path, MAX_V3_MANIFEST_BYTES)?;
     decode_manifest(&original_bytes)
 }
 

@@ -68,6 +68,8 @@ mod session_tests;
 mod social;
 #[path = "social_key_binding.rs"]
 mod social_key_binding;
+#[path = "social_presence.rs"]
+mod social_presence;
 #[cfg(test)]
 #[path = "stop_completion_tests.rs"]
 mod stop_completion_tests;
@@ -380,6 +382,10 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
         if let Some(social) = &mut a.snapshot.social {
             social.stage = if error.is_some() { "failed" } else { "closed" };
             social.digest = None;
+            social.failure_stage = match error {
+                Some(ConnectError::SocialFailure(stage, _)) => Some(stage),
+                _ => None,
+            };
         }
         social::clear(a);
         a.export = None;

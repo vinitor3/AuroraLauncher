@@ -12,6 +12,7 @@ pub(crate) struct NativeVoiceHostBinding {
     profile: StoredVoiceProfileV2,
     policy: super::super::manifest::ObservationPolicyV2,
     deadline: Instant,
+    runtime: crate::engine::connect_ready_profile::ReadyProfile,
 }
 
 #[allow(dead_code)] //86A0 has no Host/Attempt/review/IPC caller.
@@ -37,6 +38,7 @@ impl DedicatedRun {
             profile: context.profile(),
             policy: context.policy(),
             deadline: self.shared.deadline,
+            runtime: context.runtime()?,
         })
     }
 }
@@ -80,11 +82,12 @@ impl NativeVoiceHostBinding {
                 (super::super::NativeVoiceProfile::PlasmoVoice, "2.1.17")
             }
         };
+        let runtime = self.runtime.descriptor();
         sample.profile == expected.0
             && sample.artifact_version == expected.1
-            && sample.minecraft == "1.21.1"
-            && sample.loader == "fabric"
-            && sample.loader_version == "0.16.14"
+            && sample.minecraft == runtime.minecraft_version
+            && sample.loader == runtime.loader
+            && sample.loader_version == runtime.loader_version
             && sample.binding == VoiceRuntimeBinding::Ipv4Literal
             && sample.announcement
                 == match self.policy {
@@ -107,6 +110,34 @@ impl NativeVoiceHostBinding {
             return Err(VoiceRuntimeError::Context(Error::Identity));
         }
         let profile = self.identity_preimage().1;
+        let shared = self.current().map_err(VoiceRuntimeError::from)?;
+        let context = shared
+            .voice_context
+            .as_ref()
+            .ok_or(VoiceRuntimeError::Closed)?;
+        if context.is_v3() {
+            let bytes = serde_json::to_vec(&(
+                "aurora.connect.native-online-voice-source/v2",
+                self.native_nonce,
+                profile,
+                self.runtime.version_id(),
+                self.runtime.descriptor(),
+                context
+                    .source_manifest_digest()
+                    .map_err(VoiceRuntimeError::Context)?,
+                self.targets(),
+                self.policy,
+                self.policy.configuration_sha256(self.profile),
+                super::super::digest(super::super::resources::BRIDGE_PROPERTIES),
+                "127.0.0.1:35554",
+                4096_u16,
+                1264_u16,
+                16384_u32,
+                20_u32,
+            ))
+            .map_err(|_| VoiceRuntimeError::Context(Error::Identity))?;
+            return Ok((profile, super::super::digest(&bytes)));
+        }
         let bytes = serde_json::to_vec(&(
             "aurora.connect.native-online-voice-source/v1",
             self.native_nonce,
@@ -130,9 +161,7 @@ impl NativeVoiceHostBinding {
     ) -> std::result::Result<crate::engine::connect_ready_profile::ReadyProfile, VoiceRuntimeError>
     {
         self.check_current()?;
-        // V2 admitted exactly this compiled runtime. ManifestV3 will dispatch
-        // through its original closed runtime proof; no renderer claim enters.
-        Ok(crate::engine::connect_ready_profile::ReadyProfile::Fabric1211)
+        Ok(self.runtime)
     }
 
     pub(crate) fn targets(&self) -> (SocketAddr, SocketAddr) {
@@ -163,6 +192,9 @@ impl NativeVoiceHostBinding {
                     context.native_nonce() == self.native_nonce
                         && context.profile() == self.profile
                         && context.policy() == self.policy
+                        && context
+                            .runtime()
+                            .is_ok_and(|runtime| runtime == self.runtime)
                 })
             {
                 return Err(DedicatedError::Preparation(Error::Identity));

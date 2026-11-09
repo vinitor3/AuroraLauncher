@@ -141,8 +141,15 @@ impl Harness {
         self.nonce
     }
     pub(super) fn ready(&mut self) {
-        let deadline = Instant::now() + WAIT;
+        self.ready_with_timeout(WAIT);
+    }
+    pub(super) fn ready_with_timeout(&mut self, timeout: Duration) {
+        self.ready_with_observation(timeout, || {});
+    }
+    pub(super) fn ready_with_observation(&mut self, timeout: Duration, observe: impl Fn()) {
+        let deadline = Instant::now() + timeout;
         let stream = loop {
+            observe();
             match self.listener.accept() {
                 Ok((stream, peer)) => {
                     assert!(peer.ip().is_loopback());

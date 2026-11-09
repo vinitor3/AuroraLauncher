@@ -20,7 +20,7 @@ async fn native_voice_social_host_player_original_source_spawn_expiry_epoch_and_
                 profile,
             )
             .unwrap();
-            exercise(plan, profile, mode).await;
+            exercise(plan, profile, mode, false).await;
         }
     }
 }
@@ -38,11 +38,11 @@ async fn native_voice_social_host_player_real_resources_and_durable_recovery() {
             }
         };
         let plan = desktop::discover_plan(selection).expect("native_voice_real_compiled_resources");
-        exercise(plan, profile, 0).await;
+        exercise(plan, profile, 0, true).await;
     }
 }
 
-async fn exercise(plan: FactoryPlan, profile: NativeVoiceProfile, mode: u8) {
+async fn exercise(plan: FactoryPlan, profile: NativeVoiceProfile, mode: u8, real_resources: bool) {
     eprintln!("native_voice_social_case {profile:?} mode={mode} begin");
     let approval = plan.review().digest.clone();
     let mut prepared = plan.create(&approval).unwrap();
@@ -51,11 +51,32 @@ async fn exercise(plan: FactoryPlan, profile: NativeVoiceProfile, mode: u8) {
     let mut harness = Harness::new(profile.stored());
     let mut runtime_limits = limits();
     runtime_limits.lifetime_ms = 24_000;
+    // Real JARs exercise every immutable hashing/recovery gate. Their original
+    // startup budget is explicit, bounded and never granted back after use.
+    if real_resources {
+        runtime_limits.lifetime_ms = 180_000;
+        runtime_limits.readiness_ms = 120_000;
+    }
+    let worker_started = Instant::now();
     let query_gate = Arc::new(Gate::default());
     let query_count = Arc::new(AtomicUsize::new(0));
     let held_gate = query_gate.clone();
     let hooks = Arc::new(TestHooks {
         point: Some(Arc::new(move |point| {
+            if real_resources
+                && matches!(
+                    point,
+                    producer::ProducerPoint::BeforeApply
+                        | producer::ProducerPoint::AfterApply
+                        | producer::ProducerPoint::BeforeStart
+                        | producer::ProducerPoint::AfterStart
+                )
+            {
+                eprintln!(
+                    "native_voice_real_resources {point:?} elapsed_ms={}",
+                    worker_started.elapsed().as_millis()
+                );
+            }
             if mode >= 4
                 && point == producer::ProducerPoint::VoiceAfterConfigurationA
                 && query_count.fetch_add(1, Ordering::SeqCst) == 2
@@ -76,7 +97,21 @@ async fn exercise(plan: FactoryPlan, profile: NativeVoiceProfile, mode: u8) {
     .unwrap();
     let running = Running::start(plan, CancellationToken::new());
     let release_query = Release(query_gate.clone());
-    harness.ready();
+    if real_resources {
+        harness.ready_with_observation(Duration::from_secs(120), || {
+            let snapshot = running
+                .control()
+                .observer()
+                .snapshot()
+                .expect("native_voice_real_original_observer");
+            assert!(
+                snapshot.reason.is_none(),
+                "native_voice_real_before_child_ready:{snapshot:?}"
+            );
+        });
+    } else {
+        harness.ready();
+    }
     ready(running.control()).await;
     let binding = running.control().native_voice_host_binding().unwrap();
     ConnectManager::exercise_social_host_player_test(binding, mode, || {
@@ -89,7 +124,11 @@ async fn exercise(plan: FactoryPlan, profile: NativeVoiceProfile, mode: u8) {
     })
     .await;
     drop(release_query);
-    let report = running.finish().await;
+    let report = if real_resources {
+        running.finish_with_timeout(Duration::from_secs(120)).await
+    } else {
+        running.finish().await
+    };
     harness.stop_observed();
     harness.finish();
     restored(&paths, &report);

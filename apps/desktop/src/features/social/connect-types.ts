@@ -9,7 +9,19 @@ export const socialRuntimeLabels = {
   "1.16.5-forge-36.2.42": "Minecraft 1.16.5 · Forge 36.2.42",
   "1.12.2-forge-14.23.5.2860": "Minecraft 1.12.2 · Forge 14.23.5.2860",
 } as const;
-export type SocialConnectStage = "reserved" | "authenticating" | "sourceChecking" | "hostReview" | "waitingGuest" | "connecting" | "connected" | "closed" | "failed";
+export type SocialConnectStage = "reserved" | "authenticating" | "sourceChecking" | "hostReview" | "guestReview" | "waitingGuest" | "connecting" | "connected" | "closed" | "failed";
+export const socialFailureStageText = {
+  authentication: "Autenticação da conta",
+  bootstrap: "Abertura da sessão",
+  identity: "Confirmação da identidade",
+  keyChallenge: "Validação da chave da conexão",
+  hostReview: "Revisão do compartilhamento",
+  hostRegistration: "Registro do anfitrião",
+  guestAdmission: "Admissão do participante",
+  sessionContinuity: "Manutenção da sessão",
+  relay: "Autorização da rota de conexão",
+  sessionControl: "Controle da sessão",
+} as const;
 export type SocialConnectProjection = {
   sessionId: string; role: "host" | "guest"; stage: SocialConnectStage;
   digest: string | null; gameTarget: string | null; visibility: "public" | "friends" | null; expiresAtMs: number | null;
@@ -18,6 +30,8 @@ export type SocialConnectProjection = {
   hostPlayer?: boolean; maxGuests?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
   hostPlayerVoiceState?: "enabled" | "retired" | "failed" | "closed";
   runtimeProfile?: keyof typeof socialRuntimeLabels;
+  voiceTransportProfile?: "nativeVoice8V1";
+  failureStage?: keyof typeof socialFailureStageText;
   participants?: { grantId: string; accountId: string; state: "waiting" | "connected" | "disconnected" | "removing" }[];
 };
 export type SocialConnectCapabilities = { available: boolean; experimental: true; accountEpoch: number; maxSessionSeconds: 60 | 14400; ownedGameTcpDiscovery?: boolean };
@@ -33,11 +47,13 @@ export function socialConnectCapabilitiesFrom(value: unknown): SocialConnectCapa
   return value as SocialConnectCapabilities;
 }
 export function socialConnectProjectionFrom(value: unknown): SocialConnectProjection {
-  if (!record(value) || Object.keys(value).length < 7 || Object.keys(value).length > 15
-    || Object.keys(value).some(key => !["sessionId", "role", "stage", "digest", "gameTarget", "visibility", "expiresAtMs", "readyGameLaunchAvailable", "voiceProfile", "voiceState", "hostPlayer", "hostPlayerVoiceState", "maxGuests", "participants", "runtimeProfile"].includes(key))
+  if (!record(value) || Object.keys(value).length < 7 || Object.keys(value).length > 17
+    || Object.keys(value).some(key => !["sessionId", "role", "stage", "digest", "gameTarget", "visibility", "expiresAtMs", "readyGameLaunchAvailable", "voiceProfile", "voiceState", "hostPlayer", "hostPlayerVoiceState", "maxGuests", "participants", "runtimeProfile", "failureStage", "voiceTransportProfile"].includes(key))
+    || !(value.failureStage === undefined || value.stage === "failed" && typeof value.failureStage === "string" && Object.hasOwn(socialFailureStageText, value.failureStage))
     || !(value.voiceProfile === undefined || ["svc", "plasmo"].includes(String(value.voiceProfile)))
     || !(value.runtimeProfile === undefined || value.voiceProfile !== undefined && typeof value.runtimeProfile === "string" && Object.hasOwn(socialRuntimeLabels, value.runtimeProfile)
       && !(value.runtimeProfile === "1.12.2-forge-14.23.5.2860" && value.voiceProfile === "plasmo"))
+    || !(value.voiceTransportProfile === undefined || value.voiceTransportProfile === "nativeVoice8V1" && value.runtimeProfile !== undefined && value.voiceProfile !== undefined && typeof value.hostPlayer === "boolean")
     || !(value.voiceState === undefined || value.voiceProfile !== undefined && ["notStarted", "enabled", "retiring", "retired", "failed", "closed"].includes(String(value.voiceState)))
     || !(value.hostPlayer === undefined || value.voiceProfile !== undefined && typeof value.hostPlayer === "boolean")
     || !(value.hostPlayerVoiceState === undefined || value.hostPlayer === true && ["enabled", "retired", "failed", "closed"].includes(String(value.hostPlayerVoiceState)))
@@ -51,13 +67,14 @@ export function socialConnectProjectionFrom(value: unknown): SocialConnectProjec
     || !(value.readyGameLaunchAvailable === undefined || value.readyGameLaunchAvailable === true
       && (value.role === "guest" && value.stage === "connected" || value.role === "host" && value.hostPlayer === true && ["connected", "waitingGuest"].includes(String(value.stage)))) || !socialSessionId(value.sessionId)
     || !["host", "guest"].includes(value.role as string)
-    || !["reserved", "authenticating", "sourceChecking", "hostReview", "waitingGuest", "connecting", "connected", "closed", "failed"].includes(value.stage as string)
+    || !["reserved", "authenticating", "sourceChecking", "hostReview", "guestReview", "waitingGuest", "connecting", "connected", "closed", "failed"].includes(value.stage as string)
     || !(value.digest === null || typeof value.digest === "string" && /^[0-9a-f]{64}$/.test(value.digest))
     || !(value.gameTarget === null || socialGameTarget(value.gameTarget))
     || ![null, "public", "friends"].includes(value.visibility as null | string)
     || !(value.expiresAtMs === null || integer(value.expiresAtMs))) return invalid();
-  if (value.role === "guest" && (value.digest !== null || value.gameTarget !== null || value.visibility !== null)) return invalid();
+  if (value.role === "guest" && (value.stage !== "guestReview" && value.digest !== null || value.gameTarget !== null || value.visibility !== null)) return invalid();
   if (value.stage === "sourceChecking" && (value.role !== "host" || value.gameTarget !== null || value.digest !== null)) return invalid();
+  if (value.stage === "guestReview" && (value.role !== "guest" || value.voiceTransportProfile !== "nativeVoice8V1" || value.digest === null || value.expiresAtMs === null)) return invalid();
   if (value.stage === "hostReview" && (value.role !== "host" || value.digest === null || value.gameTarget === null || value.visibility === null || value.expiresAtMs === null)) return invalid();
   return value as SocialConnectProjection;
 }
@@ -74,6 +91,14 @@ export function socialConnectError(cause: unknown): string {
     connect_social_account_changed: "A conta mudou. Atualize a sessão antes de continuar.",
     connect_social_failed: "A sessão não está disponível ou a permissão mudou. Atualize a lista.",
     connect_social_auth_failed: "Sua conta não pôde ser confirmada. Entre novamente no Aurora.",
+    connect_social_account_not_registered: "A conta ainda não está registrada no Social do Aurora. Abra a aba Social para concluir o cadastro.",
+    connect_social_not_authorized: "Sua conta não tem acesso a esta sessão. Atualize a lista de sessões.",
+    connect_social_authority_changed: "A autorização original da sessão mudou ou expirou. Atualize a lista de sessões.",
+    connect_social_clock_uncertain: "O horário do serviço não pôde ser confirmado dentro do prazo. Tente iniciar uma nova conexão.",
+    connect_social_clock_unverified: "A validação do horário assinado do serviço falhou. Atualize o Aurora antes de tentar novamente.",
+    connect_social_request_timed_out: "O serviço online não respondeu dentro do prazo. A tentativa foi encerrada; prepare uma nova sessão.",
+    connect_social_service_unavailable: "Não foi possível obter resposta do serviço online. Tente novamente em instantes.",
+    connect_social_request_rejected: "Os dados desta etapa da conexão não puderam ser validados. Atualize a sessão antes de tentar novamente.",
     connect_social_epoch_mismatch: "A sessão da conta mudou. Atualize antes de continuar.",
     connect_plan_expired: "O prazo da sessão terminou. O anfitrião pode preparar outra sessão.",
     connect_port_unavailable: "A porta de conexão está ocupada. Nenhum outro processo foi encerrado.",
@@ -86,10 +111,10 @@ export function socialConnectError(cause: unknown): string {
     connect_account_cleanup_incomplete: "A conexão anterior ainda não foi encerrada. Tente encerrar novamente.",
     connect_cleanup_failed: "Não foi possível confirmar a liberação da conexão. Tente encerrar novamente.",
   };
-  return messages[code] ?? "Não foi possível concluir a conexão. Atualize o estado antes de tentar novamente.";
+  return Object.hasOwn(messages, code) ? messages[code] : "Não foi possível concluir a conexão. Atualize o estado antes de tentar novamente.";
 }
 export const socialStageText: Record<SocialConnectStage, string> = {
-  reserved: "Preparando conexão…", authenticating: "Confirmando sua conta…", sourceChecking: "Conferindo o jogo selecionado…", hostReview: "Revise o compartilhamento",
+  reserved: "Preparando conexão…", authenticating: "Confirmando sua conta…", sourceChecking: "Conferindo o jogo selecionado…", hostReview: "Revise o compartilhamento", guestReview: "Revise a entrada com voz",
   waitingGuest: "Aguardando um participante", connecting: "Conectando…", connected: "Conexão autenticada",
   closed: "Conexão encerrada", failed: "Conexão indisponível",
 };

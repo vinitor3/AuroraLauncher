@@ -27,6 +27,132 @@ const WORK_STAGE: &str = "server";
 
 type Cancel<'a> = dyn Fn() -> bool + Sync + 'a;
 
+pub(in super::super) fn download_server_artifacts(
+    target: &Path,
+    pins: &[super::super::voice_catalog::VoiceArtifact],
+    cancel: &Cancel<'_>,
+) -> Result<()> {
+    check_cancel(cancel)?;
+    let mut directories = recovery::pin_directory(target)?;
+    let mut requests = Vec::new();
+    for pin in pins {
+        recovery::valid_relative(pin.relative)?;
+        let path = recovery::path(target, pin.relative)?;
+        let mut current = target.to_path_buf();
+        let relative = Path::new(pin.relative).parent().ok_or(Error::UnsafePath)?;
+        for component in relative.components() {
+            let Component::Normal(name) = component else {
+                return Err(Error::UnsafePath);
+            };
+            current.push(name);
+            if !current.try_exists()? {
+                fs::create_dir(&current)?;
+            }
+            directories.extend(recovery::pin_directory(&current)?);
+        }
+        requests.push(DownloadRequest {
+            url: pin.url.into(),
+            destination: path,
+            label: pin.relative.into(),
+            expected_hash: Some(ExpectedHash::Sha256(pin.sha256.into())),
+            expected_size: Some(pin.bytes),
+        });
+    }
+    download_many_cancellable(&download_client()?, requests, 3, |_| {}, cancel).map_err(
+        |error| {
+            #[cfg(test)]
+            {
+                use crate::engine::download::DownloadError;
+                let (kind, status) = match &error {
+                    DownloadError::Network { source, .. } => {
+                        ("network", source.status().map(|s| s.as_u16()))
+                    }
+                    DownloadError::Io { .. } => ("io", None),
+                    DownloadError::Integrity(_) => ("integrity", None),
+                    DownloadError::Resume(_) => ("resume", None),
+                    DownloadError::ConflictingDestination(_) => ("conflict", None),
+                    DownloadError::Cancelled => ("cancelled", None),
+                };
+                eprintln!("native_server_download_failure kind={kind} status={status:?}");
+            }
+            #[cfg(not(test))]
+            let _ = error;
+            if cancel() {
+                Error::Cancelled
+            } else {
+                Error::Resources
+            }
+        },
+    )?;
+    for pin in pins {
+        check_cancel(cancel)?;
+        let (observation, _) = observe_file(&target.join(pin.relative), pin.bytes)?;
+        if observation.bytes != pin.bytes || observation.sha256 != pin.sha256 {
+            return Err(Error::Resources);
+        }
+    }
+    Ok(())
+}
+
+pub(in super::super) fn prepare_server_java(
+    lab: &Path,
+    runtime: crate::engine::connect_ready_profile::ReadyProfile,
+    cancel: &Cancel<'_>,
+) -> Result<(PathBuf, ManagedJava)> {
+    let major = runtime.descriptor().java_major;
+    let (root, url, size, hash) = match major {
+        8 => ("jdk8u512-b09-jre", "https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u512-b09/OpenJDK8U-jre_x64_windows_hotspot_8u512b09.zip", 40_124_908, "ae1ae12f817d7735477c6555107eece73854da0654da69077309ef9bff0b78bf"),
+        17 => ("jdk-17.0.21+9-jre", "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jre_x64_windows_hotspot_17.0.21_9.zip", 43_860_024, "fe4656bd78fb09812dc38c49da777f79cc33e7ee435a254be82f9e7f40d9d117"),
+        21 => (JAVA_ROOT, JAVA_URL, JAVA_SIZE, JAVA_SHA256),
+        _ => return Err(Error::Resources),
+    };
+    let expected_tree = super::super::server_preparation::java_tree(runtime);
+    let (_lab, _lock) = open_cache(lab)?;
+    let java = lab.join(format!("java-server-v3-{major}"));
+    let verify = |path: &Path| -> Result<ManagedJava> {
+        let (hash, pins) = observe_tree(path, cancel)?;
+        if format!("{hash:x}") != expected_tree {
+            return Err(Error::Resources);
+        }
+        Ok(pins)
+    };
+    if verified_directory(&java, || verify(&java).map(drop))? {
+        return Ok((java.clone(), verify(&java)?));
+    }
+    let work = Staging::create(
+        lab,
+        lab.join(format!("java-server-build-v3-{}", Uuid::new_v4())),
+    )?;
+    let output = work.path.join("java");
+    fs::create_dir(&output)?;
+    let archive = work.path.join("java.zip");
+    download_many_cancellable(
+        &download_client()?,
+        vec![DownloadRequest {
+            url: url.into(),
+            destination: archive.clone(),
+            label: format!("Java {major}"),
+            expected_hash: Some(ExpectedHash::Sha256(hash.into())),
+            expected_size: Some(size),
+        }],
+        1,
+        |_| {},
+        cancel,
+    )
+    .map_err(|_| {
+        if cancel() {
+            Error::Cancelled
+        } else {
+            Error::Resources
+        }
+    })?;
+    extract_java(recovery::secure_open(&archive)?, &output, root, cancel)?;
+    drop(verify(&output)?);
+    check_cancel(cancel)?;
+    replace_directory(lab, &output, &java)?;
+    Ok((java.clone(), verify(&java)?))
+}
+
 fn check_cancel(cancel: &Cancel<'_>) -> Result<()> {
     if cancel() {
         return Err(Error::Cancelled);
@@ -141,6 +267,23 @@ pub(crate) fn acquire_client_mods(
     missing: &[&str],
     cancel: &Cancel<'_>,
 ) -> Result<Vec<Vec<u8>>> {
+    acquire_client_mods_for(
+        data,
+        crate::engine::connect_ready_profile::ReadyProfile::Fabric1211,
+        profile,
+        missing,
+        cancel,
+    )
+}
+
+pub(crate) fn acquire_client_mods_for(
+    data: &Path,
+    runtime: crate::engine::connect_ready_profile::ReadyProfile,
+    profile: NativeVoiceProfile,
+    missing: &[&str],
+    cancel: &Cancel<'_>,
+) -> Result<Vec<Vec<u8>>> {
+    let voice = super::super::client_voice_pins_for(runtime, profile).ok_or(Error::Resources)?;
     if missing.is_empty() {
         return Ok(Vec::new());
     }
@@ -153,7 +296,6 @@ pub(crate) fn acquire_client_mods(
     fs::create_dir(staging.path.join("mods"))?;
     let _staging = recovery::pin_directory(&staging.path.join("mods"))?;
     let cached = lab.join(stage_name(profile));
-    let voice = client_voice_pins(profile);
     let mut ordered = Vec::new();
     let mut downloads = Vec::new();
     for name in missing {
@@ -302,7 +444,7 @@ fn artifact_request(pin: &Pin, stage: &Path) -> Result<DownloadRequest> {
         "mods/voicechat-fabric-1.21.1-2.6.22.jar" => "https://cdn.modrinth.com/data/9eGKb6K1/versions/VS5X7jZd/voicechat-fabric-1.21.1-2.6.22.jar",
         "mods/plasmovoice-fabric-1.21.1-2.1.17.jar" => "https://cdn.modrinth.com/data/1bZhdhsH/versions/6Q2QmcUp/plasmovoice-fabric-1.21.1-2.1.17.jar",
         "mods/fabric-api-0.116.10+1.21.1.jar" => "https://cdn.modrinth.com/data/P7dR8mSH/versions/ID8pq1x1/fabric-api-0.116.10%2B1.21.1.jar",
-        _ => return Err(Error::Resources),
+        _ => catalog_url(pin).ok_or(Error::Resources)?,
     };
     let hash = if pin.sha1 {
         ExpectedHash::Sha1(pin.expected.clone())
@@ -318,14 +460,38 @@ fn artifact_request(pin: &Pin, stage: &Path) -> Result<DownloadRequest> {
     })
 }
 
+fn catalog_url(pin: &Pin) -> Option<&'static str> {
+    for runtime in crate::engine::connect_ready_profile::ReadyProfile::ALL {
+        for profile in [
+            NativeVoiceProfile::SimpleVoiceChat,
+            NativeVoiceProfile::PlasmoVoice,
+        ] {
+            for artifact in super::super::voice_catalog::artifacts(runtime, profile).unwrap_or(&[])
+            {
+                if artifact.relative == pin.name
+                    && artifact.bytes == pin.size
+                    && artifact.sha256 == pin.expected
+                    && !pin.sha1
+                {
+                    return Some(artifact.url);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn download_client() -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
+        .user_agent("AuroraLauncher/0.1.1")
         .https_only(true)
         .connect_timeout(Duration::from_secs(8))
         .timeout(Duration::from_secs(20))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             let allowed = attempt.previous().len() == 1
-                && attempt.previous()[0].as_str() == JAVA_URL
+                && [JAVA_URL,
+                    "https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u512-b09/OpenJDK8U-jre_x64_windows_hotspot_8u512b09.zip",
+                    "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jre_x64_windows_hotspot_17.0.21_9.zip"].contains(&attempt.previous()[0].as_str())
                 && attempt.url().scheme() == "https"
                 && attempt.url().host_str() == Some("release-assets.githubusercontent.com")
                 && attempt.url().port_or_known_default() == Some(443)

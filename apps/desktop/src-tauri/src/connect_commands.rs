@@ -27,6 +27,18 @@ pub fn connect_social_capabilities(
     Ok(manager.social_capabilities())
 }
 #[tauri::command]
+pub async fn connect_social_observe_sessions(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    request: aurora_launcher_core::engine::connect::SocialPresenceRequest,
+    id_token: String,
+) -> Result<Vec<aurora_launcher_core::engine::connect::SocialSessionAvailability>, &'static str> {
+    manager
+        .social_observe_sessions(owner(&window)?, request, id_token)
+        .await
+        .map_err(|error| error.code())
+}
+#[tauri::command]
 pub fn connect_social_reserve(
     window: WebviewWindow,
     manager: State<'_, ConnectManager>,
@@ -75,6 +87,18 @@ pub fn connect_social_confirm_host(
 ) -> Result<ConnectSnapshot, &'static str> {
     manager
         .social_confirm_host(owner(&window)?, &operation_id, generation, &digest)
+        .map_err(|error| error.code())
+}
+#[tauri::command]
+pub fn connect_social_confirm_guest(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    operation_id: String,
+    generation: u64,
+    digest: String,
+) -> Result<ConnectSnapshot, &'static str> {
+    manager
+        .social_confirm_guest(owner(&window)?, &operation_id, generation, &digest)
         .map_err(|error| error.code())
 }
 #[tauri::command]
@@ -634,6 +658,7 @@ pub async fn connect_stop(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ReadyCopyInstallRequest {
     pub(crate) operation_id: String,
+    pub(crate) connect_operation_id: String,
     pub(crate) source_instance_id: String,
     pub(crate) profile_id: String,
     pub(crate) approved: bool,
@@ -646,20 +671,22 @@ pub async fn connect_install_ready_copy(
     manager: State<'_, ConnectManager>,
     request: ReadyCopyInstallRequest,
 ) -> Result<aurora_launcher_core::engine::diagnostic_lab::LabEnvironment, &'static str> {
-    owner(&window)?;
+    let owner = owner(&window)?;
     #[cfg(all(windows, feature = "connect-lab"))]
     {
         if manager.capabilities().ready_game_launch.is_none() {
             return Err("connect_ready_game_disabled");
         }
-        crate::commands::ready_game::install_ready_copy(app, request).await
+        crate::commands::ready_game::install_ready_copy(app, &manager, owner, request).await
     }
     #[cfg(not(all(windows, feature = "connect-lab")))]
     {
         let _ = (
             app,
             manager,
+            owner,
             request.operation_id,
+            request.connect_operation_id,
             request.source_instance_id,
             request.profile_id,
             request.approved,

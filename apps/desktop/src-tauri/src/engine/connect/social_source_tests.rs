@@ -42,6 +42,7 @@ fn reserve_run(
         selection: control.selection.take(),
         key: control.key.take().unwrap(),
         authority: manager.social_authority.clone().unwrap(),
+        clock: None,
         deadline: a.prepared_deadline,
         expiry: a.snapshot.social.as_ref().unwrap().expires_at_ms.unwrap(),
         cancel: a.cancel.clone(),

@@ -101,6 +101,15 @@ impl MinecraftInstaller {
         concurrency: usize,
         progress: impl FnMut(TransferProgress),
     ) -> Result<(), InstallError> {
+        if self.cancel.is_some()
+            && requests.iter().any(|request| {
+                !reqwest::Url::parse(&request.url).is_ok_and(|url| ready_origin_allowed(&url))
+            })
+        {
+            return Err(InstallError::Metadata(
+                "origem de artefato fora do perfil oficial".into(),
+            ));
+        }
         download_many_cancellable(&self.client, requests, concurrency, progress, &|| {
             self.check_cancel().is_err()
         })?;
@@ -135,6 +144,13 @@ impl MinecraftInstaller {
             .https_only(true)
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() < 4 && ready_origin_allowed(attempt.url()) {
+                    attempt.follow()
+                } else {
+                    attempt.error("redirecionamento fora das origens oficiais")
+                }
+            }))
             .build()?;
         let installer = Self {
             client,
@@ -565,31 +581,49 @@ impl MinecraftInstaller {
         let base = format!(
             "https://maven.minecraftforge.net/net/minecraftforge/forge/{forge_id}/forge-{forge_id}-installer.jar"
         );
-        let checksum = self
-            .client
-            .get(format!("{base}.sha1"))
-            .send()?
-            .error_for_status()?
-            .text()?;
-        let checksum = checksum
-            .split_whitespace()
-            .next()
-            .ok_or_else(|| InstallError::Metadata("checksum do Forge ausente".to_owned()))?;
         let installer = instance
             .root()
             .join("installers")
             .join(format!("forge-{forge_id}-installer.jar"));
-        let request = DownloadRequest {
-            url: base,
+        let mut request = DownloadRequest {
+            url: base.clone(),
             destination: installer.clone(),
             label: installer
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("Forge installer")
                 .to_owned(),
-            expected_hash: Some(ExpectedHash::Sha1(checksum.to_owned())),
+            expected_hash: None,
             expected_size: None,
         };
+        #[cfg(all(windows, feature = "connect-lab"))]
+        let forge_pin = if self.cancel.is_some() {
+            let version_id = format!("{minecraft_version}-forge-{forge_version}");
+            let pin = super::connect_ready_profile::ReadyProfile::from_version_id(&version_id)
+                .and_then(super::connect_forge_installer_pins::ForgeInstallerPin::for_runtime)
+                .ok_or_else(|| {
+                    InstallError::Metadata("instalador Forge fora da matriz aprovada".into())
+                })?;
+            request.url = pin.url.into();
+            request.expected_hash = Some(ExpectedHash::Sha256(pin.sha256.into()));
+            request.expected_size = Some(pin.bytes);
+            Some(pin)
+        } else {
+            None
+        };
+        if request.expected_hash.is_none() {
+            let checksum = self
+                .client
+                .get(format!("{base}.sha1"))
+                .send()?
+                .error_for_status()?
+                .text()?;
+            let checksum = checksum
+                .split_whitespace()
+                .next()
+                .ok_or_else(|| InstallError::Metadata("checksum do Forge ausente".to_owned()))?;
+            request.expected_hash = Some(ExpectedHash::Sha1(checksum.to_owned()));
+        }
         self.download(vec![request], 1, |item| {
             progress(item.map_total(84.0, 93.0))
         })?;
@@ -603,30 +637,42 @@ impl MinecraftInstaller {
         }
 
         progress(stage_progress("Executando instalador do Forge", 95.0));
-        let mut command = background_command(java);
         if self.cancel.is_some() {
-            let home = instance.root().join("installers/aurora-forge-home");
-            let temp = home.join("tmp");
-            fs::create_dir_all(&temp)?;
-            for name in [
-                "JAVA_TOOL_OPTIONS",
-                "_JAVA_OPTIONS",
-                "JDK_JAVA_OPTIONS",
-                "CLASSPATH",
-            ] {
-                command.env_remove(name);
+            #[cfg(all(windows, feature = "connect-lab"))]
+            {
+                use super::connect_owned_process::{run_owned_java_installer, OwnedInstallerError};
+                let _installer_pin = forge_pin
+                    .ok_or_else(|| InstallError::Integrity(installer.clone()))?
+                    .pin_file(&installer)
+                    .map_err(|_| InstallError::Integrity(installer.clone()))?;
+                let home = instance.root().join("installers/aurora-forge-home");
+                let args = [
+                    "-jar".into(),
+                    installer.as_os_str().to_owned(),
+                    "--installClient".into(),
+                    instance.root().as_os_str().to_owned(),
+                ];
+                run_owned_java_installer(
+                    &java,
+                    &args,
+                    instance.root(),
+                    &home,
+                    std::time::Duration::from_secs(15 * 60),
+                    &|| self.check_cancel().is_err(),
+                )
+                .map_err(|error| match error {
+                    OwnedInstallerError::Cancelled => InstallError::Cancelled,
+                    other => InstallError::ForgeInstaller(format!("processo oficial: {other:?}")),
+                })?;
             }
-            command
-                .arg(format!("-Duser.home={}", home.display()))
-                .arg(format!("-Djava.io.tmpdir={}", temp.display()))
-                .env("TEMP", &temp)
-                .env("TMP", &temp);
-        }
-        configure_forge_installer_command(&mut command, &installer, instance.root());
-        command.current_dir(instance.root());
-        if self.cancel.is_some() {
-            self.run_controlled_forge(command)?;
+            #[cfg(not(all(windows, feature = "connect-lab")))]
+            return Err(InstallError::ForgeInstaller(
+                "preparo Connect indisponível".into(),
+            ));
         } else {
+            let mut command = background_command(java);
+            configure_forge_installer_command(&mut command, &installer, instance.root());
+            command.current_dir(instance.root());
             let output = command.output()?;
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -643,54 +689,36 @@ impl MinecraftInstaller {
 
     fn get_json(&self, url: &str) -> Result<Value, InstallError> {
         self.check_cancel()?;
+        if self.cancel.is_some()
+            && !reqwest::Url::parse(url).is_ok_and(|url| ready_origin_allowed(&url))
+        {
+            return Err(InstallError::Metadata(
+                "origem de metadado fora do perfil oficial".into(),
+            ));
+        }
         let value = self.client.get(url).send()?.error_for_status()?.json()?;
         self.check_cancel()?;
         Ok(value)
     }
+}
 
-    fn run_controlled_forge(&self, mut command: Command) -> Result<(), InstallError> {
-        use std::{
-            process::Stdio,
-            thread,
-            time::{Duration, Instant},
-        };
-        self.check_cancel()?;
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let mut child = command.spawn()?;
-        let deadline = Instant::now() + Duration::from_secs(15 * 60);
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) if status.success() => return self.check_cancel(),
-                Ok(Some(_)) => {
-                    return Err(InstallError::ForgeInstaller(
-                        "o processo oficial terminou com erro".into(),
-                    ))
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(error.into());
-                }
-            }
-            if self.check_cancel().is_err() || Instant::now() >= deadline {
-                let kill = child.kill();
-                if kill.is_ok() || child.try_wait()?.is_some() {
-                    let _ = child.wait()?;
-                    self.check_cancel()?;
-                    return Err(InstallError::ForgeInstaller(
-                        "prazo do processo oficial excedido".into(),
-                    ));
-                }
-                // Keep the child and copy lock until process exit. A live
-                // installer must never leave behind a writable published copy.
-            }
-            thread::sleep(Duration::from_millis(50));
-        }
-    }
+fn ready_origin_allowed(url: &reqwest::Url) -> bool {
+    url.scheme() == "https"
+        && url.port_or_known_default() == Some(443)
+        && url.username().is_empty()
+        && url.password().is_none()
+        && matches!(
+            url.host_str(),
+            Some(
+                "piston-meta.mojang.com"
+                    | "piston-data.mojang.com"
+                    | "libraries.minecraft.net"
+                    | "resources.download.minecraft.net"
+                    | "meta.fabricmc.net"
+                    | "maven.fabricmc.net"
+                    | "maven.minecraftforge.net"
+            )
+        )
 }
 
 fn validate_artifact_path(path: &str) -> Result<(), InstallError> {

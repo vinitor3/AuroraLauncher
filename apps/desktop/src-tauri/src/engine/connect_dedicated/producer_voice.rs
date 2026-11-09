@@ -5,7 +5,7 @@ use crate::engine::connect_discovery::UdpLoopbackRepresentation;
 use crate::engine::connect_voice::dedicated::{
     manifest::StoredVoiceProfileV2,
     runtime_config::{PinnedRuntimeConfiguration, RuntimeConfigError},
-    voice_profile::{self, NativeVoiceProfile},
+    voice_profile::NativeVoiceProfile,
 };
 use std::net::SocketAddrV4;
 
@@ -199,11 +199,15 @@ fn observe_inner(
         StoredVoiceProfileV2::Svc => (NativeVoiceProfile::SimpleVoiceChat, "2.6.22"),
         StoredVoiceProfileV2::Plasmo => (NativeVoiceProfile::PlasmoVoice, "2.1.17"),
     };
+    let runtime = context
+        .runtime()
+        .map_err(VoiceRuntimeError::Context)?
+        .descriptor();
     Ok(VoiceRuntimeSample {
         profile,
-        minecraft: voice_profile::MINECRAFT,
-        loader: voice_profile::LOADER,
-        loader_version: voice_profile::LOADER_VERSION,
+        minecraft: runtime.minecraft_version,
+        loader: runtime.loader,
+        loader_version: runtime.loader_version,
         artifact_version,
         binding: VoiceRuntimeBinding::Ipv4Literal,
         announcement: match context.policy() {
@@ -215,6 +219,28 @@ fn observe_inner(
             }
         },
     })
+}
+
+/// The V3 producer borrows its already-owned Readiness QueryJob. This does not
+/// expose a pre-Ready reservation or manufacture a second observation owner.
+pub(in super::super) fn observe_v3_readiness(
+    job: &QueryJob,
+) -> std::result::Result<VoiceRuntimeSample, VoiceRuntimeError> {
+    let shared = &job.shared;
+    if !shared
+        .voice_context
+        .as_ref()
+        .is_some_and(|context| context.is_v3() && context.native_nonce() == shared.native_nonce)
+    {
+        return Err(VoiceRuntimeError::Context(Error::Identity));
+    }
+    let result = observe_inner(shared, &job.observer);
+    let mut state = shared.lock();
+    shared.refresh(&mut state);
+    if state.reason.is_some() {
+        return Err(VoiceRuntimeError::Closed);
+    }
+    result
 }
 
 // This closed fixture plan changes only its OWN argv, never RecipeV1 or the V1
@@ -234,7 +260,7 @@ pub(in super::super) fn plan_voice_for_test(
     {
         return Err(DedicatedError::Preparation(Error::Resources));
     }
-    let profile = prepared.bundle.manifest.voice_v2()?.profile;
+    let profile = prepared.bundle.manifest.voice()?.profile;
     let mut recipe = Recipe::voice_production(&prepared)?;
     recipe.executable = std::env::current_exe().map_err(|_| DedicatedError::Internal)?;
     recipe.args = vec![
@@ -263,7 +289,7 @@ pub(in super::super) fn plan_voice_for_test(
     );
     recipe.environment.insert(
         "AURORA_NATIVE_VOICE_TEST_ANNOUNCED".into(),
-        if prepared.bundle.manifest.voice_v2()?.observation_policy
+        if prepared.bundle.manifest.voice()?.observation_policy
             == super::super::manifest::ObservationPolicyV2::LiteralLoopback35554Durable
         {
             "1"

@@ -4,6 +4,9 @@ use super::*;
 use serde::de::IgnoredAny;
 use std::{fs, ops::Range, path::PathBuf};
 
+#[path = "v3_tests.rs"]
+mod v3_tests;
+
 // Deliberately structural V1 data: the old serde type did not validate hash
 // spellings/counts/physical identities. B1 must not silently add those rules.
 const V1_CANONICAL: &[u8] = br#"{"schema":1,"id":"00000000-0000-0000-0000-000000000001","lab_identity":{"volume":7,"index":11},"bundle_identity":{"volume":7,"index":12},"native_identity":{"volume":7,"index":13},"copy_id":"aurora-test-codec","copy_uuid":"copy","origin_uuid":"origin","copy_identity":"copy-physical","origin_identity":"origin-physical","origin_fingerprint":"legacy-fingerprint","resources":[{"name":"r","observation":{"identity":{"volume":7,"index":21},"bytes":23,"sha256":"legacy-hash"}}],"installed":[{"name":"i","observation":{"identity":{"volume":7,"index":22},"bytes":24,"sha256":"legacy-hash"}}],"provenance":[{"name":"p","observation":{"identity":{"volume":7,"index":23},"bytes":25,"sha256":"legacy-hash"}}]}"#;

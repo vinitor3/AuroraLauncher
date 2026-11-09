@@ -10,6 +10,23 @@ const runtimeTargets = [
   ["1.16.5", "forge", "36.2.42", 8],
   ["1.12.2", "forge", "14.23.5.2860", 8],
 ] as const;
+const voiceModSizes: Record<string, readonly [simple: number, plasmo?: number]> = {
+  "forge-1.12.2": [5_875_010],
+  "fabric-1.16.5": [5_138_361, 12_335_242],
+  "forge-1.16.5": [4_921_098, 12_319_461],
+  "fabric-1.19.2": [5_227_844, 12_352_072],
+  "forge-1.19.2": [5_362_155, 12_335_111],
+  "fabric-1.20.1": [5_279_173, 12_354_369],
+  "forge-1.20.1": [4_923_439, 12_337_455],
+  "fabric-1.21.1": [5_369_475, 12_365_966],
+  "forge-1.21.1": [4_914_752, 12_341_307],
+};
+const voiceFabricApi: Record<string, readonly [string, number]> = {
+  "1.16.5": ["mods/fabric-api-0.42.0+1.16.jar", 1_090_414],
+  "1.19.2": ["mods/fabric-api-0.77.0+1.19.2.jar", 1_892_953],
+  "1.20.1": ["mods/fabric-api-0.92.12+1.20.1.jar", 2_137_232],
+  "1.21.1": ["mods/fabric-api-0.116.10+1.21.1.jar", 2_425_988],
+};
 type RuntimeTarget = typeof runtimeTargets[number];
 export type ReadyGameRuntime = {
   minecraftVersion: RuntimeTarget[0]; loader: RuntimeTarget[1]; loaderVersion: RuntimeTarget[2];
@@ -129,11 +146,17 @@ function reviewFrom(value: unknown): ReadyGameLaunchReview {
     || value.coreVersion !== "1.1.5" || !hash(value.coreSha256) || value.skinsVersion !== "0.3.1" || !hash(value.skinsSha256)) return invalid();
   if (Object.hasOwn(value, "voice")) {
     const voice = value.voice;
-    if (!validRuntime(value, runtimeTargets.slice(0, 1)) || !object(voice) || !exact(voice, ["profile", "mods"])) return invalid();
-    const mods = voice.profile === "simpleVoiceChat" ? [["mods/voicechat-fabric-1.21.1-2.6.22.jar", 5_369_475]]
-      : voice.profile === "plasmoVoice" ? [["mods/plasmovoice-fabric-1.21.1-2.1.17.jar", 12_365_966], ["mods/fabric-api-0.116.10+1.21.1.jar", 2_425_988]]
-      : undefined;
-    if (!mods || !Array.isArray(voice.mods) || voice.mods.length !== mods.length
+    if (!object(voice) || !exact(voice, ["profile", "mods"])) return invalid();
+    const runtime = `${value.loader}-${value.minecraftVersion}`;
+    const sizes = voiceModSizes[runtime];
+    let mods: (readonly [string, number])[];
+    if (voice.profile === "simpleVoiceChat" && sizes) {
+      mods = [[`mods/voicechat-${runtime}-2.6.22.jar`, sizes[0]]];
+    } else if (voice.profile === "plasmoVoice" && sizes?.[1] !== undefined) {
+      mods = [[`mods/plasmovoice-${runtime}-2.1.17.jar`, sizes[1]]];
+      if (value.loader === "fabric") mods.push(voiceFabricApi[String(value.minecraftVersion)]);
+    } else return invalid();
+    if (!Array.isArray(voice.mods) || voice.mods.length !== mods.length
       || !voice.mods.every((mod, index) => object(mod) && exact(mod, ["relative", "bytes", "sha256", "action"])
         && mod.relative === mods[index][0] && mod.bytes === mods[index][1] && hash(mod.sha256)
         && (mod.action === "install" || mod.action === "present"))) return invalid();

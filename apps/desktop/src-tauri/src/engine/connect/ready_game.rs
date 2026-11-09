@@ -100,6 +100,20 @@ impl GuestAuthority {
     }
 }
 impl GuestSource {
+    fn plan_expired(&self, deadline: Instant, displayed_expiry: u64) -> bool {
+        Instant::now() >= deadline
+            || (matches!(&self.authority, GuestAuthority::Invitation(_))
+                && lab::unix_millis() >= displayed_expiry)
+    }
+
+    fn displayed_session_expiry(&self, published_expiry: u64) -> u64 {
+        if matches!(&self.authority, GuestAuthority::Invitation(_)) {
+            published_expiry
+        } else {
+            displayed_deadline(self.deadline)
+        }
+    }
+
     pub(super) fn new(
         guest: &Arc<lab::Guest>,
         bridge: &Arc<lab::TcpBridge>,
@@ -224,6 +238,15 @@ impl GuestSource {
         })
     }
 }
+
+fn displayed_deadline(deadline: Instant) -> u64 {
+    lab::unix_millis().saturating_add(
+        deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as u64,
+    )
+}
+
 pub(super) struct ReadyWork {
     snapshot: ReadyGameLaunchSnapshot,
     cancel: CancellationToken,
@@ -290,7 +313,7 @@ impl ReadyGameSpawnGate {
             .lock()
             .map_err(|_| ReadyGameLaunchError::Internal)?;
         self.validate(&state)?;
-        self.source.with_current(|| Ok(()))
+        self.with_live_plan(|| Ok(()))
     }
     fn validate(&self, state: &State) -> Result<(), ReadyGameLaunchError> {
         let a = state
@@ -313,7 +336,7 @@ impl ReadyGameSpawnGate {
         {
             return Err(ReadyGameLaunchError::Cancelled);
         }
-        if Instant::now() >= self.deadline || lab::unix_millis() >= self.expires_at {
+        if self.source.plan_expired(self.deadline, self.expires_at) {
             return Err(ReadyGameLaunchError::Expired);
         }
         let epoch_check = self.source.authority.check_epoch(state.social_epoch);
@@ -325,6 +348,19 @@ impl ReadyGameSpawnGate {
         epoch_check?;
         Ok(())
     }
+    fn with_live_plan<T>(
+        &self,
+        work: impl FnOnce() -> Result<T, ReadyGameLaunchError>,
+    ) -> Result<T, ReadyGameLaunchError> {
+        self.source.with_current(|| {
+            // Acquiring the original source guard may have consumed the rest
+            // of the review window while the longer session remains current.
+            if self.source.plan_expired(self.deadline, self.expires_at) {
+                return Err(ReadyGameLaunchError::Expired);
+            }
+            work()
+        })
+    }
     pub fn with_current(
         &self,
         spawn_and_register: impl FnOnce() -> Result<ReadyGameLaunchResult, ReadyGameLaunchError>,
@@ -334,7 +370,7 @@ impl ReadyGameSpawnGate {
             .lock()
             .map_err(|_| ReadyGameLaunchError::Internal)?;
         self.validate(&state)?;
-        let result = self.source.with_current(spawn_and_register)?;
+        let result = self.with_live_plan(spawn_and_register)?;
         let work = state
             .attempt
             .as_mut()
@@ -416,6 +452,40 @@ fn finish_ready(
 }
 
 impl Manager {
+    pub(in crate::engine::connect) fn authorize_ready_copy_install(
+        &self,
+        owner: &str,
+        operation: &str,
+        profile: crate::engine::connect_ready_profile::ReadyProfile,
+    ) -> Result<(), ReadyGameLaunchError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ReadyGameLaunchError::Internal)?;
+        if state.shutting_down {
+            return Err(ReadyGameLaunchError::Cancelled);
+        }
+        let account_epoch = state.social_epoch;
+        let attempt = selected_ready(&mut state, owner, operation)?;
+        let source = attempt
+            .guest_source
+            .as_ref()
+            .filter(|source| {
+                source.allows_phase(attempt.snapshot.phase) && !attempt.cancel.is_cancelled()
+            })
+            .ok_or(ReadyGameLaunchError::Unavailable)?;
+        source.authority.check_epoch(account_epoch)?;
+        source.address()?;
+        if source
+            .authority
+            .runtime_profile()?
+            .is_some_and(|original| original != profile)
+        {
+            return Err(ReadyGameLaunchError::UnsupportedRuntime);
+        }
+        Ok(())
+    }
+
     pub(in crate::engine::connect) fn prepare_ready_game(
         &self,
         owner: &str,
@@ -453,17 +523,13 @@ impl Manager {
         let deadline = source
             .deadline
             .min(Instant::now() + Duration::from_secs(60));
-        let session_expiry = a
+        let published_expiry = a
             .snapshot
             .expires_at_ms
             .ok_or(ReadyGameLaunchError::Unavailable)?;
-        let expires_at = session_expiry.min(
-            lab::unix_millis().saturating_add(
-                deadline
-                    .saturating_duration_since(Instant::now())
-                    .as_millis() as u64,
-            ),
-        );
+        let expires_at = source
+            .displayed_session_expiry(published_expiry)
+            .min(displayed_deadline(deadline));
         let (send, receiver) = mpsc::sync_channel(1);
         let generation = a
             .ready_game
@@ -497,7 +563,7 @@ impl Manager {
             let mut blocking = tokio::task::spawn_blocking(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let check = || {
-                        if Instant::now() >= deadline || lab::unix_millis() >= expires_at {
+                        if source.plan_expired(deadline, expires_at) {
                             return Err(ReadyGameLaunchError::Expired);
                         }
                         if cancel.is_cancelled() {
@@ -527,15 +593,10 @@ impl Manager {
                     let deadline = source
                         .deadline
                         .min(Instant::now() + Duration::from_secs(60));
-                    let expires_at = session_expiry.min(
-                        lab::unix_millis().saturating_add(
-                            deadline
-                                .saturating_duration_since(Instant::now())
-                                .as_millis() as u64,
-                        ),
-                    );
+                    let session_expiry = source.displayed_session_expiry(published_expiry);
+                    let expires_at = session_expiry.min(displayed_deadline(deadline));
                     let check = || {
-                        if Instant::now() >= deadline || lab::unix_millis() >= expires_at {
+                        if source.plan_expired(deadline, expires_at) {
                             return Err(ReadyGameLaunchError::Expired);
                         }
                         if cancel.is_cancelled() {
@@ -691,25 +752,21 @@ impl Manager {
         if work.cancel.is_cancelled() || a.cancel.is_cancelled() {
             return Err(ReadyGameLaunchError::Cancelled);
         }
-        if Instant::now() >= work.deadline
-            || work
-                .snapshot
-                .review
-                .as_ref()
-                .is_none_or(|r| lab::unix_millis() >= r.expires_at_ms)
+        let source = a
+            .guest_source
+            .as_ref()
+            .ok_or(ReadyGameLaunchError::Unavailable)?;
+        if work
+            .snapshot
+            .review
+            .as_ref()
+            .is_none_or(|review| source.plan_expired(work.deadline, review.expires_at_ms))
         {
             work.cancel.cancel();
             return Err(ReadyGameLaunchError::Expired);
         }
-        a.guest_source
-            .as_ref()
-            .ok_or(ReadyGameLaunchError::Unavailable)?
-            .authority
-            .check_epoch(account_epoch)?;
-        a.guest_source
-            .as_ref()
-            .ok_or(ReadyGameLaunchError::Unavailable)?
-            .address()?;
+        source.authority.check_epoch(account_epoch)?;
+        source.address()?;
         work.snapshot.phase = "starting";
         work.snapshot.review = None;
         work.snapshot.generation = work.snapshot.generation.saturating_add(1);

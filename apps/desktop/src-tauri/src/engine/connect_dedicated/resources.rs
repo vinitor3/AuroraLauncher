@@ -3,9 +3,13 @@ use super::{manifest::StoredVoiceProfileV2, voice_profile::NativeVoiceProfile};
 use std::collections::BTreeSet;
 use std::io::{Seek, SeekFrom};
 
+#[path = "resources_v3.rs"]
+mod v3;
+pub(super) use v3::{v3_inventory, v3_record_shape, validate_v3_artifacts};
+
 #[cfg(feature = "connect-voice-lab")]
 #[path = "resource_cache.rs"]
-mod cache;
+pub(super) mod cache;
 pub(crate) use cache::acquire_client_mods;
 #[cfg(feature = "connect-voice-lab")]
 pub(super) use cache::{prepare_managed_plan, LAB_NAME};
@@ -15,7 +19,7 @@ pub(super) const PROPERTIES: &[u8] = b"# Disposable Aurora Connect STATUS labora
 /// Minecraft offline login is confined behind the original authenticated Host.
 pub(super) const BRIDGE_PROPERTIES: &[u8] = b"# Disposable Aurora Connect voice laboratory; no personal world.\nserver-ip=127.0.0.1\nserver-port=43001\nonline-mode=false\nwhite-list=false\nenforce-whitelist=false\nenable-rcon=false\nenable-query=false\nenable-jmx-monitoring=false\nenable-status=true\nmax-players=8\nview-distance=2\nsimulation-distance=5\nlevel-name=connect-lab-world\nlevel-seed=0\ngenerate-structures=false\nmotd=Aurora Connect disposable voice lab\n";
 pub(super) fn properties(manifest: &super::manifest::Manifest) -> &'static [u8] {
-    if manifest.voice_v2().is_ok_and(|voice| {
+    if manifest.voice().is_ok_and(|voice| {
         voice.observation_policy
             == super::manifest::ObservationPolicyV2::LiteralLoopback35554Durable
     }) {
@@ -293,14 +297,43 @@ struct Pinned {
     file: recovery::SecureFile,
     observation: Observation,
 }
+/// Only for a file whose bytes were verified while this same deny-write/delete
+/// handle was already retained. This cannot establish trust in a reopened file.
+pub(super) fn recheck_retained_file(
+    held: &recovery::SecureFile,
+    path: &Path,
+    expected: &Observation,
+) -> Result<()> {
+    let current = recovery::secure_open(path)?;
+    if file_identity(held)? != expected.identity
+        || held.metadata()?.len() != expected.bytes
+        || file_identity(&current)? != expected.identity
+        || current.metadata()?.len() != expected.bytes
+    {
+        return Err(Error::Changed);
+    }
+    Ok(())
+}
 pub(super) struct Resources {
     files: Vec<Pinned>,
     pub records: Vec<ResourceRecord>,
     _directories: Vec<File>,
+    server_proof: Option<Box<super::server_preparation::PreparedServerResources>>,
     #[cfg(feature = "connect-voice-lab")]
     _managed_java: Option<cache::ManagedJava>,
 }
 impl Resources {
+    pub(super) fn verify_server_proof(&self) -> Result<()> {
+        self.server_proof.as_ref().ok_or(Error::Identity)?.verify()
+    }
+    pub(super) fn server_work_lifetime(
+        &self,
+    ) -> Option<std::sync::Arc<super::server_preparation::PreparationDirectory>> {
+        self.server_proof
+            .as_ref()
+            .map(|proof| proof.work_lifetime())
+    }
+
     pub(super) fn immutable_observations(&self) -> Vec<(String, PathBuf, Observation)> {
         self.files
             .iter()
@@ -337,6 +370,7 @@ impl Resources {
             files: Vec::new(),
             records: Vec::new(),
             _directories: directories,
+            server_proof: None,
             #[cfg(feature = "connect-voice-lab")]
             _managed_java: cache::pin_managed_java(lab, jdk)?,
         };
@@ -423,6 +457,9 @@ impl Resources {
         Ok(bytes)
     }
     pub fn recheck(&self) -> Result<()> {
+        if let Some(proof) = &self.server_proof {
+            proof.verify()?;
+        }
         for pin in &self.files {
             if observe_file(&pin.path, pin.observation.bytes)?.0 != pin.observation {
                 return Err(Error::Changed);
@@ -430,7 +467,19 @@ impl Resources {
         }
         Ok(())
     }
+    pub(super) fn recheck_retained(&self) -> Result<()> {
+        if let Some(proof) = &self.server_proof {
+            proof.verify()?;
+        }
+        for pin in &self.files {
+            recheck_retained_file(&pin.file, &pin.path, &pin.observation)?;
+        }
+        Ok(())
+    }
     pub fn copy_artifacts(&mut self, destination: &Path) -> Result<()> {
+        if self.server_proof.is_some() {
+            return self.copy_artifacts_v3(destination);
+        }
         fs::create_dir(destination.join("libraries"))?;
         for pin in &mut self.files {
             if pin.name.starts_with("jdk/") {

@@ -7,8 +7,10 @@ mod controller;
 pub use controller::RestorationController;
 #[path = "connect_voice_durable.rs"]
 mod durable;
-#[cfg(test)]
+#[cfg(all(test, windows, feature = "connect-lab"))]
 pub(in super::super) use durable::prepare_fixture_durable_announcement;
+#[cfg(all(windows, feature = "connect-lab"))]
+pub(crate) use durable::prepare_runtime_durable_announcement;
 pub use durable::{
     list_restoration_receipts, prepare_durable_announcement, prepare_retirement,
     resume_restoration, DurableAppliedAnnouncement, DurableReceiptState,

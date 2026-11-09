@@ -103,7 +103,7 @@ const button = label => { const found = [...container.querySelectorAll("button")
 const click = async label => { assert.equal(button(label).disabled, false); await act(async () => button(label).dispatchEvent(new window.Event("click", { bubbles: true }))); };
 const submit = async () => { const form = container.querySelector("form"); assert.ok(form); await act(async () => form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }))); };
 const count = name => calls.filter(call => call.command === name).length;
-const render = async () => { await act(async () => root.render(createElement(ConnectView))); };
+const render = async (props = {}) => { await act(async () => root.render(createElement(ConnectView, props))); };
 const checkConsent = async () => { const checkbox = container.querySelector('.connect-consent input'); assert.ok(checkbox); await act(async () => { checkbox.checked = !checkbox.checked; checkbox.dispatchEvent(new window.Event("click", { bubbles: true })); }); };
 const editInput = async (input, value) => { await act(async () => {
   Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set.call(input, value);
@@ -111,6 +111,23 @@ const editInput = async (input, value) => { await act(async () => {
 }); };
 beforeEach(() => { snapshot = idle(); capabilities = { ...caps }; calls = []; handlers = new Map(); copied = []; clipboardFails = false; root = createRoot(container); });
 afterEach(async () => { await act(async () => root.unmount()); });
+
+test("dedicated navigation is released only after the initial Connect form is committed", async () => {
+  let capabilityReply, snapshotReply;
+  handlers.set("connect_capabilities", () => new Promise(resolve => { capabilityReply = resolve; }));
+  handlers.set("connect_snapshot", () => new Promise(resolve => { snapshotReply = resolve; }));
+  const layouts = [];
+  const onInitialReadReady = ready => layouts.push({ ready, form: Boolean(container.querySelector("form.connect-form")) });
+  await render({ onInitialReadReady });
+  assert.deepEqual(layouts, [{ ready: false, form: false }]);
+  await act(async () => capabilityReply(structuredClone(capabilities)));
+  assert.deepEqual(layouts, [{ ready: false, form: false }], "capability alone does not settle the initial layout");
+  await act(async () => snapshotReply(structuredClone(snapshot)));
+  assert.deepEqual(layouts, [{ ready: false, form: false }, { ready: true, form: true }]);
+  await render({ onInitialReadReady });
+  assert.equal(layouts.length, 2);
+  assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot"]);
+});
 
 test("disabled backend exposes no host, guest, network or clipboard operation", async () => {
   capabilities.available = false;
@@ -2238,7 +2255,8 @@ test("ConnectView forwards ready launch context and exposes missing context inst
   handlers.set("connect_ready_game_launch_snapshot", () => ({ operationId: snapshot.operationId, generation: 0, planId: null,
     phase: "idle", review: null, result: null, errorCode: null }));
   handlers.set("diagnostic_lab_list", () => []);
-  await render(); assert.match(container.textContent, /Selecione uma instância, um Java disponível/);
+  await render(); assert.match(container.textContent, /Selecione uma instância e aguarde o perfil e a aparência/);
+  assert.match(container.textContent, /cópia de runtime com Java próprio/);
   assert.equal(button("Revisar entrada no servidor").disabled, true); assert.equal(count("connect_prepare_ready_game_launch"), 0);
   const launchContext = { sourceInstanceId: "test-source", contextKey: "fixture-context", javaExecutable: "C:\\fixture\\java.exe",
     nickname: "FixturePlayer", appearance: { skinUrl: null, skinFile: null, capeUrl: null, skinModel: "classic" } };

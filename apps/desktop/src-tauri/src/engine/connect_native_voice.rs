@@ -10,6 +10,60 @@ pub enum NativeVoiceProfile {
     PlasmoVoice,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum NativeVoiceRuntime {
+    #[serde(rename = "fabric-loader-0.16.14-1.21.1")]
+    Fabric1211,
+    #[serde(rename = "fabric-loader-0.16.14-1.20.1")]
+    Fabric1201,
+    #[serde(rename = "fabric-loader-0.16.14-1.19.2")]
+    Fabric1192,
+    #[serde(rename = "fabric-loader-0.13.3-1.16.5")]
+    Fabric1165,
+    #[serde(rename = "1.21.1-forge-52.1.12")]
+    Forge1211,
+    #[serde(rename = "1.20.1-forge-47.4.23")]
+    Forge1201,
+    #[serde(rename = "1.19.2-forge-43.4.16")]
+    Forge1192,
+    #[serde(rename = "1.16.5-forge-36.2.42")]
+    Forge1165,
+    #[serde(rename = "1.12.2-forge-14.23.5.2860")]
+    Forge1122,
+}
+impl NativeVoiceRuntime {
+    #[cfg(all(feature = "connect-voice-lab", feature = "connect-lab"))]
+    pub(crate) fn from_ready(runtime: crate::engine::connect_ready_profile::ReadyProfile) -> Self {
+        use crate::engine::connect_ready_profile::ReadyProfile as R;
+        match runtime {
+            R::Forge1122 => Self::Forge1122,
+            R::Fabric1165 => Self::Fabric1165,
+            R::Forge1165 => Self::Forge1165,
+            R::Fabric1192 => Self::Fabric1192,
+            R::Forge1192 => Self::Forge1192,
+            R::Fabric1201 => Self::Fabric1201,
+            R::Forge1201 => Self::Forge1201,
+            R::Fabric1211 => Self::Fabric1211,
+            R::Forge1211 => Self::Forge1211,
+        }
+    }
+    #[cfg(all(feature = "connect-voice-lab", feature = "connect-lab"))]
+    pub(crate) fn ready(self) -> crate::engine::connect_ready_profile::ReadyProfile {
+        use crate::engine::connect_ready_profile::ReadyProfile;
+        match self {
+            Self::Fabric1211 => ReadyProfile::Fabric1211,
+            Self::Fabric1201 => ReadyProfile::Fabric1201,
+            Self::Fabric1192 => ReadyProfile::Fabric1192,
+            Self::Fabric1165 => ReadyProfile::Fabric1165,
+            Self::Forge1211 => ReadyProfile::Forge1211,
+            Self::Forge1201 => ReadyProfile::Forge1201,
+            Self::Forge1192 => ReadyProfile::Forge1192,
+            Self::Forge1165 => ReadyProfile::Forge1165,
+            Self::Forge1122 => ReadyProfile::Forge1122,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(
     tag = "action",
@@ -18,10 +72,17 @@ pub enum NativeVoiceProfile {
     deny_unknown_fields
 )]
 pub enum NativeVoiceRequest {
+    PrepareRuntime {
+        profile: NativeVoiceProfile,
+        runtime_profile: NativeVoiceRuntime,
+    },
+    ApprovePreparation {
+        digest: String,
+    },
     Prepare {
         profile: NativeVoiceProfile,
     },
-    InspectRecovery,
+    InspectRecovery {},
     ResumeRecovery {
         bundle_id: String,
         receipt_id: String,
@@ -42,11 +103,15 @@ pub enum NativeVoiceRequest {
     ExportInvitation {
         participant_id: String,
     },
-    Stop,
+    Stop {},
     PrepareRestore {
         reconciled: bool,
     },
     ApproveRestore {
+        digest: String,
+    },
+    PrepareEulaRestore {},
+    ApproveEulaRestore {
         digest: String,
     },
 }
@@ -58,6 +123,7 @@ pub struct NativeVoiceApproval {
     pub before: String,
     pub after: String,
     pub details: Vec<String>,
+    pub remaining_ms: u64,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +138,9 @@ pub struct NativeVoiceRecoveryCandidate {
     pub bundle_id: String,
     pub receipt_id: String,
     pub profile: NativeVoiceProfile,
+    pub runtime_profile: NativeVoiceRuntime,
+    pub eula_recovery_pending: bool,
+    pub announcement_recovery_pending: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,6 +150,7 @@ pub struct NativeVoiceSnapshot {
     pub manual_lab_available: bool,
     pub phase: &'static str,
     pub profile: Option<NativeVoiceProfile>,
+    pub runtime_profile: Option<NativeVoiceRuntime>,
     pub review: Option<NativeVoiceApproval>,
     pub operation_id: Option<String>,
     pub host_public_id: Option<String>,
@@ -91,6 +161,10 @@ pub struct NativeVoiceSnapshot {
     pub recovery_pending: bool,
     pub recoverable_copies: Vec<NativeVoiceRecoveryCandidate>,
     pub eula_state: &'static str,
+    pub eula_recovery_available: bool,
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    #[serde(skip)]
+    pub(crate) native_review_deadline: Option<std::time::Instant>,
     pub error_code: Option<&'static str>,
     pub exported_invitation: Option<String>,
     pub audio_state: &'static str,
@@ -112,6 +186,7 @@ impl Default for NativeVoiceSnapshot {
             )),
             phase: "idle",
             profile: None,
+            runtime_profile: None,
             review: None,
             operation_id: None,
             host_public_id: None,
@@ -122,10 +197,30 @@ impl Default for NativeVoiceSnapshot {
             recovery_pending: false,
             recoverable_copies: Vec::new(),
             eula_state: "unchanged",
+            eula_recovery_available: false,
+            #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+            native_review_deadline: None,
             error_code: None,
             exported_invitation: None,
             audio_state: "notVerified",
         }
+    }
+}
+impl NativeVoiceSnapshot {
+    #[cfg(all(windows, feature = "connect-voice-lab", feature = "connect-lab"))]
+    pub(crate) fn projected(mut self) -> Self {
+        if let Some(review) = &mut self.review {
+            review.remaining_ms = self
+                .native_review_deadline
+                .map(|deadline| {
+                    deadline
+                        .saturating_duration_since(std::time::Instant::now())
+                        .as_millis()
+                        .min(u64::MAX as u128) as u64
+                })
+                .unwrap_or(0);
+        }
+        self
     }
 }
 #[derive(Default)]
@@ -225,6 +320,10 @@ mod tests {
             r#"{"action":"prepare","profile":"plasmoVoice"}"#,
             r#"{"action":"reviewHost","guests":[],"localPlayer":true}"#,
             r#"{"action":"stop"}"#,
+            r#"{"action":"inspectRecovery"}"#,
+            r#"{"action":"prepareEulaRestore"}"#,
+            r#"{"action":"prepareRuntime","profile":"simpleVoiceChat","runtimeProfile":"fabric-loader-0.16.14-1.21.1"}"#,
+            r#"{"action":"approvePreparation","digest":"review-digest"}"#,
         ];
         for input in cases {
             assert!(serde_json::from_str::<NativeVoiceRequest>(input).is_ok());
@@ -242,7 +341,10 @@ mod tests {
                     &input[..input.len() - 1],
                     field
                 );
-                assert!(serde_json::from_str::<NativeVoiceRequest>(&added).is_err());
+                assert!(
+                    serde_json::from_str::<NativeVoiceRequest>(&added).is_err(),
+                    "unexpected field accepted: {added}"
+                );
             }
         }
         assert!(serde_json::from_str::<NativeVoiceRequest>(

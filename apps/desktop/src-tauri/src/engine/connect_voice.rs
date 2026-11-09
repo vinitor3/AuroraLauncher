@@ -46,8 +46,10 @@ mod process;
 pub use process::{acquire_voice_mutation_guard, VoiceMutationGuard};
 #[path = "connect_voice_restore.rs"]
 mod restoration;
-#[cfg(test)]
+#[cfg(all(test, windows, feature = "connect-lab"))]
 pub(super) use restoration::prepare_fixture_durable_announcement;
+#[cfg(all(windows, feature = "connect-lab"))]
+pub(crate) use restoration::prepare_runtime_durable_announcement;
 pub use restoration::{
     list_restoration_receipts, prepare_durable_announcement, prepare_retirement,
     resume_restoration, DurableAppliedAnnouncement, DurableReceiptState,
@@ -340,6 +342,41 @@ fn prepare_announcement_with_artifact(
     request: AnnouncementRequest,
     (artifact_hash, artifact_bytes): (&str, u64),
 ) -> Result<PreparedAnnouncement> {
+    prepare_announcement_for_runtime(
+        instance,
+        guard,
+        request,
+        (artifact_hash, artifact_bytes),
+        ("1.21.1", "fabric"),
+    )
+}
+
+#[cfg(all(windows, feature = "connect-lab"))]
+fn prepare_runtime_announcement(
+    instance: &Instance,
+    guard: &VoiceMutationGuard,
+    request: AnnouncementRequest,
+    runtime: crate::engine::connect_ready_profile::ReadyProfile,
+) -> Result<PreparedAnnouncement> {
+    let artifact = dedicated::runtime_announcement_artifact(runtime, request.voice_mod)
+        .ok_or(RecoveryError::Compatibility)?;
+    let descriptor = runtime.descriptor();
+    prepare_announcement_for_runtime(
+        instance,
+        guard,
+        request,
+        artifact,
+        (descriptor.minecraft_version, descriptor.loader),
+    )
+}
+
+fn prepare_announcement_for_runtime(
+    instance: &Instance,
+    guard: &VoiceMutationGuard,
+    request: AnnouncementRequest,
+    (artifact_hash, artifact_bytes): (&str, u64),
+    (minecraft_version, loader): (&str, &str),
+) -> Result<PreparedAnnouncement> {
     require_test_copy(instance)?;
     let AnnouncementMode::DedicatedAuroraOnly = request.mode;
     if request.expected_source_sha256.len() != 64
@@ -368,8 +405,8 @@ fn prepare_announcement_with_artifact(
         .collect();
     if minecraft.is_empty()
         || loaders.is_empty()
-        || minecraft.iter().any(|value| *value != "1.21.1")
-        || loaders.iter().any(|value| *value != "fabric")
+        || minecraft.iter().any(|value| *value != minecraft_version)
+        || loaders.iter().any(|value| *value != loader)
     {
         return Err(RecoveryError::Compatibility);
     }

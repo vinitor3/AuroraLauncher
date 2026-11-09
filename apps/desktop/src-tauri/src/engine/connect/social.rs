@@ -1,10 +1,17 @@
 //! Social admission is one worker of the existing Attempt, not a UI sidecar.
 use super::*;
 use serde_json::{json, Value};
+use std::sync::Weak;
 use tokio::sync::oneshot;
 
+#[cfg(test)]
+#[path = "social_bootstrap_tests.rs"]
+mod bootstrap_tests;
+#[path = "social_guest_admission.rs"]
+mod guest_admission;
 #[path = "social_online.rs"]
 mod online;
+use guest_admission::{verify_guest_admission, GuestIngress};
 #[cfg(test)]
 #[path = "social_ready_game_fixture.rs"]
 mod ready_fixture;
@@ -25,8 +32,9 @@ pub(super) struct Control {
     reservation_generation: u64,
     approval: Option<oneshot::Sender<String>>,
     selection: Option<DiscoverySelection>,
-    token: Option<Arc<Mutex<String>>>,
+    token: Option<Weak<Mutex<String>>>,
     revocations: std::collections::HashSet<String>,
+    online: bool,
     #[cfg(all(windows, feature = "connect-voice-lab"))]
     native_voice_source: Option<crate::engine::connect_voice::dedicated::NativeVoiceHostBinding>,
     #[cfg(all(windows, feature = "connect-voice-lab"))]
@@ -48,11 +56,9 @@ pub(super) fn clear(a: &mut Attempt) {
             control.native_voice_source = None;
             control.native_voice_local_key = None;
         }
-        if let Some(token) = control.token.take() {
-            if let Ok(mut token) = token.lock() {
-                token.clear();
-            }
-        }
+        // Revoke refresh access immediately. Only the original actor can keep
+        // the credential long enough to acknowledge its own terminal stop.
+        control.token = None;
         #[cfg(test)]
         if let Some(probe) = control.guard_probe.take() {
             probe.release();
@@ -63,11 +69,14 @@ pub(super) fn expire(a: &mut Attempt) {
     if a.worker.is_none()
         && a.social.is_some()
         && (Instant::now() >= a.prepared_deadline
-            || a.snapshot
-                .social
-                .as_ref()
-                .and_then(|social| social.expires_at_ms)
-                .is_none_or(|expiry| lab::unix_millis() >= expiry))
+            || a.social.as_ref().is_some_and(|control| {
+                !control.online
+                    && a.snapshot
+                        .social
+                        .as_ref()
+                        .and_then(|social| social.expires_at_ms)
+                        .is_none_or(|expiry| lab::unix_millis() >= expiry)
+            }))
         && !matches!(a.snapshot.phase, "closed" | "failed")
     {
         clear(a);
@@ -119,7 +128,7 @@ fn local_emulator_token(token: &str, expected_account: &str) -> bool {
         && claims["auth_time"].as_u64().is_some_and(|at| at <= now)
 }
 /// Destination confinement; the online Worker, not decoded client claims, verifies RS256.
-fn online_token_destination(token: &str, expected_account: &str) -> bool {
+pub(super) fn online_token_destination(token: &str, expected_account: &str) -> bool {
     use base64::Engine as _;
     let parts: Vec<_> = token.split('.').collect();
     if token.len() > 8192 || parts.len() != 3 || parts[2].is_empty() {
@@ -134,12 +143,13 @@ fn online_token_destination(token: &str, expected_account: &str) -> bool {
     let (Some(header), Some(claims)) = (decode(parts[0]), decode(parts[1])) else {
         return false;
     };
-    let now = lab::unix_millis() / 1000;
     header["alg"] == "RS256"
         && claims["aud"] == "auroralauncher"
         && claims["iss"] == "https://securetoken.google.com/auroralauncher"
         && claims["sub"] == expected_account
-        && claims["exp"].as_u64().is_some_and(|expiry| expiry > now)
+        && claims["exp"]
+            .as_u64()
+            .is_some_and(|expiry| (1..=9_007_199_254_740_991).contains(&expiry))
 }
 impl Manager {
     pub(in crate::engine::connect) fn social_revoke_participant(
@@ -335,12 +345,14 @@ impl Manager {
             expires_at_ms: Some(lab::unix_millis() + 60_000),
             ready_game_launch_available: None,
             voice_profile: None,
+            voice_transport_profile: None,
             voice_state: None,
             host_player_voice_state: None,
             host_player: None,
             max_guests: None,
             participants: None,
             runtime_profile: None,
+            failure_stage: None,
         });
         state.attempt = Some(Attempt {
             #[cfg(all(windows, feature = "connect-voice-lab"))]
@@ -355,6 +367,10 @@ impl Manager {
                 selection,
                 token: None,
                 revocations: std::collections::HashSet::new(),
+                online: self
+                    .social_authority
+                    .as_ref()
+                    .is_some_and(|authority| authority.online_origin.is_some()),
                 #[cfg(all(windows, feature = "connect-voice-lab"))]
                 native_voice_source: None,
                 #[cfg(all(windows, feature = "connect-voice-lab"))]
@@ -499,6 +515,7 @@ impl Manager {
                 authority,
                 deadline,
                 expiry,
+                clock: None,
                 cancel: cancel.clone(),
                 #[cfg(all(test, windows))]
                 source_gate: None,
@@ -541,7 +558,11 @@ impl Manager {
         {
             return Err(ConnectError::InvitationRejected);
         }
-        let token = control.token.as_ref().ok_or(ConnectError::StaleOperation)?;
+        let token = control
+            .token
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .ok_or(ConnectError::StaleOperation)?;
         *token.lock().map_err(|_| ConnectError::Internal)? = id_token;
         Ok(())
     }
@@ -582,6 +603,52 @@ impl Manager {
         a.snapshot.generation = a.snapshot.generation.saturating_add(1);
         Ok(a.snapshot.clone())
     }
+    pub(in crate::engine::connect) fn social_confirm_guest(
+        &self,
+        owner: &str,
+        id: &str,
+        generation: u64,
+        digest: &str,
+    ) -> Result<ConnectSnapshot, ConnectError> {
+        let mut state = lock(&self.state)?;
+        let epoch = state.social_epoch;
+        let a = selected(&mut state, owner, id)?;
+        if a.snapshot.generation != generation {
+            return Err(ConnectError::StaleOperation);
+        }
+        if a.cancel.is_cancelled() || Instant::now() >= a.prepared_deadline {
+            return Err(ConnectError::PlanExpired);
+        }
+        let control = a.social.as_ref().ok_or(ConnectError::InvalidRequest)?;
+        if control.request.role != "guest" || control.request.account_epoch != epoch {
+            return Err(ConnectError::StaleOperation);
+        }
+        let social = a
+            .snapshot
+            .social
+            .as_ref()
+            .ok_or(ConnectError::InvalidRequest)?;
+        if a.snapshot.phase != "reviewed"
+            || social.stage != "guestReview"
+            || social.voice_transport_profile.as_deref() != Some("nativeVoice8V1")
+            || social.digest.as_deref() != Some(digest)
+        {
+            return Err(ConnectError::WrongDigest);
+        }
+        a.social
+            .as_mut()
+            .and_then(|control| control.approval.take())
+            .ok_or(ConnectError::StaleOperation)?
+            .send(digest.into())
+            .map_err(|_| ConnectError::StaleOperation)?;
+        if let Some(social) = &mut a.snapshot.social {
+            social.digest = None;
+            social.stage = "connecting";
+        }
+        a.snapshot.phase = "starting";
+        a.snapshot.generation = a.snapshot.generation.saturating_add(1);
+        Ok(a.snapshot.clone())
+    }
     pub(in crate::engine::connect) async fn account_transition_stop(
         &self,
         owner: &str,
@@ -593,14 +660,18 @@ impl Manager {
                     return Err(ConnectError::OwnerMismatch);
                 }
             }
-            state.social_epoch = state
+            let next_epoch = state
                 .social_epoch
                 .checked_add(1)
                 .ok_or(ConnectError::Internal)?;
-            state
-                .attempt
-                .as_ref()
-                .and_then(|a| a.snapshot.operation_id.clone())
+            let operation = state.attempt.as_ref().and_then(|attempt| {
+                // The actor checks cancellation without taking State. Set
+                // its token before the new account epoch becomes observable.
+                attempt.cancel.cancel();
+                attempt.snapshot.operation_id.clone()
+            });
+            state.social_epoch = next_epoch;
+            operation
         };
         match operation {
             Some(id) => self.stop(owner, &id).await,
@@ -623,6 +694,7 @@ struct Run {
     authority: SocialLabAuthority,
     deadline: Instant,
     expiry: u64,
+    clock: Option<lab::OnlineClock>,
     cancel: CancellationToken,
     #[cfg(all(test, windows))]
     source_gate: Option<Arc<group_source::SourceGate>>,
@@ -630,6 +702,32 @@ struct Run {
     guard_probe: Option<Arc<ready_source::fixture::Pause>>,
 }
 impl Run {
+    fn clock(&self) -> Result<&lab::OnlineClock, ConnectError> {
+        self.clock.as_ref().ok_or(ConnectError::InvitationRejected)
+    }
+    fn server_now(&self) -> u64 {
+        self.clock
+            .as_ref()
+            .map_or_else(lab::unix_millis, lab::OnlineClock::upper_now)
+    }
+    fn server_issue_time(&self) -> u64 {
+        self.clock
+            .as_ref()
+            .map_or_else(lab::unix_millis, lab::OnlineClock::lower_now)
+    }
+    fn display_expiry(&self, expiry: u64) -> u64 {
+        match &self.clock {
+            Some(clock) => lab::unix_millis().saturating_add(clock.deadline_for(expiry).map_or(
+                0,
+                |deadline| {
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .as_millis() as u64
+                },
+            )),
+            None => expiry,
+        }
+    }
     fn requested_revocations(&self) -> Result<std::collections::HashSet<String>, ConnectError> {
         Ok(lock(&self.state)?
             .attempt
@@ -642,7 +740,10 @@ impl Run {
     fn current(&self) -> Result<(), ConnectError> {
         if self.cancel.is_cancelled() {
             Err(ConnectError::Cancelled)
-        } else if Instant::now() >= self.deadline || lab::unix_millis() >= self.expiry {
+        } else if Instant::now() >= self.deadline
+            || ((self.clock.is_some() || self.authority.online_origin.is_none())
+                && self.server_now() >= self.expiry)
+        {
             Err(ConnectError::PlanExpired)
         } else {
             Ok(())
@@ -692,6 +793,59 @@ fn interval(duration: Duration) -> tokio::time::Interval {
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     interval
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SocialRoute {
+    Bootstrap,
+    Identity,
+    KeyChallenge,
+    HostRegister,
+    HostPoll,
+    HostPublish,
+    HostRevoke,
+    HostStop,
+    Context,
+    Join,
+    Continuity,
+    GuestReceive,
+    GuestStop,
+    RelayTicket,
+}
+impl SocialRoute {
+    fn path(self) -> &'static str {
+        match self {
+            Self::Bootstrap => "/v1/social/bootstrap",
+            Self::Identity => "/v1/social/identity",
+            Self::KeyChallenge => "/v1/social/key/challenge",
+            Self::HostRegister => "/v1/social/host/register",
+            Self::HostPoll => "/v1/social/host/poll",
+            Self::HostPublish => "/v1/social/host/publish",
+            Self::HostRevoke => "/v1/social/host/revoke",
+            Self::HostStop => "/v1/social/host/stop",
+            Self::Context => "/v1/social/context",
+            Self::Join => "/v1/social/join",
+            Self::Continuity => "/v1/social/continuity",
+            Self::GuestReceive => "/v1/social/guest/receive",
+            Self::GuestStop => "/v1/social/guest/stop",
+            Self::RelayTicket => "/v1/social/relay/ticket",
+        }
+    }
+    fn stage(self) -> SocialFailureStage {
+        use SocialFailureStage as Stage;
+        match self {
+            Self::Bootstrap => Stage::Bootstrap,
+            Self::Identity => Stage::Identity,
+            Self::KeyChallenge => Stage::KeyChallenge,
+            Self::HostRegister => Stage::HostRegistration,
+            Self::HostPoll | Self::Continuity => Stage::SessionContinuity,
+            Self::Context | Self::Join | Self::HostPublish | Self::GuestReceive => {
+                Stage::GuestAdmission
+            }
+            Self::HostRevoke | Self::HostStop | Self::GuestStop => Stage::SessionControl,
+            Self::RelayTicket => Stage::Relay,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Http {
     client: reqwest::Client,
@@ -700,15 +854,24 @@ struct Http {
     deadline: Instant,
     origin: &'static str,
     session_id: String,
+    online: bool,
 }
 impl Http {
     fn new(token: String, run: &Run) -> Result<Self, ConnectError> {
-        if !(if run.authority.online_origin.is_some() {
+        let online = run.authority.online_origin.is_some();
+        if !(if online {
             online_token_destination(&token, &run.request.account_id)
         } else {
             local_emulator_token(&token, &run.request.account_id)
         }) {
-            return Err(ConnectError::InvitationRejected);
+            return Err(if online {
+                ConnectError::SocialFailure(
+                    SocialFailureStage::Authentication,
+                    SocialFailureReason::Authentication,
+                )
+            } else {
+                ConnectError::InvitationRejected
+            });
         }
         let client = reqwest::Client::builder()
             .no_proxy()
@@ -720,7 +883,7 @@ impl Http {
         let token = Arc::new(Mutex::new(token));
         update(&run.state, &run.id, |a| {
             if let Some(control) = &mut a.social {
-                control.token = Some(token.clone());
+                control.token = Some(Arc::downgrade(&token));
             }
         });
         Ok(Self {
@@ -730,51 +893,140 @@ impl Http {
             deadline: run.deadline,
             origin: run.authority.online_origin.unwrap_or(ORIGIN),
             session_id: run.request.session_id.clone(),
+            online,
         })
     }
-    async fn post(&self, path: &'static str, body: Value) -> Result<Value, ConnectError> {
+    fn failure(
+        &self,
+        stage: SocialFailureStage,
+        reason: SocialFailureReason,
+        legacy: ConnectError,
+    ) -> ConnectError {
+        if self.online {
+            ConnectError::SocialFailure(stage, reason)
+        } else {
+            legacy
+        }
+    }
+    fn invalid_reply(&self, route: SocialRoute) -> ConnectError {
+        self.failure(
+            route.stage(),
+            SocialFailureReason::RequestRejected,
+            ConnectError::InvitationRejected,
+        )
+    }
+    fn transport_failure(&self, route: SocialRoute, error: reqwest::Error) -> ConnectError {
+        self.failure(
+            route.stage(),
+            if error.is_timeout() {
+                SocialFailureReason::RequestTimedOut
+            } else {
+                SocialFailureReason::ServiceUnavailable
+            },
+            ConnectError::TransportFailed,
+        )
+    }
+    fn reply_field<'a>(
+        &self,
+        route: SocialRoute,
+        reply: &'a Value,
+        name: &str,
+    ) -> Result<&'a str, ConnectError> {
+        field(reply, name).map_err(|_| self.invalid_reply(route))
+    }
+    async fn read_reply(
+        &self,
+        route: SocialRoute,
+        response: &mut reqwest::Response,
+        maximum: usize,
+    ) -> Result<Value, ConnectError> {
+        if response
+            .content_length()
+            .is_some_and(|n| n > maximum as u64)
+        {
+            return Err(self.invalid_reply(route));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| self.transport_failure(route, error))?
+        {
+            if bytes.len().saturating_add(chunk.len()) > maximum {
+                return Err(self.invalid_reply(route));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| self.invalid_reply(route))
+    }
+    async fn post(&self, route: SocialRoute, body: Value) -> Result<Value, ConnectError> {
+        #[cfg(test)]
+        let diagnostic_started = Instant::now();
         let token = self
             .token
             .lock()
             .map_err(|_| ConnectError::Internal)?
             .clone();
         let work = async {
-            let mut response = self
+            let request = self
                 .client
-                .post(format!("{}{path}", self.origin))
+                .post(format!("{}{}", self.origin, route.path()))
                 .header("X-Aurora-Session", &self.session_id)
                 .bearer_auth(&token)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|_| ConnectError::TransportFailed)?;
-            if !response.status().is_success() {
-                if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                    return Err(ConnectError::SocialQuota);
-                }
-                if response.status().is_server_error() {
-                    return Err(ConnectError::SocialUnavailable);
-                }
-                return Err(ConnectError::InvitationRejected);
+                .json(&body);
+            let request = if route == SocialRoute::Bootstrap {
+                request.timeout(lab::OnlineClock::BOOTSTRAP_TIMEOUT)
+            } else if self.online && route == SocialRoute::HostRegister {
+                // Registration verifies and stores several authority records.
+                // Allow that single mutation time to complete, within the
+                // original attempt deadline. Never retry a consumed proof.
+                request.timeout(Duration::from_secs(6))
+            } else {
+                request
+            };
+            let mut response = request.send().await.map_err(|error| {
+                #[cfg(test)]
+                bootstrap_tests::trace_http(
+                    route,
+                    diagnostic_started,
+                    "send_error",
+                    None,
+                    Some(&error),
+                );
+                self.transport_failure(route, error)
+            })?;
+            #[cfg(test)]
+            bootstrap_tests::trace_http(
+                route,
+                diagnostic_started,
+                "headers",
+                Some(&response),
+                None,
+            );
+            let status = response.status();
+            if !status.is_success() {
+                let reply = if self.online && status == reqwest::StatusCode::FORBIDDEN {
+                    self.read_reply(route, &mut response, 512).await.ok()
+                } else {
+                    None
+                };
+                let (reason, legacy) = http_failure(status, reply.as_ref());
+                return Err(self.failure(route.stage(), reason, legacy));
             }
-            if response
-                .content_length()
-                .is_some_and(|n| n > MAX_HTTP_BYTES as u64)
-            {
-                return Err(ConnectError::InvitationRejected);
-            }
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|_| ConnectError::TransportFailed)?
-            {
-                if bytes.len().saturating_add(chunk.len()) > MAX_HTTP_BYTES {
-                    return Err(ConnectError::InvitationRejected);
-                }
-                bytes.extend_from_slice(&chunk);
-            }
-            serde_json::from_slice(&bytes).map_err(|_| ConnectError::InvitationRejected)
+            let result = self.read_reply(route, &mut response, MAX_HTTP_BYTES).await;
+            #[cfg(test)]
+            bootstrap_tests::trace_http(
+                route,
+                diagnostic_started,
+                if result.is_ok() {
+                    "body_complete"
+                } else {
+                    "body_error"
+                },
+                Some(&response),
+                None,
+            );
+            result
         };
         tokio::select! { biased;
             _=self.cancel.cancelled()=>Err(ConnectError::Cancelled),
@@ -782,14 +1034,103 @@ impl Http {
             result=work=>result,
         }
     }
-    async fn stop(&self, path: &'static str, body: Value) {
+    async fn stop(&self, route: SocialRoute, body: Value) {
+        if !matches!(route, SocialRoute::HostStop | SocialRoute::GuestStop) {
+            return;
+        }
+        let token = match self.token.lock() {
+            Ok(mut token) => std::mem::take(&mut *token),
+            Err(_) => return,
+        };
+        if token.is_empty() {
+            return;
+        }
         let stopping = Self {
+            token: Arc::new(Mutex::new(token)),
             cancel: CancellationToken::new(),
             deadline: Instant::now() + Duration::from_secs(2),
             ..self.clone()
         };
-        let _ = stopping.post(path, body).await;
+        let _ = stopping.post(route, body).await;
     }
+}
+fn http_failure(
+    status: reqwest::StatusCode,
+    reply: Option<&Value>,
+) -> (SocialFailureReason, ConnectError) {
+    use reqwest::StatusCode;
+    use SocialFailureReason as Reason;
+    match status {
+        StatusCode::UNAUTHORIZED => (Reason::Authentication, ConnectError::InvitationRejected),
+        StatusCode::TOO_MANY_REQUESTS => (Reason::Quota, ConnectError::SocialQuota),
+        status if status.is_server_error() => {
+            (Reason::ServiceUnavailable, ConnectError::SocialUnavailable)
+        }
+        StatusCode::FORBIDDEN => {
+            // Only a one-field error from the service can refine a 403. No
+            // value from the reply is copied to an error, log or projection.
+            let code = reply
+                .and_then(Value::as_object)
+                .filter(|body| body.len() == 1)
+                .and_then(|body| body.get("code"))
+                .and_then(Value::as_str);
+            let reason = match code {
+                Some("account_not_registered") => Reason::AccountNotRegistered,
+                Some("account_mismatch" | "session_not_authorized" | "relay_unauthorized") => {
+                    Reason::NotAuthorized
+                }
+                Some(
+                    "authority_retired"
+                    | "session_changed"
+                    | "policy_binding_mismatch"
+                    | "context_unavailable"
+                    | "policy_unavailable"
+                    | "policy_expired"
+                    | "challenge_unavailable"
+                    | "challenge_expired"
+                    | "preparation_expired"
+                    | "admission_expired"
+                    | "continuity_expired"
+                    | "grant_terminal",
+                ) => Reason::AuthorityChanged,
+                Some("broker_unavailable") => Reason::ServiceUnavailable,
+                _ => Reason::RequestRejected,
+            };
+            (reason, ConnectError::InvitationRejected)
+        }
+        _ => (Reason::RequestRejected, ConnectError::InvitationRejected),
+    }
+}
+const BOOTSTRAP_CLOCK_UNCERTAIN: ConnectError = ConnectError::SocialFailure(
+    SocialFailureStage::Bootstrap,
+    SocialFailureReason::ClockUncertain,
+);
+const BOOTSTRAP_CLOCK_UNVERIFIED: ConnectError = ConnectError::SocialFailure(
+    SocialFailureStage::Bootstrap,
+    SocialFailureReason::ClockUnverified,
+);
+fn challenge_failure(http: &Http, error: lab::SocialKeyBindingError) -> ConnectError {
+    if error == lab::SocialKeyBindingError::Expired {
+        http.failure(
+            SocialFailureStage::KeyChallenge,
+            SocialFailureReason::AuthorityChanged,
+            ConnectError::InvitationRejected,
+        )
+    } else {
+        http.invalid_reply(SocialRoute::KeyChallenge)
+    }
+}
+fn review_failure(http: &Http, error: lab::SocialAdmissionError) -> ConnectError {
+    let reason = if error == lab::SocialAdmissionError::Expired {
+        SocialFailureReason::AuthorityChanged
+    } else {
+        SocialFailureReason::RequestRejected
+    };
+    http.failure(
+        SocialFailureStage::HostReview,
+        reason,
+        ConnectError::InvitationRejected,
+    )
 }
 fn field<'a>(value: &'a Value, name: &str) -> Result<&'a str, ConnectError> {
     value
@@ -817,11 +1158,15 @@ async fn challenge(
     expected: Option<&lab::VerifiedSocialJoinContext>,
 ) -> Result<(lab::SocialKeyChallenge, lab::SocialKeyBindingProof), ConnectError> {
     run.current()?;
-    let value = http.post("/v1/social/key/challenge", json!({"schemaVersion":1,"operationId":run.id,"generation":run.generation,
+    let value = http.post(SocialRoute::KeyChallenge, json!({"schemaVersion":1,"operationId":run.id,"generation":run.generation,
         "role":run.request.role,"publicKey":run.key.public().to_string(),"sessionId":run.request.session_id,
         "preparedExpiresAtUnixMs":run.expiry})).await?;
-    let challenge = lab::SocialKeyChallenge::parse(&value.to_string())
-        .map_err(|_| ConnectError::InvitationRejected)?;
+    let encoded = value.to_string();
+    let challenge = match &run.clock {
+        Some(clock) => lab::SocialKeyChallenge::parse_with_clock(&encoded, clock),
+        None => lab::SocialKeyChallenge::parse(&encoded),
+    }
+    .map_err(|error| challenge_failure(http, error))?;
     if challenge.account_id() != run.request.account_id
         || challenge.session_id() != run.request.session_id
         || challenge.operation_id() != run.id
@@ -831,7 +1176,7 @@ async fn challenge(
         || challenge.issuer_instance() != run.authority.issuer
         || challenge.expires_at_unix_ms() > run.expiry
     {
-        return Err(ConnectError::InvitationRejected);
+        return Err(http.invalid_reply(SocialRoute::KeyChallenge));
     }
     run.current()?;
     if let Some(expected) = expected {
@@ -840,60 +1185,154 @@ async fn challenge(
             .map_err(|_| ConnectError::PlanExpired)?;
         expected
             .check_challenge(&challenge)
-            .map_err(|_| ConnectError::InvitationRejected)?;
+            .map_err(|_| http.invalid_reply(SocialRoute::KeyChallenge))?;
     }
-    let proof = challenge
-        .sign(&run.key)
-        .map_err(|_| ConnectError::InvitationRejected)?;
+    let proof = match &run.clock {
+        Some(clock) => challenge.sign_with_clock(&run.key, clock),
+        None => challenge.sign(&run.key),
+    }
+    .map_err(|error| challenge_failure(http, error))?;
     run.current()?;
     if let Some(expected) = expected {
         expected
             .check_current()
             .map_err(|_| ConnectError::PlanExpired)?;
     }
-    challenge
-        .validate()
-        .map_err(|_| ConnectError::PlanExpired)?;
+    match &run.clock {
+        Some(clock) => challenge.validate_with_clock(clock),
+        None => challenge.validate(),
+    }
+    .map_err(|_| ConnectError::PlanExpired)?;
     Ok((challenge, proof))
 }
-async fn execute(mut run: Run, token: String) -> Result<(), ConnectError> {
-    let http = Http::new(token, &run)?;
-    if run.authority.online_origin.is_some() {
-        let bootstrap = http.post("/v1/social/bootstrap", json!({})).await?;
+async fn bootstrap_clock(run: &mut Run, http: &mut Http) -> Result<(), ConnectError> {
+    use lab::OnlineClockBootstrapError as SampleError;
+
+    let route = SocialRoute::Bootstrap;
+    let mut original = None;
+    for attempt in 0..3 {
+        run.current()?;
+        let nonce = uuid::Uuid::new_v4().simple().to_string();
+        let sent = Instant::now();
+        let response = http
+            .post(
+                route,
+                json!({
+                    "operationId":run.id, "generation":run.generation, "nonce":nonce,
+                }),
+            )
+            .await;
+        let bootstrap = match response {
+            Ok(value) => value,
+            Err(ConnectError::SocialFailure(
+                SocialFailureStage::Bootstrap,
+                SocialFailureReason::RequestTimedOut | SocialFailureReason::ServiceUnavailable,
+            )) if attempt < 2 => {
+                // Bootstrap consumes no admission proof or participant slot.
+                // A transient request may retry only within this same attempt;
+                // a new nonce cannot replace an already signed authority scope.
+                run.current()?;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let received = Instant::now();
         if bootstrap["schemaVersion"] != 1
-            || field(&bootstrap, "accountId")? != run.request.account_id
-            || field(&bootstrap, "sessionId")? != run.request.session_id
-            || !bootstrap["expiresAtUnixMs"]
-                .as_u64()
-                .is_some_and(|expiry| expiry > lab::unix_millis())
+            || http.reply_field(route, &bootstrap, "accountId")? != run.request.account_id
+            || http.reply_field(route, &bootstrap, "sessionId")? != run.request.session_id
         {
-            return Err(ConnectError::InvitationRejected);
+            return Err(http.invalid_reply(route));
         }
         let validated = SocialLabAuthority::from_local_process(
-            field(&bootstrap, "admissionPublicKey")?,
-            field(&bootstrap, "issuerInstance")?,
-        )?;
-        let policy = field(&bootstrap, "joinPolicy")?;
+            http.reply_field(route, &bootstrap, "admissionPublicKey")?,
+            http.reply_field(route, &bootstrap, "issuerInstance")?,
+        )
+        .map_err(|_| BOOTSTRAP_CLOCK_UNVERIFIED)?;
+        let policy = http.reply_field(route, &bootstrap, "joinPolicy")?;
         if !matches!(policy, "open" | "approval") {
-            return Err(ConnectError::InvitationRejected);
+            return Err(http.invalid_reply(route));
         }
-        run.authority.pin = validated.pin;
-        run.authority.issuer = validated.issuer;
-        run.authority.join_policy = policy.into();
-        run.authority.session_expiry = bootstrap["expiresAtUnixMs"]
-            .as_u64()
-            .ok_or(ConnectError::InvitationRejected)?;
-        run.authority.max_players = bootstrap["maxPlayers"]
+        let max_players = bootstrap["maxPlayers"]
             .as_u64()
             .filter(|maximum| (1..=100).contains(maximum))
-            .ok_or(ConnectError::InvitationRejected)? as u8;
+            .ok_or_else(|| http.invalid_reply(route))? as u8;
+        let sample = lab::OnlineClock::verify_bootstrap_sample(
+            &packet(&bootstrap, "clock").map_err(|_| BOOTSTRAP_CLOCK_UNVERIFIED)?,
+            validated.pin,
+            lab::OnlineClockBinding {
+                issuer: &validated.issuer,
+                account: &run.request.account_id,
+                session: &run.request.session_id,
+                operation: &run.id,
+                generation: run.generation,
+                nonce: &nonce,
+            },
+            sent,
+            received,
+        );
+        let (session_expiry, clock) = match sample {
+            Ok(clock) => (clock.session_expiry(), Some(clock)),
+            Err(SampleError::Uncertain { session_expiry }) => (session_expiry, None),
+            Err(SampleError::Expired) => return Err(ConnectError::PlanExpired),
+            Err(SampleError::Rejected(_)) => return Err(BOOTSTRAP_CLOCK_UNVERIFIED),
+        };
+        let authority = (validated.pin, validated.issuer, session_expiry);
+        if bootstrap["expiresAtUnixMs"].as_u64() != Some(session_expiry)
+            || original
+                .as_ref()
+                .is_some_and(|previous| previous != &authority)
+        {
+            return Err(BOOTSTRAP_CLOCK_UNVERIFIED);
+        }
+        let Some(clock) = clock else {
+            // The signed sample was too uncertain to use. Keep the original
+            // local deadline and authority scope while requesting a fresh nonce.
+            original = Some(authority);
+            continue;
+        };
         run.current()?;
+        run.authority.pin = authority.0;
+        run.authority.issuer = authority.1;
+        run.authority.join_policy = policy.into();
+        run.authority.session_expiry = session_expiry;
+        run.authority.max_players = max_players;
+        run.expiry = clock
+            .lower_now()
+            .saturating_add(
+                run.deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis() as u64,
+            )
+            .min(clock.session_expiry());
+        run.deadline = run.deadline.min(
+            clock
+                .deadline_for(run.expiry)
+                .map_err(|_| ConnectError::PlanExpired)?,
+        );
+        http.deadline = run.deadline;
+        run.clock = Some(clock);
+        update(&run.state, &run.id, |attempt| {
+            attempt.prepared_deadline = run.deadline;
+            if let Some(social) = &mut attempt.snapshot.social {
+                social.expires_at_ms = Some(run.display_expiry(run.expiry));
+            }
+        });
+        return run.current();
     }
-    let identity = http.post("/v1/social/identity", json!({})).await?;
-    if field(&identity, "accountId")? != run.request.account_id
-        || field(&identity, "issuerInstance")? != run.authority.issuer
+    Err(BOOTSTRAP_CLOCK_UNCERTAIN)
+}
+
+async fn execute(mut run: Run, token: String) -> Result<(), ConnectError> {
+    let mut http = Http::new(token, &run)?;
+    if run.authority.online_origin.is_some() {
+        bootstrap_clock(&mut run, &mut http).await?;
+    }
+    let route = SocialRoute::Identity;
+    let identity = http.post(route, json!({})).await?;
+    if http.reply_field(route, &identity, "accountId")? != run.request.account_id
+        || http.reply_field(route, &identity, "issuerInstance")? != run.authority.issuer
     {
-        return Err(ConnectError::InvitationRejected);
+        return Err(http.invalid_reply(route));
     }
     run.current()?;
     if run.request.role == "host" {
@@ -907,6 +1346,11 @@ fn limits() -> lab::Limits {
         handshake_timeout: Duration::from_secs(2),
         ..Default::default()
     }
+}
+fn native_voice_limits() -> lab::Limits {
+    let mut limits = lab::NativeVoiceBudget::limits();
+    limits.handshake_timeout = Duration::from_secs(2);
+    limits
 }
 
 /// A blocking source query belongs to the social actor. It captures no endpoint;
@@ -1026,7 +1470,7 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
             .online_voice_policy()
             .map_err(|_| ConnectError::SourceChanged)?;
         let expiry = run.authority.session_expiry.min(
-            lab::unix_millis().saturating_add(
+            run.server_issue_time().saturating_add(
                 binding
                     .deadline()
                     .saturating_duration_since(Instant::now())
@@ -1034,7 +1478,7 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
             ),
         );
         Some(
-            lab::SocialHostPolicy::review_online_voice(
+            lab::SocialHostPolicy::review_online_voice_with_clock(
                 &challenge,
                 visibility,
                 source,
@@ -1043,6 +1487,7 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
                 profile,
                 &digest,
                 run.native_voice_local_key.is_some(),
+                run.clock.as_ref(),
             )
             .and_then(|policy| {
                 policy.with_runtime_profile(
@@ -1052,7 +1497,8 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
                         .version_id(),
                 )
             })
-            .map_err(|_| ConnectError::InvitationRejected)?,
+            .and_then(lab::SocialHostPolicy::with_native_voice_transport)
+            .map_err(|error| review_failure(&http, error))?,
         )
     } else {
         None
@@ -1062,12 +1508,13 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
     let policy = if let Some(policy) = voice_policy {
         Ok(policy)
     } else if run.authority.online_origin.is_some() {
-        lab::SocialHostPolicy::review_online(
+        lab::SocialHostPolicy::review_online_with_clock(
             &challenge,
             visibility,
             source,
             &run.authority.join_policy,
             run.authority.session_expiry,
+            run.clock.as_ref(),
         )
     } else {
         lab::SocialHostPolicy::review_with_join_policy(
@@ -1077,7 +1524,7 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
             &run.authority.join_policy,
         )
     }
-    .map_err(|_| ConnectError::InvitationRejected)?;
+    .map_err(|error| review_failure(&http, error))?;
     let policy = if run.authority.online_origin.is_some() {
         let maximum = policy.max_guests().min(
             run.authority
@@ -1086,7 +1533,7 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
         );
         policy
             .with_guest_limit(maximum)
-            .map_err(|_| ConnectError::InvalidRequest)?
+            .map_err(|error| review_failure(&http, error))?
     } else {
         policy
     };
@@ -1101,9 +1548,11 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
                 social.stage = "hostReview";
                 social.digest = Some(digest.clone());
                 social.game_target = Some(source.to_string());
-                social.expires_at_ms = Some(policy.expires_at_unix_ms());
+                social.expires_at_ms = Some(run.display_expiry(policy.expires_at_unix_ms()));
                 social.max_guests = Some(policy.max_guests());
                 social.runtime_profile = policy.runtime_profile().map(str::to_owned);
+                social.voice_transport_profile =
+                    policy.voice_transport_profile().map(str::to_owned);
                 #[cfg(all(windows, feature = "connect-voice-lab"))]
                 if let Some(binding) = &run.native_voice_source {
                     if let Ok((profile, _)) = binding.online_voice_policy() {
@@ -1126,31 +1575,31 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
         online::voice::probe(&run, binding, None).await?;
     }
     let policy = policy
-        .approve(&run.key, &approved, run.deadline)
+        .approve_with_clock(&run.key, &approved, run.deadline, run.clock.as_ref())
         .map_err(|_| ConnectError::WrongDigest)?;
     if run.authority.online_origin.is_some() {
         let expiry = policy.body().expires_at_unix_ms();
-        if expiry >= run.expiry {
-            run.deadline += Duration::from_millis(expiry - run.expiry);
-        } else {
-            run.deadline -= Duration::from_millis(run.expiry - expiry);
-        }
+        run.deadline = run
+            .clock()?
+            .deadline_for(expiry)
+            .map_err(|_| ConnectError::PlanExpired)?;
         run.expiry = expiry;
         http.deadline = run.deadline;
     }
     let policy_id = policy.body().policy_id().to_owned();
     let registration = http
         .post(
-            "/v1/social/host/register",
+            SocialRoute::HostRegister,
             json!({"proof":proof,"policySigned":policy}),
         )
         .await;
     let result = async {
         let registration = registration?;
-        if field(&registration, "policyId")? != policy_id
-            || field(&registration, "policyDigest")? != digest
+        let route = SocialRoute::HostRegister;
+        if http.reply_field(route, &registration, "policyId")? != policy_id
+            || http.reply_field(route, &registration, "policyDigest")? != digest
         {
-            return Err(ConnectError::InvitationRejected);
+            return Err(http.invalid_reply(route));
         }
         run.stage("waitingGuest", "hostListening");
         if run.authority.online_origin.is_some() {
@@ -1178,7 +1627,7 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
         }
     }
     .await;
-    http.stop("/v1/social/host/stop", json!({"policyId":policy_id}))
+    http.stop(SocialRoute::HostStop, json!({"policyId":policy_id}))
         .await;
     result
 }
@@ -1198,7 +1647,7 @@ async fn host_registered(
             check_source(run, source_guard, &mut None, None, || Ok(())).await?;
         }
         let packet = http
-            .post("/v1/social/host/poll", json!({"policyId":policy_id}))
+            .post(SocialRoute::HostPoll, json!({"policyId":policy_id}))
             .await?;
         match field(&packet, "state")? {
             "admitted" => break packet,
@@ -1336,7 +1785,7 @@ async fn host_active(
     policy: HostPolicyScope<'_>,
 ) -> Result<(), ConnectError> {
     let publishing = http.post(
-        "/v1/social/host/publish",
+        SocialRoute::HostPublish,
         json!({"grantId":grant.grant_id(),"invitation":invitation.encode()}),
     );
     tokio::pin!(publishing);
@@ -1379,7 +1828,7 @@ async fn host_active(
                 }
             },
             _=poll.tick()=>{
-                let querying=http.post("/v1/social/host/poll",json!({"policyId":policy.id}));tokio::pin!(querying);
+                let querying=http.post(SocialRoute::HostPoll,json!({"policyId":policy.id}));tokio::pin!(querying);
                 let result=loop{tokio::select!{biased;
                     _=run.cancel.cancelled()=>return Ok(()),
                     _=tick.tick()=>{run.current()?;continuity.check().map_err(|_|ConnectError::PlanExpired)?;},
@@ -1397,16 +1846,17 @@ async fn host_active(
 async fn guest(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
     let context = http
         .post(
-            "/v1/social/context",
+            SocialRoute::Context,
             json!({"sessionId":run.request.session_id}),
         )
         .await?;
-    let expected = lab::VerifiedSocialJoinContext::verify(
+    let expected = lab::VerifiedSocialJoinContext::verify_with_clock(
         &context.to_string(),
         run.authority.pin,
         &run.request.account_id,
         &run.request.session_id,
         run.deadline,
+        run.clock.as_ref(),
     )
     .map_err(|_| ConnectError::InvitationRejected)?;
     if field(&context["body"], "issuerInstance")? != run.authority.issuer {
@@ -1422,30 +1872,22 @@ async fn guest(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
         .map_err(|_| ConnectError::PlanExpired)?;
     let joined = http
         .post(
-            "/v1/social/join",
+            SocialRoute::Join,
             json!({"proof":proof,"policyId":policy_id}),
         )
         .await?;
-    let verify = if run.authority.online_origin.is_some() {
-        lab::VerifiedSocialGrant::for_guest_online
-    } else {
-        lab::VerifiedSocialGrant::for_guest
-    };
-    let grant = verify(
-        &packet(&joined, "grant")?,
-        run.authority.pin,
-        &challenge,
-        &expected,
-        run.deadline,
-    )
-    .map_err(|_| ConnectError::InvitationRejected)?;
+    let (grant, native_admission) =
+        verify_guest_admission(&run, &expected, &challenge, &packet(&joined, "grant")?)?;
+    let ingress = native_admission
+        .as_ref()
+        .map_or(GuestIngress::Legacy(&expected), GuestIngress::Native);
     if run.authority.online_origin.is_some() {
         run.deadline = grant.session_deadline();
         run.expiry = grant.session_expires_at_unix_ms();
         http.deadline = run.deadline;
         update(&run.state, &run.id, |a| {
             if let Some(social) = &mut a.snapshot.social {
-                social.expires_at_ms = Some(run.expiry);
+                social.expires_at_ms = Some(run.display_expiry(run.expiry));
             }
         });
     }
@@ -1466,7 +1908,7 @@ async fn guest(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
         let _authority_guard = heartbeat_guard;
         loop {
             tokio::select! {biased;_=heartbeat_signal.cancelled()=>return Ok(()),_=tokio::time::sleep(Duration::from_millis(750))=>{}};
-            let result = tokio::select! {biased;_=heartbeat_signal.cancelled()=>return Ok(()),result=heartbeat_http.post("/v1/social/continuity",json!({"grantId":heartbeat_id}))=>result?};
+            let result = tokio::select! {biased;_=heartbeat_signal.cancelled()=>return Ok(()),result=heartbeat_http.post(SocialRoute::Continuity,json!({"grantId":heartbeat_id}))=>result?};
             continuity
                 .update(&result.to_string())
                 .map_err(|_| ConnectError::InvitationRejected)?;
@@ -1479,7 +1921,7 @@ async fn guest(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
     let result = guest_admitted(
         &run,
         &http,
-        &expected,
+        &ingress,
         &grant,
         receiver,
         &mut heartbeat,
@@ -1489,14 +1931,14 @@ async fn guest(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
     authority.close();
     heartbeat_cancel.cancel();
     let _ = heartbeat.await;
-    http.stop("/v1/social/guest/stop", json!({"grantId":grant_id}))
+    http.stop(SocialRoute::GuestStop, json!({"grantId":grant_id}))
         .await;
     result
 }
 async fn guest_admitted(
     run: &Run,
     http: &Http,
-    expected: &lab::VerifiedSocialJoinContext,
+    expected: &GuestIngress<'_>,
     grant: &lab::VerifiedSocialGrant,
     mut leases: tokio::sync::watch::Receiver<String>,
     heartbeat: &mut JoinHandle<Result<(), ConnectError>>,
@@ -1511,7 +1953,7 @@ async fn guest_admitted(
             return Err(ConnectError::TransportFailed);
         }
         let receiving = http.post(
-            "/v1/social/guest/receive",
+            SocialRoute::GuestReceive,
             json!({"grantId":grant.grant_id()}),
         );
         tokio::pin!(receiving);
@@ -1530,27 +1972,42 @@ async fn guest_admitted(
         }
     };
     let voice = grant.voice_profile().is_some();
+    let native_voice = match grant.voice_transport_profile() {
+        Some("nativeVoice8V1") if voice => true,
+        None => false,
+        _ => return Err(ConnectError::InvitationRejected),
+    };
     update(&run.state, &run.id, |a| {
         if let Some(social) = &mut a.snapshot.social {
             social.runtime_profile = grant.runtime_profile().map(str::to_owned);
             social.voice_profile = grant.voice_profile().map(str::to_owned);
+            social.voice_transport_profile = grant.voice_transport_profile().map(str::to_owned);
+            social.host_player = voice.then_some(grant.host_player());
         }
     });
-    let verify = if voice {
-        if run.authority.online_origin.is_none() {
-            return Err(ConnectError::InvitationRejected);
+    let encoded = field(&delivery, "invitation")?;
+    let invitation = if let Some(clock) = &run.clock {
+        if native_voice {
+            lab::SessionInvitation::verify_online_native_voice_with_clock(
+                encoded,
+                grant.host_key(),
+                run.key.public(),
+                clock,
+            )
+        } else {
+            lab::SessionInvitation::verify_online_with_clock(
+                encoded,
+                grant.host_key(),
+                run.key.public(),
+                voice,
+                clock,
+            )
         }
-        lab::SessionInvitation::verify_online_fragmented
-    } else if run.authority.online_origin.is_some() {
-        lab::SessionInvitation::verify_online
+    } else if voice || run.authority.online_origin.is_some() {
+        return Err(ConnectError::InvitationRejected);
     } else {
-        lab::SessionInvitation::verify_loopback
-    };
-    let invitation = verify(
-        field(&delivery, "invitation")?,
-        grant.host_key(),
-        run.key.public(),
-    )
+        lab::SessionInvitation::verify_loopback(encoded, grant.host_key(), run.key.public())
+    }
     .map_err(|_| ConnectError::InvitationRejected)?;
     if invitation.session_id() != grant.session_id()
         || invitation.admission_expires_at_unix_ms() != grant.admission_expires_at_unix_ms()
@@ -1581,56 +2038,104 @@ async fn guest_admitted(
     {
         return Err(ConnectError::InvitationRejected);
     }
-    let latest = leases.borrow_and_update().clone();
-    let sequence = serde_json::from_str::<Value>(&latest)
-        .ok()
-        .and_then(|value| value["body"]["sequence"].as_u64())
-        .ok_or(ConnectError::InvitationRejected)?;
-    if sequence > authority.sequence()? {
-        authority
-            .update(&latest)
-            .map_err(|_| ConnectError::InvitationRejected)?;
-    }
+    guest_admission::consume_latest_lease(authority, &mut leases)?;
     expected
         .check_current()
         .map_err(|_| ConnectError::PlanExpired)?;
     grant
         .check_admission()
         .map_err(|_| ConnectError::PlanExpired)?;
+    if native_voice {
+        approve_native_voice_guest(
+            run,
+            expected,
+            grant,
+            &invitation,
+            heartbeat,
+            authority,
+            &mut leases,
+        )
+        .await?;
+    }
     let network = if run.authority.online_origin.is_some() {
-        Some(online::ticket(run, http, "guest", grant.grant_id(), grant.host_key()).await?)
+        let requesting = online::ticket(run, http, "guest", grant.grant_id(), grant.host_key());
+        tokio::pin!(requesting);
+        let mut ticket_tick = interval(Duration::from_millis(20));
+        let ticket = loop {
+            guest_admission::check_before_transport(run, expected, grant, &invitation, authority)?;
+            if heartbeat.is_finished() {
+                return Err(ConnectError::TransportFailed);
+            }
+            tokio::select! { biased;
+                _ = run.cancel.cancelled() => return Err(ConnectError::Cancelled),
+                _ = ticket_tick.tick() => {},
+                result = leases.changed() => {
+                    result.map_err(|_| ConnectError::TransportFailed)?;
+                    guest_admission::consume_latest_lease(authority, &mut leases)?;
+                },
+                result = &mut requesting => break result?,
+            }
+        };
+        Some(ticket)
     } else {
         None
     };
-    let connecting = async {
-        if let Some(ticket) = &network {
-            if voice {
-                lab::Guest::connect_invited_online_fragmented(
-                    run.key.clone(),
-                    &invitation,
-                    limits(),
-                    ticket,
-                )
-                .await
-            } else {
-                lab::Guest::connect_invited_online(run.key.clone(), &invitation, limits(), ticket)
+    guest_admission::consume_latest_lease(authority, &mut leases)?;
+    let connecting =
+        guest_admission::after_ticket(run, expected, grant, &invitation, authority, async {
+            let result = if let Some(ticket) = &network {
+                if native_voice {
+                    lab::Guest::connect_invited_online_native_voice(
+                        run.key.clone(),
+                        &invitation,
+                        native_voice_limits(),
+                        ticket,
+                    )
                     .await
-            }
-        } else {
-            lab::Guest::connect_invited_session(run.key.clone(), &invitation, limits()).await
-        }
-    };
+                } else if voice {
+                    lab::Guest::connect_invited_online_fragmented(
+                        run.key.clone(),
+                        &invitation,
+                        limits(),
+                        ticket,
+                    )
+                    .await
+                } else {
+                    lab::Guest::connect_invited_online(
+                        run.key.clone(),
+                        &invitation,
+                        limits(),
+                        ticket,
+                    )
+                    .await
+                }
+            } else {
+                lab::Guest::connect_invited_session(run.key.clone(), &invitation, limits()).await
+            };
+            result.map_err(|_| {
+                if run.cancel.is_cancelled() {
+                    ConnectError::Cancelled
+                } else {
+                    ConnectError::TransportFailed
+                }
+            })
+        });
     tokio::pin!(connecting);
     let mut interrupted = false;
     let mut tick = interval(Duration::from_millis(20));
-    let guest=loop{tokio::select!{biased;
-        _=run.cancel.cancelled()=>{interrupted=true;break connecting.as_mut().await;},
-        _=tick.tick()=>if run.current().is_err()||expected.check_current().is_err()||authority.check_continuity().is_err()||heartbeat.is_finished(){interrupted=true;break connecting.as_mut().await;},
-        result=leases.changed()=>{if result.is_err(){interrupted=true;break connecting.as_mut().await;}let lease=leases.borrow_and_update().clone();if authority.update(&lease).is_err(){interrupted=true;break connecting.as_mut().await;}},
-        result=&mut connecting=>break result,
-    }}.map_err(|_|if run.cancel.is_cancelled(){ConnectError::Cancelled}else{ConnectError::TransportFailed})?;
+    let guest = loop {
+        tokio::select! {biased;
+            _=run.cancel.cancelled()=>{interrupted=true;break connecting.as_mut().await;},
+            _=tick.tick()=>if run.current().is_err()||expected.check_current().is_err()||authority.check_continuity().is_err()||heartbeat.is_finished(){interrupted=true;break connecting.as_mut().await;},
+            result=leases.changed()=>{if result.is_err(){interrupted=true;break connecting.as_mut().await;}let lease=leases.borrow_and_update().clone();if authority.update(&lease).is_err(){interrupted=true;break connecting.as_mut().await;}},
+            result=&mut connecting=>break result,
+        }
+    }?;
     let guest = Arc::new(guest);
     let sockets = guest.bound_sockets();
+    if !interrupted && expected.admit(&guest).is_err() {
+        interrupted = true;
+    }
     let (result, tcp) = if interrupted
         || run.current().is_err()
         || expected.check_current().is_err()
@@ -1662,13 +2167,128 @@ async fn guest_admitted(
     release(&sockets, tcp).await?;
     result
 }
+
+// This is a review of the original signed invitation and budget. No relay
+// ticket, endpoint or local bridge is created while confirmation is pending.
+#[allow(clippy::too_many_arguments)] // Keep each original authority explicit through the wait.
+async fn approve_native_voice_guest(
+    run: &Run,
+    expected: &GuestIngress<'_>,
+    grant: &lab::VerifiedSocialGrant,
+    invitation: &lab::SessionInvitation,
+    heartbeat: &JoinHandle<Result<(), ConnectError>>,
+    authority: &ready_source::LaunchAuthority,
+    leases: &mut tokio::sync::watch::Receiver<String>,
+) -> Result<(), ConnectError> {
+    if grant.voice_transport_profile() != Some("nativeVoice8V1")
+        || !invitation.is_online_native_voice()
+        || !matches!(expected, GuestIngress::Native(_))
+    {
+        return Err(ConnectError::InvitationRejected);
+    }
+    let mut deadline = run
+        .clock()?
+        .deadline_for(invitation.admission_expires_at_unix_ms())
+        .map_err(|_| ConnectError::PlanExpired)?
+        .min(expected.ingress_deadline())
+        .min(run.deadline);
+    let digest = expected.review_digest(invitation, run.generation)?;
+    let (sender, mut receiver) = oneshot::channel();
+    {
+        let mut state = lock(&run.state)?;
+        if state.social_epoch != run.request.account_epoch {
+            return Err(ConnectError::StaleOperation);
+        }
+        let attempt = state
+            .attempt
+            .as_mut()
+            .filter(|attempt| attempt.snapshot.operation_id.as_deref() == Some(run.id.as_str()))
+            .ok_or(ConnectError::StaleOperation)?;
+        deadline = deadline.min(attempt.prepared_deadline);
+        if attempt.cancel.is_cancelled() || Instant::now() >= deadline {
+            return Err(ConnectError::PlanExpired);
+        }
+        let control = attempt
+            .social
+            .as_mut()
+            .filter(|control| {
+                control.request.role == "guest"
+                    && control.request.account_epoch == run.request.account_epoch
+                    && control.request.account_id == run.request.account_id
+                    && control.request.session_id == run.request.session_id
+            })
+            .ok_or(ConnectError::StaleOperation)?;
+        if control.approval.is_some() {
+            return Err(ConnectError::StaleOperation);
+        }
+        control.approval = Some(sender);
+        attempt.prepared_deadline = deadline;
+        let social = attempt
+            .snapshot
+            .social
+            .as_mut()
+            .ok_or(ConnectError::StaleOperation)?;
+        social.stage = "guestReview";
+        social.digest = Some(digest.clone());
+        social.expires_at_ms = Some(
+            lab::unix_millis().saturating_add(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis() as u64,
+            ),
+        );
+        attempt.snapshot.phase = "reviewed";
+        attempt.snapshot.generation = attempt.snapshot.generation.saturating_add(1);
+    }
+    let _review = guest_admission::GuestReviewGuard {
+        run,
+        digest: &digest,
+    };
+    let current = || {
+        run.current()?;
+        if Instant::now() >= deadline {
+            return Err(ConnectError::PlanExpired);
+        }
+        expected.check_current()?;
+        grant
+            .check_admission()
+            .map_err(|_| ConnectError::PlanExpired)?;
+        invitation
+            .check_admission_current()
+            .map_err(|_| ConnectError::PlanExpired)?;
+        authority.check_continuity()?;
+        if heartbeat.is_finished() {
+            return Err(ConnectError::TransportFailed);
+        }
+        Ok(())
+    };
+    let mut tick = interval(Duration::from_millis(20));
+    loop {
+        current()?;
+        tokio::select! { biased;
+            _ = run.cancel.cancelled() => return Err(ConnectError::Cancelled),
+            _ = tokio::time::sleep_until(deadline.into()) => return Err(ConnectError::PlanExpired),
+            _ = tick.tick() => {},
+            result = leases.changed() => {
+                result.map_err(|_| ConnectError::TransportFailed)?;
+                let lease = leases.borrow_and_update().clone();
+                authority.update(&lease).map_err(|_| ConnectError::InvitationRejected)?;
+            },
+            result = &mut receiver => {
+                let approved = result.map_err(|_| ConnectError::Cancelled)?;
+                current()?;
+                return if approved == digest { Ok(()) } else { Err(ConnectError::WrongDigest) };
+            },
+        }
+    }
+}
 // Every argument is the original attempt authority or one of its retained owners;
 // keeping these borrows explicit prevents a detached UDP or launch lifecycle.
 #[allow(clippy::too_many_arguments)]
 async fn guest_connected(
     run: &Run,
     guest: &Arc<lab::Guest>,
-    expected: &lab::VerifiedSocialJoinContext,
+    expected: &GuestIngress<'_>,
     invitation: &lab::SessionInvitation,
     heartbeat: &mut JoinHandle<Result<(), ConnectError>>,
     authority: &Arc<ready_source::LaunchAuthority>,
@@ -1747,12 +2367,14 @@ async fn guest_connected(
                 a.snapshot.phase = "guestConnected";
                 a.snapshot.transport_state = "authenticated";
                 a.snapshot.tcp_address = Some(tcp.to_string());
-                a.snapshot.expires_at_ms = Some(invitation.session_expires_at_unix_ms());
+                a.snapshot.expires_at_ms =
+                    Some(run.display_expiry(invitation.session_expires_at_unix_ms()));
                 a.session_deadline = Some(run.deadline);
                 if let Some(social) = &mut a.snapshot.social {
                     social.stage = "connected";
                     social.ready_game_launch_available = Some(true);
-                    social.expires_at_ms = Some(invitation.session_expires_at_unix_ms());
+                    social.expires_at_ms =
+                        Some(run.display_expiry(invitation.session_expires_at_unix_ms()));
                 }
             }
         });
@@ -2104,13 +2726,7 @@ mod tests {
         );
         manager.shutdown_all().await;
     }
-    #[tokio::test]
-    async fn cleanup_failure_is_never_normalized_or_reported_as_success() {
-        assert_eq!(execution_error(Err(ConnectError::Cancelled)), None);
-        assert_eq!(
-            execution_error(Err(ConnectError::CleanupFailed)),
-            Some(ConnectError::CleanupFailed)
-        );
+    fn failed_cleanup_fixture() -> (Manager, SocialReservation) {
         let manager = manager();
         let reservation = manager.social_reserve("main", request(0)).unwrap();
         finish(
@@ -2118,6 +2734,25 @@ mod tests {
             &reservation.operation_id,
             Some(ConnectError::CleanupFailed),
         );
+        (manager, reservation)
+    }
+
+    #[cfg(all(windows, feature = "connect-voice-lab"))]
+    impl crate::engine::connect::ConnectManager {
+        pub(crate) fn test_failed_social_cleanup() -> (Self, String) {
+            let (live, reservation) = failed_cleanup_fixture();
+            (Self { live }, reservation.operation_id)
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_is_never_normalized_or_reported_as_success() {
+        assert_eq!(execution_error(Err(ConnectError::Cancelled)), None);
+        assert_eq!(
+            execution_error(Err(ConnectError::CleanupFailed)),
+            Some(ConnectError::CleanupFailed)
+        );
+        let (manager, reservation) = failed_cleanup_fixture();
         let snapshot = manager
             .stop("main", &reservation.operation_id)
             .await
@@ -2243,6 +2878,197 @@ mod tests {
         assert!(manager.social_reserve("main", request(epoch + 2)).is_ok());
         manager.shutdown_all().await;
     }
+
+    #[tokio::test]
+    async fn social_online_http_diagnostics_are_closed_and_scoped() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use SocialFailureReason as Reason;
+        use SocialFailureStage as Stage;
+
+        let manager = manager();
+        let epoch = manager.social_capabilities().account_epoch;
+        let reservation = manager.social_reserve("main", request(epoch)).unwrap();
+        let mut last = None;
+        for (route, status, body, expected) in [
+            (
+                SocialRoute::Bootstrap,
+                401,
+                "untrusted-private-response".to_owned(),
+                ConnectError::SocialFailure(Stage::Bootstrap, Reason::Authentication),
+            ),
+            (
+                SocialRoute::Identity,
+                403,
+                json!({"code":"account_not_registered"}).to_string(),
+                ConnectError::SocialFailure(Stage::Identity, Reason::AccountNotRegistered),
+            ),
+            (
+                SocialRoute::Context,
+                403,
+                json!({"code":"session_not_authorized"}).to_string(),
+                ConnectError::SocialFailure(Stage::GuestAdmission, Reason::NotAuthorized),
+            ),
+            (
+                SocialRoute::HostRegister,
+                403,
+                json!({"code":"authority_retired","detail":"untrusted-private-response"})
+                    .to_string(),
+                ConnectError::SocialFailure(Stage::HostRegistration, Reason::RequestRejected),
+            ),
+            (
+                SocialRoute::HostRegister,
+                403,
+                json!({"code":"untrusted-private-response".repeat(25)}).to_string(),
+                ConnectError::SocialFailure(Stage::HostRegistration, Reason::RequestRejected),
+            ),
+            (
+                SocialRoute::RelayTicket,
+                429,
+                "untrusted-private-response".to_owned(),
+                ConnectError::SocialFailure(Stage::Relay, Reason::Quota),
+            ),
+            (
+                SocialRoute::HostPoll,
+                503,
+                "untrusted-private-response".to_owned(),
+                ConnectError::SocialFailure(Stage::SessionContinuity, Reason::ServiceUnavailable),
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin =
+                Box::leak(format!("http://{}", listener.local_addr().unwrap()).into_boxed_str());
+            let actor = Http {
+                client: reqwest::Client::builder()
+                    .no_proxy()
+                    .timeout(Duration::from_secs(2))
+                    .build()
+                    .unwrap(),
+                token: Arc::new(Mutex::new("fixture-only-credential".into())),
+                cancel: CancellationToken::new(),
+                deadline: Instant::now() + Duration::from_secs(3),
+                origin,
+                session_id: request(epoch).session_id,
+                online: true,
+            };
+            let reply = async {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut input = [0; 1024];
+                let count = socket.read(&mut input).await.unwrap();
+                assert!(count > 0);
+                let response = format!(
+                    "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            };
+            let (result, ()) = tokio::time::timeout(Duration::from_secs(4), async {
+                tokio::join!(actor.post(route, json!({})), reply)
+            })
+            .await
+            .unwrap();
+            assert_eq!(result, Err(expected));
+            last = result.err();
+        }
+        finish(&manager.state, &reservation.operation_id, last);
+        let state = manager.state.lock().unwrap();
+        let projection = serde_json::to_value(&state.attempt.as_ref().unwrap().snapshot).unwrap();
+        assert_eq!(
+            projection["errorCode"],
+            "connect_social_service_unavailable"
+        );
+        assert_eq!(projection["social"]["failureStage"], "sessionContinuity");
+        assert_eq!(projection["social"]["stage"], "failed");
+        let projected = projection.to_string();
+        assert!(!projected.contains("untrusted-private-response"));
+        assert!(!projected.contains("fixture-only-credential"));
+        assert!(!projected.contains(SocialRoute::HostPoll.path()));
+    }
+
+    #[tokio::test]
+    async fn terminal_social_stop_owns_its_original_credential_after_account_transition() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let manager = manager();
+        let epoch = manager.social_capabilities().account_epoch;
+        let request = request(epoch);
+        let session_id = request.session_id.clone();
+        let reservation = manager.social_reserve("main", request).unwrap();
+        let credential = Arc::new(Mutex::new("terminal-fixture-credential".into()));
+        let cancel = {
+            let mut state = manager.state.lock().unwrap();
+            let attempt = state.attempt.as_mut().unwrap();
+            attempt.social.as_mut().unwrap().token = Some(Arc::downgrade(&credential));
+            attempt.cancel.clone()
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin =
+            Box::leak(format!("http://{}", listener.local_addr().unwrap()).into_boxed_str());
+        let actor = Http {
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            token: credential,
+            cancel,
+            deadline: Instant::now() + Duration::from_secs(10),
+            origin,
+            session_id,
+            online: false,
+        };
+        let stopped = manager.account_transition_stop("main").await.unwrap();
+        assert_eq!(
+            stopped.operation_id.as_deref(),
+            Some(reservation.operation_id.as_str())
+        );
+        assert_eq!(stopped.cleanup_state, "complete");
+        assert_eq!(manager.social_capabilities().account_epoch, epoch + 1);
+        assert!(manager
+            .state
+            .lock()
+            .unwrap()
+            .attempt
+            .as_ref()
+            .unwrap()
+            .social
+            .as_ref()
+            .unwrap()
+            .token
+            .is_none());
+        assert_eq!(
+            actor.post(SocialRoute::GuestReceive, json!({})).await,
+            Err(ConnectError::Cancelled),
+        );
+
+        let receive = async {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert!(count > 0 && request.len() + count <= 4096);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await
+                .unwrap();
+            String::from_utf8(request).unwrap()
+        };
+        let ((), wire) = tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::join!(
+                actor.stop(SocialRoute::GuestStop, json!({"grantId":"original"})),
+                receive
+            )
+        })
+        .await
+        .expect("owned terminal request");
+        assert!(wire.starts_with("POST /v1/social/guest/stop "));
+        assert!(wire
+            .lines()
+            .any(|line| line.split_once(':').is_some_and(|(name, value)| {
+                name.eq_ignore_ascii_case("authorization")
+                    && value.trim() == "Bearer terminal-fixture-credential"
+            })));
+        assert!(actor.token.lock().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn reserved_social_uses_existing_slot_and_rejects_manual_actions() {
         let manager = manager();

@@ -86,7 +86,7 @@ pub(crate) fn ensure_managed_java_files(
 
     progress(java_stage(format!("Consultando Java {major}"), 2.0));
     fs::create_dir_all(&runtime_directory)?;
-    let client = Client::builder()
+    let mut builder = Client::builder()
         .user_agent("Aurora-Smart-Launcher/0.1")
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(if cancel.is_some() {
@@ -94,8 +94,26 @@ pub(crate) fn ensure_managed_java_files(
         } else {
             10 * 60
         }))
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
-        .build()?;
+        .pool_idle_timeout(std::time::Duration::from_secs(90));
+    if cancel.is_some() {
+        builder = builder
+            .https_only(true)
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                let url = attempt.url();
+                if attempt.previous().len() == 1
+                    && url.scheme() == "https"
+                    && url.host_str() == Some("release-assets.githubusercontent.com")
+                    && url.port_or_known_default() == Some(443)
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                {
+                    attempt.follow()
+                } else {
+                    attempt.error("redirecionamento Java fora da origem oficial")
+                }
+            }));
+    }
+    let client = builder.build()?;
     let (package, package_type) = match latest_java_package(&client, major, "jre")? {
         Some(package) => (package, "JRE"),
         None => (
@@ -109,7 +127,12 @@ pub(crate) fn ensure_managed_java_files(
         .ok_or(JavaRuntimeError::Metadata)?;
     if cancel.is_some() {
         let url = reqwest::Url::parse(download_url).map_err(|_| JavaRuntimeError::Metadata)?;
-        if url.host_str() != Some("github.com") || !url.path().starts_with("/adoptium/temurin") {
+        if url.host_str() != Some("github.com")
+            || url.port_or_known_default() != Some(443)
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || !url.path().starts_with("/adoptium/temurin")
+        {
             return Err(JavaRuntimeError::Metadata);
         }
     }

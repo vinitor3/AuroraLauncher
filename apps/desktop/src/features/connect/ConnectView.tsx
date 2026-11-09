@@ -31,7 +31,7 @@ type SourcePreparationAwaiting = {
   profile?: HostSourceProfile; baseline?: ConnectSnapshot; controlledRejectionSettled?: symbol;
 };
 
-export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunchContext }) {
+export function ConnectView({ launchContext, onInitialReadReady }: { launchContext?: ReadyGameLaunchContext; onInitialReadReady?: (ready: boolean) => void }) {
   const [capabilities, setCapabilities] = useState<ConnectCapabilities>();
   const [snapshot, setSnapshot] = useState<ConnectSnapshot>();
   const [loading, setLoading] = useState(true);
@@ -71,6 +71,8 @@ export function ConnectView({ launchContext }: { launchContext?: ReadyGameLaunch
   const udpRetryContext = useRef<{ operationId: string; generation: number } | undefined>(undefined);
   const sourcePreparationAwaiting = useRef<SourcePreparationAwaiting | undefined>(undefined);
   const hostReviewAwaiting = useRef<{ operationId: string } | undefined>(undefined);
+
+  useEffect(() => { onInitialReadReady?.(!loading); }, [loading, onInitialReadReady]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);

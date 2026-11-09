@@ -103,6 +103,7 @@ impl ConnectManager {
                 native_voice_local_key: control.native_voice_local_key.clone(),
                 key: control.key.clone().unwrap(),
                 authority: manager.live.social_authority.clone().unwrap(),
+                clock: None,
                 deadline: binding.deadline(),
                 expiry: lab::unix_millis()
                     + binding
@@ -130,6 +131,10 @@ impl ConnectManager {
             &digest,
             true,
         )
+        .unwrap()
+        .with_runtime_profile(binding.online_runtime_profile().unwrap().version_id())
+        .unwrap()
+        .with_native_voice_transport()
         .unwrap();
         let policy = policy
             .approve(&run.key, &policy.digest(), run.deadline)
@@ -148,15 +153,15 @@ impl ConnectManager {
         let origin = format!("http://{}", relay.bound_addr());
         let ticket = signed_ticket(&run, &authority, &origin, run.key.public());
         let mut group = Group::new(&run);
-        let invitation = issue(
-            &run,
+        let invitation = lab::SessionInvitation::issue_online_native_voice(
+            &run.key,
             run.native_voice_local_key.as_ref().unwrap().public(),
+            &run.request.session_id,
             &group.services(binding.targets().0).unwrap(),
             lab::SessionDeadlines {
-                admission_expires_at_unix_ms: run.expiry,
+                admission_expires_at_unix_ms: run.expiry.min(lab::unix_millis() + 60_000),
                 session_expires_at_unix_ms: run.expiry,
             },
-            true,
         )
         .unwrap();
         let mut host = None;
@@ -195,6 +200,18 @@ impl ConnectManager {
             .refresh_poll(&run, &json!({"checkedAtUnixMs":lab::unix_millis()}))
             .unwrap();
         assert!(original.with_current(|| Ok(())).is_ok());
+        let runtime = binding.online_runtime_profile().unwrap();
+        manager
+            .authorize_ready_copy_install("main", &run.id, runtime)
+            .unwrap();
+        let foreign = crate::engine::connect_ready_profile::ReadyProfile::ALL
+            .into_iter()
+            .find(|profile| *profile != runtime)
+            .unwrap();
+        assert_eq!(
+            manager.authorize_ready_copy_install("main", &run.id, foreign),
+            Err(ReadyGameLaunchError::UnsupportedRuntime),
+        );
         if mode >= 4 {
             monitor_remote_leases(
                 &run,
@@ -272,6 +289,10 @@ impl ConnectManager {
                 1 => stop_source(),
                 2 => {
                     manager.live.state.lock().unwrap().social_epoch += 1;
+                    assert_eq!(
+                        manager.authorize_ready_copy_install("main", &run.id, runtime),
+                        Err(ReadyGameLaunchError::Unavailable),
+                    );
                 }
                 3 => {
                     assert!(original
@@ -359,12 +380,13 @@ async fn monitor_remote_leases(
             .source()
             .online_voice_policy()
             .unwrap();
-        let body = json!({"schemaVersion":3,"purpose":"socialAdmission","issuerInstance":run.authority.issuer,
+        let body = json!({"schemaVersion":5,"purpose":"socialAdmission","issuerInstance":run.authority.issuer,
             "grantId":id,"policyId":challenge.challenge_id(),"policyDigest":policy.body().digest(),"sessionId":run.request.session_id,
             "sessionDigest":challenge.session_digest(),"hostAccountId":run.request.account_id,"hostPublicKey":run.key.public().to_string(),
             "hostOperationId":run.id,"hostGeneration":run.generation,"guestAccountId":format!("remote_{index}"),"guestPublicKey":key.public().to_string(),
             "guestOperationId":Uuid::new_v4().to_string(),"guestGeneration":1,"issuedAtUnixMs":now,"admissionExpiresAtUnixMs":now+9000,
-            "sessionExpiresAtUnixMs":run.expiry,"voiceProfile":profile,"voiceSourceDigest":digest,"hostPlayer":true});
+            "sessionExpiresAtUnixMs":run.expiry,"voiceProfile":profile,"voiceSourceDigest":digest,"hostPlayer":true,
+            "runtimeProfile":policy.body().runtime_profile().unwrap(),"voiceTransportProfile":"nativeVoice8V1"});
         let encoded = sign_fields(
             authority,
             "aurora/connect/social-admission/v1\0",
@@ -392,6 +414,8 @@ async fn monitor_remote_leases(
                 "voiceProfile",
                 "voiceSourceDigest",
                 "hostPlayer",
+                "runtimeProfile",
+                "voiceTransportProfile",
             ],
         );
         let grant = lab::VerifiedSocialGrant::for_host(
@@ -403,9 +427,10 @@ async fn monitor_remote_leases(
             run.deadline,
         )
         .unwrap();
-        let invitation = issue(
-            run,
+        let invitation = lab::SessionInvitation::issue_online_native_voice(
+            &run.key,
             key.public(),
+            &run.request.session_id,
             &group
                 .services(group.voice.as_ref().unwrap().source().targets().0)
                 .unwrap(),
@@ -413,7 +438,6 @@ async fn monitor_remote_leases(
                 admission_expires_at_unix_ms: grant.admission_expires_at_unix_ms(),
                 session_expires_at_unix_ms: grant.session_expires_at_unix_ms(),
             },
-            true,
         )
         .unwrap();
         host.as_ref().unwrap().admit_online(&invitation).unwrap();
@@ -425,10 +449,10 @@ async fn monitor_remote_leases(
             .await
             .unwrap();
         let ticket = signed_ticket(run, authority, origin, key.public());
-        let guest = bounded(lab::Guest::connect_invited_online_fragmented(
+        let guest = bounded(lab::Guest::connect_invited_online_native_voice(
             key.clone(),
             &invitation,
-            limits(),
+            native_voice_limits(),
             &ticket,
         ))
         .await
@@ -482,6 +506,28 @@ async fn monitor_remote_leases(
             .revocations
             .insert("55".repeat(32));
     }
+    let stalled = "77".repeat(32);
+    let admission_expires_at_unix_ms = lab::unix_millis() + 25;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let candidate = lab::SessionInvitation::issue_online_native_voice(
+        &run.key,
+        lab::generate_key().public(),
+        &run.request.session_id,
+        &group
+            .services(group.voice.as_ref().unwrap().source().targets().0)
+            .unwrap(),
+        lab::SessionDeadlines {
+            admission_expires_at_unix_ms,
+            session_expires_at_unix_ms: run.expiry,
+        },
+    )
+    .map_err(|_| ConnectError::InvitationRejected);
+    assert!(group
+        .accept_invitation(&stalled, candidate)
+        .unwrap()
+        .is_none());
+    assert!(group.rejected.contains(&stalled));
+    assert!(bounded(guests[1].open_tcp("game", 1)).await.is_ok());
     let end = Instant::now() + Duration::from_millis(2200);
     while Instant::now() < end {
         group.monitor(run, host).await.unwrap();

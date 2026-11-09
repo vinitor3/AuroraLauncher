@@ -18,8 +18,9 @@ async function fixture(mode) {
     }).join("\n");
     return `import {${names}} from "data:text/javascript;base64,${Buffer.from(body).toString("base64")}";`;
   });
-  const module = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}#${key}`);
-  return { module, calls, close() { delete globalThis[key]; } };
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}#${key}`;
+  const module = await import(moduleUrl);
+  return { module, moduleUrl, calls, close() { delete globalThis[key]; } };
 }
 
 test("social build pins only emulator demo and strips caller remote service fields", async () => {
@@ -65,6 +66,24 @@ test("online experiment exposes social UI with real account configuration and no
     assert.equal(f.calls.some(c => c.name.includes("Emulator")), false);
   } finally { f.close(); }
 });
+
+for (const [mode, expected] of [["social-lab", "TESTE LOCAL · CONTAS DESCARTÁVEIS · SEM PUBLICAÇÃO NA COMUNIDADE REAL"],
+  ["connect-online", "VERSÃO EXPERIMENTAL · SERVIÇO ONLINE"]]) {
+  test(`social banner describes the actual ${mode} build`, async () => {
+    const f = await fixture(mode);
+    try {
+      const source = ts.transpileModule(await readFile(new URL("../features/social/SocialBuildBanner.tsx", import.meta.url), "utf8"), {
+        fileName: "SocialBuildBanner.tsx", compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX },
+      }).outputText.replace('"../../lib/firebase"', JSON.stringify(f.moduleUrl))
+        .replace('"react/jsx-runtime"', JSON.stringify(import.meta.resolve("react/jsx-runtime")));
+      const { SocialBuildBanner } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+      const rendered = SocialBuildBanner();
+      assert.equal(rendered.type, "p"); assert.equal(rendered.props.children, expected);
+      if (mode === "connect-online") assert.doesNotMatch(rendered.props.children, /LOCAL|DESCARTÁVEIS|SEM PUBLICAÇÃO/);
+      assert.equal(f.calls.length, 0, "rendering the notice initializes no Firebase client");
+    } finally { f.close(); }
+  });
+}
 
 test("native social lab permits catalog artwork without permitting remote social data endpoints", async () => {
   const config = JSON.parse(await readFile(new URL("../../src-tauri/tauri.social-lab.conf.json", import.meta.url), "utf8"));

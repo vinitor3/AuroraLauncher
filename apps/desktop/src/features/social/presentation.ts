@@ -19,5 +19,6 @@ export function socialError(error: unknown): string {
   if (code === "invalid_nickname") return "Use o nick completo do Aurora: de 3 a 16 letras, números ou _.";
   if (code === "join_unavailable") return "A entrada automática ainda não está habilitada nesta versão.";
   if (code === "social_uncertain") return "A resposta demorou. A alteração pode ter sido aplicada; atualize a lista antes de repetir.";
+  if (code === "social_clock_unavailable") return "Não foi possível conferir o horário do serviço. Atualize a lista para tentar novamente; o relógio do computador não foi alterado.";
   return "Não foi possível concluir. Confira sua conexão e atualize a lista antes de tentar novamente.";
 }

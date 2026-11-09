@@ -62,6 +62,26 @@ test("voice review requires the matching Fabric profile and a complete closed di
   ]) assert.throws(() => types.readyGameSnapshotFrom({ ...state, review: changed }));
 });
 
+test("voice review accepts exact legacy Forge and Fabric files for the bound runtime", () => {
+  const forge = reviewed({ ...previous, minecraftVersion: "1.12.2", loader: "forge", loaderVersion: "14.23.5.2860", javaMajor: 8 });
+  forge.review.voice = { profile: "simpleVoiceChat", mods: [
+    { relative: "mods/voicechat-forge-1.12.2-2.6.22.jar", bytes: 5_875_010, sha256: "a".repeat(64), action: "install" },
+  ] };
+  assert.deepEqual(types.readyGameSnapshotFrom(forge), forge);
+  assert.throws(() => types.readyGameSnapshotFrom({ ...forge, review: { ...forge.review, voice: {
+    profile: "plasmoVoice", mods: [{ ...forge.review.voice.mods[0], relative: "mods/plasmovoice-forge-1.12.2-2.1.17.jar" }],
+  } } }));
+  const fabric = reviewed({ ...previous, minecraftVersion: "1.16.5", loaderVersion: "0.13.3", javaMajor: 8 });
+  fabric.review.voice = { profile: "plasmoVoice", mods: [
+    { relative: "mods/plasmovoice-fabric-1.16.5-2.1.17.jar", bytes: 12_335_242, sha256: "b".repeat(64), action: "install" },
+    { relative: "mods/fabric-api-0.42.0+1.16.jar", bytes: 1_090_414, sha256: "c".repeat(64), action: "present" },
+  ] };
+  assert.deepEqual(types.readyGameSnapshotFrom(fabric), fabric);
+  assert.throws(() => types.readyGameSnapshotFrom({ ...fabric, review: { ...fabric.review, voice: {
+    ...fabric.review.voice, mods: [{ ...fabric.review.voice.mods[0], bytes: 1 }, fabric.review.voice.mods[1]],
+  } } }));
+});
+
 test("schema3 requires each exact matrix target and keeps older capabilities closed", async () => {
   const matrix = JSON.parse(await readFile(new URL("../../../../../scripts/active-mod-matrix.json", import.meta.url), "utf8"));
   const runtimes = matrix.targets.map(target => ({

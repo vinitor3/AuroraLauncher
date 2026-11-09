@@ -25,9 +25,29 @@ pub(crate) use dedicated_test::{
     start_owned_run_dedicated_test, start_owned_voice_bridge_test, DedicatedTestHooks,
     OwnerTestGate,
 };
+#[cfg(feature = "connect-voice-lab")]
+mod spawn_refusal;
 #[cfg(test)]
 mod tests;
 mod worker;
+#[cfg(feature = "connect-voice-lab")]
+pub(crate) use spawn_refusal::{OwnedStartFailure, SpawnRefusal};
+
+#[cfg(feature = "connect-voice-lab")]
+pub(crate) fn start_owned_voice_bridge_receipted(
+    command: Command,
+    instance_id: &str,
+    attempt: uuid::Uuid,
+    limits: OwnedRunLimits,
+    cancel: CancellationToken,
+    #[cfg(test)] hooks: DedicatedTestHooks,
+) -> Result<OwnedRun, OwnedStartFailure> {
+    #[cfg(test)]
+    let hooks = hooks.0;
+    #[cfg(not(test))]
+    let hooks = Hooks;
+    worker::start_receipted(command, instance_id, attempt, limits, cancel, hooks)
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OwnedRunLimits {
@@ -43,11 +63,18 @@ impl OwnedRunLimits {
     fn valid_voice_bridge(self) -> bool {
         self.valid_with_lifetime(Duration::from_secs(14_400))
     }
+    #[cfg(feature = "connect-voice-lab")]
+    fn valid_native_server(self) -> bool {
+        self.valid_with_caps(Duration::from_secs(14_400), Duration::from_secs(30))
+    }
     fn valid_with_lifetime(self, cap: Duration) -> bool {
+        self.valid_with_caps(cap, Duration::from_secs(5))
+    }
+    fn valid_with_caps(self, cap: Duration, stop_cap: Duration) -> bool {
         !self.lifetime.is_zero()
             && self.lifetime <= cap
             && !self.stop_grace.is_zero()
-            && self.stop_grace <= Duration::from_secs(5)
+            && self.stop_grace <= stop_cap
             && self.stop_grace <= self.lifetime
             && (1..=16 * 1024 * 1024).contains(&self.output_bytes)
     }

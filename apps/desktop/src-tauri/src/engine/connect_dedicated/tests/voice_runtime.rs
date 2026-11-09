@@ -112,11 +112,16 @@ impl Running {
     pub(super) fn drop_control(&mut self) {
         drop(self.run.take());
     }
-    pub(super) async fn finish(mut self) -> DedicatedReport {
+    pub(super) async fn finish(self) -> DedicatedReport {
+        self.finish_with_timeout(WAIT).await
+    }
+    pub(super) async fn finish_with_timeout(mut self, timeout: Duration) -> DedicatedReport {
         if let Some(run) = &self.run {
             run.request_stop();
         }
-        let report = completed(&self.completion).await;
+        let report = tokio::time::timeout(timeout, self.completion.wait())
+            .await
+            .expect("voice_runtime_original_completion_deadline");
         self.collected = true;
         drop(self.run.take());
         report

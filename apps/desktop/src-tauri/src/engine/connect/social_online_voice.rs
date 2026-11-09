@@ -268,21 +268,10 @@ pub(in crate::engine::connect::live::social) async fn probe(
     }
 }
 
-/// Exact service grant shared by the policy2 SVC and Plasmo profiles. Payloads
-/// remain opaque; the application's complete datagram is capped at 4096 bytes.
+/// The explicitly reviewed NativeVoice8 grant remains separate from the older
+/// fragmented laboratory profile. Complete application datagrams stay opaque.
 pub(super) fn service(binding: &NativeVoiceHostBinding) -> lab::Service {
-    lab::Service {
-        service_id: "aux".into(),
-        protocol: lab::Protocol::Udp,
-        endpoint: binding.targets().1,
-        revision: 1,
-        max_datagram_bytes: 4096,
-        required_capability: lab::Capability::FragmentedDatagram,
-        udp_return_policy: lab::UdpReturnPolicy::AuthorizedDownstream {
-            bytes_per_second: 16384,
-            datagrams_per_second: 20,
-        },
-    }
+    lab::NativeVoiceBudget::service(binding.targets().1)
 }
 
 #[derive(Default)]
@@ -316,6 +305,12 @@ async fn initialize<T>(
     (Some(error), future.await)
 }
 impl LocalPlayer {
+    pub(super) fn transport_connected(&self) -> bool {
+        self.guest
+            .as_ref()
+            .is_some_and(|guest| guest.path_observation().state != lab::PathState::Closed)
+            && self.tcp.as_ref().is_some_and(|bridge| !bridge.is_closed())
+    }
     #[allow(clippy::too_many_arguments)] // Original policy, source and ticket remain distinct authorities.
     pub(super) async fn start(
         &mut self,
@@ -334,7 +329,12 @@ impl LocalPlayer {
             run,
             host,
             monitor,
-            lab::Guest::connect_local_authorized(key.clone(), invitation, limits(), &ticket),
+            lab::Guest::connect_local_authorized(
+                key.clone(),
+                invitation,
+                native_voice_limits(),
+                &ticket,
+            ),
         )
         .await;
         self.guest = Some(Arc::new(result.map_err(|_| ConnectError::TransportFailed)?));
@@ -404,7 +404,8 @@ impl LocalPlayer {
         update(&run.state, &run.id, |a| {
             a.guest_source = Some(source);
             a.session_deadline = Some(run.deadline);
-            a.snapshot.expires_at_ms = Some(policy.body().expires_at_unix_ms().min(run.expiry));
+            a.snapshot.expires_at_ms =
+                Some(run.display_expiry(policy.body().expires_at_unix_ms().min(run.expiry)));
             a.snapshot.tcp_address = self.tcp_address.map(|address| address.to_string());
             a.snapshot.transport_state = "authenticated";
             if let Some(social) = &mut a.snapshot.social {

@@ -4,13 +4,16 @@ import { validateSocialSession } from "../../shared/social";
 import { socialArtwork, socialError, socialInitials } from "./presentation";
 import { SocialConnectionPanel, type SocialConnectionControls } from "./SocialConnectionPanel";
 import { SocialOrganizationPanel } from "./SocialOrganizationPanel";
+import { SocialAvailabilityBadge, useSocialAvailability } from "./SocialAvailability";
 import "./social.css";
 
 type FriendTab = "friends" | "incoming" | "outgoing" | "blocked";
-type Props = { service: SocialService | null; accountId: string; nickname: string; currentModpack?: string; connection?: SocialConnectionControls; onOpenConnectedGame?: () => void };
+type Props = { service: SocialService | null; accountId: string; nickname: string; currentModpack?: string; connection?: SocialConnectionControls; onOpenConnectedGame?: () => void; onPrepareDedicatedServer?: () => void };
 const friendTabs: [FriendTab, string][] = [["friends", "Amigos"], ["incoming", "Recebidos"], ["outgoing", "Enviados"], ["blocked", "Bloqueados"]];
 const MAX_VISIBLE_SESSIONS = 100;
 const emptyDraft = (): SocialSessionDraft => ({ title: "", modpackName: "", minecraftVersion: "", loader: "Vanilla", imageUrl: null, players: 0, maxPlayers: 8, visibility: "private", joinPolicy: "open" });
+const sessionDraft = ({ title, modpackName, minecraftVersion, loader, imageUrl, players, maxPlayers, visibility, joinPolicy }: SocialSession): SocialSessionDraft =>
+  ({ title, modpackName, minecraftVersion, loader, imageUrl, players, maxPlayers, visibility, joinPolicy });
 const clientKeys = new WeakMap<SocialService, number>();
 let nextClientKey = 0;
 
@@ -22,13 +25,13 @@ function Empty({ title, children }: { title: string; children: ReactNode }) {
   return <div className="social-empty"><span className="social-empty-mark" aria-hidden="true">◇</span><strong>{title}</strong><p>{children}</p></div>;
 }
 
-function SessionCard({ session, now, joinEnabled, pending, onJoin }: {
+function SessionCard({ session, now, joinEnabled, pending, onJoin, availability }: {
   session: SocialSession; now: number; joinEnabled: boolean; pending: boolean; onJoin: (id: string) => void;
+  availability: ReturnType<typeof useSocialAvailability>;
 }) {
   const image = socialArtwork(session.imageUrl);
   const [failedImage, setFailedImage] = useState<string>();
   const expired = session.expiresAtMs <= now;
-  const full = session.players >= session.maxPlayers;
   return <article className="social-session" aria-label={session.title}>
     <div className="social-session-art">{image && failedImage !== image
       ? <img src={image} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailedImage(image)} />
@@ -36,11 +39,12 @@ function SessionCard({ session, now, joinEnabled, pending, onJoin }: {
     <div className="social-session-body">
       <div className="social-session-title"><h3>{session.title}</h3><p>{session.modpackName || "Minecraft"}</p></div>
       <div className="social-session-meta"><span>{session.minecraftVersion}</span><span>{session.loader || "Vanilla"}</span>
-        <span className="social-population" title="Quantidade declarada pelo anfitrião">{session.players} / {session.maxPlayers}</span></div>
-      <small>{expired ? "Anúncio expirado" : full ? "Lotação declarada" : session.visibility === "friends" ? "Para amigos" : "Sessão da comunidade"}</small>
+        <span className="social-population" title="Limite declarado; o transporte aplica sua capacidade própria">Limite do anúncio: {session.maxPlayers}</span></div>
+      <SocialAvailabilityBadge sessionId={session.id} value={availability.values.get(session.id)} observe={availability.observe} />
+      <small>{expired ? "Anúncio expirado" : session.visibility === "friends" ? "Para amigos" : "Sessão da comunidade"}</small>
     </div>
-    <div className="social-session-footer"><small>{!joinEnabled ? "Entrada automática em implementação" : session.joinPolicy === "approval" ? "O anfitrião aprova a entrada" : "Ingresso aberto"}</small>
-      <button disabled={!joinEnabled || pending || expired || full} onClick={() => onJoin(session.id)}>{session.joinPolicy === "approval" ? "Pedir para entrar" : "Entrar"}</button></div>
+    <div className="social-session-footer"><small>{!joinEnabled ? "Entrada indisponível" : session.joinPolicy === "approval" ? "O anfitrião aprova a entrada" : "Ingresso aberto"}</small>
+      <button disabled={!joinEnabled || pending || expired} onClick={() => onJoin(session.id)}>{session.joinPolicy === "approval" ? "Pedir para entrar" : "Entrar"}</button></div>
   </article>;
 }
 
@@ -51,7 +55,7 @@ export function SocialView(props: Props) {
   return <SocialAccountView key={`${props.accountId}:${props.service ? clientKeys.get(props.service) : "none"}`} {...props} />;
 }
 
-function SocialAccountView({ service, accountId, nickname, currentModpack, connection, onOpenConnectedGame }: Props) {
+function SocialAccountView({ service, accountId, nickname, currentModpack, connection, onOpenConnectedGame, onPrepareDedicatedServer }: Props) {
   const [snapshot, setSnapshot] = useState<SocialSnapshot>();
   const [sessions, setSessions] = useState<SocialSession[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -67,11 +71,15 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
   const [layout, setLayout] = useState<"grid" | "list">("grid");
   const [filter, setFilter] = useState("");
   const [draft, setDraft] = useState<SocialSessionDraft>(emptyDraft);
+  const draftSession = useRef<string | null | undefined>(undefined);
+  const draftEdited = useRef(false);
   const [publicationConsent, setPublicationConsent] = useState(false);
-  const [now, setNow] = useState(Date.now);
+  const readNow = () => service?.now ? service.now() : Date.now();
+  const [now, setNow] = useState(readNow);
   const epoch = useRef(0);
   const busy = useRef(false);
   const active = useRef(false);
+  const availability = useSocialAvailability(connection?.controller, connection?.state.available === true && connection.state.maxSessionSeconds === 14400);
   const available = !!service?.capabilities.friends;
   const observedModpack = currentModpack?.trim().slice(0, 64) || null;
   const current = (generation: number) => active.current && epoch.current === generation;
@@ -80,18 +88,32 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
     if (!service) return;
     const [next, page] = await Promise.all([service.snapshot(), service.capabilities.catalog ? service.listPublicSessions() : Promise.resolve({ items: [], nextCursor: null })]);
     if (!current(generation)) return;
-    setSnapshot(next); setSessions(page.items.slice(0, MAX_VISIBLE_SESSIONS)); setNextCursor(page.items.length >= MAX_VISIBLE_SESSIONS ? null : page.nextCursor);
+    const sessionId = next.ownSession?.id ?? null;
+    if (!draftEdited.current || draftSession.current !== sessionId) {
+      setDraft(next.ownSession ? sessionDraft(next.ownSession) : emptyDraft());
+      draftEdited.current = false;
+      setPublicationConsent(false);
+    }
+    draftSession.current = sessionId;
+    setNow(readNow()); setSnapshot(next); setSessions(page.items.slice(0, MAX_VISIBLE_SESSIONS)); setNextCursor(page.items.length >= MAX_VISIBLE_SESSIONS ? null : page.nextCursor);
+  }
+
+  function editDraft(change: Partial<SocialSessionDraft>) {
+    if (hostPublicationLocked) return;
+    draftEdited.current = true;
+    setDraft(previous => ({ ...previous, ...change }));
   }
 
   useEffect(() => {
     active.current = true; const generation = ++epoch.current; busy.current = false;
     setSnapshot(undefined); setSessions([]); setNextCursor(null); setPending(false); setLoading(available);
     setError(""); setMessage(""); setQuery(""); setSearched(false); setResult(null); setFilter("");
+    draftSession.current = undefined; draftEdited.current = false;
     setDraft(emptyDraft()); setPublicationConsent(false); setFriendTab("friends"); setScope("public");
     if (available) void readAll(generation).catch((reason: unknown) => {
       if (current(generation)) setError(socialError(reason));
     }).finally(() => { if (current(generation)) setLoading(false); });
-    const observeClock = () => setNow(Date.now());
+    const observeClock = () => setNow(readNow());
     const timer = window.setInterval(observeClock, 1000);
     window.addEventListener("focus", observeClock); document.addEventListener("visibilitychange", observeClock);
     return () => { active.current = false; ++epoch.current; window.clearInterval(timer); window.removeEventListener("focus", observeClock); document.removeEventListener("visibilitychange", observeClock); };
@@ -114,7 +136,7 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
   }
 
   async function enterSession(session: SocialSession) {
-    if (!service?.capabilities.join || session.expiresAtMs <= Date.now()) return;
+    if (!service?.capabilities.join || !(session.expiresAtMs > readNow())) return;
     if (session.joinPolicy === "approval") {
       if (!service.organization) throw new Error("Os pedidos de entrada não estão disponíveis neste serviço.");
       const status = await service.organization.joinRequestStatus(session.id);
@@ -141,7 +163,8 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
   function actOn(person: SocialPerson, action: "accept" | "decline" | "cancel" | "remove" | "block" | "unblock" | "request") {
     if (!service) return;
     const request = action === "accept" ? snapshot?.incoming.find(item => item.uid === person.uid) : undefined;
-    if (action === "accept" && (!request || !Number.isFinite(request.expiresAtMs) || request.expiresAtMs <= Date.now())) { setError("Este pedido expirou. Você pode recusá-lo para removê-lo da lista."); return; }
+    if (action === "accept" && !Number.isFinite(readNow())) { setError(socialError({ code: "social_clock_unavailable" })); return; }
+    if (action === "accept" && (!request || !Number.isFinite(request.expiresAtMs) || request.expiresAtMs <= readNow())) { setError("Este pedido expirou. Você pode recusá-lo para removê-lo da lista."); return; }
     const work = {
       accept: () => service.respondFriend(person.uid, "accept"), decline: () => service.respondFriend(person.uid, "decline"),
       cancel: () => service.cancelRequest(person.uid), remove: () => service.removeFriend(person.uid),
@@ -176,6 +199,11 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
   const connectSnapshot = connection?.state.snapshot;
   const connectionBusy = !!connection?.state.pending || !!connectSnapshot?.operationId
     && !(["closed", "failed"].includes(connectSnapshot.phase) && connectSnapshot.cleanupState === "complete");
+  const hostPublicationLocked = !!snapshot?.ownSession && !!connectSnapshot?.operationId
+    && connectSnapshot.role === "host" && connectSnapshot.social?.role === "host"
+    && connectSnapshot.social.sessionId === snapshot.ownSession.id
+    && !(["closed", "failed"].includes(connectSnapshot.phase) && connectSnapshot.cleanupState === "complete");
+  const publicationDisabled = disabled || hostPublicationLocked;
   const visibleSessions = (scope === "public" ? sessions : (snapshot?.friends.flatMap(friend => friend.session ? [friend.session] : []) ?? []))
     .filter(session => session.expiresAtMs > now && `${session.title} ${session.modpackName} ${session.minecraftVersion}`.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase()));
   const friends = snapshot?.[friendTab] ?? [];
@@ -187,7 +215,9 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
     {!available ? <div className="social-notice" data-kind="warning"><strong>O serviço social ainda não está habilitado.</strong><p>Amigos, busca e comunidade dependem da configuração autorizada do serviço. Nenhuma solicitação foi enviada.</p></div> : <>
       {error && <div className="social-notice" data-kind="error" role="alert">{error}</div>}
       {message && <div className="social-notice" role="status">{message}</div>}
-      <div className="social-actions"><button className="secondary" disabled={disabled} onClick={() => void run(async () => undefined, "Lista atualizada.")}>{loading ? "Carregando…" : pending ? "Aguarde…" : "Atualizar"}</button><small>Atividade e população são informadas pelo anfitrião; não comprovam entrada no mundo.</small></div>
+      {!loading && !Number.isFinite(now) && <p className="social-notice" role="status">O horário do serviço está indisponível. Atualize a lista para conferir anúncios e pedidos.</p>}
+      <div className="social-actions"><button className="secondary" disabled={disabled} onClick={() => void run(async () => undefined, "Lista atualizada.")}>{loading ? "Carregando…" : pending ? "Aguarde…" : "Atualizar"}</button><small>Conexões Aurora e admissões não indicam jogadores dentro do mundo. A entrada sempre verifica a autorização atual.</small></div>
+      {availability.error && <div className="social-notice" role="status">Disponibilidade não verificada. {availability.error}</div>}
     </>}
     <div className="social-layout">
       <aside className="social-friends" aria-label="Amigos do Aurora">
@@ -203,10 +233,10 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
           const expiredRequest = !!request && (!Number.isFinite(request.expiresAtMs) || request.expiresAtMs <= now);
           return <li key={person.uid} className="social-friend-row"><div className="social-person"><Avatar name={person.nickname} /><div><strong>{person.nickname}</strong><small>{friend ? activity || "Atividade não compartilhada" : expiredRequest ? "Pedido expirado" : friendTab === "incoming" ? "Quer ser seu amigo" : friendTab === "outgoing" ? "Aguardando resposta" : "Bloqueado"}</small></div></div>
             <div className="social-person-actions">
-              {friendTab === "incoming" && <><button disabled={disabled || expiredRequest} onClick={() => actOn(person, "accept")}>Aceitar</button><button className="secondary" disabled={disabled} onClick={() => actOn(person, "decline")}>Recusar</button></>}
+              {friendTab === "incoming" && <><button disabled={disabled || expiredRequest || !Number.isFinite(now)} onClick={() => actOn(person, "accept")}>Aceitar</button><button className="secondary" disabled={disabled} onClick={() => actOn(person, "decline")}>Recusar</button></>}
               {friendTab === "outgoing" && <button className="secondary" disabled={disabled} onClick={() => actOn(person, "cancel")}>Cancelar pedido</button>}
               {friendTab === "blocked" && <button className="secondary" disabled={disabled} onClick={() => actOn(person, "unblock")}>Desbloquear</button>}
-              {friendTab === "friends" && friend?.session && <button disabled={disabled || connectionBusy || !service?.capabilities.join || (friend.session.joinPolicy === "approval" && !service.organization) || friend.session.expiresAtMs <= now || friend.session.players >= friend.session.maxPlayers} onClick={() => { if (!connectionBusy && friend.session && friend.session.expiresAtMs > Date.now() && service?.capabilities.join) void run(() => enterSession(friend.session!), "", false); }}>{friend.session.joinPolicy === "approval" ? "Pedir para entrar" : "Entrar"}</button>}
+              {friendTab === "friends" && friend?.session && <><SocialAvailabilityBadge sessionId={friend.session.id} value={availability.values.get(friend.session.id)} observe={availability.observe} /><button disabled={disabled || connectionBusy || !service?.capabilities.join || (friend.session.joinPolicy === "approval" && !service.organization) || !(friend.session.expiresAtMs > now)} onClick={() => { if (!connectionBusy && friend.session && friend.session.expiresAtMs > readNow() && service?.capabilities.join) void run(() => enterSession(friend.session!), "", false); }}>{friend.session.joinPolicy === "approval" ? "Pedir para entrar" : "Entrar"}</button></>}
               {friendTab !== "blocked" && <details className="social-person-menu"><summary>Opções</summary><div>{friendTab === "friends" && <button className="secondary" disabled={disabled} onClick={() => actOn(person, "remove")}>Remover amigo</button>}<button className="danger" disabled={disabled} onClick={() => actOn(person, "block")}>Bloquear</button></div></details>}
             </div></li>;
         })}</ul>}
@@ -217,32 +247,32 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
       </aside>
       <div className="social-community">
         {service?.organization && <SocialOrganizationPanel service={service.organization} accountId={accountId} friends={snapshot?.friends ?? []} />}
-        {connection && <SocialConnectionPanel connection={connection} ownSession={snapshot?.ownSession} now={now} onOpenConnectedGame={onOpenConnectedGame} service={service} />}
+        {connection && <SocialConnectionPanel connection={connection} ownSession={snapshot?.ownSession} now={Date.now()} catalogNow={now} onOpenConnectedGame={onOpenConnectedGame} onPrepareDedicatedServer={onPrepareDedicatedServer} service={service} />}
         <header className="social-community-heading"><div><h3>Mundos da comunidade</h3><p>Encontre uma sessão para a sua próxima aventura.</p></div><div className="social-layout-switch" aria-label="Visualização das sessões"><button aria-pressed={layout === "grid"} onClick={() => setLayout("grid")}>Grade</button><button aria-pressed={layout === "list"} onClick={() => setLayout("list")}>Lista</button></div></header>
         <div className="social-filters"><div className="social-tabs" aria-label="Origem das sessões"><button aria-pressed={scope === "public"} onClick={() => setScope("public")}>Comunidade</button><button aria-pressed={scope === "friends"} onClick={() => setScope("friends")}>Dos amigos</button></div><input aria-label="Filtrar sessões carregadas" placeholder="Filtrar modpack ou versão" value={filter} onChange={event => setFilter(event.target.value)} /></div>
         {available && !service?.capabilities.join && <p className="social-notice">O serviço online não está ativado neste executável. Você pode organizar amizades e descobrir anúncios.</p>}
-        {!visibleSessions.length ? <Empty title={loading ? "Procurando sessões…" : "Nenhuma sessão disponível"}>{filter ? "Nenhum anúncio carregado corresponde ao filtro." : scope === "friends" ? "As sessões compartilhadas pelos seus amigos aparecerão aqui." : "Os mundos publicados voluntariamente pelos anfitriões aparecerão aqui."}</Empty> : <div className="social-catalog" data-layout={layout}>{visibleSessions.map(session => <SessionCard key={session.id} session={session} now={now} pending={disabled || connectionBusy || session.hostUid === accountId} joinEnabled={service?.capabilities.join === true && (session.joinPolicy === "open" || !!service.organization)} onJoin={() => { if (!connectionBusy && session.hostUid !== accountId && session.expiresAtMs > Date.now() && service?.capabilities.join) void run(() => enterSession(session), "", false); }} />)}</div>}
+        {!visibleSessions.length ? <Empty title={loading ? "Procurando sessões…" : "Nenhuma sessão disponível"}>{filter ? "Nenhum anúncio carregado corresponde ao filtro." : scope === "friends" ? "As sessões compartilhadas pelos seus amigos aparecerão aqui." : "Os mundos publicados voluntariamente pelos anfitriões aparecerão aqui."}</Empty> : <div className="social-catalog" data-layout={layout}>{visibleSessions.map(session => <SessionCard key={session.id} session={session} now={now} availability={availability} pending={disabled || connectionBusy || session.hostUid === accountId} joinEnabled={service?.capabilities.join === true && (session.joinPolicy === "open" || !!service.organization)} onJoin={() => { if (!connectionBusy && session.hostUid !== accountId && session.expiresAtMs > readNow() && service?.capabilities.join) void run(() => enterSession(session), "", false); }} />)}</div>}
         {scope === "public" && nextCursor && <div className="social-pagination"><button className="secondary" disabled={disabled} onClick={() => void more()}>Carregar mais</button></div>}
         {sessions.length >= MAX_VISIBLE_SESSIONS && <small>Exibindo até 100 anúncios. Atualize para consultar a lista novamente.</small>}
         {available && service?.capabilities.publication && snapshot && <details className="social-publish"><summary>{snapshot.ownSession ? "Meu anúncio de sessão" : "Compartilhar uma sessão"}</summary>
-          <form onSubmit={event => { event.preventDefault(); if (draft.visibility !== "private" && !publicationConsent) return; void run(() => service.publishSession(validateSocialSession(draft)), connection?.state.available
+          <form onSubmit={event => { event.preventDefault(); if (publicationDisabled || (draft.visibility !== "private" && !publicationConsent)) return; void run(() => service.publishSession(validateSocialSession(draft)), connection?.state.available
             ? "Anúncio atualizado. Use Preparar meu servidor para ativar o compartilhamento."
             : "Anúncio atualizado. O compartilhamento do servidor ainda não foi ativado."); }}>
             <p>O anúncio não abre portas, inicia o jogo ou comprova que o servidor está acessível.</p>
-            {snapshot.ownSession && <div className="social-notice"><strong>{snapshot.ownSession.title}</strong><small>{snapshot.ownSession.expiresAtMs <= now ? "Anúncio expirado" : "Anúncio registrado"}</small><div className="social-actions"><button type="button" className="secondary" disabled={disabled} onClick={() => void run(() => service.closeSession(), "Anúncio encerrado.")}>Encerrar anúncio</button></div></div>}
+            {hostPublicationLocked && <p className="social-notice" role="status">Este anúncio está vinculado à hospedagem em andamento. Use Desconectar e aguarde a liberação dos recursos antes de editar ou salvar.</p>}
+            {snapshot.ownSession && <div className="social-notice"><strong>{snapshot.ownSession.title}</strong><small>{snapshot.ownSession.expiresAtMs <= now ? "Anúncio expirado" : "Anúncio registrado"}</small><p>Encerrar o anúncio revoga a autorização desta sessão e encerra a entrada e as conexões dos participantes.</p><div className="social-actions"><button type="button" className="secondary" disabled={disabled} onClick={() => void run(() => service.closeSession(), "Anúncio encerrado.")}>Encerrar anúncio</button></div></div>}
             <div className="social-fields">
-              <label>Título<input required maxLength={64} value={draft.title} disabled={disabled} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
-              <label>Modpack<input required maxLength={64} value={draft.modpackName} disabled={disabled} onChange={event => setDraft({ ...draft, modpackName: event.target.value })} /></label>
-              <label>Versão do Minecraft<input required maxLength={24} value={draft.minecraftVersion} disabled={disabled} onChange={event => setDraft({ ...draft, minecraftVersion: event.target.value })} placeholder="Ex.: 1.21.1" /></label>
-              <label>Loader<input required maxLength={24} value={draft.loader} disabled={disabled} onChange={event => setDraft({ ...draft, loader: event.target.value })} placeholder="Ex.: Fabric" /></label>
-              <label className="social-field-wide">Imagem do modpack<input type="url" maxLength={512} value={draft.imageUrl ?? ""} disabled={disabled} onChange={event => setDraft({ ...draft, imageUrl: event.target.value || null })} placeholder="Imagem do catálogo Modrinth ou CurseForge (opcional)" /></label>
-              <label>Quem pode descobrir<select value={draft.visibility} disabled={disabled} onChange={event => { setDraft({ ...draft, visibility: event.target.value as SocialSessionDraft["visibility"] }); setPublicationConsent(false); }}><option value="private">Privada</option><option value="friends">Meus amigos</option><option value="public">Toda a comunidade</option></select></label>
-              <label>Política de ingresso<select value={draft.joinPolicy} disabled={disabled} onChange={event => setDraft({ ...draft, joinPolicy: event.target.value as SocialSessionDraft["joinPolicy"] })}><option value="open">Entrada aberta</option><option value="approval">Aprovar cada pedido</option></select></label>
-              <label>Pessoas na sessão<input type="number" min={0} max={draft.maxPlayers} value={draft.players} disabled={disabled} onChange={event => setDraft({ ...draft, players: Number(event.target.value) })} /></label>
-              <label>Limite de pessoas<input type="number" min={1} max={100} value={draft.maxPlayers} disabled={disabled} onChange={event => setDraft({ ...draft, maxPlayers: Number(event.target.value) })} /></label>
+              <label>Título<input required maxLength={64} value={draft.title} disabled={publicationDisabled} onChange={event => editDraft({ title: event.target.value })} /></label>
+              <label>Modpack<input required maxLength={64} value={draft.modpackName} disabled={publicationDisabled} onChange={event => editDraft({ modpackName: event.target.value })} /></label>
+              <label>Versão do Minecraft<input required maxLength={24} value={draft.minecraftVersion} disabled={publicationDisabled} onChange={event => editDraft({ minecraftVersion: event.target.value })} placeholder="Ex.: 1.21.1" /></label>
+              <label>Loader<input required maxLength={24} value={draft.loader} disabled={publicationDisabled} onChange={event => editDraft({ loader: event.target.value })} placeholder="Ex.: Fabric" /></label>
+              <label className="social-field-wide">Imagem do modpack<input type="url" maxLength={512} value={draft.imageUrl ?? ""} disabled={publicationDisabled} onChange={event => editDraft({ imageUrl: event.target.value || null })} placeholder="Imagem do catálogo Modrinth ou CurseForge (opcional)" /></label>
+              <label>Quem pode descobrir<select value={draft.visibility} disabled={publicationDisabled} onChange={event => { editDraft({ visibility: event.target.value as SocialSessionDraft["visibility"] }); setPublicationConsent(false); }}><option value="private">Privada</option><option value="friends">Meus amigos</option><option value="public">Toda a comunidade</option></select></label>
+              <label>Política de ingresso<select value={draft.joinPolicy} disabled={publicationDisabled} onChange={event => editDraft({ joinPolicy: event.target.value as SocialSessionDraft["joinPolicy"] })}><option value="open">Entrada aberta</option><option value="approval">Aprovar cada pedido</option></select></label>
+              <label>Limite total do anúncio<input type="number" min={1} max={100} value={draft.maxPlayers} disabled={publicationDisabled} onChange={event => editDraft({ maxPlayers: Number(event.target.value) })} /></label>
             </div>
-            {draft.visibility !== "private" && <label className="social-consent"><input type="checkbox" checked={publicationConsent} disabled={disabled} onChange={event => setPublicationConsent(event.target.checked)} />Quero publicar estes dados {draft.visibility === "friends" ? "para meus amigos" : "para a comunidade do Aurora"}. Posso encerrar o anúncio.</label>}
-            <div className="social-actions"><button disabled={disabled || (draft.visibility !== "private" && !publicationConsent)}>Salvar anúncio</button></div>
+            {draft.visibility !== "private" && <label className="social-consent"><input type="checkbox" checked={publicationConsent} disabled={publicationDisabled} onChange={event => setPublicationConsent(event.target.checked)} />Quero publicar estes dados {draft.visibility === "friends" ? "para meus amigos" : "para a comunidade do Aurora"}. Posso encerrar o anúncio.</label>}
+            <div className="social-actions"><button disabled={publicationDisabled || (draft.visibility !== "private" && !publicationConsent)}>Salvar anúncio</button></div>
           </form>
         </details>}
       </div>

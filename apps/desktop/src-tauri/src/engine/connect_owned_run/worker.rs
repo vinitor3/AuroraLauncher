@@ -20,7 +20,7 @@ pub(super) fn start(
     if !limits.valid() {
         return Err(OwnedRunError::InvalidRequest);
     }
-    start_validated(command, instance_id, limits, cancel, hooks)
+    start_validated(command, instance_id, limits, cancel, hooks, None)
 }
 #[cfg(feature = "connect-voice-lab")]
 pub(super) fn start_voice_bridge(
@@ -33,14 +33,49 @@ pub(super) fn start_voice_bridge(
     if !limits.valid_voice_bridge() {
         return Err(OwnedRunError::InvalidRequest);
     }
-    start_validated(command, instance_id, limits, cancel, hooks)
+    start_validated(command, instance_id, limits, cancel, hooks, None)
 }
+#[cfg(feature = "connect-voice-lab")]
+pub(super) fn start_receipted(
+    command: Command,
+    instance_id: &str,
+    attempt: uuid::Uuid,
+    limits: OwnedRunLimits,
+    cancel: CancellationToken,
+    hooks: Hooks,
+) -> Result<OwnedRun, OwnedStartFailure> {
+    // This receipted entry point is used only by the separately reviewed V3
+    // server recipe. Legacy83 and V2 keep their five-second stop cap above.
+    if !limits.valid_native_server() || attempt.is_nil() {
+        return Err(OwnedStartFailure {
+            error: OwnedRunError::InvalidRequest,
+            refusal: None,
+        });
+    }
+    let mut refusal = None;
+    start_validated(
+        command,
+        instance_id,
+        limits,
+        cancel,
+        hooks,
+        Some((attempt, &mut refusal)),
+    )
+    .map_err(|error| OwnedStartFailure { error, refusal })
+}
+
+// The optional sink remains absent for every legacy83 invocation.
+#[cfg(feature = "connect-voice-lab")]
+type RefusalSink<'a> = Option<(uuid::Uuid, &'a mut Option<SpawnRefusal>)>;
+#[cfg(not(feature = "connect-voice-lab"))]
+type RefusalSink<'a> = Option<&'a ()>;
 fn start_validated(
     mut command: Command,
     instance_id: &str,
     limits: OwnedRunLimits,
     cancel: CancellationToken,
     hooks: Hooks,
+    refusal: RefusalSink<'_>,
 ) -> Result<OwnedRun, OwnedRunError> {
     if instance_id.is_empty() || instance_id.len() > 128 {
         return Err(OwnedRunError::InvalidRequest);
@@ -85,7 +120,29 @@ fn start_validated(
     let _ = hooks;
     // The RAII owner is installed immediately: no fallible work or pipe
     // extraction may be inserted between spawn and this struct construction.
-    let child = command.spawn().map_err(|_| OwnedRunError::Spawn)?;
+    let child = command.spawn().map_err(|error| {
+        #[cfg(feature = "connect-voice-lab")]
+        if let Some((attempt, sink)) = refusal {
+            *sink = Some(SpawnRefusal::original(instance_id, attempt));
+        }
+        #[cfg(not(feature = "connect-voice-lab"))]
+        let _ = refusal;
+        #[cfg(test)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            let cwd_units = command
+                .get_current_dir()
+                .map(|path| path.as_os_str().encode_wide().count());
+            eprintln!(
+                "owned_run_spawn_failed kind={:?} os_code={:?} cwd_utf16_units={cwd_units:?}",
+                error.kind(),
+                error.raw_os_error()
+            );
+        }
+        #[cfg(not(test))]
+        let _ = error;
+        OwnedRunError::Spawn
+    })?;
     let mut owner = Worker {
         child: Some(child),
         stdin: None,
@@ -216,6 +273,10 @@ fn spawn_reader(
                     match pipe.read(&mut buffer) {
                         Ok(0) => break,
                         Ok(count) => {
+                            #[cfg(test)]
+                            if !stdout {
+                                shared.hooks.observe_launcher_stderr(&buffer[..count]);
+                            }
                             let mut state = shared.lock();
                             let counter = if stdout {
                                 &mut state.stdout_bytes

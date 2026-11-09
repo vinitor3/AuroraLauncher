@@ -16,6 +16,10 @@ use crate::engine::{
 mod voice_context;
 pub(super) use voice_context::ImmutableVoiceContext;
 
+#[path = "factory_v3.rs"]
+mod v3;
+pub(super) use v3::plan_voice_server_factory_at;
+
 fn lock(instance: &Instance) -> Result<InstanceMutationGuard> {
     acquire_instance_mutation_lock(instance).map_err(|e| {
         if matches!(e, ContentUpdateError::Busy) {
@@ -62,6 +66,7 @@ pub(crate) struct FactoryPlan {
     hooks: Hooks,
     kind: ManifestKind,
     voice_policy: ObservationPolicyV2,
+    server: Option<super::manifest::ServerRuntimeV3>,
     #[cfg(test)]
     test_expected_pins: Option<Vec<resources::Pin>>,
     _pins: Vec<File>,
@@ -132,6 +137,7 @@ pub(super) fn plan(
         hooks,
         kind: ManifestKind::StatusV1,
         voice_policy: ObservationPolicyV2::LiteralOnlyFirstPersisted,
+        server: None,
         #[cfg(test)]
         test_expected_pins: None,
         _pins: directories,
@@ -349,6 +355,9 @@ fn factory_digest_input(
 }
 #[allow(dead_code)] // Functional consumed-plan API, reserved for the native caller.
 impl FactoryPlan {
+    pub(super) fn approval_deadline(&self) -> Instant {
+        self.deadline
+    }
     #[cfg(test)]
     pub(super) fn v1_digest_input_for_test(&self) -> Result<Vec<u8>> {
         let destination = self.lab.join(format!("native-status-{}", self.id.0));
@@ -365,7 +374,11 @@ impl FactoryPlan {
     }
     pub(crate) fn create(mut self, expected: &str) -> Result<PreparedStatus> {
         approve(&self.review, self.deadline, expected)?;
-        self.resources.recheck()?;
+        if self.voice_policy == ObservationPolicyV2::LiteralLoopback35554Durable {
+            self.resources.recheck_retained()?;
+        } else {
+            self.resources.recheck()?;
+        }
         approve(&self.review, self.deadline, expected)?;
         let bundle_path = self.lab.join(format!("native-status-{}", self.id.0));
         absent(&bundle_path)?;
@@ -377,7 +390,8 @@ impl FactoryPlan {
         let layout = InstanceLayout::new(&native);
         let origin = layout.open(InstanceId::parse("status-origin").map_err(|_| Error::Identity)?);
         origin.ensure_layout().map_err(|_| Error::Io)?;
-        recovery::write_new(&origin.root().join("aurora-instance.json"), RUNTIME)?;
+        let runtime_bytes = v3::runtime_bytes(self.server.as_ref())?;
+        recovery::write_new(&origin.root().join("aurora-instance.json"), &runtime_bytes)?;
         let source_guard = lock(&origin)?;
         let source_observation = recovery::capture_observation(&origin, &source_guard)?;
         let environment = diagnostic_lab::create(&origin, &source_guard, None, |_| {})?;
@@ -437,7 +451,7 @@ impl FactoryPlan {
         let mut announcement_recovery = None;
         let manifest = match self.kind {
             ManifestKind::StatusV1 => Manifest::StatusV1(common),
-            ManifestKind::VoiceV2(profile) => {
+            ManifestKind::VoiceV2(profile) | ManifestKind::VoiceV3(profile) => {
                 // Only fresh factory data is moved here, before any manifest
                 // publication. No opened V1 bundle or Prepared is converted.
                 let mut initial_voice_configuration =
@@ -454,21 +468,25 @@ impl FactoryPlan {
                     } else {
                         prepare_announcement
                     };
-                    let prepared = prepare_announcement(
-                        &copy,
-                        &voice_guard,
-                        super::super::AnnouncementRequest {
-                            voice_mod: match profile {
-                                StoredVoiceProfileV2::Svc => {
-                                    super::super::VoiceMod::SimpleVoiceChat
-                                }
-                                StoredVoiceProfileV2::Plasmo => super::super::VoiceMod::PlasmoVoice,
-                            },
-                            mode: super::super::AnnouncementMode::DedicatedAuroraOnly,
-                            guest_port: 35554,
-                            expected_source_sha256: profile.configuration_sha256().into(),
+                    let request = super::super::AnnouncementRequest {
+                        voice_mod: match profile {
+                            StoredVoiceProfileV2::Svc => super::super::VoiceMod::SimpleVoiceChat,
+                            StoredVoiceProfileV2::Plasmo => super::super::VoiceMod::PlasmoVoice,
                         },
-                    )?;
+                        mode: super::super::AnnouncementMode::DedicatedAuroraOnly,
+                        guest_port: 35554,
+                        expected_source_sha256: profile.configuration_sha256().into(),
+                    };
+                    let prepared = if let Some(server) = &self.server {
+                        super::super::prepare_runtime_durable_announcement(
+                            &copy,
+                            &voice_guard,
+                            request,
+                            server.runtime()?,
+                        )?
+                    } else {
+                        prepare_announcement(&copy, &voice_guard, request)?
+                    };
                     // Factory approval already bound both complete compiled files.
                     // Refuse any adapter output that differs from that approved diff.
                     if prepared.review().replacement_sha256
@@ -488,7 +506,7 @@ impl FactoryPlan {
                     }
                     initial_voice_configuration.observation = observation;
                 }
-                Manifest::VoiceV2(VoiceManifestV2 {
+                let voice = VoiceManifestV2 {
                     schema: 2,
                     profile,
                     id: common.id,
@@ -504,13 +522,30 @@ impl FactoryPlan {
                     resources: common.resources,
                     installed: common.installed,
                     provenance: common.provenance,
-                    runtime: voice_runtime(),
+                    runtime: self
+                        .server
+                        .as_ref()
+                        .map(super::manifest::ServerRuntimeV3::runtime_metadata)
+                        .transpose()?
+                        .unwrap_or_else(voice_runtime),
                     initial_voice_configuration,
                     observation_policy: self.voice_policy,
-                })
+                };
+                if let Some(server) = self.server.take() {
+                    Manifest::VoiceV3(Box::new(super::manifest::VoiceManifestV3 {
+                        schema: 3,
+                        voice,
+                        server,
+                    }))
+                } else {
+                    Manifest::VoiceV2(voice)
+                }
             }
         };
-        publish(&bundle_path.join("bundle.json"), &manifest)?;
+        recovery::write_new(
+            &bundle_path.join("bundle.json"),
+            &manifest.encode_bounded()?,
+        )?;
         let tx = bundle_path.join("eula-transaction");
         fs::create_dir(&tx)?;
         let tx = internal_directory(&tx, &mut pins)?;
@@ -527,10 +562,16 @@ impl FactoryPlan {
             test_expected_pins: self.test_expected_pins,
             _pins: pins,
             _files: Vec::new(),
+            retained_manifest: None,
         };
         let mut bundle = bundle;
-        bundle.validate(&guard)?;
-        bundle.pin_files()?;
+        if bundle.retained_policy() {
+            bundle.pin_files()?;
+            bundle.validate(&guard)?;
+        } else {
+            bundle.validate(&guard)?;
+            bundle.pin_files()?;
+        }
         let (review, approved_files) = eula::execution_review(&bundle, &guard)?;
         Ok(PreparedStatus {
             bundle,
@@ -560,7 +601,7 @@ impl PreparedStatus {
         self.approved_files
             .require_manifest_kind(&self.bundle.manifest)?;
         approve(&self.review, self.deadline, expected)?;
-        self.resources.recheck()?;
+        self.recheck_resources()?;
         self.bundle.validate(&self.guard)?;
         if eula::execution_digest(&self.bundle, self.review.review_id)? != self.review.digest {
             return Err(Error::Changed);
@@ -572,6 +613,13 @@ impl PreparedStatus {
     }
     pub(super) fn confirm_fresh(&self, expected: &str) -> Result<()> {
         approve(&self.review, self.deadline, expected)
+    }
+    pub(super) fn recheck_resources(&self) -> Result<()> {
+        if self.bundle.retained_policy() {
+            self.resources.recheck_retained()
+        } else {
+            self.resources.recheck()
+        }
     }
     pub(super) fn approval_deadline(&self) -> Instant {
         self.deadline
@@ -616,6 +664,9 @@ pub(super) struct Bundle {
     test_expected_pins: Option<Vec<resources::Pin>>,
     _pins: Vec<File>,
     _files: Vec<recovery::SecureFile>,
+    // Set only after all immutable handles are held and a full validation under
+    // those pins succeeds. Never serialized; reopening must establish it again.
+    retained_manifest: Option<Observation>,
 }
 impl Bundle {
     pub fn reopen(lab: &Path, id: BundleId) -> Result<Self> {
@@ -661,7 +712,7 @@ impl Bundle {
         {
             return Err(Error::Identity);
         }
-        if let ManifestKind::VoiceV2(profile) = manifest.kind() {
+        if let ManifestKind::VoiceV2(profile) | ManifestKind::VoiceV3(profile) = manifest.kind() {
             Self::voice_shape(&manifest, profile)?;
         }
         let layout = InstanceLayout::new(&native);
@@ -683,14 +734,35 @@ impl Bundle {
             test_expected_pins,
             _pins: pins,
             _files: Vec::new(),
+            retained_manifest: None,
         };
         result.pin_files()?;
-        if let ManifestKind::VoiceV2(profile) = result.manifest.kind() {
+        if let ManifestKind::VoiceV2(profile) | ManifestKind::VoiceV3(profile) =
+            result.manifest.kind()
+        {
             result.validate_voice_immutable(profile)?;
         }
         Ok(result)
     }
     fn voice_shape(manifest: &Manifest, profile: StoredVoiceProfileV2) -> Result<()> {
+        if let Some(server) = manifest.server_v3() {
+            if server.voice.profile != profile {
+                return Err(Error::Identity);
+            }
+            resources::v3_record_shape(server)?;
+            let expected = provenance_names(manifest.copy_id())?;
+            let actual = manifest
+                .provenance()
+                .iter()
+                .map(|record| record.name.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            if actual.len() != expected.len()
+                || actual != expected.iter().map(String::as_str).collect()
+            {
+                return Err(Error::Identity);
+            }
+            return Ok(());
+        }
         let voice = manifest.voice_v2()?;
         let initial = &voice.initial_voice_configuration;
         if voice.schema != 2
@@ -719,18 +791,30 @@ impl Bundle {
     }
     fn validate_voice_immutable(&self, profile: StoredVoiceProfileV2) -> Result<()> {
         Self::voice_shape(&self.manifest, profile)?;
+        if self.retained_policy() && self.retained_manifest.is_some() {
+            if let Some(server) = self.manifest.server_v3() {
+                resources::v3_inventory(self.copy.root(), server)?;
+            } else {
+                resources::voice_inventory(self.copy.root(), profile)?;
+            }
+            return self.recheck_retained_files();
+        }
         let compiled = resources::compiled_voice_pins(profile);
         #[cfg(test)]
         let expected = self.test_expected_pins.as_deref().unwrap_or(&compiled);
         #[cfg(not(test))]
         let expected = compiled.as_slice();
-        resources::validate_voice_artifacts(
-            self.copy.root(),
-            profile,
-            self.manifest.resources(),
-            self.manifest.installed(),
-            expected,
-        )?;
+        if let Some(server) = self.manifest.server_v3() {
+            resources::validate_v3_artifacts(self.copy.root(), server)?;
+        } else {
+            resources::validate_voice_artifacts(
+                self.copy.root(),
+                profile,
+                self.manifest.resources(),
+                self.manifest.installed(),
+                expected,
+            )?;
+        }
         for record in self.manifest.provenance() {
             if record.observation.bytes > 1024 * 1024
                 || observe_file(&self.native.join(&record.name), 1024 * 1024)?.0
@@ -741,12 +825,49 @@ impl Bundle {
         }
         Ok(())
     }
+    fn retained_policy(&self) -> bool {
+        self.manifest.voice().is_ok_and(|voice| {
+            voice.observation_policy == ObservationPolicyV2::LiteralLoopback35554Durable
+        })
+    }
+    fn recheck_retained_files(&self) -> Result<()> {
+        let manifest = self.retained_manifest.as_ref().ok_or(Error::Identity)?;
+        let expected = std::iter::once((self.path.join("bundle.json"), manifest))
+            .chain(
+                self.manifest
+                    .installed()
+                    .iter()
+                    .map(|record| (self.copy.root().join(&record.name), &record.observation)),
+            )
+            .chain(
+                self.manifest
+                    .provenance()
+                    .iter()
+                    .map(|record| (self.native.join(&record.name), &record.observation)),
+            );
+        if self._files.len()
+            != 1 + self.manifest.installed().len() + self.manifest.provenance().len()
+        {
+            return Err(Error::Identity);
+        }
+        for (file, (path, observation)) in self._files.iter().zip(expected) {
+            resources::recheck_retained_file(file, &path, observation)?;
+        }
+        Ok(())
+    }
     fn pin_files(&mut self) -> Result<()> {
+        if !self._files.is_empty() || self.retained_manifest.is_some() {
+            return Err(Error::Identity);
+        }
         let voice = match self.manifest.kind() {
             ManifestKind::StatusV1 => None,
-            ManifestKind::VoiceV2(profile) => {
+            ManifestKind::VoiceV2(profile) | ManifestKind::VoiceV3(profile) => {
                 Self::voice_shape(&self.manifest, profile)?;
-                resources::voice_inventory(self.copy.root(), profile)?;
+                if let Some(server) = self.manifest.server_v3() {
+                    resources::v3_inventory(self.copy.root(), server)?;
+                } else {
+                    resources::voice_inventory(self.copy.root(), profile)?;
+                }
                 Some(profile)
             }
         };
@@ -768,12 +889,25 @@ impl Bundle {
             self._files
                 .push(recovery::secure_open(&self.native.join(&record.name))?);
         }
+        if self.retained_policy() {
+            let profile = voice.ok_or(Error::Identity)?;
+            // Initial verification happens only after every immutable pin is
+            // acquired. The earlier parsed manifest alone cannot seed a cache.
+            if read_manifest(&self.path.join("bundle.json"))? != self.manifest {
+                return Err(Error::Changed);
+            }
+            self.validate_voice_immutable(profile)?;
+            let observation =
+                observe_file(&self.path.join("bundle.json"), self.manifest.byte_limit())?.0;
+            self.retained_manifest = Some(observation);
+            self.recheck_retained_files()?;
+        }
         Ok(())
     }
     pub fn validate(&self, guard: &InstanceMutationGuard) -> Result<()> {
         let voice = match self.manifest.kind() {
             ManifestKind::StatusV1 => None,
-            ManifestKind::VoiceV2(profile) => {
+            ManifestKind::VoiceV2(profile) | ManifestKind::VoiceV3(profile) => {
                 Self::voice_shape(&self.manifest, profile)?;
                 Some(profile)
             }
@@ -829,8 +963,10 @@ impl Bundle {
             })?;
             Ok(())
         })?;
-        let expected: serde_json::Value =
-            serde_json::from_slice(RUNTIME).map_err(|_| Error::Identity)?;
+        let expected: serde_json::Value = serde_json::from_slice(&v3::runtime_bytes(
+            self.manifest.server_v3().map(|manifest| &manifest.server),
+        )?)
+        .map_err(|_| Error::Identity)?;
         for instance in [&self.origin, &self.copy] {
             let current: serde_json::Value = serde_json::from_slice(&recovery::read_bounded(
                 &instance.root().join("aurora-instance.json"),
@@ -871,8 +1007,9 @@ impl Bundle {
             if !expected.contains(&record.name)
                 || !names.insert(&record.name)
                 || record.observation.bytes > 1024 * 1024
-                || observe_file(&self.native.join(&record.name), 1024 * 1024)?.0
-                    != record.observation
+                || (!(self.retained_policy() && self.retained_manifest.is_some())
+                    && observe_file(&self.native.join(&record.name), 1024 * 1024)?.0
+                        != record.observation)
             {
                 return Err(Error::Changed);
             }

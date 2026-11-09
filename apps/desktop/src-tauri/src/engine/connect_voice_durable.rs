@@ -73,7 +73,7 @@ pub fn prepare_durable_announcement(
 
 /// Only the two compiled synthetic fixture byte strings are accepted here. The
 /// normal adapter never uses this path, including real-artifact tests.
-#[cfg(test)]
+#[cfg(all(test, windows, feature = "connect-lab"))]
 pub(in super::super::super) fn prepare_fixture_durable_announcement(
     instance: &Instance,
     guard: &VoiceMutationGuard,
@@ -106,6 +106,17 @@ fn durable_plan(mut prepared: PreparedAnnouncement) -> Result<PreparedDurableAnn
         .map_err(|_| RecoveryError::Integrity)?,
     );
     Ok(PreparedDurableAnnouncement { prepared })
+}
+#[cfg(all(windows, feature = "connect-lab"))]
+pub(crate) fn prepare_runtime_durable_announcement(
+    instance: &Instance,
+    guard: &VoiceMutationGuard,
+    request: AnnouncementRequest,
+    runtime: crate::engine::connect_ready_profile::ReadyProfile,
+) -> Result<PreparedDurableAnnouncement> {
+    durable_plan(prepare_runtime_announcement(
+        instance, guard, request, runtime,
+    )?)
 }
 impl PreparedDurableAnnouncement {
     pub fn review(&self) -> &AnnouncementReview {
@@ -262,6 +273,10 @@ fn checked_loaded(
 }
 
 impl DurableRestorationController {
+    #[cfg(all(windows, feature = "connect-lab"))]
+    pub(crate) fn review_deadline(&self) -> Option<Instant> {
+        self.pending.as_ref().map(|prepared| prepared.deadline)
+    }
     pub fn voice_mod(&self) -> VoiceMod {
         self.receipt.voice_mod
     }

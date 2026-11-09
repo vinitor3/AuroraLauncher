@@ -84,6 +84,29 @@ test("mount only reads projections and never searches, mutates, publishes or joi
   assert.equal(container.querySelectorAll("img").length, 0);
 });
 
+test("catalog uses the account service clock when the computer year is ahead", async () => {
+  Date.now = () => fixedNow + 365 * 86_400_000;
+  service.now = () => fixedNow; service.capabilities.join = true;
+  page.items = [baseSession]; handlers.prepareJoin = async () => {};
+  await render(); assert.equal(button("Entrar").disabled, false);
+  await click("Entrar"); assert.deepEqual(calls.find(call => call.name === "prepareJoin").args, [baseSession.id]);
+});
+
+test("service clock expiry is rechecked on Enter before the next UI timer", async () => {
+  let serverNow = fixedNow;
+  Date.now = () => fixedNow - 365 * 86_400_000;
+  service.now = () => serverNow; service.capabilities.join = true; page.items = [baseSession];
+  await render(); serverNow = baseSession.expiresAtMs;
+  await click("Entrar"); assert.equal(count("prepareJoin"), 0);
+});
+
+test("unavailable bounded service clock hides stale cards and offers a clear refresh", async () => {
+  service.now = () => Number.NaN; service.capabilities.join = true; page.items = [baseSession];
+  await render(); assert.equal(buttons("Entrar").length, 0);
+  assert.match(container.textContent, /horário do serviço está indisponível/);
+  assert.equal(button("Atualizar").disabled, false);
+});
+
 test("nick search is exact, explicit, one result and has no Minecraft profile lookup", async () => {
   await render();
   await edit(container.querySelector("#social-nickname"), "Aventureiro");
@@ -150,14 +173,53 @@ test("modpack activity is shown only while its declared presence is current", as
   assert.doesNotMatch(container.textContent, /Aurora Valley/); assert.match(container.textContent, /Atividade não compartilhada/);
 });
 
-test("catalog uses card/list layouts with modpack version and declared population", async () => {
+test("catalog uses card/list layouts and separates declared limit from unobserved population", async () => {
   page.items = [baseSession]; await render();
   assert.match(container.textContent, /Mundo da montanha/); assert.match(container.textContent, /Aurora Valley/);
-  assert.match(container.textContent, /1\.21\.1/); assert.match(container.textContent, /2 \/ 8/);
+  assert.match(container.textContent, /1\.21\.1/); assert.match(container.textContent, /Limite do anúncio: 8/); assert.match(container.textContent, /Disponibilidade não verificada/);
   assert.equal(container.querySelector(".social-catalog").dataset.layout, "grid");
   const image = container.querySelector(".social-session img");
   assert.equal(image.getAttribute("referrerpolicy") ?? image.getAttribute("referrerPolicy"), "no-referrer");
   await click("Lista"); assert.equal(container.querySelector(".social-catalog").dataset.layout, "list");
+});
+
+test("declared manual population cannot disable a real selected admission", async () => {
+  page.items = [{ ...baseSession, players: baseSession.maxPlayers }]; service.capabilities.join = true; handlers.prepareJoin = () => undefined;
+  await render({ connection: connection() }); await click("Entrar");
+  assert.equal(count("prepareJoin"), 1); assert.equal(container.querySelector("input[aria-label='Pessoas na sessão']"), null);
+});
+
+test("visible catalog observes native connections and monotonic expiry removes stale counts", async t => {
+  const id = "11111111-2222-4333-8444-555555555555"; page.items = [{ ...baseSession, id }];
+  const native = connection(); native.state.maxSessionSeconds = 14400;
+  let hold = false; native.controller.observeSessions = async ids => { calls.push({ name: "observe", args: ids });
+    if (hold) return new Promise(() => {});
+    return [{ sessionId: id, state: "ready", validUntil: performance.now() + 2000, admittedGuests: 2, connectedGuests: 1, hostPlayerConnected: true, maxGuests: 7 }]; };
+  await render({ connection: native });
+  assert.match(container.textContent, /Host disponível/); assert.match(container.textContent, /1 \/ 7 conexões remotas/);
+  assert.match(container.textContent, /2 admissões ativas · anfitrião conectado/); assert.equal(count("prepareJoin"), 0);
+  hold = true; const monotonic = performance.now(); t.mock.method(performance, "now", () => monotonic + 4000);
+  await act(async () => window.dispatchEvent(new window.Event("focus")));
+  assert.doesNotMatch(container.textContent, /1 \/ 7 conexões remotas/); assert.match(container.textContent, /Disponibilidade não verificada/);
+});
+
+test("delayed catalog observation cannot cross an account transition", async () => {
+  const id = "11111111-2222-4333-8444-555555555555"; page.items = [{ ...baseSession, id }];
+  let resolve; const response = new Promise(yes => { resolve = yes; }); const native = connection(); native.state.maxSessionSeconds = 14400;
+  native.controller.observeSessions = () => response;
+  await render({ connection: native }); await render({ accountId: "other", service: null });
+  await act(async () => resolve([{ sessionId: id, state: "ready", validUntil: performance.now() + 2000, admittedGuests: 2, connectedGuests: 1, hostPlayerConnected: true, maxGuests: 7 }]));
+  assert.doesNotMatch(container.textContent, /Host disponível|conexões remotas/);
+});
+
+test("catalog read quota does not claim to close a connection or expose a provider response", async () => {
+  page.items = [{ ...baseSession, id: "11111111-2222-4333-8444-555555555555" }];
+  const native = connection(); native.state.maxSessionSeconds = 14400;
+  native.controller.observeSessions = async () => { throw { code: "connect_social_quota", message: "Bearer private-token" }; };
+  await render({ connection: native });
+  assert.match(container.textContent, /limite de consultas de disponibilidade/);
+  assert.doesNotMatch(container.textContent, /conexão foi encerrada|private-token|Bearer/);
+  assert.equal(count("prepareJoin"), 0);
 });
 
 test("join capability false never invokes prepareJoin, including synthetic click", async () => {
@@ -241,6 +303,59 @@ test("publication defaults private and does not publish on mount or disclosure",
   assert.match(container.textContent, /não abre portas/);
 });
 
+test("reopening Social hydrates the own advertisement without granting publication consent", async () => {
+  state.ownSession = { ...baseSession, hostUid: "owner-uid", visibility: "friends", joinPolicy: "approval", maxPlayers: 12 };
+  const expectedInputs = [baseSession.title, baseSession.modpackName, baseSession.minecraftVersion, "Fabric", baseSession.imageUrl, "12"];
+  const values = () => [...container.querySelectorAll(".social-publish .social-fields input")].map(input => input.value);
+  await render();
+  assert.deepEqual(values(), expectedInputs);
+  assert.deepEqual([...container.querySelectorAll(".social-publish select")].map(select => select.value), ["friends", "approval"]);
+  assert.equal(button("Salvar anúncio").disabled, true);
+  await submit(".social-publish form"); assert.equal(count("publishSession"), 0);
+  await edit(container.querySelector(".social-publish .social-fields input"), "Rascunho não salvo");
+  await act(async () => root.render(null)); await render();
+  assert.deepEqual(values(), expectedInputs, "a fresh view loads the original persisted advertisement");
+  const consent = container.querySelector(".social-publish .social-consent input");
+  assert.equal(Boolean(consent.checked), false);
+  await act(async () => { consent.checked = true; consent.dispatchEvent(new window.Event("click", { bubbles: true })); });
+  await submit(".social-publish form");
+  const { id: _id, hostUid: _host, expiresAtMs: _expiry, ...draft } = state.ownSession;
+  assert.deepEqual(calls.find(call => call.name === "publishSession").args, [draft], "only editable draft fields are submitted");
+});
+
+test("refresh hydrates pristine fields, preserves intentional edits, and resets only for a different session", async () => {
+  state.ownSession = { ...baseSession, hostUid: "owner-uid", visibility: "friends" };
+  const title = () => container.querySelector(".social-publish .social-fields input");
+  await render();
+  state.ownSession.title = "Título atualizado no serviço"; await click("Atualizar");
+  assert.equal(title().value, state.ownSession.title);
+  await edit(title(), "Minha edição em andamento");
+  state.ownSession.title = "Outra observação do serviço"; await click("Atualizar");
+  assert.equal(title().value, "Minha edição em andamento");
+  state.ownSession = { ...state.ownSession, id: "different-session", title: "Outro anúncio", visibility: "private" };
+  await click("Atualizar"); assert.equal(title().value, "Outro anúncio");
+  assert.equal(container.querySelector(".social-publish select").value, "private");
+  handlers.closeSession = () => { state.ownSession = null; };
+  await click("Encerrar anúncio");
+  assert.equal(title().value, ""); assert.equal(container.querySelectorAll(".social-publish .social-fields input")[3].value, "Vanilla");
+  assert.equal(count("publishSession"), 0);
+});
+
+for (const transition of ["account", "service"]) test(`late own advertisement cannot hydrate after ${transition} replacement`, async () => {
+  state.ownSession = { ...baseSession, hostUid: "owner-uid", title: "Anúncio anterior", visibility: "friends" };
+  await render();
+  const old = structuredClone(state), delayed = deferred(); handlers.snapshot = () => delayed.promise;
+  await click("Atualizar"); delete handlers.snapshot;
+  const accountId = transition === "account" ? "another-owner" : "owner-uid";
+  state.ownSession = { ...baseSession, id: "another-session", hostUid: accountId, title: "Anúncio atual", visibility: "private" };
+  await render({ accountId, service: transition === "service" ? makeService() : service });
+  await act(async () => delayed.resolve(old));
+  assert.equal(container.querySelector(".social-publish .social-fields input").value, "Anúncio atual");
+  assert.equal(container.querySelector(".social-publish select").value, "private");
+  assert.doesNotMatch(container.textContent, /Anúncio anterior/);
+  assert.equal(count("publishSession"), 0);
+});
+
 test("catalog retention is bounded to 100 records instead of unlimited pagination", async () => {
   page.items = Array.from({ length: 100 }, (_, index) => ({ ...baseSession, id: `session-${index}` })); page.nextCursor = "more";
   await render(); assert.equal(container.querySelectorAll(".social-session").length, 100);
@@ -280,7 +395,7 @@ test("acceptance checks the request deadline at click time even before a timer r
 
 function connection(snapshot) {
   const controller = {};
-  for (const name of ["prepareHost", "prepareHostDiscovered", "confirmHost", "stop", "refresh"]) controller[name] = async (...args) => { calls.push({ name: `connect:${name}`, args }); };
+  for (const name of ["prepareHost", "prepareHostDiscovered", "confirmHost", "confirmGuest", "stop", "refresh"]) controller[name] = async (...args) => { calls.push({ name: `connect:${name}`, args }); };
   return { state: { available: true, pending: false, error: "", snapshot }, controller };
 }
 function connectionSnapshot(stage = "hostReview", role = "host") {
@@ -289,6 +404,52 @@ function connectionSnapshot(stage = "hostReview", role = "host") {
     social: { sessionId: baseSession.id, role, stage, digest: role === "host" ? "a".repeat(64) : null,
       gameTarget: role === "host" ? "127.0.0.1:43001" : null, visibility: role === "host" ? "public" : null, expiresAtMs: fixedNow + 60_000 } };
 }
+test("the original host attempt locks its advertisement through review, listening and unfinished cleanup", async () => {
+  state.ownSession = { ...baseSession, hostUid: "owner-uid" };
+  const own = connectionSnapshot();
+  for (const [phase, cleanupState] of [["reviewed", "pending"], ["hostListening", "pending"], ["closing", "pending"], ["closed", "pending"], ["failed", "failed"]]) {
+    await render({ connection: connection({ ...own, phase, cleanupState }) });
+    const controls = [...container.querySelectorAll(".social-publish input, .social-publish select")];
+    assert.ok(controls.length > 0); assert.ok(controls.every(control => control.disabled), phase);
+    assert.equal(button("Salvar anúncio").disabled, true, phase);
+    assert.equal(button("Encerrar anúncio").disabled, false, "explicit revocation stays available");
+    assert.match(container.textContent, /Use Desconectar e aguarde a liberação dos recursos/);
+    await submit(".social-publish form");
+  }
+  assert.equal(count("publishSession"), 0, "synthetic submit cannot bypass the lock");
+  assert.equal(count("closeSession"), 0);
+  assert.match(container.textContent, /Encerrar o anúncio revoga a autorização desta sessão/);
+  await click("Encerrar anúncio"); assert.equal(count("closeSession"), 1);
+});
+
+test("host cleanup releases the editor without replacing an intentional draft", async () => {
+  state.ownSession = { ...baseSession, hostUid: "owner-uid" };
+  const title = () => container.querySelector(".social-publish .social-fields input");
+  await render(); await edit(title(), "Minha alteração ainda não salva");
+  const own = connectionSnapshot();
+  await render({ connection: connection(own) });
+  assert.equal(title().disabled, true); assert.equal(title().value, "Minha alteração ainda não salva");
+  await render({ connection: connection({ ...own, phase: "closed", cleanupState: "complete" }) });
+  assert.equal(title().disabled, false); assert.equal(title().value, "Minha alteração ainda não salva");
+  assert.doesNotMatch(container.textContent, /Use Desconectar e aguarde a liberação dos recursos/);
+  const consent = container.querySelector(".social-publish .social-consent input");
+  await act(async () => { consent.checked = true; consent.dispatchEvent(new window.Event("click", { bubbles: true })); });
+  await submit(".social-publish form");
+  assert.equal(calls.find(call => call.name === "publishSession").args[0].title, "Minha alteração ainda não salva");
+});
+
+test("a guest or a host of another session does not lock this advertisement", async () => {
+  state.ownSession = { ...baseSession, hostUid: "owner-uid", visibility: "private" };
+  const otherHost = connectionSnapshot(); otherHost.social.sessionId = "other-session";
+  for (const snapshot of [connectionSnapshot("connected", "guest"), otherHost, { ...connectionSnapshot(), phase: "failed", cleanupState: "complete" }]) {
+    await render({ connection: connection(snapshot) });
+    assert.ok([...container.querySelectorAll(".social-publish input, .social-publish select")].every(control => !control.disabled));
+    assert.equal(button("Salvar anúncio").disabled, false);
+    await submit(".social-publish form");
+  }
+  assert.equal(count("publishSession"), 3);
+});
+
 test("public Enter invokes selected session only; rendering does not create transport", async () => {
   service.capabilities.join = true; handlers.prepareJoin = () => undefined; page.items = [baseSession];
   await render({ connection: connection() }); assert.equal(count("prepareJoin"), 0);
@@ -312,6 +473,22 @@ test("host preparation requires an eligible own advert and never auto-approves",
   await render({ connection: connection() }); assert.equal(count("connect:prepareHost"), 0);
   await click("Preparar meu servidor"); assert.deepEqual(calls.find(call => call.name === "connect:prepareHost").args, [baseSession.id, "public"]);
   assert.equal(count("connect:confirmHost"), 0);
+});
+test("dedicated server shortcut routes once without preparing, reserving or approving", async () => {
+  let routed = 0;
+  const control = connection(); control.state.maxSessionSeconds = 14400;
+  state.ownSession = { ...baseSession, hostUid: "owner-uid" };
+  await render({ connection: control, onPrepareDedicatedServer: () => { routed++; } });
+  assert.equal(routed, 0); assert.equal(button("Preparar meu servidor").disabled, true);
+  await click("Preparar servidor dedicado");
+  assert.equal(routed, 1);
+  assert.equal(calls.some(call => call.name.startsWith("connect:") || call.name === "native_voice_execute"), false);
+  await render({ connection: { ...control, state: { ...control.state, pending: true } }, onPrepareDedicatedServer: () => { routed++; } });
+  assert.equal(button("Preparar servidor dedicado").disabled, true);
+  await act(async () => button("Preparar servidor dedicado").dispatchEvent(new window.Event("click", { bubbles: true })));
+  assert.equal(routed, 1);
+  await render({ connection: control });
+  assert.equal(buttons("Preparar servidor dedicado").length, 0);
 });
 test("host review shows fixed source scope deadline and starts with consent unchecked", async () => {
   await render({ connection: connection(connectionSnapshot()) });
@@ -449,6 +626,24 @@ test("native source checking keeps Disconnect available without exposing a fabri
 
 const organizationData = name => ({ group:name ? {id:"group", name, ownerUid:"owner-uid", members:[{uid:"owner-uid",nickname:"Host"}], invited:[], expiresAtMs:fixedNow+60_000}:null, invitations:[], joinRequests:[] });
 const organizationRender = async (org,accountId="owner-uid") => act(async()=>root.render(createElement(SocialOrganizationPanel,{service:org,accountId,friends:[]})));
+test("group expiration uses the service sample despite a computer year ahead", async()=>{
+  Date.now=()=>fixedNow+365*86_400_000;
+  await organizationRender({now:()=>fixedNow,snapshot:async()=>organizationData("Grupo atual")});
+  assert.doesNotMatch(container.textContent,/Grupo expirado/);
+  assert.equal(container.querySelector('select[aria-label="Amigo para convidar ao grupo"]').disabled,false);
+});
+test("clock failure pauses group polling until an explicit retry succeeds",async()=>{
+  let reads=0, fail=true;
+  const org={now:()=>fail?NaN:fixedNow,snapshot:async()=>{reads++;if(fail)throw {code:"social_clock_unavailable"};return organizationData("Recuperado");}};
+  await organizationRender(org);
+  assert.match(container.textContent,/horário do serviço/);
+  await act(async()=>document.dispatchEvent(new window.Event("visibilitychange")));
+  assert.equal(reads,1);
+  fail=false; await click("Atualizar grupos e pedidos");
+  assert.equal(reads,2); assert.match(container.textContent,/Recuperado/);
+  await act(async()=>document.dispatchEvent(new window.Event("visibilitychange")));
+  assert.equal(reads,3);
+});
 test("expired group keeps its exit action but cannot invite another member", async()=>{
   const value=organizationData("Grupo antigo"); value.group.expiresAtMs=fixedNow-1;
   let left=0;
@@ -497,4 +692,39 @@ test("group polling has one in-flight read and unmount prevents a delayed update
   await render({service:null});
   await act(async()=>pendingRead.resolve(organizationData("Não restaurar")));
   assert.equal(reads,2); assert.doesNotMatch(container.textContent,/Não restaurar/);
+});
+
+function guestVoiceReviewSnapshot() {
+  const value = connectionSnapshot("guestReview", "guest");
+  Object.assign(value.social, {digest: "b".repeat(64), voiceProfile: "svc", voiceTransportProfile: "nativeVoice8V1", hostPlayer: false, runtimeProfile: "fabric-loader-0.16.14-1.21.1", expiresAtMs: fixedNow + 9000});
+  return value;
+}
+test("native guest review shows approved voice limits and requires its own explicit consent", async () => {
+  const snapshot = guestVoiceReviewSnapshot();
+  await render({connection: connection(snapshot)});
+  for (const text of [/até 8 participantes/, /4\.096 bytes/, /524\.288 bytes\/s/, /1\.600 fragmentos\/s/, /5\.000\.000 bytes\/s/, /128 KiB/, /9 segundos restantes/]) assert.match(container.textContent, text);
+  assert.equal(button("Confirmar entrada com voz").disabled, true); assert.equal(count("connect:confirmGuest"), 0);
+  const consent = container.querySelector(".social-connection .social-consent input");
+  await act(async () => {consent.checked = true; consent.dispatchEvent(new window.Event("click", {bubbles:true}));});
+  await click("Confirmar entrada com voz"); assert.equal(count("connect:confirmGuest"), 1); assert.equal(count("connect:confirmHost"), 0);
+  await render({connection: connection({...snapshot, social:{...snapshot.social,digest:"c".repeat(64)}})});
+  assert.equal(button("Confirmar entrada com voz").disabled, true, "a changed original invitation cannot reuse consent");
+  await click("Cancelar entrada"); assert.equal(count("connect:stop"), 1);
+});
+test("native guest review does not renew its original deadline on refresh or approve after expiry", async () => {
+  const snapshot = guestVoiceReviewSnapshot(); await render({connection: connection(snapshot)});
+  const consent = container.querySelector(".social-connection .social-consent input");
+  await act(async () => {consent.checked = true; consent.dispatchEvent(new window.Event("click", {bubbles:true}));});
+  Date.now = () => fixedNow + 9000;
+  await click("Confirmar entrada com voz"); assert.equal(count("connect:confirmGuest"), 0, "expiry is rechecked at click");
+  await render({connection: connection(snapshot)}); assert.equal(button("Confirmar entrada com voz").disabled, true);
+  assert.match(container.textContent, /0 segundos restantes/); assert.match(container.textContent, /Esta revisão expirou/);
+  await click("Cancelar entrada"); assert.equal(count("connect:stop"), 1);
+});
+test("native host review exposes the same transport budget without changing legacy reviews", async () => {
+  const snapshot = connectionSnapshot(); await render({connection: connection(snapshot)});
+  assert.doesNotMatch(container.textContent, /5\.000\.000 bytes\/s/);
+  Object.assign(snapshot.social, {voiceProfile:"plasmo", voiceTransportProfile:"nativeVoice8V1", hostPlayer:true, runtimeProfile:"fabric-loader-0.16.14-1.21.1"});
+  await render({connection: connection(snapshot)}); assert.match(container.textContent, /5\.000\.000 bytes\/s/);
+  assert.equal(button("Compartilhar agora").disabled, true);
 });
