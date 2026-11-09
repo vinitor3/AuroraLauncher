@@ -110,7 +110,8 @@ async function bounded<T>(request: Request, work: (signal: AbortSignal) => Promi
   } catch (error) { if (error instanceof SocialBindingError) throw error; return fail("backend_unavailable"); }
   finally { clearTimeout(timer); if (abort) request.signal.removeEventListener("abort", abort); controller.abort(); }
 }
-type PolicyState = { body: HostSocialPolicy; digest: string; deadline: number; checkedAt?: number; pendingGuests?: number; deniedAccounts?: string[]; state: "registering" | "open" | "reserved" | "terminal" };
+type PolicyState = { body: HostSocialPolicy; digest: string; deadline: number; checkedAt?: number; pendingGuests?: number;
+  pendingIdentities?: { accountId: string; publicKey: string }[]; deniedAccounts?: string[]; state: "registering" | "open" | "reserved" | "terminal" };
 type GrantState = { body: SocialAdmissionGrant; policy: PolicyState; deadline: number; admissionDeadline: number; terminal: boolean; busy: boolean; sequence: number;
   lastLease?: SocialContinuityLease; leaseDeadline: number; attempts: number[];
   signedGrant?: SocialSigned<SocialAdmissionGrant>; initialLease?: SocialSigned<SocialContinuityLease>;
@@ -321,10 +322,15 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
       const online = policy.body.schemaVersion !== 1;
       if (online && policy.deniedAccounts?.includes(receipt.accountId)) fail("session_not_authorized");
       const activeGuests = [...grants.values()].filter(value => value.policy === policy && !value.terminal && value.body.sessionExpiresAtUnixMs > clock.wall());
-      if (online && (grants.size >= (policy.body.hostPlayer ? 127 : 128) || activeGuests.length + (policy.pendingGuests ?? 0) >= policy.body.maxGuests
-        || activeGuests.some(value => value.body.guestAccountId === receipt.accountId || value.body.guestPublicKey === receipt.publicKey))) fail("authority_busy");
+      const pendingIdentity = { accountId: receipt.accountId, publicKey: receipt.publicKey };
+      // Reserve identity and lifetime capacity before the first asynchronous fresh
+      // read. A consumed proof alone does not serialize different keys of one UID.
+      const pendingCount = [...policies.values()].reduce((count, value) => count + (value.pendingIdentities?.length ?? 0), 0);
+      if (online && (grants.size + pendingCount >= (policy.body.hostPlayer ? 127 : 128) || activeGuests.length + (policy.pendingGuests ?? 0) >= policy.body.maxGuests
+        || activeGuests.some(value => value.body.guestAccountId === receipt.accountId || value.body.guestPublicKey === receipt.publicKey)
+        || policy.pendingIdentities?.some(value => value.accountId === receipt.accountId || value.publicKey === receipt.publicKey))) fail("authority_busy");
       // Each proof is consumed; only explicitly departed v2 participants free capacity.
-      if (online) policy.pendingGuests = (policy.pendingGuests ?? 0) + 1; else policy.state = "reserved";
+      if (online) { policy.pendingGuests = (policy.pendingGuests ?? 0) + 1; (policy.pendingIdentities ??= []).push(pendingIdentity); } else policy.state = "reserved";
       let state: GrantState | undefined;
       try {
         const observed = await fresh(request, receipt.accountId, policy);
@@ -346,7 +352,10 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
         state.signedGrant = copySigned(grant); state.initialLease = copySigned(firstLease);
         return { grant, lease: firstLease };
       } catch (error) { if (!online) policy.state = "terminal"; if (state) state.terminal = true; throw error; }
-      finally { if (online) policy.pendingGuests = Math.max(0, (policy.pendingGuests ?? 1) - 1); }
+      finally { if (online) {
+        policy.pendingGuests = Math.max(0, (policy.pendingGuests ?? 1) - 1);
+        policy.pendingIdentities = policy.pendingIdentities?.filter(value => value !== pendingIdentity);
+      } }
     },
     async continuity(request: Request, input: unknown) {
       attempt(); exact(input, ["grantId"]); if (!matches(HEX, input.grantId)) fail("invalid_grant");

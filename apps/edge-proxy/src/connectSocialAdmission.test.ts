@@ -499,6 +499,49 @@ test("online original session survives preparation expiry; short continuity and 
   if (roster.state !== "group") assert.fail(); assert.equal(roster.deliveries.length, 1);
 });
 
+test("concurrent online proofs from one account reserve its identity before the fresh read", async () => {
+  const f = await fixture(true), { policy } = await f.register();
+  const first = await f.prepared("same_guest"), second = await f.prepared("same_guest");
+  const freshRead = f.readCount() + 2; // One binding revalidation, then admission freshness.
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; }), ready = new Promise<void>(resolve => { entered = resolve; });
+  f.onRead(async count => { if (count === freshRead) { entered(); await held; } });
+  const original = f.authority.join(req("same_guest"), { proof: first.proof, policyId: policy.policyId });
+  await ready;
+  try {
+    await assert.rejects(f.authority.join(req("same_guest"), { proof: second.proof, policyId: policy.policyId }), code("authority_busy"));
+    await assert.rejects(f.binding.prove(req("same_guest"), second.proof), code("challenge_unavailable"));
+  } finally { release(); }
+  await original;
+  const roster = await f.authority.hostPoll(req("host"), { policyId: policy.policyId });
+  assert.equal(roster.state, "group"); if (roster.state !== "group") assert.fail();
+  assert.equal(roster.deliveries.length, 1);
+  assert.deepEqual(f.authority.durableState().policies[0][1].pendingIdentities, []);
+});
+
+test("concurrent online joins reserve the last historical slot before asynchronous publication", async () => {
+  const f = await fixture(true), { policy, packet } = await f.pair();
+  await f.authority.guestStop(req(), { grantId: packet.grant.body.grantId });
+  const stored = f.authority.durableState(), terminal = stored.grants[0][1];
+  // Restore a bounded history with one lifetime slot left; every old entry is terminal.
+  stored.grants = Array.from({ length: 127 }, (_, index) => {
+    const id = index.toString(16).padStart(64, "0"), value = structuredClone(terminal);
+    value.body.grantId = id; return [id, value];
+  });
+  const authority = await createSocialAdmissionAuthority(f.binding, f.dependencies, { keys: f.keys, online: true, state: stored });
+  const first = await f.prepared("last_first"), second = await f.prepared("last_second");
+  const freshRead = f.readCount() + 2;
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; }), ready = new Promise<void>(resolve => { entered = resolve; });
+  f.onRead(async count => { if (count === freshRead) { entered(); await held; } });
+  const original = authority.join(req("last_first"), { proof: first.proof, policyId: policy.policyId });
+  await ready;
+  try { await assert.rejects(authority.join(req("last_second"), { proof: second.proof, policyId: policy.policyId }), code("authority_busy")); }
+  finally { release(); }
+  await original;
+  assert.equal(authority.durableState().grants.length, 128);
+});
+
 test("online relay identity is derived from exact policy/grant and cannot select another peer or account", async () => {
   const f = await fixture(true), { packet, policy } = await f.pair();
   const guest = await f.authority.relayIdentity(req(), { role: "guest", id: packet.grant.body.grantId });
