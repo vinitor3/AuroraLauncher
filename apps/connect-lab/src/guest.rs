@@ -30,6 +30,46 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[derive(Clone)]
+struct GuestSessionAuthority {
+    invitation: SessionInvitation,
+    online: Option<OnlineNetworkTicket>,
+}
+impl GuestSessionAuthority {
+    fn check_admission_current(&self) -> Result<()> {
+        self.check_online()?;
+        self.invitation.check_admission_current()
+    }
+
+    fn check_session_current(&self) -> Result<()> {
+        self.check_online()?;
+        self.invitation.check_session_current()
+    }
+
+    fn check_online(&self) -> Result<()> {
+        if let Some(ticket) = &self.online {
+            ticket.check_current()?;
+        }
+        Ok(())
+    }
+
+    async fn wait_session_expired(&self) {
+        let route_expired = async {
+            let Some(ticket) = &self.online else {
+                return std::future::pending::<()>().await;
+            };
+            while ticket.check_current().is_ok() {
+                let remaining = ticket.deadline().saturating_duration_since(Instant::now());
+                tokio::time::sleep(remaining.min(Duration::from_millis(100))).await;
+            }
+        };
+        tokio::select! {
+            _ = self.invitation.wait_session_expired() => (),
+            _ = route_expired => (),
+        }
+    }
+}
+
 struct Inner {
     endpoint: Endpoint,
     connection: Connection,
@@ -42,7 +82,7 @@ struct Inner {
     udp: Arc<Semaphore>,
     task: Mutex<Option<JoinHandle<()>>>,
     session_task: Mutex<Option<JoinHandle<()>>>,
-    session_authority: Option<SessionInvitation>,
+    session_authority: Option<GuestSessionAuthority>,
     // Keep the original short invitation's clocks for read-only observations.
     // No watcher, new verification or transport authorization is added here.
     legacy_authority: Option<Invitation>,
@@ -62,6 +102,84 @@ pub struct Guest {
 #[cfg(test)]
 #[path = "path_observation_clock_tests.rs"]
 mod path_clock_tests;
+
+#[cfg(test)]
+mod online_deadline_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn guest_online_authority_expires_before_a_longer_invitation() {
+        let host = generate_key();
+        let peer = generate_key().public();
+        let signer = generate_key();
+        let now = unix_millis();
+        let expires = now + 1000;
+        let issuer = "a".repeat(64);
+        let body = format!(
+            concat!(
+                "{{\"schemaVersion\":1,\"sessionId\":\"earlier-route\",\"issuerInstance\":\"{}\",",
+                "\"peerId\":\"{}\",\"hostPeerId\":\"{}\",\"accountId\":\"fixture\",\"generation\":1,",
+                "\"issuedAtUnixMs\":{},\"expiresAtUnixMs\":{},\"directAddresses\":[]}}"
+            ),
+            issuer,
+            peer,
+            host.public(),
+            now,
+            expires,
+        );
+        let mut signed = b"aurora/connect/relay-ticket/v1\0".to_vec();
+        signed.extend(body.as_bytes());
+        let signature = signer
+            .sign(&signed)
+            .to_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let encoded = format!(r#"{{"body":{body},"signature":"{signature}"}}"#);
+        let online = OnlineNetworkTicket::for_local_test(
+            &encoded,
+            signer.public(),
+            &issuer,
+            "fixture",
+            "earlier-route",
+            peer,
+            host.public(),
+            "http://127.0.0.1:42321",
+        )
+        .unwrap();
+        let invitation = SessionInvitation::issue_online(
+            &host,
+            peer,
+            "earlier-route",
+            &[Service {
+                service_id: "game".into(),
+                protocol: Protocol::Tcp,
+                endpoint: "127.0.0.1:42322".parse().unwrap(),
+                revision: 1,
+                max_datagram_bytes: 1400,
+                required_capability: Capability::ReliableStream,
+                udp_return_policy: UdpReturnPolicy::ReplyBudget,
+            }],
+            SessionDeadlines {
+                admission_expires_at_unix_ms: now + 5000,
+                session_expires_at_unix_ms: now + 10_000,
+            },
+        )
+        .unwrap();
+        let authority = GuestSessionAuthority {
+            invitation,
+            online: Some(online),
+        };
+        authority.check_admission_current().unwrap();
+        authority.check_session_current().unwrap();
+        tokio::time::timeout(Duration::from_secs(3), authority.wait_session_expired())
+            .await
+            .unwrap();
+        assert_eq!(authority.check_session_current(), Err(Error::Expired));
+        assert!(authority.invitation.check_session_current().is_ok());
+        assert!(authority.invitation.check_admission_current().is_ok());
+    }
+}
 
 impl Guest {
     pub async fn connect(config: GuestConfig) -> Result<Self> {
@@ -371,6 +489,105 @@ impl Guest {
         )
         .await
     }
+    pub async fn connect_invited_online(
+        secret_key: SecretKey,
+        invitation: &SessionInvitation,
+        limits: Limits,
+        ticket: &OnlineNetworkTicket,
+    ) -> Result<Self> {
+        Self::connect_online_in_profile(
+            secret_key,
+            invitation,
+            limits,
+            ticket,
+            SessionInvitationProfile::OnlineGameTcp,
+        )
+        .await
+    }
+    pub async fn connect_invited_online_fragmented(
+        secret_key: SecretKey,
+        invitation: &SessionInvitation,
+        limits: Limits,
+        ticket: &OnlineNetworkTicket,
+    ) -> Result<Self> {
+        Self::connect_online_in_profile(
+            secret_key,
+            invitation,
+            limits,
+            ticket,
+            SessionInvitationProfile::OnlineFragmentedGameUdp,
+        )
+        .await
+    }
+    /// Explicit Host-player on the same original online Host. The opaque ticket
+    /// supplies its owned loopback route; callers cannot provide any endpoint.
+    pub async fn connect_local_authorized(
+        secret_key: SecretKey,
+        invitation: &SessionInvitation,
+        limits: Limits,
+        ticket: &crate::HostLocalPlayerTicket,
+    ) -> Result<Self> {
+        invitation.check_profile(SessionInvitationProfile::OnlineFragmentedGameUdp)?;
+        let peer = secret_key.public();
+        let address = ticket.begin(invitation, peer)?;
+        let guest = Self::connect_inner_authorized(
+            GuestConfig {
+                secret_key,
+                bind_addr: "127.0.0.1:0".parse().expect("owned loopback"),
+                host: address,
+                session_id: invitation.session_id().into(),
+                lease_id: invitation.lease().lease_id,
+                capabilities: invitation.capabilities(),
+                limits,
+            },
+            Some(invitation.proof()),
+            transport::EndpointMode::Direct,
+            Some(invitation.clone()),
+            None,
+            None,
+        )
+        .await?;
+        if let Err(error) = ticket.check(invitation, peer, true) {
+            guest.shutdown().await;
+            return Err(error);
+        }
+        Ok(guest)
+    }
+
+    async fn connect_online_in_profile(
+        secret_key: SecretKey,
+        invitation: &SessionInvitation,
+        limits: Limits,
+        ticket: &OnlineNetworkTicket,
+        profile: SessionInvitationProfile,
+    ) -> Result<Self> {
+        invitation.check_profile(profile)?;
+        invitation.check_admission_current()?;
+        if secret_key.public() != invitation.guest_key()
+            || ticket.session_id() != invitation.session_id()
+            || ticket.host_peer() != invitation.host_key()
+            || ticket.local_peer() != invitation.guest_key()
+        {
+            return Err(Error::Unauthorized);
+        }
+        Self::connect_inner_authorized(
+            GuestConfig {
+                secret_key,
+                bind_addr: "0.0.0.0:0".parse().expect("literal address"),
+                host: ticket.host_address(),
+                session_id: invitation.session_id().into(),
+                lease_id: invitation.lease().lease_id,
+                capabilities: invitation.capabilities(),
+                limits,
+            },
+            Some(invitation.proof()),
+            transport::EndpointMode::Online(ticket.clone()),
+            Some(invitation.clone()),
+            None,
+            None,
+        )
+        .await
+    }
     async fn connect_session_in_mode(
         secret_key: SecretKey,
         invitation: &SessionInvitation,
@@ -432,7 +649,11 @@ impl Guest {
             return Err(Error::Configuration);
         }
         // The existing APIs keep their direct-only gate even with this feature.
-        match &mode {
+        let online = match &mode {
+            transport::EndpointMode::Online(ticket) => {
+                ticket.check_guest(&config)?;
+                Some(ticket.clone())
+            }
             transport::EndpointMode::Direct => {
                 if config.host.addrs.is_empty()
                     || config
@@ -443,10 +664,19 @@ impl Guest {
                 {
                     return Err(Error::Configuration);
                 }
+                None
             }
             #[cfg(feature = "local-relay-lab")]
-            transport::EndpointMode::LocalRelay(ticket) => ticket.check_guest(&config)?,
+            transport::EndpointMode::LocalRelay(ticket) => {
+                ticket.check_guest(&config)?;
+                None
+            }
+        };
+        if online.is_some() && session_authority.is_none() {
+            return Err(Error::Configuration);
         }
+        let session_authority =
+            session_authority.map(|invitation| GuestSessionAuthority { invitation, online });
         connect_observation::enter(observer, GuestConnectPhase::EndpointBind);
         let endpoint =
             transport::endpoint_in_mode(config.secret_key, config.bind_addr, &config.limits, mode)
@@ -454,7 +684,7 @@ impl Guest {
         let fragmented_capability = config
             .capabilities
             .contains(&Capability::FragmentedDatagram);
-        let attempt = tokio::time::timeout(config.limits.handshake_timeout, async {
+        let handshake = async {
             if let Some(authority) = &session_authority {
                 authority.check_admission_current()?;
             }
@@ -469,6 +699,9 @@ impl Guest {
             }
             connect_observation::enter(observer, GuestConnectPhase::ControlOpen);
             let (mut send, mut recv) = connection.open_bi().await.map_err(|_| Error::Transport)?;
+            if let Some(authority) = &session_authority {
+                authority.check_admission_current()?;
+            }
             let hello = Hello {
                 schema_version: SCHEMA_VERSION,
                 session_id: config.session_id,
@@ -490,9 +723,19 @@ impl Guest {
             }
             connect_observation::enter(observer, GuestConnectPhase::Admitted);
             Ok::<_, Error>(connection)
-        })
-        .await
-        .unwrap_or(Err(Error::Timeout));
+        };
+        let authority_expired = async {
+            match &session_authority {
+                Some(authority) => authority.wait_session_expired().await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+        let attempt = tokio::select! {
+            biased;
+            _ = authority_expired => Err(Error::Expired),
+            result = tokio::time::timeout(config.limits.handshake_timeout, handshake) =>
+                result.unwrap_or(Err(Error::Timeout)),
+        };
         let connection = match attempt {
             Ok(c) => c,
             Err(error) => {
@@ -592,6 +835,9 @@ impl Guest {
         }
     }
     pub fn max_datagram_payload(&self, service_max: usize) -> Option<usize> {
+        if let Some(authority) = &self.inner.session_authority {
+            authority.check_session_current().ok()?;
+        }
         transport::payload_limit(&self.inner.connection, service_max)
     }
     pub async fn shutdown(&self) {
@@ -642,6 +888,9 @@ impl Guest {
             _ = self.inner.cancel.cancelled() => Err(Error::Closed),
             response = tokio::time::timeout(self.inner.limits.handshake_timeout, async {
                 let (mut send, mut recv) = self.inner.connection.open_bi().await.map_err(|_| Error::Transport)?;
+                if let Some(authority) = &self.inner.session_authority {
+                    authority.check_session_current()?;
+                }
                 wire::write_message(&mut send, &request, self.inner.limits.max_control_bytes).await?;
                 let response: Reply = wire::read_message(&mut recv, self.inner.limits.max_control_bytes).await?;
                 if let Some(authority) = &self.inner.session_authority {
@@ -912,7 +1161,7 @@ impl Guest {
 }
 
 struct AssociationState {
-    session_authority: Option<SessionInvitation>,
+    session_authority: Option<GuestSessionAuthority>,
     service_handle: u32,
     generation: u32,
     max_payload: usize,

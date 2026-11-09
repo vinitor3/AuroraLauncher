@@ -90,11 +90,7 @@ impl Slot {
 }
 impl Host {
     pub fn native_voice_service_disabled_for_test(&self, lease_id: &str) -> Result<bool> {
-        let lease = self
-            .state
-            .leases
-            .get(lease_id)
-            .ok_or(Error::ServiceDenied)?;
+        let lease = self.state.lease(lease_id).ok_or(Error::ServiceDenied)?;
         let (handle, service) = self.state.services.get("aux").ok_or(Error::ServiceDenied)?;
         if service.protocol != Protocol::Udp || service.revision != 1 {
             return Err(Error::ServiceDenied);
@@ -112,11 +108,7 @@ impl Host {
         lease_id: &str,
         stage: NativeVoiceRetirementStage,
     ) -> Result<NativeVoiceRetirementGate> {
-        let lease = self
-            .state
-            .leases
-            .get(lease_id)
-            .ok_or(Error::ServiceDenied)?;
+        let lease = self.state.lease(lease_id).ok_or(Error::ServiceDenied)?;
         let (handle, service) = self.state.services.get("aux").ok_or(Error::ServiceDenied)?;
         if !matches!(lease.invitation, Some(InvitationAuthority::Session(_)))
             || !lease.value.services.contains("aux")

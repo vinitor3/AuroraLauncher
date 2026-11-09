@@ -1,7 +1,10 @@
 use crate::{ALPN, DATAGRAM_HEADER_LEN, Error, Limits, Result, model::Metrics};
 use iroh::{
     Endpoint, NetReportConfig, RelayMode, SecretKey,
-    endpoint::{Connection, QuicTransportConfig, RecvStream, SendStream, presets},
+    endpoint::{
+        BindOpts, Connection, PortmapperConfig, QuicTransportConfig, RecvStream, SendStream,
+        presets,
+    },
 };
 use std::{
     net::SocketAddr,
@@ -16,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) enum EndpointMode {
     Direct,
+    Online(crate::OnlineNetworkTicket),
     #[cfg(feature = "local-relay-lab")]
     LocalRelay(crate::LocalRelayTicket),
 }
@@ -28,6 +32,50 @@ pub(crate) async fn endpoint_in_mode(
 ) -> Result<Endpoint> {
     match mode {
         EndpointMode::Direct => endpoint(key, bind, limits).await,
+        EndpointMode::Online(ticket) => {
+            ticket.check_current()?;
+            if key.public() != ticket.local_peer() {
+                return Err(Error::Unauthorized);
+            }
+            let mut report = NetReportConfig::minimal();
+            report.https_probes = true;
+            // A disabled/unavailable IP family must not prevent the configured
+            // relay from bootstrapping the same authenticated peer.
+            let optional = BindOpts::default().set_is_required(false);
+            let endpoint = Endpoint::builder(presets::Minimal)
+                .portmapper_config(PortmapperConfig::Disabled)
+                .clear_ip_transports()
+                .clear_relay_transports()
+                .clear_address_lookup()
+                .relay_mode(RelayMode::Custom(ticket.relay_map()))
+                .net_report_config(report)
+                .secret_key(key)
+                .alpns(vec![ALPN.to_vec()])
+                .keylog(false)
+                .transport_config(quic_config(limits)?)
+                .bind_addr_with_opts("0.0.0.0:0", optional.clone())
+                .map_err(|_| Error::Configuration)?
+                .bind_addr_with_opts("[::]:0", optional)
+                .map_err(|_| Error::Configuration)?
+                .bind()
+                .await
+                .map_err(|_| Error::Transport)?;
+            let deadline = ticket
+                .deadline()
+                .min(Instant::now() + limits.handshake_timeout);
+            if tokio::time::timeout_at(deadline.into(), endpoint.online())
+                .await
+                .is_err()
+            {
+                endpoint.close().await;
+                return Err(Error::Timeout);
+            }
+            if let Err(error) = ticket.check_current() {
+                endpoint.close().await;
+                return Err(error);
+            }
+            Ok(endpoint)
+        }
         #[cfg(feature = "local-relay-lab")]
         EndpointMode::LocalRelay(ticket) => {
             let creation = ticket.begin_endpoint()?;
@@ -41,6 +89,7 @@ pub(crate) async fn endpoint_in_mode(
             // No bind_addr: that would re-add an IP transport. The only route
             // is the owned loopback fixture, without QAD, DNS or publication.
             let endpoint = Endpoint::builder(presets::Minimal)
+                .portmapper_config(PortmapperConfig::Disabled)
                 .clear_ip_transports()
                 .clear_relay_transports()
                 .clear_address_lookup()
@@ -109,6 +158,7 @@ pub(crate) async fn endpoint(
 ) -> Result<Endpoint> {
     let config = quic_config(limits)?;
     Endpoint::builder(presets::Minimal)
+        .portmapper_config(PortmapperConfig::Disabled)
         .clear_ip_transports()
         .clear_relay_transports()
         .relay_mode(RelayMode::Disabled)

@@ -9,6 +9,9 @@ mod invitation;
 mod local_relay;
 mod minecraft_status;
 mod model;
+pub mod network_online;
+#[cfg(all(test, feature = "local-relay-lab"))]
+mod network_online_tests;
 mod path_observation;
 mod plan;
 mod session_invitation;
@@ -21,7 +24,7 @@ pub use bridge::MAX_FRAGMENT_FRAME_BYTES;
 pub use connect_observation::{GuestConnectObservation, GuestConnectPhase};
 pub use fragment::Completed as ReassembledDatagram;
 pub use guest::{FragmentedUdpAssociation, Guest, TcpBridge, UdpAssociation, UdpBridge};
-pub use host::Host;
+pub use host::{Host, HostLocalPlayerTicket};
 #[cfg(all(windows, debug_assertions, feature = "native-voice-test-support"))]
 pub use host::{NativeVoiceRetirementGate, NativeVoiceRetirementStage};
 pub use invitation::{
@@ -39,6 +42,7 @@ pub use minecraft_status::{
     MinecraftStatusSummary, probe_minecraft_status,
 };
 pub use model::*;
+pub use network_online::OnlineNetworkTicket;
 pub use path_observation::{PathObservation, PathState};
 pub use plan::{MAX_PLAN_BYTES, PlanError, ValidatedPlan, load_fragmented_plan, load_plan};
 pub use session_invitation::{

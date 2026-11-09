@@ -1,4 +1,4 @@
-//! Opt-in local social admission. These typed signatures are separate from key
+//! Signed social admission. These typed signatures are separate from key
 //! possession, manual invitations and the transport's existing TLS authority.
 use crate::{EndpointId, SecretKey, SocialKeyChallenge, SocialKeyRole, unix_millis};
 use iroh::Signature;
@@ -40,6 +40,30 @@ fn is_hex(value: &str) -> bool {
         && value
             .bytes()
             .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
+}
+fn voice_fields(
+    schema: u8,
+    profile: &Option<String>,
+    digest: &Option<String>,
+    host_player: Option<bool>,
+) -> bool {
+    if schema == 3 {
+        matches!(profile.as_deref(), Some("svc" | "plasmo"))
+            && digest.as_deref().is_some_and(is_hex)
+            && host_player.is_some()
+    } else {
+        profile.is_none() && digest.is_none() && host_player.is_none()
+    }
+}
+fn non_null_bool<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<bool>, D::Error> {
+    bool::deserialize(deserializer).map(Some)
+}
+fn non_null_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
 }
 fn uid(value: &str) -> bool {
     !value.is_empty()
@@ -145,12 +169,38 @@ pub struct SocialHostPolicy {
     max_guests: u8,
     issued_at_unix_ms: u64,
     expires_at_unix_ms: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null_string"
+    )]
+    voice_profile: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null_string"
+    )]
+    voice_source_digest: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null_bool"
+    )]
+    host_player: Option<bool>,
 }
 impl SocialHostPolicy {
     pub fn review(
         challenge: &SocialKeyChallenge,
         visibility: &str,
         source: SocketAddr,
+    ) -> Result<Self> {
+        Self::review_with_join_policy(challenge, visibility, source, "open")
+    }
+    pub fn review_with_join_policy(
+        challenge: &SocialKeyChallenge,
+        visibility: &str,
+        source: SocketAddr,
+        join_policy: &str,
     ) -> Result<Self> {
         challenge
             .validate()
@@ -170,19 +220,75 @@ impl SocialHostPolicy {
             session_id: challenge.session_id().into(),
             session_digest: challenge.session_digest().into(),
             visibility: visibility.into(),
-            join_policy: "open".into(),
+            join_policy: join_policy.into(),
             service_id: "game".into(),
             protocol: "tcp".into(),
             source_digest: social_source_digest(source)?,
             max_guests: 1,
             issued_at_unix_ms: challenge.issued_at_unix_ms(),
             expires_at_unix_ms: challenge.expires_at_unix_ms(),
+            voice_profile: None,
+            voice_source_digest: None,
+            host_player: None,
         };
         value.validate()?;
         Ok(value)
     }
+    pub fn review_online(
+        challenge: &SocialKeyChallenge,
+        visibility: &str,
+        source: SocketAddr,
+        join_policy: &str,
+        session_expiry: u64,
+    ) -> Result<Self> {
+        let mut policy = Self::review_with_join_policy(challenge, visibility, source, join_policy)?;
+        policy.schema_version = 2;
+        policy.max_guests = 8;
+        policy.expires_at_unix_ms = session_expiry;
+        policy.validate()?;
+        Ok(policy)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn review_online_voice(
+        challenge: &SocialKeyChallenge,
+        visibility: &str,
+        source: SocketAddr,
+        join_policy: &str,
+        session_expiry: u64,
+        voice_profile: &str,
+        voice_source_digest: &str,
+        host_player: bool,
+    ) -> Result<Self> {
+        let mut policy =
+            Self::review_online(challenge, visibility, source, join_policy, session_expiry)?;
+        policy.schema_version = 3;
+        policy.voice_profile = Some(voice_profile.into());
+        policy.voice_source_digest = Some(voice_source_digest.into());
+        policy.host_player = Some(host_player);
+        policy.max_guests = if host_player { 7 } else { 8 };
+        policy.validate()?;
+        Ok(policy)
+    }
+    /// Restrict the reviewed online capacity before its digest is approved.
+    pub fn with_guest_limit(mut self, maximum: u8) -> Result<Self> {
+        if self.schema_version == 1 || maximum == 0 || maximum > self.max_guests {
+            return Err(SocialAdmissionError::Context);
+        }
+        self.max_guests = maximum;
+        self.validate()?;
+        Ok(self)
+    }
+    pub fn max_guests(&self) -> u8 {
+        self.max_guests
+    }
     fn validate(&self) -> Result<()> {
-        if self.schema_version != 1
+        if !matches!(self.schema_version, 1..=3)
+            || !voice_fields(
+                self.schema_version,
+                &self.voice_profile,
+                &self.voice_source_digest,
+                self.host_player,
+            )
             || self.purpose != "hostSocialSession"
             || !is_hex(&self.issuer_instance)
             || !is_hex(&self.policy_id)
@@ -193,44 +299,60 @@ impl SocialHostPolicy {
             || !uuid(&self.session_id)
             || !is_hex(&self.session_digest)
             || !matches!(self.visibility.as_str(), "public" | "friends")
-            || self.join_policy != "open"
+            || !matches!(self.join_policy.as_str(), "open" | "approval")
             || self.service_id != "game"
             || self.protocol != "tcp"
             || !is_hex(&self.source_digest)
-            || self.max_guests != 1
+            || if self.schema_version != 1 {
+                !(1..=if self.host_player == Some(true) { 7 } else { 8 }).contains(&self.max_guests)
+            } else {
+                self.max_guests != 1
+            }
             || !integer(self.issued_at_unix_ms)
             || !integer(self.expires_at_unix_ms)
             || self.expires_at_unix_ms <= self.issued_at_unix_ms
-            || self.expires_at_unix_ms - self.issued_at_unix_ms > 60_000
+            || self.expires_at_unix_ms - self.issued_at_unix_ms
+                > if self.schema_version != 1 {
+                    14_400_000
+                } else {
+                    60_000
+                }
         {
             return Err(SocialAdmissionError::Invalid);
         }
         Ok(())
     }
     fn bytes(&self) -> Vec<u8> {
-        preimage(
-            POLICY_DOMAIN,
-            &[
-                self.schema_version.to_string(),
-                self.purpose.clone(),
-                self.issuer_instance.clone(),
-                self.policy_id.clone(),
-                self.account_id.clone(),
-                self.operation_id.clone(),
-                self.generation.to_string(),
-                self.public_key.clone(),
-                self.session_id.clone(),
-                self.session_digest.clone(),
-                self.visibility.clone(),
-                self.join_policy.clone(),
-                self.service_id.clone(),
-                self.protocol.clone(),
-                self.source_digest.clone(),
-                self.max_guests.to_string(),
-                self.issued_at_unix_ms.to_string(),
-                self.expires_at_unix_ms.to_string(),
-            ],
-        )
+        let mut fields = vec![
+            self.schema_version.to_string(),
+            self.purpose.clone(),
+            self.issuer_instance.clone(),
+            self.policy_id.clone(),
+            self.account_id.clone(),
+            self.operation_id.clone(),
+            self.generation.to_string(),
+            self.public_key.clone(),
+            self.session_id.clone(),
+            self.session_digest.clone(),
+            self.visibility.clone(),
+            self.join_policy.clone(),
+            self.service_id.clone(),
+            self.protocol.clone(),
+            self.source_digest.clone(),
+            self.max_guests.to_string(),
+            self.issued_at_unix_ms.to_string(),
+            self.expires_at_unix_ms.to_string(),
+        ];
+        if self.schema_version == 3 {
+            fields.push(self.voice_profile.clone().expect("validated voice profile"));
+            fields.push(
+                self.voice_source_digest
+                    .clone()
+                    .expect("validated voice source"),
+            );
+            fields.push(self.host_player.expect("validated host player").to_string());
+        }
+        preimage(POLICY_DOMAIN, &fields)
     }
     pub fn digest(&self) -> String {
         hex(&Sha256::digest(self.bytes()))
@@ -260,6 +382,31 @@ impl SocialHostPolicy {
     }
     pub fn policy_id(&self) -> &str {
         &self.policy_id
+    }
+    pub fn host_player(&self) -> bool {
+        self.host_player == Some(true)
+    }
+    pub fn voice_profile(&self) -> Option<&str> {
+        self.voice_profile.as_deref()
+    }
+    pub fn voice_source_digest(&self) -> Option<&str> {
+        self.voice_source_digest.as_deref()
+    }
+    pub fn matches_host(
+        &self,
+        account: &str,
+        operation: &str,
+        generation: u64,
+        key: EndpointId,
+        session: &str,
+        source: SocketAddr,
+    ) -> bool {
+        self.account_id == account
+            && self.operation_id == operation
+            && self.generation == generation
+            && self.public_key == key.to_string()
+            && self.session_id == session
+            && social_source_digest(source).is_ok_and(|digest| digest == self.source_digest)
     }
     pub fn session_digest(&self) -> &str {
         &self.session_digest
@@ -503,10 +650,34 @@ struct GrantBody {
     issued_at_unix_ms: u64,
     admission_expires_at_unix_ms: u64,
     session_expires_at_unix_ms: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null_string"
+    )]
+    voice_profile: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null_string"
+    )]
+    voice_source_digest: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null_bool"
+    )]
+    host_player: Option<bool>,
 }
 impl GrantBody {
     fn validate(&self) -> Result<()> {
-        if self.schema_version != 1
+        if !matches!(self.schema_version, 1..=3)
+            || !voice_fields(
+                self.schema_version,
+                &self.voice_profile,
+                &self.voice_source_digest,
+                self.host_player,
+            )
             || self.purpose != "socialAdmission"
             || !is_hex(&self.issuer_instance)
             || !is_hex(&self.grant_id)
@@ -530,37 +701,49 @@ impl GrantBody {
             || self.admission_expires_at_unix_ms <= self.issued_at_unix_ms
             || self.admission_expires_at_unix_ms - self.issued_at_unix_ms > 10_000
             || self.session_expires_at_unix_ms < self.admission_expires_at_unix_ms
-            || self.session_expires_at_unix_ms - self.issued_at_unix_ms > 60_000
+            || self.session_expires_at_unix_ms - self.issued_at_unix_ms
+                > if self.schema_version != 1 {
+                    14_400_000
+                } else {
+                    60_000
+                }
         {
             return Err(SocialAdmissionError::Invalid);
         }
         Ok(())
     }
     fn bytes(&self) -> Vec<u8> {
-        preimage(
-            GRANT_DOMAIN,
-            &[
-                self.schema_version.to_string(),
-                self.purpose.clone(),
-                self.issuer_instance.clone(),
-                self.grant_id.clone(),
-                self.policy_id.clone(),
-                self.policy_digest.clone(),
-                self.session_id.clone(),
-                self.session_digest.clone(),
-                self.host_account_id.clone(),
-                self.host_public_key.clone(),
-                self.host_operation_id.clone(),
-                self.host_generation.to_string(),
-                self.guest_account_id.clone(),
-                self.guest_public_key.clone(),
-                self.guest_operation_id.clone(),
-                self.guest_generation.to_string(),
-                self.issued_at_unix_ms.to_string(),
-                self.admission_expires_at_unix_ms.to_string(),
-                self.session_expires_at_unix_ms.to_string(),
-            ],
-        )
+        let mut fields = vec![
+            self.schema_version.to_string(),
+            self.purpose.clone(),
+            self.issuer_instance.clone(),
+            self.grant_id.clone(),
+            self.policy_id.clone(),
+            self.policy_digest.clone(),
+            self.session_id.clone(),
+            self.session_digest.clone(),
+            self.host_account_id.clone(),
+            self.host_public_key.clone(),
+            self.host_operation_id.clone(),
+            self.host_generation.to_string(),
+            self.guest_account_id.clone(),
+            self.guest_public_key.clone(),
+            self.guest_operation_id.clone(),
+            self.guest_generation.to_string(),
+            self.issued_at_unix_ms.to_string(),
+            self.admission_expires_at_unix_ms.to_string(),
+            self.session_expires_at_unix_ms.to_string(),
+        ];
+        if self.schema_version == 3 {
+            fields.push(self.voice_profile.clone().expect("validated voice profile"));
+            fields.push(
+                self.voice_source_digest
+                    .clone()
+                    .expect("validated voice source"),
+            );
+            fields.push(self.host_player.expect("validated host player").to_string());
+        }
+        preimage(GRANT_DOMAIN, &fields)
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -584,21 +767,27 @@ impl VerifiedSocialGrant {
         pin: EndpointId,
         challenge: &SocialKeyChallenge,
         prepared_deadline: Instant,
+        online: bool,
     ) -> Result<Self> {
         let at = Instant::now();
         let now = unix_millis();
-        challenge
-            .validate()
-            .map_err(|_| SocialAdmissionError::Expired)?;
+        if !(online && challenge.role() == SocialKeyRole::Host) {
+            challenge
+                .validate()
+                .map_err(|_| SocialAdmissionError::Expired)?;
+        }
         let envelope: GrantEnvelope = parse(text)?;
         let b = envelope.body;
         b.validate()?;
+        if (b.schema_version != 1) != online {
+            return Err(SocialAdmissionError::Context);
+        }
         verify_signature(pin, &b.bytes(), &envelope.signature)?;
         if b.issuer_instance != challenge.issuer_instance()
             || b.session_id != challenge.session_id()
             || b.session_digest != challenge.session_digest()
             || b.issued_at_unix_ms < challenge.issued_at_unix_ms()
-            || b.session_expires_at_unix_ms > challenge.expires_at_unix_ms()
+            || (!online && b.session_expires_at_unix_ms > challenge.expires_at_unix_ms())
         {
             return Err(SocialAdmissionError::Context);
         }
@@ -609,7 +798,16 @@ impl VerifiedSocialGrant {
                 b.admission_expires_at_unix_ms,
                 prepared_deadline,
             )?,
-            session_deadline: deadline(at, now, b.session_expires_at_unix_ms, prepared_deadline)?,
+            session_deadline: deadline(
+                at,
+                now,
+                b.session_expires_at_unix_ms,
+                if online {
+                    at + Duration::from_secs(14_400)
+                } else {
+                    prepared_deadline
+                },
+            )?,
             body: b,
             pin,
         };
@@ -625,7 +823,13 @@ impl VerifiedSocialGrant {
         prepared_deadline: Instant,
     ) -> Result<Self> {
         policy.verify()?;
-        let value = Self::verified(text, pin, challenge, prepared_deadline)?;
+        let value = Self::verified(
+            text,
+            pin,
+            challenge,
+            prepared_deadline,
+            policy.body.schema_version != 1,
+        )?;
         let b = &value.body;
         let p = &policy.body;
         if challenge.role() != SocialKeyRole::Host
@@ -638,8 +842,12 @@ impl VerifiedSocialGrant {
             || p.session_id != challenge.session_id()
             || p.session_digest != challenge.session_digest()
             || p.issued_at_unix_ms != challenge.issued_at_unix_ms()
-            || p.expires_at_unix_ms != challenge.expires_at_unix_ms()
+            || (p.schema_version == 1 && p.expires_at_unix_ms != challenge.expires_at_unix_ms())
             || p.source_digest != social_source_digest(source)?
+            || b.schema_version != p.schema_version
+            || b.voice_profile != p.voice_profile
+            || b.voice_source_digest != p.voice_source_digest
+            || b.host_player != p.host_player
             || b.policy_id != p.policy_id
             || b.policy_digest != p.digest()
             || b.host_account_id != p.account_id
@@ -659,12 +867,31 @@ impl VerifiedSocialGrant {
         context: &VerifiedSocialJoinContext,
         prepared_deadline: Instant,
     ) -> Result<Self> {
+        Self::for_guest_mode(text, pin, challenge, context, prepared_deadline, false)
+    }
+    pub fn for_guest_online(
+        text: &str,
+        pin: EndpointId,
+        challenge: &SocialKeyChallenge,
+        context: &VerifiedSocialJoinContext,
+        prepared_deadline: Instant,
+    ) -> Result<Self> {
+        Self::for_guest_mode(text, pin, challenge, context, prepared_deadline, true)
+    }
+    fn for_guest_mode(
+        text: &str,
+        pin: EndpointId,
+        challenge: &SocialKeyChallenge,
+        context: &VerifiedSocialJoinContext,
+        prepared_deadline: Instant,
+        online: bool,
+    ) -> Result<Self> {
         context.check_challenge(challenge)?;
         if context.pin != pin {
             return Err(SocialAdmissionError::Context);
         }
         let expected = &context.body;
-        let value = Self::verified(text, pin, challenge, prepared_deadline)?;
+        let value = Self::verified(text, pin, challenge, prepared_deadline, online)?;
         let b = &value.body;
         if challenge.role() != SocialKeyRole::Guest
             || b.guest_account_id != challenge.account_id()
@@ -698,6 +925,18 @@ impl VerifiedSocialGrant {
             self.session_deadline,
         )
     }
+    pub fn host_player(&self) -> bool {
+        self.body.host_player == Some(true)
+    }
+    pub fn voice_profile(&self) -> Option<&str> {
+        self.body.voice_profile.as_deref()
+    }
+    pub fn voice_source_digest(&self) -> Option<&str> {
+        self.body.voice_source_digest.as_deref()
+    }
+    pub fn session_deadline(&self) -> Instant {
+        self.session_deadline
+    }
     pub fn grant_id(&self) -> &str {
         &self.body.grant_id
     }
@@ -715,6 +954,9 @@ impl VerifiedSocialGrant {
             .guest_public_key
             .parse()
             .expect("validated guest public key")
+    }
+    pub fn guest_account_id(&self) -> &str {
+        &self.body.guest_account_id
     }
     pub fn admission_expires_at_unix_ms(&self) -> u64 {
         self.body.admission_expires_at_unix_ms
@@ -914,6 +1156,9 @@ mod tests {
                 issued_at_unix_ms: now,
                 admission_expires_at_unix_ms: now + 9_000,
                 session_expires_at_unix_ms: now + 40_000,
+                voice_profile: None,
+                voice_source_digest: None,
+                host_player: None,
             };
             let expected = SocialGuestExpectation {
                 host_account_id: hc.account_id().into(),
@@ -1007,6 +1252,97 @@ mod tests {
             })
             .unwrap()
         }
+    }
+    #[test]
+    fn social_online_voice_scope_is_signed_and_matches_original_host_policy() {
+        let mut f = Fixture::new();
+        let review = SocialHostPolicy::review_online_voice(
+            &f.hc,
+            "friends",
+            "127.0.0.1:43001".parse().unwrap(),
+            "open",
+            f.hc.issued_at_unix_ms() + 300_000,
+            "svc",
+            &"77".repeat(32),
+            true,
+        )
+        .unwrap();
+        assert_eq!(review.max_guests, 7);
+        assert!(review.bytes().ends_with(&preimage(
+            "",
+            &["svc".into(), "77".repeat(32), "true".into()]
+        )));
+        f.policy = review.approve(&f.host, &review.digest(), f.cap).unwrap();
+        f.grant.schema_version = 3;
+        f.grant.policy_digest = review.digest();
+        f.grant.session_expires_at_unix_ms = review.expires_at_unix_ms();
+        f.grant.voice_profile = Some("svc".into());
+        f.grant.voice_source_digest = Some("77".repeat(32));
+        f.grant.host_player = Some(true);
+        f.expected.policy_digest = review.digest();
+        let encoded = f.encoded(&f.grant);
+        let verified = f.verify_host(&encoded).unwrap();
+        assert_eq!(verified.voice_profile(), Some("svc"));
+        assert!(verified.host_player());
+        VerifiedSocialGrant::for_guest_online(
+            &encoded,
+            f.authority.public(),
+            &f.gc,
+            &f.context(&f.expected),
+            f.cap,
+        )
+        .unwrap();
+        assert!(
+            VerifiedSocialGrant::for_guest(
+                &encoded,
+                f.authority.public(),
+                &f.gc,
+                &f.context(&f.expected),
+                f.cap
+            )
+            .is_err()
+        );
+        for kind in 0..3 {
+            let mut changed = f.grant.clone();
+            match kind {
+                0 => changed.voice_profile = Some("plasmo".into()),
+                1 => changed.voice_source_digest = Some("88".repeat(32)),
+                _ => changed.host_player = Some(false),
+            }
+            assert!(
+                f.verify_host(&f.encoded(&changed)).is_err(),
+                "original policy must match even with a valid authority signature"
+            );
+        }
+        let mut legacy = serde_json::to_value(Fixture::new().grant).unwrap();
+        legacy["voiceProfile"] = Value::Null;
+        assert!(serde_json::from_value::<GrantBody>(legacy).is_err());
+    }
+    #[test]
+    fn social_online_capacity_can_only_shrink_before_fresh_approval() {
+        let f = Fixture::new();
+        let original = SocialHostPolicy::review_online(
+            &f.hc,
+            "friends",
+            "127.0.0.1:43001".parse().unwrap(),
+            "open",
+            f.hc.issued_at_unix_ms() + 300_000,
+        )
+        .unwrap();
+        let limited = original.clone().with_guest_limit(2).unwrap();
+        assert_eq!(limited.max_guests(), 2);
+        assert_ne!(limited.digest(), original.digest());
+        assert_eq!(
+            limited
+                .approve(&f.host, &original.digest(), f.cap)
+                .unwrap_err(),
+            SocialAdmissionError::Approval
+        );
+        assert!(limited.approve(&f.host, &limited.digest(), f.cap).is_ok());
+        assert!(limited.with_guest_limit(3).is_err());
+        assert!(original.clone().with_guest_limit(0).is_err());
+        assert!(original.with_guest_limit(9).is_err());
+        assert!(f.policy.body().clone().with_guest_limit(1).is_err());
     }
     #[test]
     fn social_admission_host_requires_exact_approval_source_and_original_key() {

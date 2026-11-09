@@ -74,6 +74,7 @@ impl InvitationAuthority {
 enum HostAuthorities {
     Manual,
     Invited(HashMap<String, InvitationAuthority>),
+    Online(Box<online::OnlineAuthority>),
 }
 
 #[cfg(test)]
@@ -82,6 +83,9 @@ mod active_observation_tests;
 #[cfg(all(windows, debug_assertions, feature = "native-voice-test-support"))]
 #[path = "host_native_voice_test_support.rs"]
 mod native_voice_test_support;
+#[path = "host_online.rs"]
+mod online;
+pub use online::HostLocalPlayerTicket;
 #[path = "host_session_group.rs"]
 mod session_group;
 #[path = "host_udp_service.rs"]
@@ -223,13 +227,43 @@ struct LeaseState {
     udp_services: HashMap<u32, Arc<udp_service::Control>>,
 }
 
+impl LeaseState {
+    fn new(
+        lease: Lease,
+        invitation: Option<InvitationAuthority>,
+        services: &HashMap<String, (u32, Service)>,
+        limits: &Limits,
+    ) -> Self {
+        Self {
+            udp_services: lease
+                .services
+                .iter()
+                .filter_map(|id| {
+                    let (handle, service) = &services[id];
+                    (service.protocol == Protocol::Udp)
+                        .then(|| (*handle, udp_service::Control::new()))
+                })
+                .collect(),
+            fragment_memory: bridge::peer_budget(lease.peer),
+            fragment_ingress: Arc::new(Mutex::new(UdpLimiter::new(limits))),
+            value: lease,
+            invitation,
+            consumed: AtomicBool::new(false),
+            cancel: CancellationToken::new(),
+            udp_limiters: Mutex::new(HashMap::new()),
+            downstream_limiters: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "host_session_udp_tests.rs"]
 mod session_udp_tests;
 struct State {
     session_id: String,
     services: HashMap<String, (u32, Service)>,
-    leases: HashMap<String, LeaseState>,
+    leases: Mutex<HashMap<String, Arc<LeaseState>>>,
+    online: Option<Box<online::OnlineAuthority>>,
     limits: Limits,
     metrics: Arc<Metrics>,
     tcp: Arc<Semaphore>,
@@ -239,6 +273,12 @@ struct State {
     cancel: CancellationToken,
     #[cfg(test)]
     control_reads_started: AtomicU64,
+}
+
+impl State {
+    fn lease(&self, id: &str) -> Option<Arc<LeaseState>> {
+        self.leases.lock().ok()?.get(id).cloned()
+    }
 }
 
 pub struct Host {
@@ -449,11 +489,13 @@ impl Host {
         mode: transport::EndpointMode,
     ) -> Result<Self> {
         config.limits.validate()?;
+        let online = matches!(&authorities, HostAuthorities::Online(_));
         if !valid_id(&config.session_id)
             || config.services.is_empty()
             || config.services.len() > 8
             || config.leases.is_empty()
             || config.leases.len() > config.limits.max_peers
+            || (online && config.leases.len() != 1)
         {
             return Err(Error::Configuration);
         }
@@ -501,7 +543,7 @@ impl Host {
         let mut peers = HashSet::new();
         for lease in config.leases {
             if !valid_id(&lease.lease_id)
-                || lease.expires_at_unix_ms > now.saturating_add(3_600_000)
+                || (!online && lease.expires_at_unix_ms > now.saturating_add(3_600_000))
                 || lease.services.is_empty()
                 || lease.services.iter().any(|id| !services.contains_key(id))
                 || leases.contains_key(&lease.lease_id)
@@ -514,33 +556,27 @@ impl Host {
                 HostAuthorities::Invited(values) => {
                     Some(values.remove(&lease.lease_id).ok_or(Error::Configuration)?)
                 }
+                HostAuthorities::Online(authority) => {
+                    Some(InvitationAuthority::Session(authority.first.clone()))
+                }
             };
             leases.insert(
                 lease.lease_id.clone(),
-                LeaseState {
-                    udp_services: lease
-                        .services
-                        .iter()
-                        .filter_map(|id| {
-                            let (handle, service) = &services[id];
-                            (service.protocol == Protocol::Udp)
-                                .then(|| (*handle, udp_service::Control::new()))
-                        })
-                        .collect(),
-                    fragment_memory: bridge::peer_budget(lease.peer),
-                    fragment_ingress: Arc::new(Mutex::new(UdpLimiter::new(&config.limits))),
-                    value: lease,
+                Arc::new(LeaseState::new(
+                    lease,
                     invitation,
-                    consumed: AtomicBool::new(false),
-                    cancel: CancellationToken::new(),
-                    udp_limiters: Mutex::new(HashMap::new()),
-                    downstream_limiters: Mutex::new(HashMap::new()),
-                },
+                    &services,
+                    &config.limits,
+                )),
             );
         }
-        if matches!(&authorities, HostAuthorities::Invited(values) if !values.is_empty()) {
-            return Err(Error::Configuration);
-        }
+        let online = match authorities {
+            HostAuthorities::Invited(values) if !values.is_empty() => {
+                return Err(Error::Configuration);
+            }
+            HostAuthorities::Online(authority) => Some(authority),
+            _ => None,
+        };
         let endpoint =
             transport::endpoint_in_mode(config.secret_key, config.bind_addr, &config.limits, mode)
                 .await?;
@@ -552,10 +588,17 @@ impl Host {
                 return Err(error);
             }
         }
+        if let Some(online) = &online
+            && let Err(error) = online.check_current()
+        {
+            endpoint.close().await;
+            return Err(error);
+        }
         let state = Arc::new(State {
             session_id: config.session_id,
             services,
-            leases,
+            leases: Mutex::new(leases),
+            online,
             tcp: Arc::new(Semaphore::new(config.limits.max_tcp_total)),
             udp: Arc::new(Semaphore::new(config.limits.max_udp_total)),
             budget: Arc::new(Mutex::new(Bucket::new(
@@ -592,7 +635,7 @@ impl Host {
     /// before a caller could sample active_peers. Contains no peer/key material.
     pub fn invitation_consumed(&self, lease_id: &str) -> bool {
         let _admission = self.state.active_leases.lock().unwrap();
-        self.state.leases.get(lease_id).is_some_and(|lease| {
+        self.state.lease(lease_id).is_some_and(|lease| {
             lease.invitation.is_some() && lease.consumed.load(Ordering::Acquire)
         })
     }
@@ -607,7 +650,7 @@ impl Host {
     /// The existing admission lock linearizes this read with revoke/admission.
     pub fn invitation_path_observation(&self, lease_id: &str) -> Option<PathObservation> {
         let active = self.state.active_leases.lock().ok()?;
-        let lease = self.state.leases.get(lease_id)?;
+        let lease = self.state.lease(lease_id)?;
         if self.state.cancel.is_cancelled() || lease.invitation.is_none() {
             return None;
         }
@@ -644,7 +687,7 @@ impl Host {
     pub fn revoke(&self, lease_id: &str) -> bool {
         // Linearize revocation with admission and its single-use decision.
         let _admission = self.state.active_leases.lock().unwrap();
-        if let Some(lease) = self.state.leases.get(lease_id) {
+        if let Some(lease) = self.state.lease(lease_id) {
             lease.cancel.cancel();
             true
         } else {
@@ -663,11 +706,7 @@ impl Host {
         if !valid_id(lease_id) || !valid_id(service_id) || service_revision == 0 {
             return Err(Error::Configuration);
         }
-        let lease = self
-            .state
-            .leases
-            .get(lease_id)
-            .ok_or(Error::ServiceDenied)?;
+        let lease = self.state.lease(lease_id).ok_or(Error::ServiceDenied)?;
         let (handle, service) = self
             .state
             .services
@@ -704,12 +743,23 @@ impl Drop for Host {
 async fn serve(endpoint: Endpoint, state: Arc<State>) {
     let admission = Arc::new(Semaphore::new(state.limits.max_peers + 8));
     let mut tasks = JoinSet::new();
-    loop {
+    let online_expired = async {
+        match &state.online {
+            Some(authority) => authority.wait_expired().await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::pin!(online_expired);
+    let expired = loop {
         tokio::select! {
             biased;
-            _ = state.cancel.cancelled() => break,
+            _ = state.cancel.cancelled() => break false,
+            _ = &mut online_expired => {
+                state.cancel.cancel();
+                break true;
+            }
             incoming = endpoint.accept() => {
-                let Some(incoming) = incoming else { break; };
+                let Some(incoming) = incoming else { break false; };
                 let Ok(permit) = admission.clone().try_acquire_owned() else { incoming.refuse(); continue; };
                 let state = state.clone();
                 tasks.spawn(async move {
@@ -724,8 +774,11 @@ async fn serve(endpoint: Endpoint, state: Arc<State>) {
             }
             _ = tasks.join_next(), if !tasks.is_empty() => (),
         }
-    }
+    };
     while tasks.join_next().await.is_some() {}
+    if expired {
+        endpoint.close().await;
+    }
 }
 
 struct PeerGuard {
@@ -743,12 +796,8 @@ impl Drop for PeerGuard {
     }
 }
 
-fn authorize_session<'a>(
-    state: &'a State,
-    lease_id: &str,
-    peer: EndpointId,
-) -> Result<&'a LeaseState> {
-    let lease = state.leases.get(lease_id).ok_or(Error::Unauthorized)?;
+fn authorize_session(state: &State, lease_id: &str, peer: EndpointId) -> Result<Arc<LeaseState>> {
+    let lease = state.lease(lease_id).ok_or(Error::Unauthorized)?;
     if lease.value.peer != peer {
         return Err(Error::Unauthorized);
     }
@@ -757,6 +806,12 @@ fn authorize_session<'a>(
     }
     if let Some(invitation) = &lease.invitation {
         invitation.check_session()?;
+    }
+    if let Some(online) = &state.online {
+        if state.cancel.is_cancelled() {
+            return Err(Error::Closed);
+        }
+        online.check_current()?;
     }
     Ok(lease)
 }
@@ -775,11 +830,7 @@ fn active_invitation(state: &State, active: &HashMap<String, Connection>, lease_
     })
 }
 
-fn authorize_admission<'a>(
-    state: &'a State,
-    lease_id: &str,
-    peer: EndpointId,
-) -> Result<&'a LeaseState> {
+fn authorize_admission(state: &State, lease_id: &str, peer: EndpointId) -> Result<Arc<LeaseState>> {
     let lease = authorize_session(state, lease_id, peer)?;
     if let Some(invitation) = &lease.invitation {
         invitation.check_admission()?;
@@ -945,11 +996,17 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
         connection.close(1u32.into(), b"authorization failed");
         return;
     };
-    let lease = &state.leases[&hello.lease_id];
+    let Some(lease) = state.lease(&hello.lease_id) else {
+        connection.close(1u32.into(), b"authorization failed");
+        return;
+    };
     let mut remaining =
         Duration::from_millis(lease.value.expires_at_unix_ms.saturating_sub(unix_millis()));
     if let Some(invitation) = &lease.invitation {
         remaining = remaining.min(invitation.session_remaining());
+    }
+    if let Some(online) = &state.online {
+        remaining = remaining.min(online.remaining());
     }
     let cancel = state.cancel.child_token();
     let lease_deadline = Instant::now() + remaining;

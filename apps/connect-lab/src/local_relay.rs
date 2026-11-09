@@ -283,8 +283,28 @@ impl LocalRelayFixture {
         peers: [EndpointId; 2],
         profile: LocalRelayProfile,
     ) -> std::result::Result<Self, LocalRelayError> {
+        Self::start_inner(peers, profile, None).await
+    }
+    /// Native desktop test only: one original Host and two independently keyed
+    /// remote Guests. The existing relay-only ticket still binds its original pair.
+    #[cfg(all(windows, debug_assertions, feature = "native-voice-test-support"))]
+    pub async fn start_native_group(
+        peers: [EndpointId; 3],
+        profile: LocalRelayProfile,
+    ) -> std::result::Result<Self, LocalRelayError> {
+        Self::start_inner([peers[0], peers[1]], profile, Some(peers[2])).await
+    }
+    #[cfg(all(windows, debug_assertions, feature = "native-voice-test-support"))]
+    pub fn bound_addr(&self) -> SocketAddr {
+        self.address
+    }
+    async fn start_inner(
+        peers: [EndpointId; 2],
+        profile: LocalRelayProfile,
+        extra: Option<EndpointId>,
+    ) -> std::result::Result<Self, LocalRelayError> {
         require_no_proxy_scope()?;
-        if peers[0] == peers[1] {
+        if peers[0] == peers[1] || extra.is_some_and(|peer| peers.contains(&peer)) {
             return Err(LocalRelayError::Peers);
         }
         let started = Instant::now();
@@ -295,7 +315,7 @@ impl LocalRelayFixture {
         });
         let expires_at_unix_ms = unix_millis().saturating_add(60_000);
         let access = Arc::new(Allowed {
-            peers: peers.into_iter().collect(),
+            peers: peers.into_iter().chain(extra).collect(),
             connections: Mutex::new(HashMap::new()),
             denied: AtomicU64::new(0),
         });

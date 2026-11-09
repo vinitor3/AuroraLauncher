@@ -19,25 +19,42 @@ pub const MAX_SESSION_INVITATION_BYTES: usize = 4096;
 pub const MAX_ADMISSION_LIFETIME: Duration = Duration::from_secs(600);
 pub const MAX_SESSION_LIFETIME: Duration = Duration::from_secs(3600);
 const DOMAIN: &[u8] = b"aurora/connect-lab/session-invitation/v2\0";
+const ONLINE_FRAGMENTED_DOMAIN: &[u8] = b"aurora/connect/session-invitation/v5\0";
+const ONLINE_DOMAIN: &[u8] = b"aurora/connect/session-invitation/v4\0";
 const FRAGMENTED_DOMAIN: &[u8] = b"aurora/connect-lab/session-invitation/v3\0";
 
 /// Transport selection is separate from the independently approved address mode.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SessionInvitationProfile {
     GameTcp,
+    OnlineGameTcp,
+    OnlineFragmentedGameUdp,
     FragmentedGameUdp,
 }
 impl SessionInvitationProfile {
+    fn online(self) -> bool {
+        matches!(self, Self::OnlineGameTcp | Self::OnlineFragmentedGameUdp)
+    }
+    fn fragmented(self) -> bool {
+        matches!(
+            self,
+            Self::FragmentedGameUdp | Self::OnlineFragmentedGameUdp
+        )
+    }
     fn schema(self) -> u8 {
         match self {
             Self::GameTcp => 2,
+            Self::OnlineGameTcp => 4,
+            Self::OnlineFragmentedGameUdp => 5,
             Self::FragmentedGameUdp => 3,
         }
     }
     fn grants(self) -> Vec<Grant> {
         match self {
-            Self::GameTcp => vec![Grant::game()],
-            Self::FragmentedGameUdp => vec![Grant::game(), Grant::fragmented_aux()],
+            Self::GameTcp | Self::OnlineGameTcp => vec![Grant::game()],
+            Self::FragmentedGameUdp | Self::OnlineFragmentedGameUdp => {
+                vec![Grant::game(), Grant::fragmented_aux()]
+            }
         }
     }
     fn validate_grants(self, grants: &[Grant]) -> Result<()> {
@@ -45,7 +62,7 @@ impl SessionInvitationProfile {
             return Err(Error::Configuration);
         }
         grants[0].validate()?;
-        if self == Self::FragmentedGameUdp && !grants[1].matches(&Grant::fragmented_aux()) {
+        if self.fragmented() && !grants[1].matches(&Grant::fragmented_aux()) {
             return Err(Error::Configuration);
         }
         Ok(())
@@ -192,8 +209,11 @@ fn validate_profile_services(
     profile: SessionInvitationProfile,
 ) -> Result<()> {
     match profile {
-        SessionInvitationProfile::GameTcp => validate_local_services(services),
-        SessionInvitationProfile::FragmentedGameUdp => {
+        SessionInvitationProfile::GameTcp | SessionInvitationProfile::OnlineGameTcp => {
+            validate_local_services(services)
+        }
+        SessionInvitationProfile::FragmentedGameUdp
+        | SessionInvitationProfile::OnlineFragmentedGameUdp => {
             if services.len() != 2 || services[0].max_datagram_bytes != 1400 {
                 return Err(Error::Configuration);
             }
@@ -268,6 +288,108 @@ struct VerificationOptions {
     profile: SessionInvitationProfile,
 }
 impl SessionInvitation {
+    /// Online routing comes from an independently authenticated native ticket.
+    /// The sentinel is never interpreted as a network destination.
+    pub fn issue_online(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        services: &[Service],
+        deadlines: SessionDeadlines,
+    ) -> Result<Self> {
+        Self::issue_in_profile(
+            host,
+            guest,
+            session_id,
+            "0.0.0.0:0".parse().expect("route sentinel"),
+            services,
+            IssueOptions {
+                timing: IssueTiming::Absolute(deadlines),
+                mode: AddressMode::Loopback,
+                profile: SessionInvitationProfile::OnlineGameTcp,
+            },
+        )
+    }
+    pub fn verify_online(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+    ) -> Result<Self> {
+        Self::verify_in_profile(
+            encoded,
+            expected_host,
+            guest,
+            VerificationOptions {
+                clock: Clock::now(),
+                mode: AddressMode::Loopback,
+                profile: SessionInvitationProfile::OnlineGameTcp,
+            },
+        )
+    }
+    pub(crate) fn check_host_online(&self, config: &HostConfig) -> Result<()> {
+        self.check_host_profile_at(
+            config,
+            VerificationOptions {
+                clock: Clock::now(),
+                mode: AddressMode::Loopback,
+                profile: SessionInvitationProfile::OnlineGameTcp,
+            },
+        )
+    }
+    /// Schema5 approves the same closed fragmented aux profile, while routes
+    /// still require a separately verified online ticket. Schema4 stays TCP-only.
+    pub fn issue_online_fragmented(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        services: &[Service],
+        deadlines: SessionDeadlines,
+    ) -> Result<Self> {
+        Self::issue_in_profile(
+            host,
+            guest,
+            session_id,
+            "0.0.0.0:0".parse().expect("route sentinel"),
+            services,
+            IssueOptions {
+                timing: IssueTiming::Absolute(deadlines),
+                mode: AddressMode::Loopback,
+                profile: SessionInvitationProfile::OnlineFragmentedGameUdp,
+            },
+        )
+    }
+    pub fn verify_online_fragmented(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+    ) -> Result<Self> {
+        Self::verify_in_profile(
+            encoded,
+            expected_host,
+            guest,
+            VerificationOptions {
+                clock: Clock::now(),
+                mode: AddressMode::Loopback,
+                profile: SessionInvitationProfile::OnlineFragmentedGameUdp,
+            },
+        )
+    }
+    pub(crate) fn check_host_online_fragmented(&self, config: &HostConfig) -> Result<()> {
+        self.check_host_profile_at(
+            config,
+            VerificationOptions {
+                clock: Clock::now(),
+                mode: AddressMode::Loopback,
+                profile: SessionInvitationProfile::OnlineFragmentedGameUdp,
+            },
+        )
+    }
+    pub(crate) fn check_same_online_profile(&self, other: &Self) -> Result<()> {
+        if !other.profile.online() {
+            return Err(Error::Configuration);
+        }
+        self.check_profile(other.profile)
+    }
     pub fn issue_loopback(
         host: &SecretKey,
         guest: EndpointId,
@@ -857,8 +979,11 @@ impl SessionInvitation {
     }
     pub(crate) fn capabilities(&self) -> Vec<Capability> {
         match self.profile {
-            SessionInvitationProfile::GameTcp => vec![Capability::ReliableStream],
-            SessionInvitationProfile::FragmentedGameUdp => {
+            SessionInvitationProfile::GameTcp | SessionInvitationProfile::OnlineGameTcp => {
+                vec![Capability::ReliableStream]
+            }
+            SessionInvitationProfile::FragmentedGameUdp
+            | SessionInvitationProfile::OnlineFragmentedGameUdp => {
                 vec![Capability::ReliableStream, Capability::FragmentedDatagram]
             }
         }
@@ -940,7 +1065,11 @@ impl SessionInvitation {
     ) -> Result<()> {
         self.check_profile(options.profile)?;
         self.check_admission_at(options.clock)?;
-        self.check_address_mode(options.mode)?;
+        if !options.profile.online() {
+            self.check_address_mode(options.mode)?;
+        } else if !config.bind_addr.ip().is_unspecified() || config.bind_addr.port() != 0 {
+            return Err(Error::Configuration);
+        }
         validate_profile_services(&config.services, options.profile)?;
         let expected = self.lease();
         if config.secret_key.public() != self.host
@@ -964,6 +1093,8 @@ impl SessionInvitation {
     pub fn preview(&self) -> Value {
         let profile = match self.profile {
             SessionInvitationProfile::GameTcp => "sessionGameTcp",
+            SessionInvitationProfile::OnlineGameTcp => "onlineGameTcp",
+            SessionInvitationProfile::OnlineFragmentedGameUdp => "onlineFragmentedGameUdp",
             SessionInvitationProfile::FragmentedGameUdp => "sessionFragmentedGameUdp",
         };
         let mut preview = json!({"schemaVersion":self.profile.schema(),"experimental":true,"profile":profile,
@@ -974,7 +1105,7 @@ impl SessionInvitation {
             "sessionExpiresAtUnixMs":self.session_expires_at_unix_ms(),
             "directAddress":self.direct_addr().to_string(),"services":self.envelope.body.services,
             "admissionSingleUse":true,"renewal":false,"relay":false,"accountIdentityVerified":false});
-        if self.profile == SessionInvitationProfile::FragmentedGameUdp {
+        if self.profile.fragmented() {
             preview["udpEnvelopeVersion"] = json!(2);
             preview["maxFragmentFrameBytes"] = json!(1264);
         }
@@ -1010,7 +1141,13 @@ fn validate_body(
     {
         return Err(Error::Configuration);
     }
-    options.mode.validate(body.direct_address)?;
+    if options.profile.online() {
+        if body.direct_address != "0.0.0.0:0".parse::<SocketAddr>().expect("route sentinel") {
+            return Err(Error::Configuration);
+        }
+    } else {
+        options.mode.validate(body.direct_address)?;
+    }
     options.profile.validate_grants(&body.services)?;
     let admission_ttl = body
         .admission_expires_at_unix_ms
@@ -1021,9 +1158,19 @@ fn validate_body(
         .checked_sub(body.issued_at_unix_ms)
         .ok_or(Error::Expired)?;
     if admission_ttl == 0
-        || admission_ttl > MAX_ADMISSION_LIFETIME.as_millis() as u64
+        || admission_ttl
+            > if options.profile.online() {
+                60_000
+            } else {
+                MAX_ADMISSION_LIFETIME.as_millis() as u64
+            }
         || session_ttl == 0
-        || session_ttl > MAX_SESSION_LIFETIME.as_millis() as u64
+        || session_ttl
+            > if options.profile.online() {
+                14_400_000
+            } else {
+                MAX_SESSION_LIFETIME.as_millis() as u64
+            }
         || body.admission_expires_at_unix_ms > body.session_expires_at_unix_ms
         || body.issued_at_unix_ms > now
         || body.admission_expires_at_unix_ms <= now
@@ -1036,7 +1183,11 @@ fn validate_body(
 fn signed_bytes(body: &Body) -> Result<Vec<u8>> {
     let encoded = serde_json::to_vec(body).map_err(|_| Error::Protocol)?;
     // Every public issue/verify path first checks its explicitly selected schema.
-    let domain = if body.schema_version == 3 {
+    let domain = if body.schema_version == 5 {
+        ONLINE_FRAGMENTED_DOMAIN
+    } else if body.schema_version == 4 {
+        ONLINE_DOMAIN
+    } else if body.schema_version == 3 {
         FRAGMENTED_DOMAIN
     } else {
         DOMAIN
@@ -1201,6 +1352,120 @@ mod tests {
                 },
             },
         ]
+    }
+
+    #[test]
+    fn online_profile_keeps_independent_four_hour_session_and_short_admission() {
+        let host = generate_key();
+        let guest = generate_key();
+        let now = unix_millis();
+        let invitation = SessionInvitation::issue_online(
+            &host,
+            guest.public(),
+            "online-test",
+            &[service()],
+            SessionDeadlines {
+                admission_expires_at_unix_ms: now + 30_000,
+                session_expires_at_unix_ms: now + 14_000_000,
+            },
+        )
+        .unwrap();
+        let verified =
+            SessionInvitation::verify_online(&invitation.encode(), host.public(), guest.public())
+                .unwrap();
+        assert_eq!(verified.direct_addr(), "0.0.0.0:0".parse().unwrap());
+        assert!(verified.session_remaining().unwrap() > Duration::from_secs(3600));
+        assert!(
+            SessionInvitation::verify_loopback(&invitation.encode(), host.public(), guest.public())
+                .is_err()
+        );
+        assert!(
+            SessionInvitation::issue_online(
+                &host,
+                guest.public(),
+                "online-test",
+                &[service()],
+                SessionDeadlines {
+                    admission_expires_at_unix_ms: now + 60_100,
+                    session_expires_at_unix_ms: now + 14_000_000
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn online_fragmented_schema5_has_separate_authority_and_exact_aux_grant() {
+        let host = generate_key();
+        let guest = generate_key();
+        let now = unix_millis();
+        let deadlines = SessionDeadlines {
+            admission_expires_at_unix_ms: now + 30_000,
+            session_expires_at_unix_ms: now + 300_000,
+        };
+        let voice = SessionInvitation::issue_online_fragmented(
+            &host,
+            guest.public(),
+            "online-voice",
+            &fragmented_services(),
+            deadlines,
+        )
+        .unwrap();
+        let game = SessionInvitation::issue_online(
+            &host,
+            guest.public(),
+            "online-voice",
+            &[service()],
+            deadlines,
+        )
+        .unwrap();
+        assert_eq!(voice.preview()["schemaVersion"], 5);
+        assert_eq!(voice.preview()["profile"], "onlineFragmentedGameUdp");
+        assert_eq!(voice.preview()["services"][1]["maxDatagramBytes"], 4096);
+        assert!(
+            SessionInvitation::verify_online_fragmented(
+                &voice.encode(),
+                host.public(),
+                guest.public()
+            )
+            .is_ok()
+        );
+        assert!(
+            SessionInvitation::verify_online(&voice.encode(), host.public(), guest.public())
+                .is_err()
+        );
+        assert!(
+            SessionInvitation::verify_online_fragmented(
+                &game.encode(),
+                host.public(),
+                guest.public()
+            )
+            .is_err()
+        );
+        assert!(
+            SessionInvitation::verify_fragmented_loopback(
+                &voice.encode(),
+                host.public(),
+                guest.public()
+            )
+            .is_err()
+        );
+        let signed = signed_bytes(&voice.envelope.body).unwrap();
+        assert!(signed.starts_with(ONLINE_FRAGMENTED_DOMAIN));
+        assert!(!signed.starts_with(ONLINE_DOMAIN));
+        let mut wrong = fragmented_services();
+        wrong[1].max_datagram_bytes = 4097;
+        assert!(
+            SessionInvitation::issue_online_fragmented(
+                &host,
+                guest.public(),
+                "online-voice",
+                &wrong,
+                deadlines
+            )
+            .is_err()
+        );
+        assert!(voice.check_same_online_profile(&game).is_err());
     }
 
     #[test]

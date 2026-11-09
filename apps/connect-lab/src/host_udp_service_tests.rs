@@ -110,7 +110,7 @@ impl Fixture {
         .await
         .unwrap();
         let handle = host.state.services["aux"].0;
-        let control = host.state.leases["p"].udp_services[&handle].clone();
+        let control = host.state.lease("p").unwrap().udp_services[&handle].clone();
         let mut addresses: BTreeSet<_> = host.bound_sockets().into_iter().collect();
         addresses.extend(guest.bound_sockets());
         addresses.insert(destination.local_addr().unwrap());
@@ -131,7 +131,7 @@ impl Fixture {
 
     fn control_for(&self, service: &str) -> Arc<udp_service::Control> {
         let handle = self.host.state.services[service].0;
-        self.host.state.leases["p"].udp_services[&handle].clone()
+        self.host.state.lease("p").unwrap().udp_services[&handle].clone()
     }
 
     async fn assert_game_alive(&self) {
@@ -317,7 +317,13 @@ async fn fragmented_delivery(stage: Stage) {
     fixture
         .control
         .install(Stage::BeforeWait, wait_gate.clone());
-    let peer_memory = fixture.host.state.leases["p"].fragment_memory.clone();
+    let peer_memory = fixture
+        .host
+        .state
+        .lease("p")
+        .unwrap()
+        .fragment_memory
+        .clone();
     let baseline = peer_memory.used_bytes();
     let payload = vec![0x61; 2048];
     if stage == Stage::Pending {
@@ -797,7 +803,7 @@ async fn poisoned_publication_fails_closed_without_late_association() {
 
 type BucketSnapshot = (f64, f64, f64, Instant);
 fn budgets(fixture: &Fixture) -> [BucketSnapshot; 7] {
-    let lease = &fixture.host.state.leases["p"];
+    let lease = fixture.host.state.lease("p").unwrap();
     let handle = fixture.host.state.services["aux"].0;
     let ingress = lease.udp_limiters.lock().unwrap()[&handle].clone();
     let downstream = lease.downstream_limiters.lock().unwrap()[&handle].clone();
@@ -922,7 +928,13 @@ async fn close_udp_cleanup_and_disable_wait_for_the_same_return_owner() {
 async fn concurrent_terminal(shutdown: bool) {
     let fixture = Fixture::new().await;
     let permits = fixture.host.state.udp.available_permits();
-    let original_expiry = fixture.host.state.leases["p"].value.expires_at_unix_ms;
+    let original_expiry = fixture
+        .host
+        .state
+        .lease("p")
+        .unwrap()
+        .value
+        .expires_at_unix_ms;
     let (association, gate, address) = drive_to_return(&fixture).await;
     let weak = fixture
         .control
@@ -952,7 +964,13 @@ async fn concurrent_terminal(shutdown: bool) {
     assert_eq!(fixture.control.work_count(), 0);
     assert_eq!(fixture.host.state.udp.available_permits(), permits);
     assert_eq!(
-        fixture.host.state.leases["p"].value.expires_at_unix_ms,
+        fixture
+            .host
+            .state
+            .lease("p")
+            .unwrap()
+            .value
+            .expires_at_unix_ms,
         original_expiry
     );
     bounded(fixture.host.disable_udp_service("p", "aux", 1))
@@ -1043,7 +1061,7 @@ async fn original_schema_three_expiry_converges_with_service_cleanup() {
     .await
     .unwrap();
     let handle = host.state.services["aux"].0;
-    let control = host.state.leases[&lease_id].udp_services[&handle].clone();
+    let control = host.state.lease(&lease_id).unwrap().udp_services[&handle].clone();
     let mut addresses: BTreeSet<_> = host.bound_sockets().into_iter().collect();
     addresses.extend(guest.bound_sockets());
     addresses.insert(destination.local_addr().unwrap());
@@ -1080,7 +1098,11 @@ async fn original_schema_three_expiry_converges_with_service_cleanup() {
     assert_eq!(fixture.control.work_count(), 0);
     assert_eq!(fixture.host.state.udp.available_permits(), permits);
     assert_eq!(
-        fixture.host.state.leases[&lease_id]
+        fixture
+            .host
+            .state
+            .lease(&lease_id)
+            .unwrap()
             .value
             .expires_at_unix_ms,
         original_expiry
