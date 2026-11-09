@@ -16,6 +16,8 @@ const voicePolicyKeys = [...policyKeys, "voiceProfile", "voiceSourceDigest", "ho
 const voiceGrantKeys = [...grantKeys, "voiceProfile", "voiceSourceDigest", "hostPlayer"] as const;
 const runtimePolicyKeys = [...voicePolicyKeys, "runtimeProfile"] as const;
 const runtimeGrantKeys = [...voiceGrantKeys, "runtimeProfile"] as const;
+const nativeVoicePolicyKeys = [...runtimePolicyKeys, "voiceTransportProfile"] as const;
+const nativeVoiceGrantKeys = [...runtimeGrantKeys, "voiceTransportProfile"] as const;
 export const SOCIAL_RUNTIME_PROFILES = {
   "fabric-loader-0.16.14-1.21.1": ["1.21.1", "fabric"],
   "fabric-loader-0.16.14-1.20.1": ["1.20.1", "fabric"],
@@ -28,19 +30,19 @@ export const SOCIAL_RUNTIME_PROFILES = {
   "1.12.2-forge-14.23.5.2860": ["1.12.2", "forge"],
 } as const;
 export type SocialRuntimeProfile = keyof typeof SOCIAL_RUNTIME_PROFILES;
-const policyFields = (schema: unknown) => schema === 4 ? runtimePolicyKeys : schema === 3 ? voicePolicyKeys : policyKeys;
-const grantFields = (schema: unknown) => schema === 4 ? runtimeGrantKeys : schema === 3 ? voiceGrantKeys : grantKeys;
+const policyFields = (schema: unknown) => schema === 5 ? nativeVoicePolicyKeys : schema === 4 ? runtimePolicyKeys : schema === 3 ? voicePolicyKeys : policyKeys;
+const grantFields = (schema: unknown) => schema === 5 ? nativeVoiceGrantKeys : schema === 4 ? runtimeGrantKeys : schema === 3 ? voiceGrantKeys : grantKeys;
 const runtimeValid = (profile: unknown, voice: unknown): profile is SocialRuntimeProfile => typeof profile === "string"
   && Object.hasOwn(SOCIAL_RUNTIME_PROFILES, profile) && !(profile === "1.12.2-forge-14.23.5.2860" && voice === "plasmo");
 const contextKeys = ["schemaVersion", "purpose", "issuerInstance", "recipientAccountId", "sessionId", "sessionDigest", "hostAccountId", "hostPublicKey", "hostOperationId", "hostGeneration", "policyId", "policyDigest", "issuedAtUnixMs", "expiresAtUnixMs"] as const;
 export type HostSocialPolicy = {
-  schemaVersion: 1 | 2 | 3 | 4; purpose: "hostSocialSession"; issuerInstance: string; policyId: string; accountId: string; operationId: string; generation: number;
+  schemaVersion: 1 | 2 | 3 | 4 | 5; purpose: "hostSocialSession"; issuerInstance: string; policyId: string; accountId: string; operationId: string; generation: number;
   publicKey: string; sessionId: string; sessionDigest: string; visibility: "public" | "friends"; joinPolicy: "open" | "approval"; serviceId: "game"; protocol: "tcp";
-  sourceDigest: string; voiceProfile?: "svc" | "plasmo"; voiceSourceDigest?: string; hostPlayer?: boolean; runtimeProfile?: SocialRuntimeProfile; maxGuests: number; issuedAtUnixMs: number; expiresAtUnixMs: number;
+  sourceDigest: string; voiceProfile?: "svc" | "plasmo"; voiceSourceDigest?: string; hostPlayer?: boolean; runtimeProfile?: SocialRuntimeProfile; voiceTransportProfile?: "nativeVoice8V1"; maxGuests: number; issuedAtUnixMs: number; expiresAtUnixMs: number;
 };
 export type SocialAdmissionGrant = {
-  schemaVersion: 1 | 2 | 3 | 4; purpose: "socialAdmission"; issuerInstance: string; grantId: string; policyId: string; policyDigest: string; sessionId: string; sessionDigest: string;
-  hostAccountId: string; hostPublicKey: string; hostOperationId: string; hostGeneration: number; guestAccountId: string; guestPublicKey: string; guestOperationId: string; guestGeneration: number; voiceProfile?: "svc" | "plasmo"; voiceSourceDigest?: string; hostPlayer?: boolean; runtimeProfile?: SocialRuntimeProfile;
+  schemaVersion: 1 | 2 | 3 | 4 | 5; purpose: "socialAdmission"; issuerInstance: string; grantId: string; policyId: string; policyDigest: string; sessionId: string; sessionDigest: string;
+  hostAccountId: string; hostPublicKey: string; hostOperationId: string; hostGeneration: number; guestAccountId: string; guestPublicKey: string; guestOperationId: string; guestGeneration: number; voiceProfile?: "svc" | "plasmo"; voiceSourceDigest?: string; hostPlayer?: boolean; runtimeProfile?: SocialRuntimeProfile; voiceTransportProfile?: "nativeVoice8V1";
   issuedAtUnixMs: number; admissionExpiresAtUnixMs: number; sessionExpiresAtUnixMs: number;
 };
 export type SocialContinuityLease = { schemaVersion: 1; purpose: "socialContinuity"; issuerInstance: string; grantId: string; policyDigest: string; sequence: number; issuedAtUnixMs: number; expiresAtUnixMs: number };
@@ -65,29 +67,31 @@ function canonical(domain: string, input: object, keys: readonly string[]): Uint
 export function validateHostSocialPolicy(input: unknown): HostSocialPolicy {
   const keys = policyFields((input as {schemaVersion?: unknown})?.schemaVersion);
   exact(input, keys);
-  if (![1, 2, 3, 4].includes(input.schemaVersion as number) || input.purpose !== "hostSocialSession" || !matches(HEX, input.issuerInstance) || !matches(HEX, input.policyId)
+  if (![1, 2, 3, 4, 5].includes(input.schemaVersion as number) || input.purpose !== "hostSocialSession" || !matches(HEX, input.issuerInstance) || !matches(HEX, input.policyId)
     || !matches(UID, input.accountId) || !matches(UUID, input.operationId) || !positive(input.generation) || !matches(HEX, input.publicKey)
     || !matches(UUID, input.sessionId) || !matches(HEX, input.sessionDigest) || (input.visibility !== "public" && input.visibility !== "friends")
     || !["open", "approval"].includes(input.joinPolicy as string) || input.serviceId !== "game" || input.protocol !== "tcp" || !matches(HEX, input.sourceDigest) || (input.schemaVersion === 1 ? input.maxGuests !== 1 : !positive(input.maxGuests) || input.maxGuests > 8)
     || !positive(input.issuedAtUnixMs) || !positive(input.expiresAtUnixMs) || input.expiresAtUnixMs <= input.issuedAtUnixMs
     || input.expiresAtUnixMs - input.issuedAtUnixMs > (input.schemaVersion !== 1 ? 14_400_000 : 60_000)) fail("invalid_policy");
-  if ([3, 4].includes(input.schemaVersion as number) && (!["svc", "plasmo"].includes(input.voiceProfile as string) || !matches(HEX, input.voiceSourceDigest) || typeof input.hostPlayer !== "boolean" || (input.hostPlayer && (input.maxGuests as number) > 7))) fail("invalid_policy");
-  if (input.schemaVersion === 4 && !runtimeValid(input.runtimeProfile, input.voiceProfile)) fail("invalid_policy");
+  if ([3, 4, 5].includes(input.schemaVersion as number) && (!["svc", "plasmo"].includes(input.voiceProfile as string) || !matches(HEX, input.voiceSourceDigest) || typeof input.hostPlayer !== "boolean" || (input.hostPlayer && (input.maxGuests as number) > 7))) fail("invalid_policy");
+  if ([4, 5].includes(input.schemaVersion as number) && !runtimeValid(input.runtimeProfile, input.voiceProfile)) fail("invalid_policy");
+  if (input.schemaVersion === 5 && input.voiceTransportProfile !== "nativeVoice8V1") fail("invalid_policy");
   return ordered(input, keys);
 }
 export function validateSocialAdmissionGrant(input: unknown): SocialAdmissionGrant {
   const keys = grantFields((input as {schemaVersion?: unknown})?.schemaVersion);
   exact(input, keys);
-  if (![1, 2, 3, 4].includes(input.schemaVersion as number) || input.purpose !== "socialAdmission" || !matches(HEX, input.issuerInstance) || !matches(HEX, input.grantId)
+  if (![1, 2, 3, 4, 5].includes(input.schemaVersion as number) || input.purpose !== "socialAdmission" || !matches(HEX, input.issuerInstance) || !matches(HEX, input.grantId)
     || !matches(HEX, input.policyId) || !matches(HEX, input.policyDigest) || !matches(UUID, input.sessionId) || !matches(HEX, input.sessionDigest)
     || !matches(UID, input.hostAccountId) || !matches(HEX, input.hostPublicKey) || !matches(UUID, input.hostOperationId) || !positive(input.hostGeneration)
     || !matches(UID, input.guestAccountId) || !matches(HEX, input.guestPublicKey) || !matches(UUID, input.guestOperationId) || !positive(input.guestGeneration)
     || input.hostAccountId === input.guestAccountId || input.hostPublicKey === input.guestPublicKey
     || !positive(input.issuedAtUnixMs) || !positive(input.admissionExpiresAtUnixMs) || !positive(input.sessionExpiresAtUnixMs)
     || input.admissionExpiresAtUnixMs <= input.issuedAtUnixMs || input.admissionExpiresAtUnixMs > input.sessionExpiresAtUnixMs
-    || input.admissionExpiresAtUnixMs - input.issuedAtUnixMs > 10_000 || input.sessionExpiresAtUnixMs - input.issuedAtUnixMs > (input.schemaVersion !== 1 ? 14_400_000 : 60_000)) fail("invalid_grant");
-  if ([3, 4].includes(input.schemaVersion as number) && (!["svc", "plasmo"].includes(input.voiceProfile as string) || !matches(HEX, input.voiceSourceDigest) || typeof input.hostPlayer !== "boolean")) fail("invalid_grant");
-  if (input.schemaVersion === 4 && !runtimeValid(input.runtimeProfile, input.voiceProfile)) fail("invalid_grant");
+    || input.admissionExpiresAtUnixMs - input.issuedAtUnixMs > (input.schemaVersion === 5 ? 60_000 : 10_000) || input.sessionExpiresAtUnixMs - input.issuedAtUnixMs > (input.schemaVersion !== 1 ? 14_400_000 : 60_000)) fail("invalid_grant");
+  if ([3, 4, 5].includes(input.schemaVersion as number) && (!["svc", "plasmo"].includes(input.voiceProfile as string) || !matches(HEX, input.voiceSourceDigest) || typeof input.hostPlayer !== "boolean")) fail("invalid_grant");
+  if ([4, 5].includes(input.schemaVersion as number) && !runtimeValid(input.runtimeProfile, input.voiceProfile)) fail("invalid_grant");
+  if (input.schemaVersion === 5 && input.voiceTransportProfile !== "nativeVoice8V1") fail("invalid_grant");
   return ordered(input, keys);
 }
 export function validateSocialContinuityLease(input: unknown): SocialContinuityLease {
@@ -207,7 +211,7 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
     if (session.id !== policy.body.sessionId || session.hostUid !== policy.body.accountId || session.visibility !== policy.body.visibility || session.joinPolicy !== policy.body.joinPolicy
       || session.expiresAtMs <= clock.wall() || policy.body.expiresAtUnixMs > session.expiresAtMs
       || (policy.body.schemaVersion !== 1 && policy.body.maxGuests + Number(policy.body.hostPlayer === true) > session.maxPlayers)
-      || (policy.body.schemaVersion === 4 && (SOCIAL_RUNTIME_PROFILES[policy.body.runtimeProfile!][0] !== session.minecraftVersion
+      || ([4, 5].includes(policy.body.schemaVersion) && (SOCIAL_RUNTIME_PROFILES[policy.body.runtimeProfile!][0] !== session.minecraftVersion
         || SOCIAL_RUNTIME_PROFILES[policy.body.runtimeProfile!][1] !== session.loader.toLowerCase()))
       || await socialBindingSessionDigest(session) !== policy.body.sessionDigest) fail("session_changed");
     current(policy, request);
@@ -382,9 +386,10 @@ export async function createSocialAdmissionAuthority(binding: ReturnType<typeof 
           policyId: policy.body.policyId, policyDigest: policy.digest, sessionId: policy.body.sessionId, sessionDigest: policy.body.sessionDigest,
           hostAccountId: policy.body.accountId, hostPublicKey: policy.body.publicKey, hostOperationId: policy.body.operationId, hostGeneration: policy.body.generation,
           guestAccountId: receipt.accountId, guestPublicKey: receipt.publicKey, guestOperationId: receipt.operationId, guestGeneration: receipt.generation,
-          issuedAtUnixMs: now, admissionExpiresAtUnixMs: Math.min(now + 10_000, expires, receipt.expiresAtUnixMs), sessionExpiresAtUnixMs: expires,
-          ...([3, 4].includes(policy.body.schemaVersion) ? { voiceProfile: policy.body.voiceProfile, voiceSourceDigest: policy.body.voiceSourceDigest, hostPlayer: policy.body.hostPlayer } : {}),
-          ...(policy.body.schemaVersion === 4 ? { runtimeProfile: policy.body.runtimeProfile } : {}) });
+          issuedAtUnixMs: now, admissionExpiresAtUnixMs: Math.min(now + (policy.body.schemaVersion === 5 ? 60_000 : 10_000), expires, receipt.expiresAtUnixMs), sessionExpiresAtUnixMs: expires,
+          ...([3, 4, 5].includes(policy.body.schemaVersion) ? { voiceProfile: policy.body.voiceProfile, voiceSourceDigest: policy.body.voiceSourceDigest, hostPlayer: policy.body.hostPlayer } : {}),
+          ...([4, 5].includes(policy.body.schemaVersion) ? { runtimeProfile: policy.body.runtimeProfile } : {}),
+          ...(policy.body.schemaVersion === 5 ? { voiceTransportProfile: policy.body.voiceTransportProfile } : {}) });
         state = { body, policy, deadline: Math.min(originalDeadline, startMono + expires - startWall),
           admissionDeadline: Math.min(originalDeadline, observed.mono + body.admissionExpiresAtUnixMs - now),
           terminal: false, busy: false, sequence: 0, leaseDeadline: 0, attempts: [] };

@@ -20,7 +20,7 @@ const fields = value => Object.fromEntries(Object.entries(value).map(([key, item
   item === null ? { nullValue: null } : typeof item === "number" ? { integerValue: String(item) }
     : key === "expiresAt" ? { timestampValue: item } : { stringValue: item }]));
 
-for (const policySchema of [2, 4]) test(`real social Worker HTTP schema ${policySchema} verifies RSA callers and persists exact authority, mailbox and revocation in SQLite`, { timeout: 30_000 }, async () => {
+for (const policySchema of [2, 4, 5]) test(`real social Worker HTTP schema ${policySchema} verifies RSA callers and persists exact authority, mailbox and revocation in SQLite`, { timeout: 30_000 }, async () => {
   const root = resolve(tmpdir()), persistent = await mkdtemp(join(root, "aurora-social-miniflare-"));
   assert.ok(!relative(root, persistent).startsWith(".."));
   const rsa = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", hash: "SHA-256", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]) }, true, ["sign", "verify"]);
@@ -104,7 +104,8 @@ for (const policySchema of [2, 4]) test(`real social Worker HTTP schema ${policy
       operationId: c.operationId, generation: c.generation, publicKey: c.publicKey, sessionId: session, sessionDigest: c.sessionDigest,
       visibility: "public", joinPolicy: "approval", serviceId: "game", protocol: "tcp", sourceDigest: "a".repeat(64), maxGuests: 8,
       issuedAtUnixMs: c.issuedAtUnixMs, expiresAtUnixMs: expiry,
-      ...(policySchema === 4 ? { voiceProfile: "svc", voiceSourceDigest: "d".repeat(64), hostPlayer: false, runtimeProfile: "fabric-loader-0.16.14-1.21.1" } : {}) };
+      ...(policySchema >= 4 ? { voiceProfile: "svc", voiceSourceDigest: "d".repeat(64), hostPlayer: false, runtimeProfile: "fabric-loader-0.16.14-1.21.1" } : {}),
+      ...(policySchema === 5 ? { voiceTransportProfile: "nativeVoice8V1" } : {}) };
     const policyId = (await good("host", "host/register", { proof: host.proof, policySigned: { body, signature: hex(await crypto.subtle.sign("Ed25519", host.keys.privateKey, hostSocialPolicyPreimage(body))) } })).policyId;
     assert.equal((await good("stranger", "presence")).state, "unknown", "registered policy alone cannot invent native transport observations");
     assert.equal((await request("stranger", "context", { sessionId: session })).status, 403);
@@ -113,6 +114,7 @@ for (const policySchema of [2, 4]) test(`real social Worker HTTP schema ${policy
     const grantId = joined.grant.body.grantId; assert.equal(joined.grant.body.guestPublicKey, guest.challenge.publicKey);
     assert.equal(joined.grant.body.schemaVersion, policySchema);
     assert.equal(joined.grant.body.runtimeProfile, body.runtimeProfile);
+    assert.equal(joined.grant.body.voiceTransportProfile, body.voiceTransportProfile);
     const { socialAdmissionPreimage } = await import("../src/connectSocialAdmission.ts");
     assert.equal(await crypto.subtle.verify("Ed25519", pin, Buffer.from(joined.grant.signature, "hex"), socialAdmissionPreimage(joined.grant.body)), true);
     const polled = await good("host", "host/poll", { policyId }); assert.equal(polled.deliveries.length, 1); assert.ok(polled.checkedAtUnixMs <= Date.now());

@@ -657,13 +657,13 @@ test("online observation sharing saves reads without moving original host freshn
   f.unblock(); await assert.rejects(f.authority.continuity(req(), { grantId: packet.grant.body.grantId }), code("grant_terminal"));
 });
 
-test("schema four signs and propagates exactly the seventeen supported native voice/runtime pairs", async () => {
+for (const schemaVersion of [4, 5]) test(`schema ${schemaVersion} signs and propagates exactly the seventeen supported native voice/runtime pairs`, async () => {
   let pairs = 0;
   for (const [runtimeProfile, [minecraftVersion, loader]] of Object.entries(SOCIAL_RUNTIME_PROFILES)) {
     for (const voiceProfile of ["svc", "plasmo"]) {
       const f = await fixture(true); f.session.minecraftVersion = minecraftVersion; f.session.loader = loader;
       const host = await f.prepared("host", "host");
-      const body = { ...host.policySigned.body, schemaVersion: 4, voiceProfile, voiceSourceDigest: "d".repeat(64), hostPlayer: false, runtimeProfile };
+      const body = { ...host.policySigned.body, schemaVersion, voiceProfile, voiceSourceDigest: "d".repeat(64), hostPlayer: false, runtimeProfile, ...(schemaVersion === 5 ? { voiceTransportProfile: "nativeVoice8V1" } : {}) };
       if (voiceProfile === "plasmo" && minecraftVersion === "1.12.2") { assert.throws(() => validateHostSocialPolicy(body)); continue; }
       pairs++;
       const bytes = hostSocialPolicyPreimage(body);
@@ -671,8 +671,27 @@ test("schema four signs and propagates exactly the seventeen supported native vo
       const signature = hex(await crypto.subtle.sign("Ed25519", host.keys.privateKey, bytes));
       const { policyId } = await f.authority.registerHost(req("host"), { proof: host.proof, policySigned: { body, signature } });
       const guest = await f.prepared(), packet = await f.authority.join(req(), { proof: guest.proof, policyId });
-      assert.equal(packet.grant.body.schemaVersion, 4);
+      assert.equal(packet.grant.body.schemaVersion, schemaVersion);
       assert.equal(packet.grant.body.runtimeProfile, runtimeProfile);
+      assert.equal(packet.grant.body.voiceTransportProfile, schemaVersion === 5 ? "nativeVoice8V1" : undefined);
+      assert.equal(packet.grant.body.admissionExpiresAtUnixMs, Math.min(packet.grant.body.issuedAtUnixMs + (schemaVersion === 5 ? 60_000 : 10_000), guest.proof.challenge.expiresAtUnixMs, body.expiresAtUnixMs));
+      assert.equal(packet.grant.body.admissionExpiresAtUnixMs - packet.grant.body.issuedAtUnixMs, schemaVersion === 5 ? 55_000 : 10_000);
+      for (const extension of [1, 1000]) assert.throws(() => validateSocialAdmissionGrant({ ...packet.grant.body,
+        admissionExpiresAtUnixMs: packet.grant.body.issuedAtUnixMs + (schemaVersion === 5 ? 60_000 : 10_000) + extension }));
+      if (schemaVersion === 5) {
+        for (const voiceTransportProfile of [null, undefined, "unknown", "nativeVoice8V2", {}]) {
+          assert.throws(() => validateHostSocialPolicy({ ...body, voiceTransportProfile }));
+          assert.throws(() => validateSocialAdmissionGrant({ ...packet.grant.body, voiceTransportProfile }));
+        }
+        const { voiceTransportProfile: _transport, ...withoutProfile } = body;
+        assert.throws(() => validateHostSocialPolicy(withoutProfile));
+        assert.throws(() => validateHostSocialPolicy({ ...body, schemaVersion: 4 }));
+        assert.throws(() => validateSocialAdmissionGrant({ ...packet.grant.body, schemaVersion: 4 }));
+        const { voiceTransportProfile: _grantTransport, ...withoutGrantProfile } = packet.grant.body;
+        assert.throws(() => validateSocialAdmissionGrant(withoutGrantProfile));
+        const downgraded = { ...withoutGrantProfile, schemaVersion: 4, admissionExpiresAtUnixMs: packet.grant.body.issuedAtUnixMs + 10_000 };
+        assert.equal(await verify(f.authority.admissionPublicKey, packet.grant, socialAdmissionPreimage(downgraded)), false);
+      }
       assert.equal(await verify(f.authority.admissionPublicKey, packet.grant, socialAdmissionPreimage(packet.grant.body)), true);
       const changed = runtimeProfile === "fabric-loader-0.16.14-1.21.1" ? "fabric-loader-0.16.14-1.20.1" : "fabric-loader-0.16.14-1.21.1";
       assert.equal(await verify(f.authority.admissionPublicKey, packet.grant, socialAdmissionPreimage({ ...packet.grant.body, runtimeProfile: changed })), false);
@@ -686,9 +705,9 @@ test("schema four signs and propagates exactly the seventeen supported native vo
   assert.equal(pairs, 17);
 });
 
-test("signed native runtime must match advertisement metadata without treating advertisement as authority", async () => {
+for (const schemaVersion of [4, 5]) test(`schema ${schemaVersion} signed runtime must match advertisement metadata without treating advertisement as authority`, async () => {
   const f = await fixture(true), host = await f.prepared("host", "host");
-  const body = { ...host.policySigned.body, schemaVersion: 4, voiceProfile: "svc", voiceSourceDigest: "d".repeat(64), hostPlayer: false, runtimeProfile: "fabric-loader-0.16.14-1.19.2" };
+  const body = { ...host.policySigned.body, schemaVersion, voiceProfile: "svc", voiceSourceDigest: "d".repeat(64), hostPlayer: false, runtimeProfile: "fabric-loader-0.16.14-1.19.2", ...(schemaVersion === 5 ? { voiceTransportProfile: "nativeVoice8V1" } : {}) };
   const signature = hex(await crypto.subtle.sign("Ed25519", host.keys.privateKey, hostSocialPolicyPreimage(body)));
   await assert.rejects(f.authority.registerHost(req("host"), { proof: host.proof, policySigned: { body, signature } }), code("session_changed"));
 });
@@ -703,6 +722,9 @@ test("schema four runtime table matches the active matrix and the independent Ru
     sourceDigest: "44".repeat(32), maxGuests: 7, issuedAtUnixMs: 1800000000000, expiresAtUnixMs: 1800000300000,
     voiceProfile: "svc", voiceSourceDigest: "55".repeat(32), hostPlayer: true, runtimeProfile: "1.12.2-forge-14.23.5.2860" };
   assert.equal(await hostSocialPolicyDigest(body), "e8a05fd40d0d2eedcb8a5f4249e2ce46e6be7061f02ff1e534786b57ec4aa71b");
+  const native = { ...body, schemaVersion: 5, voiceTransportProfile: "nativeVoice8V1" };
+  assert.equal(await hostSocialPolicyDigest(native), "0e77362cd49f34e7427d2666fd344537ba54ffbb5d8d67fb1224b37b7a2c7762");
+  assert.deepEqual(hostSocialPolicyPreimage(native).slice(-16), new TextEncoder().encode("\0\x0enativeVoice8V1"));
 });
 
 test("original host removal is idempotent, durable for that account in this policy and leaves the other guest live", async () => {
@@ -740,4 +762,22 @@ test("online host capacity cannot exceed its advertisement and includes the loca
   }
   const guest = await f.prepared("three");
   await assert.rejects(f.authority.join(req("three"), { proof: guest.proof, policyId }), code("authority_busy"));
+});
+
+test("NativeVoice8 admission consumes time spent proving and cannot extend the original prepared cap", async () => {
+  const f = await fixture(true), host = await f.prepared("host", "host");
+  const body = { ...host.policySigned.body, schemaVersion: 5, voiceProfile: "svc", voiceSourceDigest: "d".repeat(64), hostPlayer: false,
+    runtimeProfile: "fabric-loader-0.16.14-1.21.1", voiceTransportProfile: "nativeVoice8V1" };
+  const signature = hex(await crypto.subtle.sign("Ed25519", host.keys.privateKey, hostSocialPolicyPreimage(body)));
+  const { policyId } = await f.authority.registerHost(req("host"), { proof: host.proof, policySigned: { body, signature } });
+  const guest = await f.prepared();
+  // The original proof preparation and Host observations continue independently.
+  for (let i = 0; i < 5; i++) { f.advance(2000); await f.authority.hostPoll(req("host"), {policyId}); }
+  const packet = await f.authority.join(req(), {proof: guest.proof, policyId});
+  assert.equal(packet.grant.body.admissionExpiresAtUnixMs, guest.proof.challenge.expiresAtUnixMs);
+  assert.equal(packet.grant.body.admissionExpiresAtUnixMs - packet.grant.body.issuedAtUnixMs, 45_000);
+  assert.equal(packet.lease.body.expiresAtUnixMs - packet.lease.body.issuedAtUnixMs, 3000, "a longer approval never widens continuity");
+  const second = await f.authority.hostPoll(req("host"), {policyId});
+  assert.equal(second.state, "group");
+  assert.equal(second.deliveries[0].grant.body.admissionExpiresAtUnixMs, packet.grant.body.admissionExpiresAtUnixMs);
 });
