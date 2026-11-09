@@ -1,5 +1,7 @@
 import { arrayRemove, arrayUnion, collection, doc, documentId, getDocFromServer, getDocsFromServer, increment, limit, orderBy, query, runTransaction, serverTimestamp, startAfter, Timestamp, type DocumentData, type Firestore } from "firebase/firestore";
 import type { FirebaseServices } from "./firebase";
+import { socialLabBuild } from "./firebase";
+import { createSocialServerClock } from "./socialServerClock";
 import { createSocialOrganization } from "./socialOrganization";
 import { normalizeSocialNickname, validateSocialSession, type SocialPerson, type SocialService, type SocialSession } from "../shared/social";
 
@@ -21,9 +23,9 @@ function parseState(data: DocumentData | undefined): State {
   return out;
 }
 
-function sessionValue(id: string, data: DocumentData | undefined): SocialSession | null {
+function sessionValue(id: string, data: DocumentData | undefined, now: number): SocialSession | null {
   if (!data || !sessionIdValid(id) || !uidValid(data.hostUid) || !(data.expiresAt instanceof Timestamp) || data.schema !== 1) return null;
-  if (data.expiresAt.toMillis() <= Date.now()) return null;
+  if (!Number.isFinite(now) || data.expiresAt.toMillis() <= now) return null;
   try {
     const draft = validateSocialSession({ title: data.title, modpackName: data.modpackName, minecraftVersion: data.minecraftVersion,
       loader: data.loader, imageUrl: data.imageUrl, players: data.players, maxPlayers: data.maxPlayers,
@@ -33,7 +35,7 @@ function sessionValue(id: string, data: DocumentData | undefined): SocialSession
 }
 
 /** Writes both bounded private containers without reading the peer's friends/requests graph. */
-export async function socialRelationshipWrite(db: Firestore, actor: string, peer: string, kind: Kind, check: () => void = () => {}): Promise<void> {
+export async function socialRelationshipWrite(db: Firestore, actor: string, peer: string, kind: Kind, check: () => void, writeTime: () => number): Promise<void> {
   if (!uidValid(actor) || !uidValid(peer) || actor === peer) throw new Error("Escolha outra conta Aurora.");
   await runTransaction(db, async batch => {
   check();
@@ -50,7 +52,7 @@ export async function socialRelationshipWrite(db: Firestore, actor: string, peer
   }
   if (kind === "request") batch.set(doc(db, "socialThrottle", actor), { at: serverTimestamp() });
   if (kind === "request") batch.set(doc(db, "socialRequests", actor, "peers", peer), {
-    createdAt: serverTimestamp(), expiresAt: Timestamp.fromMillis(Date.now() + 7 * 86_400_000 - 5_000),
+    createdAt: serverTimestamp(), expiresAt: Timestamp.fromMillis(writeTime() + 7 * 86_400_000 - 5_000),
   });
   else {
     if (previous.incoming.includes(peer)) batch.delete(doc(db, "socialRequests", peer, "peers", actor));
@@ -65,20 +67,21 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
   const accountUser = services.auth.currentUser;
   const accountId = accountUser?.uid;
   if (!accountId || !uidValid(accountId)) throw new Error("Entre em sua conta Aurora.");
+  const clock = createSocialServerClock(services, socialLabBuild);
   function account() {
     if (services.auth.currentUser !== accountUser || services.auth.currentUser?.uid !== accountId) throw new Error("A conta mudou. Abra Amigos novamente.");
     return accountId!;
   }
   async function guarded<T>(work: (check: () => void) => Promise<T>): Promise<T> {
     account();
-    const deadline = Date.now() + 15_000;
+    const deadline = performance.now() + 15_000;
     let abandoned = false;
-    const check = () => { account(); if (abandoned || Date.now() >= deadline) throw Object.assign(new Error("O prazo desta operação terminou. Atualize antes de repetir."), {code:"social_uncertain"}); };
+    const check = () => { account(); if (abandoned || performance.now() >= deadline) throw Object.assign(new Error("O prazo desta operação terminou. Atualize antes de repetir."), {code:"social_uncertain"}); };
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { abandoned = true; reject(Object.assign(
         new Error("A resposta demorou. Uma alteração pode ainda estar em andamento; atualize antes de repetir."), { code: "social_uncertain" })); }, 15_000); });
-      const value = await Promise.race([work(check), timeout]); check(); return value;
+      const value = await Promise.race([(async () => { await clock.ensure(check); check(); return work(check); })(), timeout]); check(); return value;
     }
     catch (cause) {
       account();
@@ -106,13 +109,14 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
   async function sessionForHost(uid: string, check: () => void) {
     const pointer = await optional("socialOwners", uid, check);
     if (!pointer || !sessionIdValid(pointer.sessionId)) return null;
-    const value = sessionValue(pointer.sessionId, await optional("socialSessions", pointer.sessionId, check));
+    const value = sessionValue(pointer.sessionId, await optional("socialSessions", pointer.sessionId, check), clock.now());
     return value?.hostUid === uid ? value : null;
   }
-  const relationship = (peer: string, kind: Kind) => guarded(check => socialRelationshipWrite(db, account(), peer, kind, check));
+  const relationship = (peer: string, kind: Kind) => guarded(check => socialRelationshipWrite(db, account(), peer, kind, check, clock.writeTime));
   return {
     capabilities: Object.freeze({ friends: true, catalog: true, publication: true, join: false }),
-    organization: createSocialOrganization(db, account, guarded, person),
+    now: clock.now,
+    organization: createSocialOrganization(db, account, guarded, person, clock),
     profile: uid => guarded(async check => {
       if (!uidValid(uid)) throw new Error("Conta Aurora inválida.");
       const value = await person(uid, check);
@@ -142,7 +146,7 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
         check();
         const profile = await person(uid, check);
         const p = await optional("socialPresence", uid, check);
-        const live = p?.sharing === "friends" && p.expiresAt instanceof Timestamp && p.expiresAt.toMillis() > Date.now()
+        const live = p?.sharing === "friends" && p.expiresAt instanceof Timestamp && p.expiresAt.toMillis() > clock.now()
           && p.updatedAt instanceof Timestamp && (p.modpackName === null || typeof p.modpackName === "string" && p.modpackName.length <= 64);
         friends.push({ ...profile, presence: live ? { modpackName: p.modpackName, updatedAtMs: p.updatedAt.toMillis() } : null,
           session: await sessionForHost(uid, check) });
@@ -181,7 +185,7 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
       if (!["friends", "hidden"].includes(value.sharing) || value.modpackName !== null && (typeof value.modpackName !== "string" || value.modpackName.length > 64)) throw new Error("Presença inválida.");
       await runTransaction(db, async transaction => {
         check(); const ref = doc(db, "socialPresence", account()); await transaction.get(ref); check();
-        transaction.set(ref, { ...value, updatedAt: serverTimestamp(), expiresAt: Timestamp.fromMillis(Date.now() + 115_000) });
+        transaction.set(ref, { ...value, updatedAt: serverTimestamp(), expiresAt: Timestamp.fromMillis(clock.writeTime() + 115_000) });
       }, { maxAttempts: 1 });
     }),
     publishSession: (input) => guarded(async (check) => {
@@ -200,7 +204,7 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
           for (const guest of queue.guests ?? []) transaction.delete(doc(db, "socialJoinRequests", id, "guests", guest));
           transaction.delete(doc(db, "socialJoinQueues", id));
         }
-        const expiresAt = Timestamp.fromMillis(Date.now() + 14_395_000);
+        const expiresAt = Timestamp.fromMillis(clock.writeTime() + 14_395_000);
         transaction.set(ownerRef, { sessionId: id, visibility: value.visibility });
         transaction.set(doc(db, "socialSessions", id), { ...value, schema: 1, hostUid: owner, expiresAt });
         if (value.visibility === "public") transaction.set(doc(db, "socialCatalog", id), { schema: 1, expiresAt });
@@ -237,8 +241,8 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
       for (const entry of index.docs) {
         account();
         const data = entry.data();
-        if (!sessionIdValid(entry.id) || data.schema !== 1 || !(data.expiresAt instanceof Timestamp) || data.expiresAt.toMillis() <= Date.now()) continue;
-        const value = sessionValue(entry.id, await optional("socialSessions", entry.id, check));
+        if (!sessionIdValid(entry.id) || data.schema !== 1 || !(data.expiresAt instanceof Timestamp) || data.expiresAt.toMillis() <= clock.now()) continue;
+        const value = sessionValue(entry.id, await optional("socialSessions", entry.id, check), clock.now());
         if (value?.visibility === "public") items.push(value);
       }
       return { items, nextCursor: index.size === 20 ? index.docs.at(-1)!.id : null };

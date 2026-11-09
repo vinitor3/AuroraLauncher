@@ -23,9 +23,12 @@ async function socialFactory() {
   const ts = desktopRequire("typescript");
   const compile = source => ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
   const shared = `data:text/javascript;base64,${Buffer.from(compile(await readFile(new URL("../../apps/desktop/src/shared/social.ts", import.meta.url), "utf8"))).toString("base64")}`;
+  const clock = `data:text/javascript;base64,${Buffer.from(compile(await readFile(new URL("../../apps/desktop/src/lib/socialServerClock.ts", import.meta.url), "utf8"))).toString("base64")}`;
   const organization = `data:text/javascript;base64,${Buffer.from(compile(await readFile(new URL("../../apps/desktop/src/lib/socialOrganization.ts", import.meta.url),"utf8")).replace('"firebase/firestore"', JSON.stringify(import.meta.resolve("firebase/firestore")))).toString("base64")}`;
   const source = compile(await readFile(new URL("../../apps/desktop/src/lib/socialFirebase.ts", import.meta.url), "utf8"))
     .replace('"../shared/social"', JSON.stringify(shared))
+    .replace('"./socialServerClock"', JSON.stringify(clock))
+    .replace('"./firebase"', JSON.stringify("data:text/javascript,export const socialLabBuild=true"))
     .replace('"./socialOrganization"', JSON.stringify(organization))
     .replace('"firebase/firestore"', JSON.stringify(import.meta.resolve("firebase/firestore")));
   return (await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`)).createSocialFirebaseService;
@@ -45,7 +48,7 @@ async function account(factory) {
       skinModel: "classic", role: "PLAYER", createdAt: serverTimestamp(), stats: { totalPlayTimeSeconds: 0, questsCompleted: 0, lastPlayedModpack: null } });
     batch.set(doc(db, "publicProfiles", uid), { uid, username: nickname, avatarUrl: null, skinUrl: null, skinModel: "classic", updatedAt: serverTimestamp() });
     await batch.commit();
-    return { uid, db, service: factory({ db, auth }), token: () => user.getIdToken(), async close() { await signOut(auth); await terminate(db); await deleteApp(app); } };
+    return { uid, db, service: factory({ db, auth, config: { projectId }, authScope: { id: nickname, persistent: false } }), token: () => user.getIdToken(), async close() { await signOut(auth); await terminate(db); await deleteApp(app); } };
   } catch (error) { await terminate(db).catch(() => {}); await deleteApp(app); throw error; }
 }
 

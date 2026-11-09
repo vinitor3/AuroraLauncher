@@ -8,12 +8,12 @@ const unavailable = () => new Error("O grupo ou pedido mudou. Atualize e tente n
 
 /** Small private groups and join decisions. No method creates a transport or handles its credentials. */
 export function createSocialOrganization(db: Firestore, account: () => string, guarded: Guarded,
-  person: (uid: string, check: () => void) => Promise<SocialPerson>): SocialOrganizationService {
+  person: (uid: string, check: () => void) => Promise<SocialPerson>, clock: { now(): number; writeTime(): number }): SocialOrganizationService {
   const memberRef = (id = account()) => doc(db, "socialGroupMembers", uid(id));
   const groupRef = (id: string) => doc(db, "socialGroups", uid(id));
   const inviteRef = (receiver: string, owner: string) => doc(db, "socialGroupInvites", uid(receiver), "hosts", uid(owner));
   const requestRef = (session: string, guest = account()) => doc(db, "socialJoinRequests", sid(session), "guests", uid(guest));
-  const live = (data: { expiresAt?: Timestamp } | undefined) => data?.expiresAt instanceof Timestamp && data.expiresAt.toMillis() > Date.now();
+  const live = (data: { expiresAt?: Timestamp } | undefined) => data?.expiresAt instanceof Timestamp && data.expiresAt.toMillis() > clock.now();
   async function vacantMembership(check: () => void) {
     const membership = (await getDocFromServer(memberRef())).data(); check();
     if (!membership) return;
@@ -26,6 +26,7 @@ export function createSocialOrganization(db: Firestore, account: () => string, g
     try { await deleteDoc(memberRef()); check(); } catch { throw new Error("Saia do grupo atual antes de participar de outro."); }
   }
   return {
+    now: clock.now,
     snapshot: () => guarded(async check => {
       const membership = (await getDocFromServer(memberRef())).data(); check();
       let data;
@@ -49,7 +50,7 @@ export function createSocialOrganization(db: Firestore, account: () => string, g
         }
         group = { id: membership!.groupId, name: String(data.name), ownerUid: data.ownerUid, members, invited, expiresAtMs: data.expiresAt.toMillis() };
       }
-      const invites = await getDocsFromServer(query(collection(db, "socialGroupInvites", account(), "hosts"), where("expiresAt", ">", Timestamp.now()), limit(8))); check();
+      const invites = await getDocsFromServer(query(collection(db, "socialGroupInvites", account(), "hosts"), where("expiresAt", ">", Timestamp.fromMillis(clock.now())), limit(8))); check();
       const invitations = invites.docs.flatMap(item => { const v = item.data(); return live(v) ? [{ groupId: item.id, name: String(v.name), ownerUid: item.id, expiresAtMs: v.expiresAt.toMillis() }] : []; });
       const owner = (await getDocFromServer(doc(db, "socialOwners", account()))).data(); check();
       const joinRequests = [];
@@ -64,7 +65,7 @@ export function createSocialOrganization(db: Firestore, account: () => string, g
       await vacantMembership(check);
       await runTransaction(db, async tx => {
         const membership = (await tx.get(memberRef())).data(); check(); if (membership) throw new Error("Saia do grupo atual antes de criar outro.");
-        tx.set(groupRef(account()), { ownerUid: account(), name: name.trim(), members: [account()], invited: [], expiresAt: Timestamp.fromMillis(Date.now() + 14_395_000), updatedAt: serverTimestamp() });
+        tx.set(groupRef(account()), { ownerUid: account(), name: name.trim(), members: [account()], invited: [], expiresAt: Timestamp.fromMillis(clock.writeTime() + 14_395_000), updatedAt: serverTimestamp() });
         tx.set(memberRef(), { groupId: account() });
       }, { maxAttempts: 1 });
     }),
@@ -81,7 +82,7 @@ export function createSocialOrganization(db: Firestore, account: () => string, g
         if (active.includes(peer) || active.length >= 8) throw unavailable();
         for (const id of expired) tx.delete(inviteRef(id, account()));
         tx.update(ref, { invited: [...active, peer], updatedAt: serverTimestamp() });
-        tx.set(inviteRef(peer, account()), { name: group.name, ownerUid: account(), expiresAt: Timestamp.fromMillis(Math.min(group.expiresAt.toMillis(), Date.now() + 295_000)) });
+        tx.set(inviteRef(peer, account()), { name: group.name, ownerUid: account(), expiresAt: Timestamp.fromMillis(Math.min(group.expiresAt.toMillis(), clock.writeTime() + 295_000)) });
       }, { maxAttempts: 1 });
     }),
     acceptGroup: owner => guarded(async check => {

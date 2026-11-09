@@ -18,6 +18,8 @@ export type SocialGroup = { id: string; name: string; ownerUid: string; members:
 export type SocialGroupInvite = { groupId: string; name: string; ownerUid: string; expiresAtMs: number };
 export type SocialJoinRequest = { sessionId: string; guest: SocialPerson; status: "pending" | "accepted"; expiresAtMs: number };
 export type SocialOrganizationService = {
+  /** Server-time display projection; NaN means its bounded sample is unavailable. */
+  now?(): number;
   snapshot(): Promise<{ group: SocialGroup | null; invitations: SocialGroupInvite[]; joinRequests: SocialJoinRequest[] }>;
   createGroup(name: string): Promise<void>;
   inviteToGroup(uid: string): Promise<void>;
@@ -30,6 +32,8 @@ export type SocialOrganizationService = {
   respondJoin(sessionId: string, guestUid: string, decision: "accept" | "decline"): Promise<void>;
 };
 export type SocialService = {
+  /** Firestore display clock only, never transport admission authority. */
+  now?(): number;
   readonly capabilities: { friends: boolean; catalog: boolean; publication: boolean; join: boolean };
   readonly organization?: SocialOrganizationService;
   /** Display-only, exact Aurora registry lookup in this authenticated service scope. */

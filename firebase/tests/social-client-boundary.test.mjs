@@ -22,7 +22,11 @@ before(async () => {
       increment=unused,limit=unused,orderBy=unused,query=unused,runTransaction=unused,serverTimestamp=unused,startAfter=unused,deleteDoc=unused,where=unused;
   `);
   const organization=dataUrl(transpile(await readFile(new URL("../../apps/desktop/src/lib/socialOrganization.ts",import.meta.url),"utf8")).replace('"firebase/firestore"',JSON.stringify(fakeSdk)));
+  // Clock bounds/authentication have their own real implementation fixtures; this
+  // suite isolates the following SDK request/account lifecycle.
+  const clock=dataUrl('export const createSocialServerClock=()=>({ensure:async check=>check(),now:Date.now,writeTime:Date.now});');
   const source=transpile(await readFile(new URL("../../apps/desktop/src/lib/socialFirebase.ts",import.meta.url),"utf8"))
+    .replace('"./socialServerClock"',JSON.stringify(clock)).replace('"./firebase"',JSON.stringify('data:text/javascript,export const socialLabBuild=true'))
     .replace('"./socialOrganization"',JSON.stringify(organization)).replace('"../shared/social"',JSON.stringify(sharedUrl)).replace('"firebase/firestore"',JSON.stringify(fakeSdk));
   createService=(await import(dataUrl(source))).createSocialFirebaseService;
 });
@@ -34,6 +38,7 @@ function pendingRead() {
 test("account changes during a pending exact lookup cannot issue the second read or publish a person",async()=>{
   const pending=pendingRead(),auth={currentUser:{uid:"a"}},service=createService({db:{},auth});
   const result=service.searchByNickname("User_b");
+  await new Promise(resolve=>setImmediate(resolve));
   assert.equal(pending.calls.length,1);auth.currentUser={uid:"c"};
   pending.resolve({uid:"b",usernameLower:"user_b"});
   await assert.rejects(result,/conta mudou/);
@@ -48,6 +53,7 @@ test("deadline poisons a pending operation even after wall clock rollback; late 
   const result=service.searchByNickname("User_b");
   globalThis.setTimeout=originalSetTimeout;
   try {
+    await new Promise(resolve=>setImmediate(resolve));
     timeout();
     await assert.rejects(result,cause=>cause.code==="social_uncertain");
     Date.now=()=>1;
@@ -82,6 +88,7 @@ test("roster display resolves only a matching exact Aurora public profile and re
 test("a new login of the same UID cannot publish a pending old roster profile",async()=>{
   const pending=pendingRead(),auth={currentUser:{uid:"a"}},service=createService({db:{},auth});
   const result=service.profile("b");
+  await new Promise(resolve=>setImmediate(resolve));
   auth.currentUser={uid:"a"};
   pending.resolve({uid:"b",username:"Aurora_B"});
   await assert.rejects(result,/conta mudou/);

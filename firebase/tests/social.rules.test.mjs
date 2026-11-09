@@ -16,10 +16,13 @@ before(async () => {
   const ts = desktopRequire("typescript");
   const transpile = text => ts.transpileModule(text, {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
   const shared = `data:text/javascript;base64,${Buffer.from(transpile(await readFile(new URL("../../apps/desktop/src/shared/social.ts", import.meta.url),"utf8"))).toString("base64")}`;
+  const clock = `data:text/javascript;base64,${Buffer.from(transpile(await readFile(new URL("../../apps/desktop/src/lib/socialServerClock.ts", import.meta.url),"utf8"))).toString("base64")}`;
   const organization = `data:text/javascript;base64,${Buffer.from(transpile(await readFile(new URL("../../apps/desktop/src/lib/socialOrganization.ts", import.meta.url),"utf8")).replace('"firebase/firestore"', JSON.stringify(import.meta.resolve("firebase/firestore")))).toString("base64")}`;
   const source = transpile(await readFile(new URL("../../apps/desktop/src/lib/socialFirebase.ts", import.meta.url),"utf8"))
     .replace('"../shared/social"', JSON.stringify(shared))
     .replace('"./socialOrganization"', JSON.stringify(organization))
+    .replace('"./socialServerClock"', JSON.stringify(clock))
+    .replace('"./firebase"', JSON.stringify("data:text/javascript,export const socialLabBuild=true"))
     .replace('"firebase/firestore"', JSON.stringify(import.meta.resolve("firebase/firestore")));
   createService = (await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`)).createSocialFirebaseService;
   env = await initializeTestEnvironment({ projectId, firestore: { host: "127.0.0.1", port: 8187, rules: await readFile(new URL("../firestore.rules", import.meta.url), "utf8") } });
@@ -37,9 +40,36 @@ beforeEach(async () => {
 });
 after(async () => { await env?.cleanup(); });
 const dbFor = uid => env.authenticatedContext(uid).firestore();
-const service = uid => createService({ db: dbFor(uid), auth: { currentUser: { uid } } });
+function sdkServices(uid, db = dbFor(uid)) {
+  const claims = { sub: uid, user_id: uid, aud: projectId, iss: `https://securetoken.google.com/${projectId}`, iat: Math.floor(Date.now()/1000), exp: Math.floor(Date.now()/1000)+3600, firebase: { identities: {}, sign_in_provider: "custom" } };
+  const token = `${Buffer.from('{"alg":"none","typ":"JWT"}').toString("base64url")}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.`;
+  return { db, config: { projectId }, authScope: { id: `test-${uid}`, persistent: false }, auth: { currentUser: { uid, getIdToken: async () => token }, onAuthStateChanged: () => () => {} } };
+}
+const service = uid => createService(sdkServices(uid));
 async function friendship() { await service("a").requestFriend("b"); await service("b").respondFriend("a", "accept"); }
 async function ownId(uid) { return (await getDoc(doc(dbFor(uid), "socialOwners", uid))).data().sessionId; }
+
+test("SDK Firestore clock permits bounded writes and reads with the computer one year ahead", async () => {
+  await friendship();
+  const a = service("a"), b = service("b"), originalNow = Date.now;
+  const start = originalNow();
+  Date.now = () => originalNow() + 365 * 86_400_000;
+  try {
+    await a.publishSession(draft);
+    await a.setPresence({ sharing: "friends", modpackName: "Clock fixture" });
+    await a.organization.createGroup("Clock group");
+    await a.organization.inviteToGroup("b");
+    const id = await ownId("a"), end = originalNow();
+    for (const [ref, ttl] of [[doc(dbFor("a"), "socialSessions", id), 14_400_000], [doc(dbFor("a"), "socialGroups", "a"), 14_400_000],
+      [doc(dbFor("a"), "socialPresence", "a"), 120_000], [doc(dbFor("b"), "socialGroupInvites", "b", "hosts", "a"), 300_000]]) {
+      const expiresAt = (await getDoc(ref)).data().expiresAt.toMillis();
+      assert.ok(expiresAt > start && expiresAt <= end + ttl);
+    }
+    assert.equal((await b.listPublicSessions()).items[0].id, id);
+    assert.equal((await b.snapshot()).friends[0].presence.modpackName, "Clock fixture");
+    assert.equal((await b.organization.snapshot()).invitations[0].groupId, "a");
+  } finally { Date.now = originalNow; }
+});
 
 test("SDK exact Aurora nick search and read-only empty snapshot; directory LIST denied", async () => {
   assert.equal((await service("a").searchByNickname(" UsEr_B ")).nickname, "user_b");
@@ -155,7 +185,7 @@ test("SDK bounded catalog paginates mixed expired/blocked entries without leakin
   assert.equal(second.items.length,1); assert.equal(second.nextCursor,null);
 });
 test("auth changes and automatic join remain fail closed", async () => {
-  const auth = { currentUser: { uid: "a" } }; const s = createService({db:dbFor("a"),auth});
+  const services = sdkServices("a"), auth = services.auth; const s = createService(services);
   assert.equal(s.capabilities.join,false);
   await assert.rejects(s.prepareJoin("anything"),/Nenhuma conexão/);
   auth.currentUser = { uid:"b" };
@@ -199,7 +229,7 @@ test("raw writes cannot orphan published index, change request expiry, or inject
 });
 test("offline SDK cannot reuse previously permitted public projection after a block", async () => {
   await service("a").publishSession(draft);
-  const db=dbFor("b"), reader=createService({db,auth:{currentUser:{uid:"b"}}});
+  const db=dbFor("b"), reader=createService(sdkServices("b",db));
   assert.equal((await reader.listPublicSessions()).items.length,1);
   await service("a").block("b");
   await disableNetwork(db);
