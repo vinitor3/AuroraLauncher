@@ -216,7 +216,7 @@ service cloud.firestore {
         && socialImage(d.imageUrl) && d.players is int && d.maxPlayers is int
         && d.players >= 0 && d.maxPlayers >= 1 && d.maxPlayers <= 100 && d.players <= d.maxPlayers
         && d.visibility in ['private','friends','public'] && d.joinPolicy in ['open','approval']
-        && d.expiresAt is timestamp && d.expiresAt > request.time && d.expiresAt <= request.time + duration.value(300, 's');
+        && d.expiresAt is timestamp && d.expiresAt > request.time && d.expiresAt <= request.time + duration.value(4, 'h');
     }
     function socialOwnerAfter(uid) { return getAfter(/databases/$(database)/documents/socialOwners/$(uid)).data; }
     function socialVisibleSession(id, d) {
@@ -263,6 +263,124 @@ service cloud.firestore {
       allow delete: if signedIn() && get(/databases/$(database)/documents/socialSessions/$(id)).data.hostUid == request.auth.uid
         && (!existsAfter(/databases/$(database)/documents/socialSessions/$(id))
           || getAfter(/databases/$(database)/documents/socialSessions/$(id)).data.visibility != 'public');
+    }
+    function group(id) { return get(/databases/$(database)/documents/socialGroups/$(id)).data; }
+    function groupAfter(id) { return getAfter(/databases/$(database)/documents/socialGroups/$(id)).data; }
+    function liveGroupInvitation(id, receiver) {
+      return socialFriends(id, receiver)
+        && get(/databases/$(database)/documents/socialGroupInvites/$(receiver)/hosts/$(id)).data.expiresAt > request.time;
+    }
+    function groupInviteChange(id, before, after) {
+      return after.toSet().difference(before.toSet()).size() == 0
+        || (after.size() > 0 && after.toSet().difference(before.toSet()).size() == 1
+          && !(after[after.size()-1] in before) && socialFriends(id, after[after.size()-1])
+          && getAfter(/databases/$(database)/documents/socialGroupInvites/$(after[after.size()-1])/hosts/$(id)).data.expiresAt > request.time);
+    }
+    function groupShape(d, id) {
+      return d.keys().hasOnly(['ownerUid','name','members','invited','expiresAt','updatedAt'])
+        && d.ownerUid == id && socialText(d.name, 48)
+        && d.members is list && d.members.size() >= 1 && d.members.size() <= 8 && id in d.members
+        && d.members.toSet().size() == d.members.size()
+        && d.invited is list && d.invited.size() <= 8 && d.invited.toSet().size() == d.invited.size()
+        && !d.members.hasAny(d.invited) && d.expiresAt is timestamp
+        && d.expiresAt <= request.time + duration.value(4,'h')
+        && d.updatedAt == request.time;
+    }
+    match /socialGroups/{id} {
+      allow list: if false;
+      allow get: if signedIn() && (request.auth.uid == id
+        || (exists(/databases/$(database)/documents/socialGroups/$(id)) && (request.auth.uid in resource.data.members
+          || (request.auth.uid in resource.data.invited && liveGroupInvitation(id, request.auth.uid))))
+        || (!exists(/databases/$(database)/documents/socialGroups/$(id))
+          && get(/databases/$(database)/documents/socialGroupMembers/$(request.auth.uid)).data.groupId == id));
+      allow create: if signedIn() && id == request.auth.uid && socialAccount(id) && groupShape(request.resource.data, id)
+        && request.resource.data.members == [id] && request.resource.data.invited == [] && request.resource.data.expiresAt > request.time
+        && getAfter(/databases/$(database)/documents/socialGroupMembers/$(id)).data.groupId == id;
+      allow update: if signedIn() && groupShape(request.resource.data, id)
+        && request.resource.data.name == resource.data.name && request.resource.data.expiresAt == resource.data.expiresAt
+        && ((request.auth.uid == id && request.resource.data.members.toSet().difference(resource.data.members.toSet()).size() == 0
+            && groupInviteChange(id, resource.data.invited, request.resource.data.invited))
+          || (request.auth.uid != id && request.auth.uid in resource.data.invited && request.resource.data.members == resource.data.members
+            && request.resource.data.invited == resource.data.invited.removeAll([request.auth.uid]))
+          || (request.auth.uid != id && request.auth.uid in resource.data.members && request.resource.data.invited == resource.data.invited
+            && request.resource.data.members == resource.data.members.removeAll([request.auth.uid])
+            && !existsAfter(/databases/$(database)/documents/socialGroupMembers/$(request.auth.uid)))
+          || (request.auth.uid in resource.data.invited && socialFriends(request.auth.uid, id)
+            && get(/databases/$(database)/documents/socialGroupInvites/$(request.auth.uid)/hosts/$(id)).data.expiresAt > request.time
+            && request.resource.data.members == resource.data.members.concat([request.auth.uid])
+            && request.resource.data.invited == resource.data.invited.removeAll([request.auth.uid])
+            && getAfter(/databases/$(database)/documents/socialGroupMembers/$(request.auth.uid)).data.groupId == id
+            && !existsAfter(/databases/$(database)/documents/socialGroupInvites/$(request.auth.uid)/hosts/$(id))));
+      allow delete: if signedIn() && id == request.auth.uid;
+    }
+    match /socialGroupMembers/{uid} {
+      allow list: if false;
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn() && request.auth.uid == uid && request.resource.data.keys().hasOnly(['groupId'])
+        && socialUid(request.resource.data.groupId) && uid in groupAfter(request.resource.data.groupId).members;
+      allow update: if false;
+      allow delete: if signedIn() && ((request.auth.uid == uid && (!existsAfter(/databases/$(database)/documents/socialGroups/$(resource.data.groupId))
+          || groupAfter(resource.data.groupId).expiresAt <= request.time || !(uid in groupAfter(resource.data.groupId).members)))
+        || (request.auth.uid == resource.data.groupId && (!existsAfter(/databases/$(database)/documents/socialGroups/$(resource.data.groupId))
+          || !(uid in groupAfter(resource.data.groupId).members))));
+    }
+    match /socialGroupInvites/{receiver}/hosts/{owner} {
+      allow get: if signedIn() && request.auth.uid in [receiver, owner];
+      allow list: if signedIn() && request.auth.uid == receiver && request.query.limit != null && request.query.limit <= 8;
+      allow create, update: if signedIn() && request.auth.uid == owner && socialFriends(owner, receiver)
+        && request.resource.data.keys().hasOnly(['ownerUid','name','expiresAt']) && request.resource.data.ownerUid == owner
+        && request.resource.data.name == groupAfter(owner).name && receiver in groupAfter(owner).invited
+        && request.resource.data.expiresAt > request.time && request.resource.data.expiresAt <= request.time + duration.value(300,'s')
+        && request.resource.data.expiresAt <= groupAfter(owner).expiresAt;
+      allow delete: if signedIn() && request.auth.uid in [receiver, owner];
+    }
+    function removedJoinGone(id, old, retained, i) {
+      return old.size() <= i || old[i] in retained || !existsAfter(/databases/$(database)/documents/socialJoinRequests/$(id)/guests/$(old[i]));
+    }
+    function joinRemovalsPaired(id, old, retained) {
+      return removedJoinGone(id, old, retained, 0) && removedJoinGone(id, old, retained, 1)
+        && removedJoinGone(id, old, retained, 2) && removedJoinGone(id, old, retained, 3)
+        && removedJoinGone(id, old, retained, 4) && removedJoinGone(id, old, retained, 5)
+        && removedJoinGone(id, old, retained, 6) && removedJoinGone(id, old, retained, 7);
+    }
+    match /socialJoinQueues/{sessionId} {
+      allow list: if false;
+      allow get: if signedIn() && socialVisibleSession(sessionId, get(/databases/$(database)/documents/socialSessions/$(sessionId)).data);
+      allow create, update: if signedIn() && request.resource.data.keys().hasOnly(['hostUid','guests','expiresAt'])
+        && request.resource.data.guests is list && request.resource.data.guests.size() <= 8
+        && request.resource.data.guests.toSet().size() == request.resource.data.guests.size()
+        && request.resource.data.hostUid == get(/databases/$(database)/documents/socialSessions/$(sessionId)).data.hostUid
+        && request.resource.data.expiresAt == get(/databases/$(database)/documents/socialSessions/$(sessionId)).data.expiresAt
+        && ((request.auth.uid == request.resource.data.hostUid
+            && request.resource.data.guests.toSet().difference(resource.data.guests.toSet()).size() == 0
+            && joinRemovalsPaired(sessionId, resource.data.guests, request.resource.data.guests))
+          || (getAfter(/databases/$(database)/documents/socialJoinRequests/$(sessionId)/guests/$(request.auth.uid)).data.status == 'pending'
+        && ((!exists(/databases/$(database)/documents/socialJoinQueues/$(sessionId)) && request.resource.data.guests == [request.auth.uid])
+          || (exists(/databases/$(database)/documents/socialJoinQueues/$(sessionId))
+            && request.resource.data.guests.toSet() == resource.data.guests.toSet().union([request.auth.uid].toSet())))));
+      allow delete: if signedIn() && request.auth.uid == resource.data.hostUid
+        && joinRemovalsPaired(sessionId, resource.data.guests, []);
+    }
+    match /socialJoinRequests/{sessionId}/guests/{guest} {
+      allow get: if signedIn() && (request.auth.uid == guest
+        || request.auth.uid == get(/databases/$(database)/documents/socialSessions/$(sessionId)).data.hostUid);
+      allow list: if signedIn() && request.auth.uid == get(/databases/$(database)/documents/socialSessions/$(sessionId)).data.hostUid
+        && request.query.limit != null && request.query.limit <= 8;
+      allow create: if signedIn() && request.auth.uid == guest && socialAccount(guest)
+        && request.resource.data.keys().hasOnly(['sessionId','hostUid','guestUid','status','expiresAt','updatedAt'])
+        && request.resource.data.sessionId == sessionId && request.resource.data.guestUid == guest
+        && request.resource.data.hostUid != guest && request.resource.data.status == 'pending' && request.resource.data.updatedAt == request.time
+        && request.resource.data.expiresAt == get(/databases/$(database)/documents/socialSessions/$(sessionId)).data.expiresAt
+        && request.resource.data.expiresAt > request.time
+        && get(/databases/$(database)/documents/socialSessions/$(sessionId)).data.joinPolicy == 'approval'
+        && request.resource.data.hostUid == get(/databases/$(database)/documents/socialSessions/$(sessionId)).data.hostUid
+        && socialVisibleSession(sessionId, get(/databases/$(database)/documents/socialSessions/$(sessionId)).data)
+        && guest in getAfter(/databases/$(database)/documents/socialJoinQueues/$(sessionId)).data.guests;
+      allow update: if signedIn() && request.auth.uid == resource.data.hostUid && request.resource.data.status == 'accepted'
+        && request.resource.data.expiresAt > request.time && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt'])
+        && !socialBlocked(resource.data.hostUid, guest);
+      allow delete: if signedIn() && request.auth.uid in [guest, resource.data.hostUid];
     }
     match /socialPresence/{uid} {
       allow list: if false;

@@ -19,10 +19,11 @@ before(async () => {
     export class Timestamp { static fromMillis(ms){ return {toMillis:()=>ms}; } }
     const unused=()=>{throw Error("Unexpected SDK operation");};
     export const arrayRemove=unused,arrayUnion=unused,collection=unused,documentId=unused,getDocsFromServer=unused,
-      increment=unused,limit=unused,orderBy=unused,query=unused,runTransaction=unused,serverTimestamp=unused,startAfter=unused;
+      increment=unused,limit=unused,orderBy=unused,query=unused,runTransaction=unused,serverTimestamp=unused,startAfter=unused,deleteDoc=unused,where=unused;
   `);
+  const organization=dataUrl(transpile(await readFile(new URL("../../apps/desktop/src/lib/socialOrganization.ts",import.meta.url),"utf8")).replace('"firebase/firestore"',JSON.stringify(fakeSdk)));
   const source=transpile(await readFile(new URL("../../apps/desktop/src/lib/socialFirebase.ts",import.meta.url),"utf8"))
-    .replace('"../shared/social"',JSON.stringify(sharedUrl)).replace('"firebase/firestore"',JSON.stringify(fakeSdk));
+    .replace('"./socialOrganization"',JSON.stringify(organization)).replace('"../shared/social"',JSON.stringify(sharedUrl)).replace('"firebase/firestore"',JSON.stringify(fakeSdk));
   createService=(await import(dataUrl(source))).createSocialFirebaseService;
 });
 function pendingRead() {
@@ -62,4 +63,28 @@ test("social projections accept only complete Aurora nick and bounded existing c
     "https://cdn.modrinth.com/a.svg","https://cdn.modrinth.com/a.png?track=1"])
     assert.equal(shared.socialImageUrl(url),null);
   assert.equal(shared.socialImageUrl("https://cdn.modrinth.com/data/project/icon.png"),"https://cdn.modrinth.com/data/project/icon.png");
+});
+
+test("roster display resolves only a matching exact Aurora public profile and registry",async()=>{
+  const calls=[];
+  globalThis[fixtureKey]={async read(ref){calls.push(ref);return {data:()=>ref[0]==="publicProfiles"
+    ?{uid:"b",username:"Aurora_B"}:{uid:"b",usernameLower:"aurora_b"}};}};
+  try {
+    const service=createService({db:{},auth:{currentUser:{uid:"a"}}});
+    assert.deepEqual(await service.profile("b"),{uid:"b",nickname:"Aurora_B",avatarUrl:null});
+    assert.deepEqual(calls,[["publicProfiles","b"],["usernames","aurora_b"]]);
+    globalThis[fixtureKey]={async read(ref){return {data:()=>ref[0]==="publicProfiles"?{uid:"b",username:"Aurora_B"}:{uid:"someone_else",usernameLower:"aurora_b"}};}};
+    assert.equal(await service.profile("b"),null);
+    await assert.rejects(service.profile("../users"));
+  } finally {delete globalThis[fixtureKey];}
+});
+
+test("a new login of the same UID cannot publish a pending old roster profile",async()=>{
+  const pending=pendingRead(),auth={currentUser:{uid:"a"}},service=createService({db:{},auth});
+  const result=service.profile("b");
+  auth.currentUser={uid:"a"};
+  pending.resolve({uid:"b",username:"Aurora_B"});
+  await assert.rejects(result,/conta mudou/);
+  assert.equal(pending.calls.length,1);
+  delete globalThis[fixtureKey];
 });

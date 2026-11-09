@@ -16,8 +16,10 @@ before(async () => {
   const ts = desktopRequire("typescript");
   const transpile = text => ts.transpileModule(text, {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
   const shared = `data:text/javascript;base64,${Buffer.from(transpile(await readFile(new URL("../../apps/desktop/src/shared/social.ts", import.meta.url),"utf8"))).toString("base64")}`;
+  const organization = `data:text/javascript;base64,${Buffer.from(transpile(await readFile(new URL("../../apps/desktop/src/lib/socialOrganization.ts", import.meta.url),"utf8")).replace('"firebase/firestore"', JSON.stringify(import.meta.resolve("firebase/firestore")))).toString("base64")}`;
   const source = transpile(await readFile(new URL("../../apps/desktop/src/lib/socialFirebase.ts", import.meta.url),"utf8"))
     .replace('"../shared/social"', JSON.stringify(shared))
+    .replace('"./socialOrganization"', JSON.stringify(organization))
     .replace('"firebase/firestore"', JSON.stringify(import.meta.resolve("firebase/firestore")));
   createService = (await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`)).createSocialFirebaseService;
   env = await initializeTestEnvironment({ projectId, firestore: { host: "127.0.0.1", port: 8187, rules: await readFile(new URL("../firestore.rules", import.meta.url), "utf8") } });
@@ -244,4 +246,80 @@ test("Auth-only identities cannot enumerate the public index or read known publi
   await assertFails(getDocs(query(collection(authOnly,"socialCatalog"),limit(20))));
   await assertFails(getDoc(doc(authOnly,"socialSessions",id)));
   assert.equal((await service("b").listPublicSessions()).items[0].id,id);
+});
+
+
+test("groups require friendship and recipient consent; removals, leave and closure retain one membership", async () => {
+  await friendship(); const a = service("a").organization, b = service("b").organization;
+  await a.createGroup("Aventura");
+  await assert.rejects(a.inviteToGroup("c"));
+  await a.inviteToGroup("b");
+  assert.equal((await b.snapshot()).invitations[0].name, "Aventura");
+  await assertFails(getDoc(doc(dbFor("c"), "socialGroups", "a")));
+  await b.acceptGroup("a");
+  assert.equal((await a.snapshot()).group.members.length, 2);
+  await assert.rejects(b.createGroup("Outro"));
+  await a.removeGroupMember("b"); assert.equal((await b.snapshot()).group, null);
+  await a.inviteToGroup("b"); await b.acceptGroup("a"); await b.leaveGroup();
+  assert.equal((await a.snapshot()).group.members.length, 1);
+  await a.leaveGroup(); assert.equal((await a.snapshot()).group, null);
+});
+
+test("join approval is host-only, bound to session/account, and removed by revocation or session closure", async () => {
+  const a = service("a"), b = service("b"); await a.publishSession({ ...draft, joinPolicy: "approval" }); const session = await ownId("a");
+  await b.organization.requestJoin(session);
+  assert.equal(await b.organization.joinRequestStatus(session), "pending");
+  await assert.rejects(b.organization.respondJoin(session, "b", "accept"));
+  await assertFails(getDoc(doc(dbFor("c"), "socialJoinRequests", session, "guests", "b")));
+  await a.organization.respondJoin(session, "b", "accept");
+  assert.equal(await b.organization.joinRequestStatus(session), "accepted");
+  await a.organization.respondJoin(session, "b", "decline");
+  assert.equal(await b.organization.joinRequestStatus(session), "none");
+  await b.organization.requestJoin(session); await a.closeSession();
+  assert.equal(await b.organization.joinRequestStatus(session), "none");
+});
+
+test("blocked recipient cannot accept a group or request admission, even with retained projections", async () => {
+  await friendship(); const a = service("a"), b = service("b");
+  await a.organization.createGroup("Aventura"); await a.organization.inviteToGroup("b");
+  await a.publishSession({ ...draft, joinPolicy: "approval" }); const session = await ownId("a");
+  await a.block("b");
+  await assert.rejects(b.organization.acceptGroup("a"));
+  await assert.rejects(b.organization.requestJoin(session));
+});
+
+test("group membership cannot be self-detached while live or reused to read a replacement group", async () => {
+  await friendship(); const a = service("a").organization, b = service("b").organization;
+  await a.createGroup("Original"); await a.inviteToGroup("b"); await b.acceptGroup("a");
+  await assertFails(deleteDoc(doc(dbFor("b"), "socialGroupMembers", "b")));
+  await assertFails(updateDoc(doc(dbFor("a"), "socialGroups", "a"), { invited: ["c"], updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(dbFor("c"), "socialGroups", "a"), { updatedAt: serverTimestamp() }));
+  await a.leaveGroup(); await a.createGroup("Replacement");
+  await assertFails(getDoc(doc(dbFor("b"), "socialGroups", "a")));
+  assert.equal((await b.snapshot()).group, null);
+  await b.createGroup("Independent"); assert.equal((await b.snapshot()).group.name, "Independent");
+});
+
+test("expired group remains visible for explicit closure; expired invitation grants no roster access", async () => {
+  await friendship(); const a = service("a").organization, b = service("b").organization;
+  await a.createGroup("Expired"); await a.inviteToGroup("b");
+  await env.withSecurityRulesDisabled(async context => {
+    await updateDoc(doc(context.firestore(), "socialGroupInvites", "b", "hosts", "a"), { expiresAt: Timestamp.fromMillis(1) });
+    await updateDoc(doc(context.firestore(), "socialGroups", "a"), { expiresAt: Timestamp.fromMillis(1) });
+  });
+  await assertFails(getDoc(doc(dbFor("b"), "socialGroups", "a")));
+  assert.equal((await b.snapshot()).invitations.length, 0); await b.declineGroup("a");
+  assert.equal((await a.snapshot()).group.name, "Expired"); await a.leaveGroup(); await a.createGroup("New");
+});
+
+test("join queue removals must delete the same request and republishing clears previous approvals", async () => {
+  const a = service("a"), b = service("b"); await a.publishSession({ ...draft, joinPolicy: "approval" }); const session = await ownId("a");
+  await b.organization.requestJoin(session);
+  await assertFails(deleteDoc(doc(dbFor("a"), "socialJoinQueues", session)));
+  await assertFails(updateDoc(doc(dbFor("a"), "socialJoinQueues", session), { guests: [] }));
+  await a.organization.respondJoin(session, "b", "decline");
+  assert.deepEqual((await getDoc(doc(dbFor("a"), "socialJoinQueues", session))).data().guests, []);
+  await b.organization.requestJoin(session); await a.organization.respondJoin(session, "b", "accept");
+  await a.publishSession({ ...draft, joinPolicy: "approval", title: "New review" });
+  assert.equal(await b.organization.joinRequestStatus(session), "none"); await b.organization.requestJoin(session);
 });
