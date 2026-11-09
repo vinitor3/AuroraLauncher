@@ -70,6 +70,7 @@ pub(crate) enum VoiceRuntimeBinding {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum VoiceRuntimeAnnouncement {
     DefaultUnchanged,
+    Loopback35554Durable,
 }
 /// Redacted data only. No serde, path, identity, hash, credential or capability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,10 +162,11 @@ fn observe_inner(
     observer
         .observe_tcp(ENDPOINT)
         .map_err(VoiceRuntimeError::Source)?;
-    let first = PinnedRuntimeConfiguration::pin(
+    let first = PinnedRuntimeConfiguration::pin_with_policy(
         context.configuration_root(),
         context.configuration_root_identity(),
         context.profile(),
+        context.policy(),
     )?
     .read_sample()?;
     shared.hooks.at(ProducerPoint::VoiceAfterConfigurationA);
@@ -179,10 +181,11 @@ fn observe_inner(
         return Err(VoiceRuntimeError::UnsupportedBinding);
     }
     shared.hooks.at(ProducerPoint::VoiceAfterPositiveUdp);
-    let second = PinnedRuntimeConfiguration::pin(
+    let second = PinnedRuntimeConfiguration::pin_with_policy(
         context.configuration_root(),
         context.configuration_root_identity(),
         context.profile(),
+        context.policy(),
     )?
     .read_sample()?;
     first.require_same_revision(&second)?;
@@ -203,7 +206,14 @@ fn observe_inner(
         loader_version: voice_profile::LOADER_VERSION,
         artifact_version,
         binding: VoiceRuntimeBinding::Ipv4Literal,
-        announcement: VoiceRuntimeAnnouncement::DefaultUnchanged,
+        announcement: match context.policy() {
+            super::super::manifest::ObservationPolicyV2::LiteralOnlyFirstPersisted => {
+                VoiceRuntimeAnnouncement::DefaultUnchanged
+            }
+            super::super::manifest::ObservationPolicyV2::LiteralLoopback35554Durable => {
+                VoiceRuntimeAnnouncement::Loopback35554Durable
+            }
+        },
     })
 }
 
@@ -250,6 +260,17 @@ pub(in super::super) fn plan_voice_for_test(
     recipe.environment.insert(
         "AURORA_NATIVE_VOICE_TEST_HOLD_STOP".into(),
         if hold_stop { "1" } else { "0" }.into(),
+    );
+    recipe.environment.insert(
+        "AURORA_NATIVE_VOICE_TEST_ANNOUNCED".into(),
+        if prepared.bundle.manifest.voice_v2()?.observation_policy
+            == super::super::manifest::ObservationPolicyV2::LiteralLoopback35554Durable
+        {
+            "1"
+        } else {
+            "0"
+        }
+        .into(),
     );
     recipe.synthetic = true;
     recipe.limits = limits;

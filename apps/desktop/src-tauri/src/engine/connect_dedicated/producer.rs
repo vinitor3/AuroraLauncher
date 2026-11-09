@@ -123,8 +123,26 @@ impl Limits {
             attempts: 180,
         }
     }
+    fn bridge_production() -> Self {
+        Self {
+            lifetime_ms: 14_400_000,
+            ..Self::production()
+        }
+    }
     fn valid(self) -> bool {
-        (1..=300_000).contains(&self.lifetime_ms)
+        self.valid_capped(300_000)
+    }
+    fn valid_for(self, manifest: &factory::Manifest) -> bool {
+        if manifest.voice_v2().is_ok_and(|voice| {
+            voice.observation_policy == manifest::ObservationPolicyV2::LiteralLoopback35554Durable
+        }) {
+            self.valid_capped(14_400_000)
+        } else {
+            self.valid()
+        }
+    }
+    fn valid_capped(self, lifetime_cap: u64) -> bool {
+        (1..=lifetime_cap).contains(&self.lifetime_ms)
             && (1..=180_000).contains(&self.readiness_ms)
             && self.readiness_ms <= self.lifetime_ms
             && (1..=5_000).contains(&self.stop_ms)
@@ -170,6 +188,11 @@ impl Recipe {
         recipe
             .args
             .insert(5, "-DbundlerRepoDir=.connect-run-temp".into());
+        if prepared.bundle.manifest.voice_v2()?.observation_policy
+            == manifest::ObservationPolicyV2::LiteralLoopback35554Durable
+        {
+            recipe.limits = Limits::bridge_production();
+        }
         Ok(recipe)
     }
     // Kept private: executable selection still comes from verified Resources,
@@ -336,7 +359,7 @@ fn make_plan(
     recipe: Recipe,
     hooks: ProducerHooks,
 ) -> RunResult<DedicatedPlan> {
-    if !recipe.limits.valid() {
+    if !recipe.limits.valid_for(&prepared.bundle.manifest) {
         return Err(DedicatedError::Preparation(Error::Limit));
     }
     let deadline = prepared.approval_deadline();
@@ -395,6 +418,11 @@ fn make_plan(
                         // the manifest; it must not inherit the file-only
                         // EULA review's "no Java in this checkpoint" wording.
                         let voice = prepared.bundle.manifest.voice_v2()?;
+                        if voice.observation_policy
+                            == super::manifest::ObservationPolicyV2::LiteralLoopback35554Durable
+                        {
+                            details[1] = "Binding IPv4 literal; anúncio 127.0.0.1:35554 com recibo durável; Host exige aprovação separada; áudio não verificado".into();
+                        }
                         details.push(match voice.profile {
                             manifest::StoredVoiceProfileV2::Svc => {
                                 "Perfil: Simple Voice Chat 2.6.22".into()
@@ -412,8 +440,8 @@ fn make_plan(
                         details.push(format!(
                             "Configuração inicial compilada: {}; {} bytes; SHA-256 {}",
                             voice.profile.configuration_name(),
-                            voice.profile.configuration().len(),
-                            voice.profile.configuration_sha256()
+                            voice.observation_policy.configuration(voice.profile).len(),
+                            voice.observation_policy.configuration_sha256(voice.profile)
                         ));
                         let initial = &voice.initial_voice_configuration.observation;
                         details.push(format!(

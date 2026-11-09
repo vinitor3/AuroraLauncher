@@ -46,3 +46,38 @@ pub(crate) fn start_owned_run_dedicated_test(
 ) -> Result<OwnedRun, OwnedRunError> {
     test_support::start_with_hooks(command, instance_id, limits, cancel, hooks.0)
 }
+
+pub(crate) fn start_owned_voice_bridge_test(
+    command: Command,
+    instance_id: &str,
+    limits: OwnedRunLimits,
+    cancel: CancellationToken,
+    hooks: DedicatedTestHooks,
+) -> Result<OwnedRun, OwnedRunError> {
+    worker::start_voice_bridge(command, instance_id, limits, cancel, hooks.0)
+}
+#[test]
+fn reviewed_voice_lifetime_does_not_expand_original_owner_limits() {
+    let limits = OwnedRunLimits {
+        lifetime: Duration::from_secs(14_400),
+        stop_grace: Duration::from_secs(5),
+        output_bytes: 4 * 1024 * 1024,
+    };
+    assert!(!limits.valid());
+    assert!(limits.valid_voice_bridge());
+    assert!(!OwnedRunLimits {
+        lifetime: Duration::from_secs(14_400) + Duration::from_nanos(1),
+        ..limits
+    }
+    .valid_voice_bridge());
+    assert!(!OwnedRunLimits {
+        stop_grace: Duration::from_secs(6),
+        ..limits
+    }
+    .valid_voice_bridge());
+    assert!(OwnedRunLimits {
+        lifetime: Duration::from_secs(3600),
+        ..limits
+    }
+    .valid());
+}

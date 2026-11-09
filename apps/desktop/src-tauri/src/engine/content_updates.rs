@@ -35,6 +35,7 @@ const MAX_HTTP_ATTEMPTS: usize = 3;
 const JOURNAL_VERSION: u32 = 1;
 const MAX_SNAPSHOT_FILES: usize = 30_000;
 const MAX_SNAPSHOT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const VOICE_INSTALL_MARKER: &str = "connect-voice-install";
 
 #[derive(Debug, Error)]
 pub enum ContentUpdateError {
@@ -78,6 +79,8 @@ pub enum ContentUpdateError {
     RollbackFailed(String),
     #[error("Há uma recuperação interrompida. Abra Recuperação com o jogo fechado para concluir a proteção da instância.")]
     RecoveryPending,
+    #[error("a sessão de voz encerrou a autorização")]
+    VoiceInstallCancelled,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2009,6 +2012,10 @@ fn commit_one(
     let target = secure_instance_path(instance, &file.target_relative)?;
     let staging = checked_join(transaction_root, &file.staging_relative)?;
     let backup = checked_join(transaction_root, &file.backup_relative)?;
+    if file.current_sha1.is_none() {
+        return super::recovery::durable_rename(&staging, &target)
+            .map_err(|_| ContentUpdateError::Stale(file.filename.clone()));
+    }
     fs::rename(&source, &backup).map_err(|source| io_error(&backup, source))?;
     if let Err(source_error) = fs::rename(&staging, &target) {
         let restore = fs::rename(&backup, &source);
@@ -2074,16 +2081,31 @@ fn rollback_committed(
                 }
             }
         } else if target.exists() {
-            verify_file(
-                &target,
-                Some(file.expected_size),
-                &file.target_sha1,
-                file.target_sha512.as_deref(),
-            )?;
-            if replaced.exists() {
-                return Err(ContentUpdateError::Stale(file.filename.clone()));
+            let staging = checked_join(transaction_root, &file.staging_relative)?;
+            if journal.content_type == "mod"
+                && transaction_root.join(VOICE_INSTALL_MARKER).is_file()
+                && staging.exists()
+            {
+                // The new file was never moved. A concurrently inserted
+                // destination is not ours to remove, even with the same hash.
+                verify_file(
+                    &staging,
+                    Some(file.expected_size),
+                    &file.target_sha1,
+                    file.target_sha512.as_deref(),
+                )?;
+            } else {
+                verify_file(
+                    &target,
+                    Some(file.expected_size),
+                    &file.target_sha1,
+                    file.target_sha512.as_deref(),
+                )?;
+                if replaced.exists() {
+                    return Err(ContentUpdateError::Stale(file.filename.clone()));
+                }
+                fs::rename(&target, &replaced).map_err(|cause| io_error(&target, cause))?;
             }
-            fs::rename(&target, &replaced).map_err(|cause| io_error(&target, cause))?;
         }
         journal.committed_files = index;
         write_journal(transaction_root, journal)?;
@@ -2091,6 +2113,248 @@ fn rollback_committed(
     journal.committed_files = 0;
     journal.state = TransactionState::RolledBack;
     write_journal(transaction_root, journal)
+}
+
+/// Commit only additions that already passed the compiled voice-artifact
+/// policy. The same instance lock, durable journal and undo UI as content
+/// updates apply; no personal instance, replace or deletion is accepted here.
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+pub(super) fn install_voice_mods(
+    instance: &Instance,
+    guard: &InstanceMutationGuard,
+    additions: &[(&str, &[u8])],
+    authorized: impl Fn() -> bool,
+) -> Result<(), ContentUpdateError> {
+    use super::{diagnostic_lab, recovery};
+    if !diagnostic_lab::is_lab_candidate(instance) || additions.is_empty() || additions.len() > 2 {
+        return Err(ContentUpdateError::InvalidSelection);
+    }
+    diagnostic_lab::ensure_launchable(instance)
+        .map_err(|_| ContentUpdateError::InvalidSelection)?;
+    let _instance_pins =
+        recovery::check_guard(instance, guard).map_err(|_| ContentUpdateError::RecoveryPending)?;
+    if recovery::has_pending(instance).map_err(|_| ContentUpdateError::RecoveryPending)? {
+        return Err(ContentUpdateError::RecoveryPending);
+    }
+    let mut unique = HashSet::new();
+    let files = additions
+        .iter()
+        .enumerate()
+        .map(|(index, (relative, bytes))| {
+            let filename = relative
+                .strip_prefix("mods/")
+                .ok_or(ContentUpdateError::InvalidSelection)?;
+            validate_filename(filename, ".jar")?;
+            if bytes.is_empty() || bytes.len() > 16 * 1024 * 1024 || !unique.insert(*relative) {
+                return Err(ContentUpdateError::InvalidSelection);
+            }
+            let path = secure_instance_path(instance, relative)?;
+            match fs::symlink_metadata(&path) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(io_error(&path, error)),
+                Ok(_) => return Err(ContentUpdateError::Stale(filename.to_owned())),
+            }
+            Ok(TransactionFile {
+                previous_filename: filename.into(),
+                filename: filename.into(),
+                enabled: true,
+                project_id: "aurora-connect-voice".into(),
+                previous_version_number: String::new(),
+                version_number: filename.into(),
+                current_sha1: None,
+                target_sha1: format!("{:x}", Sha1::digest(bytes)),
+                target_sha512: Some(format!("{:x}", Sha512::digest(bytes))),
+                expected_size: bytes.len() as u64,
+                target_present: true,
+                source_relative: (*relative).into(),
+                target_relative: (*relative).into(),
+                staging_relative: format!("staging/{index}.download"),
+                backup_relative: format!("backup/{index}.previous"),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if !authorized() {
+        return Err(ContentUpdateError::VoiceInstallCancelled);
+    }
+    let base = transaction_root(instance);
+    ensure_no_symlink_components(instance.root(), ".aurora/content-updates")?;
+    fs::create_dir_all(&base).map_err(|cause| io_error(&base, cause))?;
+    let _base_pins =
+        recovery::pin_directory(&base).map_err(|_| ContentUpdateError::RecoveryPending)?;
+    let transaction_id = Uuid::new_v4().simple().to_string();
+    let root = base.join(&transaction_id);
+    fs::create_dir(&root).map_err(|cause| io_error(&root, cause))?;
+    let mut journal = TransactionJournal {
+        schema_version: JOURNAL_VERSION,
+        transaction_id,
+        state: TransactionState::Committing,
+        content_type: "mod".into(),
+        minecraft_version: "1.21.1".into(),
+        loader: "fabric".into(),
+        committed_files: 0,
+        files,
+    };
+    let staged = (|| {
+        let staging = root.join("staging");
+        fs::create_dir(&staging).map_err(|cause| io_error(&staging, cause))?;
+        recovery::write_new(&root.join(VOICE_INSTALL_MARKER), b"v1")
+            .map_err(|_| ContentUpdateError::RecoveryPending)?;
+        for (file, (_, bytes)) in journal.files.iter().zip(additions) {
+            let target = checked_join(&root, &file.staging_relative)?;
+            recovery::write_new(&target, bytes).map_err(|_| ContentUpdateError::RecoveryPending)?;
+            verify_file(
+                &target,
+                Some(file.expected_size),
+                &file.target_sha1,
+                file.target_sha512.as_deref(),
+            )?;
+        }
+        write_journal(&root, &journal)
+    })();
+    if let Err(error) = staged {
+        let _ = safe_remove_transaction_directory(&base, &root);
+        return Err(error);
+    }
+    let publish_marker = root.join("publish-undo");
+    let commit = (|| {
+        for index in 0..journal.files.len() {
+            if !authorized() {
+                return Err(ContentUpdateError::VoiceInstallCancelled);
+            }
+            journal.committed_files = index + 1;
+            write_journal(&root, &journal)?;
+            if !authorized() {
+                return Err(ContentUpdateError::VoiceInstallCancelled);
+            }
+            commit_one(instance, &root, &journal.files[index])?;
+        }
+        if !authorized() {
+            return Err(ContentUpdateError::VoiceInstallCancelled);
+        }
+        atomic_write(&publish_marker, b"pending")?;
+        journal.state = TransactionState::Committed;
+        write_journal(&root, &journal)?;
+        write_last_transaction_pointer(instance, &journal.transaction_id)
+    })();
+    if let Err(error) = commit {
+        journal.state = TransactionState::RollingBack;
+        let _ = write_journal(&root, &journal);
+        rollback_committed(instance, &root, &mut journal)
+            .map_err(|_| ContentUpdateError::RecoveryPending)?;
+        let _ = fs::remove_file(&publish_marker);
+        return Err(error);
+    }
+    let _ = fs::remove_file(&publish_marker);
+    let _ = prune_old_transactions(instance, &journal.transaction_id);
+    Ok(())
+}
+
+fn voice_transactions(instance: &Instance) -> Result<Vec<PathBuf>, ContentUpdateError> {
+    if !super::diagnostic_lab::is_lab_candidate(instance) {
+        return Ok(Vec::new());
+    }
+    let base = transaction_root(instance);
+    ensure_no_symlink_components(instance.root(), ".aurora/content-updates")?;
+    let entries = match fs::read_dir(&base) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(io_error(&base, error)),
+    };
+    let _base =
+        super::recovery::pin_directory(&base).map_err(|_| ContentUpdateError::RecoveryPending)?;
+    let mut pending = Vec::new();
+    for (index, entry) in entries.enumerate() {
+        if index >= 1024 {
+            return Err(ContentUpdateError::TooManyFiles);
+        }
+        let entry = entry.map_err(|error| io_error(&base, error))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !valid_hex(&name, 32) {
+            continue;
+        }
+        let root = entry.path();
+        let _root = super::recovery::pin_directory(&root)
+            .map_err(|_| ContentUpdateError::RecoveryPending)?;
+        let marker = root.join(VOICE_INSTALL_MARKER);
+        if !marker
+            .try_exists()
+            .map_err(|error| io_error(&marker, error))?
+        {
+            continue;
+        }
+        let marker_bytes = super::recovery::read_bounded(&marker, 2)
+            .map_err(|_| ContentUpdateError::RecoveryPending)?;
+        if marker_bytes != b"v1" {
+            return Err(ContentUpdateError::RecoveryPending);
+        }
+        let journal_path = root.join("journal.json");
+        let stable = super::recovery::read_bounded(&journal_path, 32 * 1024)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<TransactionJournal>(&bytes).ok())
+            .is_some_and(|journal| {
+                matches!(
+                    journal.state,
+                    TransactionState::Committed | TransactionState::RolledBack
+                )
+            });
+        if !stable || root.join("publish-undo").exists() {
+            pending.push(root);
+        }
+    }
+    Ok(pending)
+}
+
+pub(super) fn has_pending_voice_install(instance: &Instance) -> Result<bool, ContentUpdateError> {
+    Ok(!voice_transactions(instance)?.is_empty())
+}
+
+pub(super) fn recover_pending_voice_installs(
+    instance: &Instance,
+) -> Result<bool, ContentUpdateError> {
+    let pending = voice_transactions(instance)?;
+    let base = transaction_root(instance);
+    for root in &pending {
+        let pins = super::recovery::pin_directory(root)
+            .map_err(|_| ContentUpdateError::RecoveryPending)?;
+        let path = root.join("journal.json");
+        recover_atomic_file(&path)?;
+        if !path.exists() {
+            // No journal means only isolated staging was created.
+            drop(pins);
+            safe_remove_transaction_directory(&base, root)?;
+            continue;
+        }
+        let mut journal = read_journal(root)?;
+        if journal.content_type != "mod"
+            || journal.minecraft_version != "1.21.1"
+            || journal.loader != "fabric"
+            || journal.files.is_empty()
+            || journal.files.len() > 2
+            || journal.files.iter().any(|file| {
+                file.current_sha1.is_some()
+                    || !file.target_present
+                    || validate_filename(&file.filename, ".jar").is_err()
+                    || file.source_relative != file.target_relative
+                    || file.target_relative != format!("mods/{}", file.filename)
+                    || file
+                        .target_sha512
+                        .as_ref()
+                        .is_none_or(|sha| !valid_hex(sha, 128))
+            })
+        {
+            return Err(ContentUpdateError::RecoveryPending);
+        }
+        if journal.state == TransactionState::Committed {
+            write_last_transaction_pointer(instance, &journal.transaction_id)?;
+        } else {
+            rollback_committed(instance, root, &mut journal)?;
+        }
+        let marker = root.join("publish-undo");
+        if marker.exists() {
+            fs::remove_file(&marker).map_err(|error| io_error(&marker, error))?;
+        }
+    }
+    Ok(!pending.is_empty())
 }
 
 fn recover_incomplete_transactions(instance: &Instance) -> Result<(), ContentUpdateError> {

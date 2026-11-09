@@ -1,5 +1,6 @@
 //! Explicit, default-off launch of an already prepared diagnostic copy.
 //! These DTOs carry observations and review input, never a transport permit.
+use crate::engine::connect_native_voice::NativeVoiceProfile;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize)]
@@ -13,7 +14,7 @@ pub struct ReadyGameLaunchCapabilities {
 impl Default for ReadyGameLaunchCapabilities {
     fn default() -> Self {
         Self {
-            schema_version: 2,
+            schema_version: 3,
             instance_scope: "diagnosticCopy",
             max_plan_seconds: 60,
             runtimes: crate::engine::connect_ready_profile::ReadyProfile::ALL
@@ -109,6 +110,31 @@ pub struct ReadyGameLaunchReview {
     pub core_sha256: String,
     pub skins_version: &'static str,
     pub skins_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice: Option<ReadyVoiceReview>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadyVoiceReview {
+    pub profile: NativeVoiceProfile,
+    pub mods: Vec<ReadyVoiceMod>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadyVoiceMod {
+    pub relative: String,
+    pub bytes: u64,
+    pub sha256: String,
+    pub action: ReadyVoiceAction,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ReadyVoiceAction {
+    Present,
+    Install,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -162,6 +188,9 @@ pub enum ReadyGameLaunchError {
     UnsupportedRuntime,
     MissingArtifact,
     ArtifactMismatch,
+    VoiceArtifactsUnavailable,
+    ServerStatusUnavailable,
+    ServerProtocolMismatch,
     JavaUnavailable,
     JavaIncompatible,
     ConflictingArguments,
@@ -187,6 +216,9 @@ impl ReadyGameLaunchError {
             Self::UnsupportedRuntime => "connect_ready_game_unsupported_runtime",
             Self::MissingArtifact => "connect_ready_game_missing_artifact",
             Self::ArtifactMismatch => "connect_ready_game_artifact_mismatch",
+            Self::VoiceArtifactsUnavailable => "connect_ready_game_voice_artifacts_unavailable",
+            Self::ServerStatusUnavailable => "connect_ready_game_server_status_unavailable",
+            Self::ServerProtocolMismatch => "connect_ready_game_server_protocol_mismatch",
             Self::JavaUnavailable => "connect_ready_game_java_unavailable",
             Self::JavaIncompatible => "connect_ready_game_java_incompatible",
             Self::ConflictingArguments => "connect_ready_game_conflicting_arguments",

@@ -23,6 +23,9 @@ const bundledFirebaseProjectId = import.meta.env.VITE_FIREBASE_PROJECT_ID?.trim(
 // This build mode is an isolated, local-only integration harness. It cannot
 // enable the unpublished social rules on the real Aurora project.
 export const socialLabBuild = import.meta.env.MODE === "social-lab";
+// Explicit experimental build; normal releases remain disabled. This never
+// switches the online profile to emulator authentication or configurable relays.
+export const socialFeatureBuild = socialLabBuild || import.meta.env.MODE === "connect-online";
 
 // Estes valores identificam o aplicativo Web no Firebase e são públicos por
 // definição. Nunca inclua aqui chaves de conta de serviço ou tokens privados.

@@ -79,11 +79,37 @@ impl<'de> Deserialize<'de> for StoredVoiceProfileV2 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ObservationPolicyV2 {
     LiteralOnlyFirstPersisted,
+    LiteralLoopback35554Durable,
+}
+impl ObservationPolicyV2 {
+    pub(super) const fn configuration(self, profile: StoredVoiceProfileV2) -> &'static [u8] {
+        match (self, profile) {
+            (Self::LiteralOnlyFirstPersisted, _) => profile.configuration(),
+            (Self::LiteralLoopback35554Durable, StoredVoiceProfileV2::Svc) => {
+                voice_profile::SVC_BRIDGE_CONFIGURATION
+            }
+            (Self::LiteralLoopback35554Durable, StoredVoiceProfileV2::Plasmo) => {
+                voice_profile::PLASMO_BRIDGE_CONFIGURATION
+            }
+        }
+    }
+    pub(super) const fn configuration_sha256(self, profile: StoredVoiceProfileV2) -> &'static str {
+        match (self, profile) {
+            (Self::LiteralOnlyFirstPersisted, _) => profile.configuration_sha256(),
+            (Self::LiteralLoopback35554Durable, StoredVoiceProfileV2::Svc) => {
+                voice_profile::SVC_BRIDGE_CONFIGURATION_SHA256
+            }
+            (Self::LiteralLoopback35554Durable, StoredVoiceProfileV2::Plasmo) => {
+                voice_profile::PLASMO_BRIDGE_CONFIGURATION_SHA256
+            }
+        }
+    }
 }
 impl Serialize for ObservationPolicyV2 {
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         match self {
             Self::LiteralOnlyFirstPersisted => serializer.serialize_u32(1),
+            Self::LiteralLoopback35554Durable => serializer.serialize_u32(2),
         }
     }
 }
@@ -91,6 +117,7 @@ impl<'de> Deserialize<'de> for ObservationPolicyV2 {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         match u32::deserialize(deserializer)? {
             1 => Ok(Self::LiteralOnlyFirstPersisted),
+            2 => Ok(Self::LiteralLoopback35554Durable),
             _ => Err(serde::de::Error::custom(
                 "unsupported_voice_observation_policy",
             )),
@@ -274,8 +301,9 @@ impl VoiceManifestV2 {
             || self.runtime.loader_version != voice_profile::LOADER_VERSION
             || self.runtime.protocol != voice_profile::PROTOCOL
             || initial.name != profile.configuration_name()
-            || initial.observation.bytes != profile.configuration().len() as u64
-            || initial.observation.sha256 != profile.configuration_sha256()
+            || initial.observation.bytes
+                != self.observation_policy.configuration(profile).len() as u64
+            || initial.observation.sha256 != self.observation_policy.configuration_sha256(profile)
         {
             return Err(Error::Identity);
         }

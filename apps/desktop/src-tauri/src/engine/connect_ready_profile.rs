@@ -8,6 +8,13 @@ use serde_json::Value;
 pub enum ReadyProfile {
     Fabric1211,
     Fabric1201,
+    Fabric1192,
+    Fabric1165,
+    Forge1211,
+    Forge1201,
+    Forge1192,
+    Forge1165,
+    Forge1122,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -22,7 +29,18 @@ pub struct ReadyProfileDescriptor {
 }
 
 impl ReadyProfile {
-    pub const ALL: [Self; 2] = [Self::Fabric1211, Self::Fabric1201];
+    pub const ALL: [Self; 9] = [
+        Self::Fabric1211,
+        Self::Fabric1201,
+        Self::Fabric1192,
+        Self::Fabric1165,
+        Self::Forge1211,
+        Self::Forge1201,
+        Self::Forge1192,
+        Self::Forge1165,
+        Self::Forge1122,
+    ];
+
     pub fn from_version_id(id: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
@@ -32,32 +50,83 @@ impl ReadyProfile {
         match self {
             Self::Fabric1211 => "fabric-loader-0.16.14-1.21.1",
             Self::Fabric1201 => "fabric-loader-0.16.14-1.20.1",
+            Self::Fabric1192 => "fabric-loader-0.16.14-1.19.2",
+            Self::Fabric1165 => "fabric-loader-0.13.3-1.16.5",
+            Self::Forge1211 => "1.21.1-forge-52.1.12",
+            Self::Forge1201 => "1.20.1-forge-47.4.23",
+            Self::Forge1192 => "1.19.2-forge-43.4.16",
+            Self::Forge1165 => "1.16.5-forge-36.2.42",
+            Self::Forge1122 => "1.12.2-forge-14.23.5.2860",
         }
     }
     pub fn descriptor(self) -> ReadyProfileDescriptor {
-        let (minecraft_version, java_major) = match self {
-            Self::Fabric1211 => ("1.21.1", 21),
-            Self::Fabric1201 => ("1.20.1", 17),
+        let (minecraft_version, loader, loader_version, java_major) = match self {
+            Self::Fabric1211 => ("1.21.1", "fabric", "0.16.14", 21),
+            Self::Fabric1201 => ("1.20.1", "fabric", "0.16.14", 17),
+            Self::Fabric1192 => ("1.19.2", "fabric", "0.16.14", 17),
+            Self::Fabric1165 => ("1.16.5", "fabric", "0.13.3", 8),
+            Self::Forge1211 => ("1.21.1", "forge", "52.1.12", 21),
+            Self::Forge1201 => ("1.20.1", "forge", "47.4.23", 17),
+            Self::Forge1192 => ("1.19.2", "forge", "43.4.16", 17),
+            Self::Forge1165 => ("1.16.5", "forge", "36.2.42", 8),
+            Self::Forge1122 => ("1.12.2", "forge", "14.23.5.2860", 8),
         };
         ReadyProfileDescriptor {
             minecraft_version,
-            loader: "fabric",
-            loader_version: "0.16.14",
+            loader,
+            loader_version,
             java_major,
             core_version: "1.1.5",
             skins_version: "0.3.1",
         }
     }
+    #[cfg(feature = "connect-lab")]
+    pub(super) fn main_class(self) -> &'static str {
+        match self {
+            Self::Fabric1211 | Self::Fabric1201 | Self::Fabric1192 | Self::Fabric1165 => {
+                "net.fabricmc.loader.impl.launch.knot.KnotClient"
+            }
+            Self::Forge1211 => "net.minecraftforge.bootstrap.ForgeBootstrap",
+            Self::Forge1201 | Self::Forge1192 => "cpw.mods.bootstraplauncher.BootstrapLauncher",
+            Self::Forge1165 => "cpw.mods.modlauncher.Launcher",
+            Self::Forge1122 => "net.minecraft.launchwrapper.Launch",
+        }
+    }
+    #[cfg(feature = "connect-lab")]
+    pub(super) fn uses_quick_play(self) -> bool {
+        matches!(
+            self,
+            Self::Fabric1211 | Self::Fabric1201 | Self::Forge1211 | Self::Forge1201
+        )
+    }
+    #[cfg(feature = "connect-lab")]
+    pub(super) fn uses_forge_module_path(self) -> bool {
+        matches!(self, Self::Forge1201 | Self::Forge1192)
+    }
     pub fn core_file(self) -> &'static str {
         match self {
             Self::Fabric1211 => "mods/aurora-core-fabric-1.21.1.jar",
             Self::Fabric1201 => "mods/aurora-core-fabric-1.20.1.jar",
+            Self::Fabric1192 => "mods/aurora-core-fabric-1.19.2.jar",
+            Self::Fabric1165 => "mods/aurora-core-fabric-1.16.5.jar",
+            Self::Forge1211 => "mods/aurora-core-forge-1.21.1.jar",
+            Self::Forge1201 => "mods/aurora-core-forge-1.20.1.jar",
+            Self::Forge1192 => "mods/aurora-core-forge-1.19.2.jar",
+            Self::Forge1165 => "mods/aurora-core-forge-1.16.5.jar",
+            Self::Forge1122 => "mods/aurora-core-forge-1.12.2.jar",
         }
     }
     pub fn skins_file(self) -> &'static str {
         match self {
             Self::Fabric1211 => "mods/aurora-skins-fabric-1.21.1.jar",
             Self::Fabric1201 => "mods/aurora-skins-fabric-1.20.1.jar",
+            Self::Fabric1192 => "mods/aurora-skins-fabric-1.19.2.jar",
+            Self::Fabric1165 => "mods/aurora-skins-fabric-1.16.5.jar",
+            Self::Forge1211 => "mods/aurora-skins-forge-1.21.1.jar",
+            Self::Forge1201 => "mods/aurora-skins-forge-1.20.1.jar",
+            Self::Forge1192 => "mods/aurora-skins-forge-1.19.2.jar",
+            Self::Forge1165 => "mods/aurora-skins-forge-1.16.5.jar",
+            Self::Forge1122 => "mods/aurora-skins-forge-1.12.2.jar",
         }
     }
 }
@@ -96,13 +165,17 @@ pub(crate) fn profile_from_metadata(documents: &[Value]) -> Result<ReadyProfile,
         }
     }
     let profile = selected.ok_or(Error::UnsupportedRuntime)?;
+    let runtime = profile.descriptor();
     for document in documents {
         if document
             .get("minecraft")
-            .is_some_and(|v| v.as_str() != Some(profile.descriptor().minecraft_version))
+            .is_some_and(|v| v.as_str() != Some(runtime.minecraft_version))
             || document
                 .get("loader")
-                .is_some_and(|v| v.as_str() != Some("fabric"))
+                .is_some_and(|v| v.as_str() != Some(runtime.loader))
+            || document
+                .get("loaderVersion")
+                .is_some_and(|v| v.as_str() != Some(runtime.loader_version))
         {
             return Err(Error::UnsupportedRuntime);
         }
@@ -120,6 +193,10 @@ mod tests {
             "../../../../../scripts/active-mod-matrix.json"
         ))
         .unwrap();
+        assert_eq!(
+            matrix["targets"].as_array().unwrap().len(),
+            ReadyProfile::ALL.len()
+        );
         for profile in ReadyProfile::ALL {
             let descriptor = profile.descriptor();
             assert!(matrix["targets"]
@@ -136,9 +213,8 @@ mod tests {
             );
         }
         for id in [
-            "fabric-loader-0.16.14-1.19.2",
             "fabric-loader-0.16.13-1.20.1",
-            "1.20.1-forge-47.4.23",
+            "1.20.1-forge-47.4.22",
             "../fabric-loader-0.16.14-1.20.1",
             "1.20.1",
         ] {
@@ -148,7 +224,8 @@ mod tests {
     #[test]
     fn native_ready_markers_must_select_one_consistent_profile() {
         for profile in ReadyProfile::ALL {
-            let selected = json!({"versionId":profile.version_id(),"minecraft":profile.descriptor().minecraft_version,"loader":"fabric"});
+            let runtime = profile.descriptor();
+            let selected = json!({"versionId":profile.version_id(),"minecraft":runtime.minecraft_version,"loader":runtime.loader,"loaderVersion":runtime.loader_version});
             assert_eq!(
                 profile_from_metadata(std::slice::from_ref(&selected)),
                 Ok(profile)
@@ -162,8 +239,9 @@ mod tests {
             );
             for other in [
                 json!({"versionId":"unknown"}),
-                json!({"minecraft":"1.19.2"}),
-                json!({"loader":"forge"}),
+                json!({"minecraft":"1.18.2"}),
+                json!({"loader":"neoforge"}),
+                json!({"loaderVersion":"unknown"}),
                 json!(null),
                 json!({"versionId":7}),
             ] {

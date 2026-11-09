@@ -39,4 +39,20 @@
 .connect-deadlines dt { font-size: .75rem; }
 .connect-deadlines dd { font-variant-numeric: tabular-nums; font-size: .85rem; }
 .connect-deadlines .connect-deadline-expired { color: #efcf9f; }
+.connect-native-voice { max-width: 1040px; margin-top: 1.2rem; padding: 1.2rem; border: 1px solid #c7aaff2b; border-radius: 14px; background: #b391ff08; color: #eee7f7; }
+.connect-native-voice > summary { cursor: pointer; font-weight: 650; font-size: .95rem; }
+.connect-native-voice p, .connect-native-voice label, .connect-native-voice li { font-size: .83rem; line-height: 1.6; }
+.connect-native-voice p, .connect-native-voice dt { color: #bfb4cb; }
+.connect-native-voice dl { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 3fr); gap: .5rem; font-size: .82rem; }
+.connect-native-voice dd { margin: 0; overflow-wrap: anywhere; }
+.connect-native-voice fieldset { display: grid; gap: .8rem; min-width: 0; margin: 1rem 0; padding: 1rem; border: 1px solid #c7aaff30; border-radius: 10px; }
+.connect-native-voice legend { padding: 0 .45rem; font-size: .8rem; color: #dec6fa; }
+.connect-native-voice label { display: flex; flex-wrap: wrap; align-items: flex-start; gap: .6rem; }
+.connect-native-voice input[type="checkbox"], .connect-native-voice input[type="radio"] { width: 16px; height: 16px; min-height: 0; flex: 0 0 16px; margin-top: .25rem; }
+.connect-native-voice textarea { width: 100%; min-height: 5rem; resize: vertical; box-sizing: border-box; }
+.connect-native-voice pre, .connect-native-voice code, .connect-native-voice textarea { font-family: ui-monospace, Consolas, monospace; font-size: .76rem; overflow-wrap: anywhere; }
+.connect-native-voice pre { max-height: 16rem; overflow: auto; white-space: pre-wrap; padding: .8rem; margin: 0; border-radius: 8px; background: #00000030; }
+.connect-native-voice button { width: fit-content; max-width: 100%; font-size: .8rem; }
+.connect-native-voice [role="alert"] { padding: .8rem; border: 1px solid #ec8c9d50; border-radius: 8px; color: #f0c4cc; background: #af41551a; }
+.connect-native-voice :focus-visible { outline: 2px solid #c8a2fb; outline-offset: 3px; }
 @media (max-width: 680px) { .connect-fields { grid-template-columns: 1fr; } .connect-review dl, .connect-status dl { grid-template-columns: 1fr; gap: .2rem; } .connect-view dd { margin-bottom: .55rem; } }

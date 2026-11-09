@@ -3,7 +3,27 @@ use super::{manifest::StoredVoiceProfileV2, voice_profile::NativeVoiceProfile};
 use std::collections::BTreeSet;
 use std::io::{Seek, SeekFrom};
 
+#[cfg(feature = "connect-voice-lab")]
+#[path = "resource_cache.rs"]
+mod cache;
+pub(crate) use cache::acquire_client_mods;
+#[cfg(feature = "connect-voice-lab")]
+pub(super) use cache::{prepare_managed_plan, LAB_NAME};
+
 pub(super) const PROPERTIES: &[u8] = b"# Disposable Aurora Connect STATUS laboratory; no personal world.\nserver-ip=127.0.0.1\nserver-port=43001\nonline-mode=false\nwhite-list=true\nenforce-whitelist=true\nenable-rcon=false\nenable-query=false\nenable-jmx-monitoring=false\nenable-status=true\nmax-players=2\nview-distance=2\nsimulation-distance=5\nlevel-name=connect-lab-world\nlevel-seed=0\ngenerate-structures=false\nmotd=Aurora Connect disposable status lab\n";
+/// Closed gameplay settings for policy2's fresh, reviewed disposable copy.
+/// Minecraft offline login is confined behind the original authenticated Host.
+pub(super) const BRIDGE_PROPERTIES: &[u8] = b"# Disposable Aurora Connect voice laboratory; no personal world.\nserver-ip=127.0.0.1\nserver-port=43001\nonline-mode=false\nwhite-list=false\nenforce-whitelist=false\nenable-rcon=false\nenable-query=false\nenable-jmx-monitoring=false\nenable-status=true\nmax-players=8\nview-distance=2\nsimulation-distance=5\nlevel-name=connect-lab-world\nlevel-seed=0\ngenerate-structures=false\nmotd=Aurora Connect disposable voice lab\n";
+pub(super) fn properties(manifest: &super::manifest::Manifest) -> &'static [u8] {
+    if manifest.voice_v2().is_ok_and(|voice| {
+        voice.observation_policy
+            == super::manifest::ObservationPolicyV2::LiteralLoopback35554Durable
+    }) {
+        BRIDGE_PROPERTIES
+    } else {
+        PROPERTIES
+    }
+}
 const ARTIFACTS: [(&str, u64, &str); 9] = [
     (
         "server.jar",
@@ -81,6 +101,11 @@ fn voice_extras(profile: StoredVoiceProfileV2) -> &'static [(&'static str, u64, 
         StoredVoiceProfileV2::Svc => &SVC_ARTIFACTS,
         StoredVoiceProfileV2::Plasmo => &PLASMO_ARTIFACTS,
     }
+}
+pub(crate) fn client_voice_pins(
+    profile: NativeVoiceProfile,
+) -> &'static [(&'static str, u64, &'static str)] {
+    voice_extras(profile.stored())
 }
 pub(super) fn compiled_voice_pins(profile: StoredVoiceProfileV2) -> Vec<Pin> {
     let mut selected = pins();
@@ -272,6 +297,8 @@ pub(super) struct Resources {
     files: Vec<Pinned>,
     pub records: Vec<ResourceRecord>,
     _directories: Vec<File>,
+    #[cfg(feature = "connect-voice-lab")]
+    _managed_java: Option<cache::ManagedJava>,
 }
 impl Resources {
     pub(super) fn immutable_observations(&self) -> Vec<(String, PathBuf, Observation)> {
@@ -310,6 +337,8 @@ impl Resources {
             files: Vec::new(),
             records: Vec::new(),
             _directories: directories,
+            #[cfg(feature = "connect-voice-lab")]
+            _managed_java: cache::pin_managed_java(lab, jdk)?,
         };
         for pin in pins {
             let bytes = result.read_pin(&stage.join(pin.name), pin.name, pin.size)?;

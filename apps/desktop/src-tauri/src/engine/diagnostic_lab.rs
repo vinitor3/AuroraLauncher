@@ -46,6 +46,8 @@ pub struct LabEnvironment {
     pub state: String,
     pub logical_bytes: u64,
     pub copied_world: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_java_executable: Option<String>,
     pub limitations: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -99,6 +101,8 @@ struct Record {
     filesystem_identity: String,
     baseline_settings: Vec<LabSetting>,
     copy_files: Vec<RecoveryFile>,
+    #[serde(default)]
+    runtime_only: bool,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -196,8 +200,57 @@ pub fn ensure_launchable(instance: &Instance) -> Result<()> {
     if ready != rec.environment.instance_uuid {
         return Err(RecoveryError::Identity);
     }
+    if rec.runtime_only {
+        runtime_java(instance, &dir)?;
+    }
     validate_launch_metadata(instance)?;
     Ok(())
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeJavaRecord {
+    relative: String,
+    sha256: String,
+}
+
+fn runtime_java_binding(instance: &Instance, directory: &Path) -> Result<(PathBuf, String)> {
+    let path = recovery::path(directory, "runtime-java.json")?;
+    let record: RuntimeJavaRecord = serde_json::from_slice(&recovery::read_bounded(&path, 8192)?)
+        .map_err(|_| RecoveryError::Integrity)?;
+    if !record
+        .relative
+        .starts_with("installers/aurora-managed/runtimes/")
+        || !record.relative.ends_with("/bin/java.exe")
+        || record.sha256.len() != 64
+        || !record
+            .sha256
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return Err(RecoveryError::UnsafePath);
+    }
+    let path = recovery::path(instance.root(), &record.relative)?;
+    recovery::secure_open(&path)?;
+    Ok((path, record.sha256))
+}
+
+fn runtime_java(instance: &Instance, directory: &Path) -> Result<String> {
+    let (path, _) = runtime_java_binding(instance, directory)?;
+    path.to_str()
+        .map(str::to_owned)
+        .ok_or(RecoveryError::UnsafePath)
+}
+
+#[cfg(all(windows, feature = "connect-lab"))]
+pub(super) fn installed_runtime_java(instance: &Instance) -> Result<Option<(PathBuf, String)>> {
+    if !record(instance)?.runtime_only {
+        return Ok(None);
+    }
+    runtime_java_binding(
+        instance,
+        &directory(data(instance)?, instance.id().as_str())?,
+    )
+    .map(Some)
 }
 fn validate_launch_metadata(instance: &Instance) -> Result<()> {
     fn walk(root: &Path, rel: &str, depth: usize, count: &mut usize) -> Result<()> {
@@ -245,6 +298,9 @@ fn environment(mut rec: Record, dir: &Path, instance: Option<&Instance>) -> Resu
     .into();
     if let Some(instance) = instance {
         if instance.root().exists() {
+            if rec.runtime_only && rec.environment.state == "ready" {
+                rec.environment.runtime_java_executable = Some(runtime_java(instance, dir)?);
+            }
             let mut files = Vec::new();
             scan_tree(instance.root(), "", &mut files, 0, false)?;
             rec.environment.logical_bytes = files.iter().map(|f| f.size).sum();
@@ -277,6 +333,7 @@ pub fn list(data: &Path) -> Result<Vec<LabEnvironment>> {
             if rec.version != 1 || rec.environment.id != id {
                 return Err(RecoveryError::Integrity);
             }
+            let runtime_only = rec.runtime_only;
             let mut env = environment(rec, &dir, None)?;
             if env.state == "ready" {
                 let test = InstanceLayout::new(data)
@@ -284,6 +341,9 @@ pub fn list(data: &Path) -> Result<Vec<LabEnvironment>> {
                 if ensure_launchable(&test).is_err() {
                     env.state = "failed".into();
                     env.limitations.push("A identidade ou os metadados da cópia não puderam ser validados. Iniciar e aplicar estão bloqueados.".into());
+                }
+                if runtime_only && env.state == "ready" {
+                    env.runtime_java_executable = Some(runtime_java(&test, &dir)?);
                 }
             }
             Ok(env)
@@ -301,6 +361,7 @@ pub fn list(data: &Path) -> Result<Vec<LabEnvironment>> {
                         state: "failed".into(),
                         logical_bytes: 0,
                         copied_world: None,
+                        runtime_java_executable: None,
                         limitations: Vec::new(),
                     });
                 if env.id != id {
@@ -789,7 +850,7 @@ pub fn create(
     let test = InstanceLayout::new(data(source)?)
         .open(InstanceId::parse(&id).map_err(|_| RecoveryError::Identity)?);
     let destination = recovery::path(data(source)?, &format!("instances/{id}"))?;
-    let mut env=LabEnvironment{id:id.clone(),instance_uuid:Uuid::new_v4().to_string(),origin_uuid:baseline.instance_uuid.clone(),origin_instance_id:source.id().as_str().into(),created_at:now(),state:"creating".into(),logical_bytes:total,copied_world:selected_world.map(str::to_owned),limitations:vec!["Cópia de teste com arquivos independentes; não é isolamento de segurança do sistema operacional.".into(),"Credenciais, sessões, históricos e logs da origem não são copiados. Use a autenticação normal do launcher.".into(),if selected_world.is_some(){"Somente o mundo escolhido foi copiado de forma independente; ele não pode ser aplicado à origem."}else{"Mundos da origem não foram copiados. Crie mundos descartáveis no jogo."}.into(),"Uma execução sem o erro anterior é uma observação, não uma garantia de solução.".into(),"Só alternâncias de mods sem alteração do JAR e campos de configuração suportados aparecem na lista aplicável. Mundos e outras mudanças nunca são transferidos.".into(),"Excluir a cópia libera a pasta de jogo; o armazenamento compartilhado de recuperação mantém objetos imutáveis conforme a política atual.".into()]};
+    let mut env=LabEnvironment{id:id.clone(),instance_uuid:Uuid::new_v4().to_string(),origin_uuid:baseline.instance_uuid.clone(),origin_instance_id:source.id().as_str().into(),created_at:now(),state:"creating".into(),logical_bytes:total,copied_world:selected_world.map(str::to_owned),runtime_java_executable:None,limitations:vec!["Cópia de teste com arquivos independentes; não é isolamento de segurança do sistema operacional.".into(),"Credenciais, sessões, históricos e logs da origem não são copiados. Use a autenticação normal do launcher.".into(),if selected_world.is_some(){"Somente o mundo escolhido foi copiado de forma independente; ele não pode ser aplicado à origem."}else{"Mundos da origem não foram copiados. Crie mundos descartáveis no jogo."}.into(),"Uma execução sem o erro anterior é uma observação, não uma garantia de solução.".into(),"Só alternâncias de mods sem alteração do JAR e campos de configuração suportados aparecem na lista aplicável. Mundos e outras mudanças nunca são transferidos.".into(),"Excluir a cópia libera a pasta de jogo; o armazenamento compartilhado de recuperação mantém objetos imutáveis conforme a política atual.".into()]};
     let dir = directory(data(source)?, &id)?;
     fs::create_dir_all(&dir)?;
     let _registry_pins = recovery::pin_directory(&dir)?;
@@ -814,6 +875,7 @@ pub fn create(
         baseline_settings: settings(source, &baseline)?,
         baseline,
         copy_files,
+        runtime_only: false,
     };
     #[cfg(test)]
     if FAULT.with(|f| f.get() == Fault::BeforeRecord) {
@@ -888,6 +950,135 @@ pub fn create(
     });
     env.state = "ready".into();
     Ok(env)
+}
+
+/// Owns a new unpublished copy. The caller can release the origin lock before
+/// fetching resources. A failed or interrupted installation keeps the normal
+/// diagnostic claim so the user can remove the incomplete copy.
+#[cfg(all(windows, feature = "connect-lab"))]
+pub struct PendingRuntimeCopy {
+    instance: Instance,
+    guard: InstanceMutationGuard,
+    environment: LabEnvironment,
+    directory: PathBuf,
+    _pins: Vec<fs::File>,
+}
+
+#[cfg(all(windows, feature = "connect-lab"))]
+impl PendingRuntimeCopy {
+    pub fn instance(&self) -> &Instance {
+        &self.instance
+    }
+
+    pub fn publish(
+        mut self,
+        verified: super::connect_ready_runtime::VerifiedInstalledReadyCopy,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<LabEnvironment> {
+        if verified.root != self.instance.root() || cancelled() {
+            return Err(RecoveryError::Pending);
+        }
+        let _pins = recovery::check_guard(&self.instance, &self.guard)?;
+        validate_launch_metadata(&self.instance)?;
+        let observed = recovery::capture_observation(&self.instance, &self.guard)?;
+        if observed.instance_uuid != self.environment.instance_uuid {
+            return Err(RecoveryError::Identity);
+        }
+        let relative = verified
+            .java
+            .strip_prefix(self.instance.root())
+            .map_err(|_| RecoveryError::UnsafePath)?
+            .to_str()
+            .ok_or(RecoveryError::UnsafePath)?
+            .replace('\\', "/");
+        recovery::write_new(
+            &recovery::path(&self.directory, "runtime-java.json")?,
+            &encode(&RuntimeJavaRecord {
+                relative,
+                sha256: verified.java_sha256,
+            })?,
+        )?;
+        self.environment.runtime_java_executable =
+            Some(runtime_java(&self.instance, &self.directory)?);
+        if cancelled() {
+            return Err(RecoveryError::Pending);
+        }
+        recovery::write_new(
+            &recovery::path(&self.directory, "ready.json")?,
+            &encode(&observed.instance_uuid)?,
+        )?;
+        self.environment.state = "ready".into();
+        Ok(self.environment)
+    }
+}
+
+#[cfg(all(windows, feature = "connect-lab"))]
+pub fn begin_runtime_copy(
+    source: &Instance,
+    source_guard: &InstanceMutationGuard,
+) -> Result<PendingRuntimeCopy> {
+    if is_lab_candidate(source) {
+        return Err(RecoveryError::Identity);
+    }
+    let _source_pins = recovery::check_guard(source, source_guard)?;
+    let baseline = recovery::capture_observation(source, source_guard)?;
+    let data = data(source)?;
+    recovery::ensure_space(data, 1024 * 1024 * 1024)?;
+    let id = format!("{PREFIX}{}", Uuid::new_v4());
+    let instance = InstanceLayout::new(data)
+        .open(InstanceId::parse(&id).map_err(|_| RecoveryError::Identity)?);
+    let destination = recovery::path(data, &format!("instances/{id}"))?;
+    let directory = directory(data, &id)?;
+    let mut environment = LabEnvironment {
+        id,
+        instance_uuid: Uuid::new_v4().to_string(),
+        origin_uuid: baseline.instance_uuid.clone(),
+        origin_instance_id: source.id().as_str().into(),
+        created_at: now(),
+        state: "creating".into(),
+        logical_bytes: 0,
+        copied_world: None,
+        runtime_java_executable: None,
+        limitations: vec![
+            "Cópia independente com runtime oficial, Core e Skins. O modpack, os mundos e as configurações da origem ficam fora desta cópia.".into(),
+            "As mudanças desta cópia não são aplicáveis à instância de origem.".into(),
+        ],
+    };
+    fs::create_dir_all(&directory)?;
+    let mut pins = recovery::pin_directory(&directory)?;
+    recovery::write_new(
+        &recovery::path(&directory, "intent.json")?,
+        &encode(&environment)?,
+    )?;
+    fs::create_dir(&destination)?;
+    pins.extend(recovery::pin_directory(&destination)?);
+    recovery::write_new(
+        &recovery::path(&directory, "claim.json")?,
+        &encode(&recovery::filesystem_identity(&instance)?)?,
+    )?;
+    let guard = acquire_instance_recovery_lock(&instance).map_err(|_| RecoveryError::WrongLock)?;
+    environment.instance_uuid = recovery::capture_observation(&instance, &guard)?.instance_uuid;
+    let record = Record {
+        version: 1,
+        filesystem_identity: super::ai_tools::instance_identity(&instance)
+            .map_err(|_| RecoveryError::Identity)?,
+        environment: environment.clone(),
+        baseline,
+        baseline_settings: Vec::new(),
+        copy_files: Vec::new(),
+        runtime_only: true,
+    };
+    recovery::write_new(
+        &recovery::path(&directory, "record.json")?,
+        &encode(&record)?,
+    )?;
+    Ok(PendingRuntimeCopy {
+        instance,
+        guard,
+        environment,
+        directory,
+        _pins: pins,
+    })
 }
 
 fn setting_key(key: &str) -> Option<(&'static str, Option<(f64, f64)>)> {
@@ -1032,6 +1223,9 @@ fn changes(
     current: &RecoveryObservation,
     current_settings: &[LabSetting],
 ) -> Result<Vec<LabChange>> {
+    if rec.runtime_only {
+        return Ok(Vec::new());
+    }
     let before = grouped_mods(&rec.baseline.files)?;
     let after = grouped_mods(&current.files)?;
     let mut result = Vec::new();
@@ -1225,6 +1419,9 @@ pub fn preview_apply(
 ) -> Result<RecoveryPreview> {
     ensure_launchable(test)?;
     let rec = record(test)?;
+    if rec.runtime_only {
+        return Err(RecoveryError::Compatibility);
+    }
     let origin = recovery::capture_observation(source, source_guard)?;
     let current = recovery::capture_observation(test, test_guard)?;
     if origin.instance_uuid != rec.environment.origin_uuid {
@@ -1323,6 +1520,9 @@ pub fn apply(
     ensure_launchable(test)?;
     recovery::valid_id(preview_id)?;
     let rec = record(test)?;
+    if rec.runtime_only {
+        return Err(RecoveryError::Compatibility);
+    }
     let p = marker(
         data(test)?,
         test.id().as_str(),

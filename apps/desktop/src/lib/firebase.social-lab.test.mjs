@@ -49,8 +49,19 @@ test("normal build keeps normal project and does not connect to emulators", asyn
   const f = await fixture("production");
   try {
     assert.equal(f.module.socialLabBuild, false);
+    assert.equal(f.module.socialFeatureBuild, false);
     assert.equal(f.module.bundledFirebaseConfig.projectId, "auroralauncher");
     f.module.createFirebaseServices(f.module.bundledFirebaseConfig, { id: "test", persistent: true });
+    assert.equal(f.calls.some(c => c.name.includes("Emulator")), false);
+  } finally { f.close(); }
+});
+test("online experiment exposes social UI with real account configuration and no emulator fallback", async () => {
+  const f = await fixture("connect-online");
+  try {
+    assert.equal(f.module.socialLabBuild, false);
+    assert.equal(f.module.socialFeatureBuild, true);
+    assert.equal(f.module.bundledFirebaseConfig.projectId, "auroralauncher");
+    f.module.createFirebaseServices(f.module.bundledFirebaseConfig, { id: "online-test", persistent: false });
     assert.equal(f.calls.some(c => c.name.includes("Emulator")), false);
   } finally { f.close(); }
 });

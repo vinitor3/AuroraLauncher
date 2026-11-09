@@ -22,7 +22,8 @@ mod dedicated_test;
 mod test_support;
 #[cfg(all(test, feature = "connect-voice-lab"))]
 pub(crate) use dedicated_test::{
-    start_owned_run_dedicated_test, DedicatedTestHooks, OwnerTestGate,
+    start_owned_run_dedicated_test, start_owned_voice_bridge_test, DedicatedTestHooks,
+    OwnerTestGate,
 };
 #[cfg(test)]
 mod tests;
@@ -36,8 +37,15 @@ pub(crate) struct OwnedRunLimits {
 }
 impl OwnedRunLimits {
     fn valid(self) -> bool {
+        self.valid_with_lifetime(Duration::from_secs(3600))
+    }
+    #[cfg(feature = "connect-voice-lab")]
+    fn valid_voice_bridge(self) -> bool {
+        self.valid_with_lifetime(Duration::from_secs(14_400))
+    }
+    fn valid_with_lifetime(self, cap: Duration) -> bool {
         !self.lifetime.is_zero()
-            && self.lifetime <= Duration::from_secs(3600)
+            && self.lifetime <= cap
             && !self.stop_grace.is_zero()
             && self.stop_grace <= Duration::from_secs(5)
             && self.stop_grace <= self.lifetime
@@ -128,6 +136,21 @@ pub(crate) fn start_owned_run(
     #[cfg(not(test))]
     let hooks = Hooks;
     worker::start(command, instance_id, limits, cancel, hooks)
+}
+/// Separate trusted producer entry for an explicitly reviewed ManifestV2 policy2
+/// recipe. Generic83 and previous producer recipes keep their existing caps.
+#[cfg(all(feature = "connect-voice-lab", not(test)))]
+pub(crate) fn start_owned_voice_bridge(
+    command: Command,
+    instance_id: &str,
+    limits: OwnedRunLimits,
+    cancel: CancellationToken,
+) -> Result<OwnedRun, OwnedRunError> {
+    #[cfg(test)]
+    let hooks = Hooks::default();
+    #[cfg(not(test))]
+    let hooks = Hooks;
+    worker::start_voice_bridge(command, instance_id, limits, cancel, hooks)
 }
 #[allow(dead_code)] // The future producer owns this non-clonable control.
 impl OwnedRun {

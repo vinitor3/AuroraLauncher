@@ -1,5 +1,6 @@
 import { arrayRemove, arrayUnion, collection, doc, documentId, getDocFromServer, getDocsFromServer, increment, limit, orderBy, query, runTransaction, serverTimestamp, startAfter, Timestamp, type DocumentData, type Firestore } from "firebase/firestore";
 import type { FirebaseServices } from "./firebase";
+import { createSocialOrganization } from "./socialOrganization";
 import { normalizeSocialNickname, validateSocialSession, type SocialPerson, type SocialService, type SocialSession } from "../shared/social";
 
 type Kind = "request" | "accept" | "decline" | "cancel" | "remove" | "block";
@@ -61,10 +62,11 @@ export async function socialRelationshipWrite(db: Firestore, actor: string, peer
 /** Explicitly selected adapter. The caller must keep unpublished social rules disabled in normal builds. */
 export function createSocialFirebaseService(services: FirebaseServices): SocialService {
   const db = services.db;
-  const accountId = services.auth.currentUser?.uid;
+  const accountUser = services.auth.currentUser;
+  const accountId = accountUser?.uid;
   if (!accountId || !uidValid(accountId)) throw new Error("Entre em sua conta Aurora.");
   function account() {
-    if (services.auth.currentUser?.uid !== accountId) throw new Error("A conta mudou. Abra Amigos novamente.");
+    if (services.auth.currentUser !== accountUser || services.auth.currentUser?.uid !== accountId) throw new Error("A conta mudou. Abra Amigos novamente.");
     return accountId!;
   }
   async function guarded<T>(work: (check: () => void) => Promise<T>): Promise<T> {
@@ -110,6 +112,13 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
   const relationship = (peer: string, kind: Kind) => guarded(check => socialRelationshipWrite(db, account(), peer, kind, check));
   return {
     capabilities: Object.freeze({ friends: true, catalog: true, publication: true, join: false }),
+    organization: createSocialOrganization(db, account, guarded, person),
+    profile: uid => guarded(async check => {
+      if (!uidValid(uid)) throw new Error("Conta Aurora inválida.");
+      const value = await person(uid, check);
+      check();
+      return value.nickname === "Perfil indisponível" ? null : value;
+    }),
     searchByNickname: (value) => guarded(async (check) => {
       check();
       const nickname = normalizeSocialNickname(value);
@@ -186,7 +195,12 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
         check();
         const id = current?.sessionId ?? crypto.randomUUID();
         if (!sessionIdValid(id)) throw new Error("Sessão anterior inválida.");
-        const expiresAt = Timestamp.fromMillis(Date.now() + 295_000);
+        const queue = current ? (await transaction.get(doc(db, "socialJoinQueues", id))).data() : undefined; check();
+        if (queue) {
+          for (const guest of queue.guests ?? []) transaction.delete(doc(db, "socialJoinRequests", id, "guests", guest));
+          transaction.delete(doc(db, "socialJoinQueues", id));
+        }
+        const expiresAt = Timestamp.fromMillis(Date.now() + 14_395_000);
         transaction.set(ownerRef, { sessionId: id, visibility: value.visibility });
         transaction.set(doc(db, "socialSessions", id), { ...value, schema: 1, hostUid: owner, expiresAt });
         if (value.visibility === "public") transaction.set(doc(db, "socialCatalog", id), { schema: 1, expiresAt });
@@ -203,6 +217,11 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
         check();
         if (!current) return;
         if (!sessionIdValid(current.sessionId)) throw new Error("Sessão anterior inválida.");
+        const queue = (await transaction.get(doc(db, "socialJoinQueues", current.sessionId))).data(); check();
+        if (queue) {
+          for (const guest of queue.guests ?? []) transaction.delete(doc(db, "socialJoinRequests", current.sessionId, "guests", guest));
+          transaction.delete(doc(db, "socialJoinQueues", current.sessionId));
+        }
         transaction.delete(doc(db, "socialSessions", current.sessionId));
         if (current.visibility === "public") transaction.delete(doc(db, "socialCatalog", current.sessionId));
         transaction.delete(ownerRef);

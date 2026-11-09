@@ -1,0 +1,163 @@
+{
+  "1.12.2-forge-14.23.5.2860": {
+    "baseProfileSha256": "eca902144aaf00ff8bf9d4ae28be7f2ed8c1938f79cb4374a9b4a6c1d8352d62",
+    "extractedNatives": {
+      "OpenAL32.dll": "ede381bf55e7d0cd3a7e058237bbc66a8ff63837",
+      "OpenAL64.dll": "97362fba53dfb6d9581b8c64829f4b1d98a97855",
+      "SAPIWrapper_x64.dll": "7fdbc1a8a9c0e550e95b7444369529c823f7d24f",
+      "SAPIWrapper_x86.dll": "d48b1c8b9e20f9e4de21497d6dda1fba2f0d84d1",
+      "jinput-dx8.dll": "50348b2958b017df3bf30d7915ab61a4cb9a2b33",
+      "jinput-dx8_64.dll": "5d9a7d3fb6224dab97aaff7bd9430232732d9be8",
+      "jinput-raw.dll": "4d982f408e815519c2289cd720c78338392a9887",
+      "jinput-raw_64.dll": "067c11135f9ebeb554d5f80b7a8a5244c0f3b7d7",
+      "jinput-wintab.dll": "e7b9beead279298611d0c4753089d3af07c4c9e9",
+      "lwjgl.dll": "6f1661fc6952312a9f34dfa6d3840b46e9c85e63",
+      "lwjgl64.dll": "f4013116d6750829851370ed19a9eaf8251ad6e1"
+    },
+    "loaderProfileSha256": "e29100904d3f3e85128e2545541b3a49adfdf39113904a7c33ef34582f3bf728"
+  },
+  "1.16.5-forge-36.2.42": {
+    "additionalLibraries": {
+      "libraries/net/minecraft/client/1.16.5-20210115.111550/client-1.16.5-20210115.111550-extra.jar": "4aef4168f94d97bc73bf510213b2518942f931d1",
+      "libraries/net/minecraftforge/forge/1.16.5-36.2.42/forge-1.16.5-36.2.42-client.jar": "427f13ce6f486c182c9693e94e907e2eb049773f",
+      "libraries/net/minecraftforge/forge/1.16.5-36.2.42/forge-1.16.5-36.2.42-universal.jar": "fd07fe6c2c1cc7d3e403a1db7eadfa935ca7640d"
+    },
+    "baseProfileSha256": "5f1397688452c5b3b98da3d457319d78256653779346dfe5b6337aed23a3b4e8",
+    "extractedNatives": {
+      "OpenAL.dll": "dc8f7a5704164fe3dff3631c326bab7159a9358d",
+      "OpenAL.dll.git": "711ed36fce3edf284d01c0657f0cd56154cd1fb3",
+      "OpenAL.dll.sha1": "3276b57a51fbaffa9d89980d3bc6d2b613dd7e2b",
+      "OpenAL32.dll": "aa3fa9446b7c1264e2b463bb53946718e4f8ce82",
+      "OpenAL32.dll.git": "711ed36fce3edf284d01c0657f0cd56154cd1fb3",
+      "OpenAL32.dll.sha1": "4ef1b45ff9e0875820c3095f03c2b081e20911f8",
+      "SAPIWrapper_x64.dll": "c4a293116e7531d950db2d5ea737e61a9912b61d",
+      "SAPIWrapper_x86.dll": "70e85ab3f880a7c3d5f0a9aae0f65661cb8af5a6",
+      "glfw.dll": "9d95a8f52cbd48ab87937714eb4fd2129ed10f0a",
+      "glfw.dll.git": "e3744233ac832b0ad9a64047eb5a94628513ad74",
+      "glfw.dll.sha1": "3a77059db5c1f40e3d201919e1a4d2720fbc00f1",
+      "glfw32.dll": "b9a18c65931b474a453cca5b20903220975f0fc9",
+      "glfw32.dll.git": "e3744233ac832b0ad9a64047eb5a94628513ad74",
+      "glfw32.dll.sha1": "b2b28033818b03951b3e908a3d6e1a0b4d59d238",
+      "jemalloc.dll": "8a6eb00b934da6c97b0dc9d2dc321843076c8987",
+      "jemalloc.dll.git": "497d2f86f4fce8d743c6f405683aca504874bc06",
+      "jemalloc.dll.sha1": "47b93ba6ff7003387791188c2c4dda71c18c4c1e",
+      "jemalloc32.dll": "0d3c5c4d18d9a60501bce1f586684cd2fc5c466f",
+      "jemalloc32.dll.git": "497d2f86f4fce8d743c6f405683aca504874bc06",
+      "jemalloc32.dll.sha1": "ad434e7d52f799e691e5e62247e81973a57139bd",
+      "lwjgl.dll": "d01410449d2402a952e9a6063699f1868196883f",
+      "lwjgl.dll.git": "62f1cea2ce308e59fbcdcc66bc71194fcf21d81f",
+      "lwjgl.dll.sha1": "c633e0902b5110221e065ef458070e24bc9c208c",
+      "lwjgl32.dll": "a7aa4fbaa375fd39c4cb8eabeef45b44d5848bcb",
+      "lwjgl32.dll.git": "62f1cea2ce308e59fbcdcc66bc71194fcf21d81f",
+      "lwjgl32.dll.sha1": "4e4c3cf8d31561d2999011edfc888c70c0ebe081",
+      "lwjgl_opengl.dll": "8e9836dd0d1691356db654aa02533ad80e9bf52c",
+      "lwjgl_opengl.dll.sha1": "4e68bcec5346791b2a0d2acce02cfbde570faac4",
+      "lwjgl_opengl32.dll": "2e0fe073b23ab972af00025097efcfcb446d927f",
+      "lwjgl_opengl32.dll.sha1": "f0063df66dfd652280ce10498fecb7aed080fca5",
+      "lwjgl_stb.dll": "8b047fb3f6c31946fe33157e7912ac31595cd3b8",
+      "lwjgl_stb.dll.sha1": "9b5fd2d4f380b67ff195ac03669cf3166a6f6e7e",
+      "lwjgl_stb32.dll": "1c28819763f77cbb4593a95b1cbb0999f136695d",
+      "lwjgl_stb32.dll.sha1": "8ec6a56ee0e9f0ed384bd4ada4f624c382cc95a1",
+      "lwjgl_tinyfd.dll": "ec0fd8007afba6697d5b3b8249b5be27096a0ce8",
+      "lwjgl_tinyfd.dll.sha1": "c8f6935ec4bb254f1d25526b02e3b57c49f1f00c",
+      "lwjgl_tinyfd32.dll": "079540a19727772f056cd80535e9645a674190b4",
+      "lwjgl_tinyfd32.dll.sha1": "3844f3104cbbdced7c1f0eb364f6042284daae10"
+    },
+    "loaderProfileSha256": "3bc7f26131e61540d4226fdf04af3571a3addcb9073c0031419498f1ee88d940"
+  },
+  "1.19.2-forge-43.4.16": {
+    "additionalLibraries": {
+      "libraries/net/minecraft/client/1.19.2-20220805.130853/client-1.19.2-20220805.130853-extra.jar": "b78d6d3c3160407bd7a6da30b345dd2b8b29da34",
+      "libraries/net/minecraftforge/fmlcore/1.19.2-43.4.16/fmlcore-1.19.2-43.4.16.jar": "be7fec36e4c5e4b9392bb98d147e5b96ea8c9bcd",
+      "libraries/net/minecraftforge/forge/1.19.2-43.4.16/forge-1.19.2-43.4.16-client.jar": "84fc4a5afbf4ae489c04f51403e0cde0dbce42c3",
+      "libraries/net/minecraftforge/forge/1.19.2-43.4.16/forge-1.19.2-43.4.16-universal.jar": "919dcfe90af30ffc48150a48d463f894f812eb6e",
+      "libraries/net/minecraftforge/javafmllanguage/1.19.2-43.4.16/javafmllanguage-1.19.2-43.4.16.jar": "7de595ed27ad98a3a297e2e29b379e8203aa7d4f",
+      "libraries/net/minecraftforge/lowcodelanguage/1.19.2-43.4.16/lowcodelanguage-1.19.2-43.4.16.jar": "72a6ad21fae7f997895ed99424f3d7e4eea4a1d7",
+      "libraries/net/minecraftforge/mclanguage/1.19.2-43.4.16/mclanguage-1.19.2-43.4.16.jar": "936e0286fe9ead9ed9174b811dc6369b5c7beb14"
+    },
+    "baseProfileSha256": "bc3a48cf9e4a450b1f9741a653ded6ad7d43624d0787ed13ac3a797610df47a1",
+    "loaderProfileSha256": "92fffbd80d403a24b2b546f9196c55ec3464efa03705bafcd70ad6fbafeef986"
+  },
+  "1.20.1-forge-47.4.23": {
+    "additionalLibraries": {
+      "libraries/net/minecraft/client/1.20.1-20230612.114412/client-1.20.1-20230612.114412-extra.jar": "8c5a95cbce940cfdb304376ae9fea47968d02587",
+      "libraries/net/minecraftforge/fmlcore/1.20.1-47.4.23/fmlcore-1.20.1-47.4.23.jar": "ef56cfb608a4356c3f99dd6a4fa81ce33029bcde",
+      "libraries/net/minecraftforge/forge/1.20.1-47.4.23/forge-1.20.1-47.4.23-client.jar": "d8e1d9169ab0f6f3ff0ad41eccb3496f202d5484",
+      "libraries/net/minecraftforge/forge/1.20.1-47.4.23/forge-1.20.1-47.4.23-universal.jar": "2035ff1fe9311328ef6936db7f89b230639166ba",
+      "libraries/net/minecraftforge/javafmllanguage/1.20.1-47.4.23/javafmllanguage-1.20.1-47.4.23.jar": "103ee0ecf6e5e4a971ee1ae68384e96fd73b097f",
+      "libraries/net/minecraftforge/lowcodelanguage/1.20.1-47.4.23/lowcodelanguage-1.20.1-47.4.23.jar": "2531b2da1460bc09c8ec3bf946e641de664b460d",
+      "libraries/net/minecraftforge/mclanguage/1.20.1-47.4.23/mclanguage-1.20.1-47.4.23.jar": "00eebf4eae01f6fde63717bb38b77f9b6b1b50f8"
+    },
+    "baseProfileSha256": "68cc12dd03c6fb26af49a6ad13115f22610a0bd4e5b564be1013970ea3a89095",
+    "loaderProfileSha256": "8272edd08c50fcd106227f36e1bc8f0e04212f915737dad09fa6ac88f79bd444"
+  },
+  "1.21.1-forge-52.1.12": {
+    "baseProfileSha256": "0cc04bf674bc99292c55d70f376066a9c4cfcc6dafa62eefed714dfd09fdef52",
+    "loaderProfileSha256": "5c43876520304d26409c9519ec9526cd149923516fd709be01389c9fea4fee59"
+  },
+  "fabric-loader-0.13.3-1.16.5": {
+    "baseProfileSha256": "5f1397688452c5b3b98da3d457319d78256653779346dfe5b6337aed23a3b4e8",
+    "extractedNatives": {
+      "OpenAL.dll": "dc8f7a5704164fe3dff3631c326bab7159a9358d",
+      "OpenAL.dll.git": "711ed36fce3edf284d01c0657f0cd56154cd1fb3",
+      "OpenAL.dll.sha1": "3276b57a51fbaffa9d89980d3bc6d2b613dd7e2b",
+      "OpenAL32.dll": "aa3fa9446b7c1264e2b463bb53946718e4f8ce82",
+      "OpenAL32.dll.git": "711ed36fce3edf284d01c0657f0cd56154cd1fb3",
+      "OpenAL32.dll.sha1": "4ef1b45ff9e0875820c3095f03c2b081e20911f8",
+      "SAPIWrapper_x64.dll": "c4a293116e7531d950db2d5ea737e61a9912b61d",
+      "SAPIWrapper_x86.dll": "70e85ab3f880a7c3d5f0a9aae0f65661cb8af5a6",
+      "glfw.dll": "9d95a8f52cbd48ab87937714eb4fd2129ed10f0a",
+      "glfw.dll.git": "e3744233ac832b0ad9a64047eb5a94628513ad74",
+      "glfw.dll.sha1": "3a77059db5c1f40e3d201919e1a4d2720fbc00f1",
+      "glfw32.dll": "b9a18c65931b474a453cca5b20903220975f0fc9",
+      "glfw32.dll.git": "e3744233ac832b0ad9a64047eb5a94628513ad74",
+      "glfw32.dll.sha1": "b2b28033818b03951b3e908a3d6e1a0b4d59d238",
+      "jemalloc.dll": "8a6eb00b934da6c97b0dc9d2dc321843076c8987",
+      "jemalloc.dll.git": "497d2f86f4fce8d743c6f405683aca504874bc06",
+      "jemalloc.dll.sha1": "47b93ba6ff7003387791188c2c4dda71c18c4c1e",
+      "jemalloc32.dll": "0d3c5c4d18d9a60501bce1f586684cd2fc5c466f",
+      "jemalloc32.dll.git": "497d2f86f4fce8d743c6f405683aca504874bc06",
+      "jemalloc32.dll.sha1": "ad434e7d52f799e691e5e62247e81973a57139bd",
+      "lwjgl.dll": "d01410449d2402a952e9a6063699f1868196883f",
+      "lwjgl.dll.git": "62f1cea2ce308e59fbcdcc66bc71194fcf21d81f",
+      "lwjgl.dll.sha1": "c633e0902b5110221e065ef458070e24bc9c208c",
+      "lwjgl32.dll": "a7aa4fbaa375fd39c4cb8eabeef45b44d5848bcb",
+      "lwjgl32.dll.git": "62f1cea2ce308e59fbcdcc66bc71194fcf21d81f",
+      "lwjgl32.dll.sha1": "4e4c3cf8d31561d2999011edfc888c70c0ebe081",
+      "lwjgl_opengl.dll": "8e9836dd0d1691356db654aa02533ad80e9bf52c",
+      "lwjgl_opengl.dll.sha1": "4e68bcec5346791b2a0d2acce02cfbde570faac4",
+      "lwjgl_opengl32.dll": "2e0fe073b23ab972af00025097efcfcb446d927f",
+      "lwjgl_opengl32.dll.sha1": "f0063df66dfd652280ce10498fecb7aed080fca5",
+      "lwjgl_stb.dll": "8b047fb3f6c31946fe33157e7912ac31595cd3b8",
+      "lwjgl_stb.dll.sha1": "9b5fd2d4f380b67ff195ac03669cf3166a6f6e7e",
+      "lwjgl_stb32.dll": "1c28819763f77cbb4593a95b1cbb0999f136695d",
+      "lwjgl_stb32.dll.sha1": "8ec6a56ee0e9f0ed384bd4ada4f624c382cc95a1",
+      "lwjgl_tinyfd.dll": "ec0fd8007afba6697d5b3b8249b5be27096a0ce8",
+      "lwjgl_tinyfd.dll.sha1": "c8f6935ec4bb254f1d25526b02e3b57c49f1f00c",
+      "lwjgl_tinyfd32.dll": "079540a19727772f056cd80535e9645a674190b4",
+      "lwjgl_tinyfd32.dll.sha1": "3844f3104cbbdced7c1f0eb364f6042284daae10"
+    },
+    "fabricLibrarySha1": {
+      "libraries/net/fabricmc/access-widener/2.1.0/access-widener-2.1.0.jar": "f62a27adbfd8ab4d4fa5681793039f2c0b177155",
+      "libraries/net/fabricmc/fabric-loader/0.13.3/fabric-loader-0.13.3.jar": "a91fc6ea7a5e8c3140dfaf34aeadb43ce2f38fe2",
+      "libraries/net/fabricmc/intermediary/1.16.5/intermediary-1.16.5.jar": "f67ca1c57db2c12efbcc73df312efe879b6e49af",
+      "libraries/net/fabricmc/sponge-mixin/0.11.2+mixin.0.8.5/sponge-mixin-0.11.2+mixin.0.8.5.jar": "f4ae569d559b5e3244b67321945261d83ff7ad8e",
+      "libraries/net/fabricmc/tiny-mappings-parser/0.3.0+build.17/tiny-mappings-parser-0.3.0+build.17.jar": "02f10540a290e382a7cd35c16ec3900046a4e252",
+      "libraries/net/fabricmc/tiny-remapper/0.8.1/tiny-remapper-0.8.1.jar": "d220c092cd1446d5f2668b53e71abe23a12cb8cf",
+      "libraries/org/ow2/asm/asm-analysis/9.2/asm-analysis-9.2.jar": "7487dd756daf96cab9986e44b9d7bcb796a61c10",
+      "libraries/org/ow2/asm/asm-commons/9.2/asm-commons-9.2.jar": "f4d7f0fc9054386f2893b602454d48e07d4fbead",
+      "libraries/org/ow2/asm/asm-tree/9.2/asm-tree-9.2.jar": "d96c99a30f5e1a19b0e609dbb19a44d8518ac01e",
+      "libraries/org/ow2/asm/asm-util/9.2/asm-util-9.2.jar": "fbc178fc5ba3dab50fd7e8a5317b8b647c8e8946",
+      "libraries/org/ow2/asm/asm/9.2/asm-9.2.jar": "81a03f76019c67362299c40e0ba13405f5467bff"
+    },
+    "loaderProfileSha256": "6142581705fdf26ee9c7e27aa154795f5f51a5668eb982485f69ea2ecad847d8"
+  },
+  "fabric-loader-0.16.14-1.19.2": {
+    "baseProfileSha256": "bc3a48cf9e4a450b1f9741a653ded6ad7d43624d0787ed13ac3a797610df47a1",
+    "fabricLibrarySha1": {
+      "libraries/net/fabricmc/fabric-loader/0.16.14/fabric-loader-0.16.14.jar": "05778d47f536bf2c63ed2abc1a56f5a1c129e34a",
+      "libraries/net/fabricmc/intermediary/1.19.2/intermediary-1.19.2.jar": "9264b892918b70d28a1cf8bc4c07fdc6a1463628"
+    },
+    "loaderProfileSha256": "08aae68ef2b04fa87f0c5761dfeab7e15498dea69d45933eede289d925af433c"
+  }
+}

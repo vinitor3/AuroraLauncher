@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Aurora Connect Experimental",
+  "identifier": "com.aurora.smartlauncher.connectonline",
+  "build": { "beforeBuildCommand": "npm run connect:online:frontend" },
+  "app": {
+    "windows": [{ "label": "main", "title": "Aurora Connect — experimental", "width": 1240, "height": 860, "minWidth": 960, "minHeight": 620, "resizable": true, "decorations": false }]
+  },
+  "bundle": { "active": false }
+}

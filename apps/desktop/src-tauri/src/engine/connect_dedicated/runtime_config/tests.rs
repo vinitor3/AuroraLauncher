@@ -603,3 +603,37 @@ fn real_reparse_leaf_and_parent_never_follow_the_other_fixture() {
         }
     }
 }
+
+#[test]
+fn loopback35554_policy_is_separate_and_caps_original_mod_datagrams() {
+    for profile in [StoredVoiceProfileV2::Svc, StoredVoiceProfileV2::Plasmo] {
+        let policy = ObservationPolicyV2::LiteralLoopback35554Durable;
+        let bytes = policy.configuration(profile);
+        assert!(validate_configuration_with_policy(profile, policy, bytes).is_ok());
+        assert!(validate_configuration(profile, bytes).is_err());
+        assert!(
+            validate_configuration_with_policy(profile, policy, profile.configuration()).is_err()
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(bytes)),
+            policy.configuration_sha256(profile)
+        );
+        let text = std::str::from_utf8(bytes).unwrap();
+        assert!(validate_configuration_with_policy(
+            profile,
+            policy,
+            text.replace("35554", "35555").as_bytes()
+        )
+        .is_err());
+        let with_mtu = |mtu| match profile {
+            StoredVoiceProfileV2::Svc => format!("{text}mtu_size={mtu}\n"),
+            StoredVoiceProfileV2::Plasmo => format!("{text}[voice]\nmtu_size = {mtu}\n"),
+        };
+        assert!(
+            validate_configuration_with_policy(profile, policy, with_mtu(4096).as_bytes()).is_ok()
+        );
+        assert!(
+            validate_configuration_with_policy(profile, policy, with_mtu(4097).as_bytes()).is_err()
+        );
+    }
+}

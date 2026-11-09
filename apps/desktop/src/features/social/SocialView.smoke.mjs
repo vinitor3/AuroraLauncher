@@ -33,6 +33,7 @@ const { act, createElement } = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { SocialView } = await import(await sourceModule(new URL("./SocialView.tsx", import.meta.url)));
 const { SocialConnectionPanel } = await import(await sourceModule(new URL("./SocialConnectionPanel.tsx", import.meta.url)));
+const { SocialOrganizationPanel } = await import(await sourceModule(new URL("./SocialOrganizationPanel.tsx", import.meta.url)));
 const { socialArtwork } = await import(await sourceModule(new URL("./presentation.ts", import.meta.url)));
 const actualNow = Date.now;
 const fixedNow = 1_800_000_000_000;
@@ -166,7 +167,7 @@ test("join capability false never invokes prepareJoin, including synthetic click
     assert.equal(element.disabled, true);
     await act(async () => element.dispatchEvent(new window.Event("click", { bubbles: true })));
   }
-  assert.equal(count("prepareJoin"), 0); assert.match(container.textContent, /conexão social segura estiver integrada/);
+  assert.equal(count("prepareJoin"), 0); assert.match(container.textContent, /serviço online não está ativado/);
 });
 
 test("expired cards are removed on resume and no stale click can request admission", async () => {
@@ -315,7 +316,7 @@ test("host preparation requires an eligible own advert and never auto-approves",
 test("host review shows fixed source scope deadline and starts with consent unchecked", async () => {
   await render({ connection: connection(connectionSnapshot()) });
   assert.match(container.textContent, /127\.0\.0\.1:43001/); assert.match(container.textContent, /60 segundos/);
-  assert.match(container.textContent, /com uma vaga/); assert.equal(button("Compartilhar agora").disabled, true);
+  assert.match(container.textContent, /com 1 vaga/); assert.equal(button("Compartilhar agora").disabled, true);
   assert.equal(count("connect:confirmHost"), 0);
 });
 test("host explicit consent permits confirm and resets when the reviewed digest changes", async () => {
@@ -444,4 +445,56 @@ test("native source checking keeps Disconnect available without exposing a fabri
   await renderPanel(control); assert.match(container.textContent, /Conferindo o jogo selecionado/);
   assert.equal(button("Desconectar").disabled, false); assert.equal(buttons("Compartilhar agora").length, 0);
   await click("Desconectar"); assert.equal(count("connect:stop"), 1);
+});
+
+const organizationData = name => ({ group:name ? {id:"group", name, ownerUid:"owner-uid", members:[{uid:"owner-uid",nickname:"Host"}], invited:[], expiresAtMs:fixedNow+60_000}:null, invitations:[], joinRequests:[] });
+const organizationRender = async (org,accountId="owner-uid") => act(async()=>root.render(createElement(SocialOrganizationPanel,{service:org,accountId,friends:[]})));
+test("expired group keeps its exit action but cannot invite another member", async()=>{
+  const value=organizationData("Grupo antigo"); value.group.expiresAtMs=fixedNow-1;
+  let left=0;
+  await organizationRender({snapshot:async()=>value,leaveGroup:async()=>{left++;}});
+  assert.match(container.textContent,/Grupo expirado/);
+  assert.equal(container.querySelector('select[aria-label="Amigo para convidar ao grupo"]').disabled,true);
+  assert.equal(button("Convidar ao grupo").disabled,true);
+  assert.equal(button("Encerrar grupo").disabled,false);
+  await click("Encerrar grupo"); assert.equal(left,1);
+});
+test("group projection refreshes on visible resume and discards old account results", async()=>{
+  let reads=0, value=organizationData("Original");
+  const original={snapshot:async()=>{reads++;return value;}};
+  await organizationRender(original); assert.match(container.textContent,/Original/);
+  value=organizationData("Atualizado");
+  await act(async()=>document.dispatchEvent(new window.Event("visibilitychange")));
+  assert.equal(reads,2); assert.match(container.textContent,/Atualizado/);
+  const delayed=deferred(); original.snapshot=()=>delayed.promise;
+  await act(async()=>document.dispatchEvent(new window.Event("visibilitychange")));
+  await organizationRender({snapshot:async()=>organizationData("Outra conta")},"other-uid");
+  await act(async()=>delayed.resolve(organizationData("Nunca exibir")));
+  assert.match(container.textContent,/Outra conta/); assert.doesNotMatch(container.textContent,/Nunca exibir|Atualizado/);
+});
+test("group mutation invalidates pending projection and performs one fresh read after it",async()=>{
+  const old=deferred(); let reads=0, mutations=0;
+  const org={snapshot:async()=>{reads++;return reads===2?old.promise:organizationData(reads===1?"Antes":"Depois");},leaveGroup:async()=>{mutations++;}};
+  await organizationRender(org);
+  await act(async()=>document.dispatchEvent(new window.Event("visibilitychange")));
+  await click("Encerrar grupo"); assert.equal(mutations,1);
+  await act(async()=>old.resolve(organizationData("Antigo")));
+  assert.equal(reads,3); assert.match(container.textContent,/Depois/); assert.doesNotMatch(container.textContent,/Antigo/);
+});
+test("failed group refresh removes previous actionable members and redacts details",async()=>{
+  let fail=false;
+  const org={snapshot:async()=>{if(fail)throw new Error("token=secret");return organizationData("Ocultar");}};
+  await organizationRender(org); fail=true;
+  await click("Atualizar grupos e pedidos");
+  assert.doesNotMatch(container.textContent,/Ocultar|token=secret/); assert.equal(buttons("Encerrar grupo").length,0);
+});
+test("group polling has one in-flight read and unmount prevents a delayed update",async()=>{
+  const pendingRead=deferred(); let reads=0;
+  const org={snapshot:async()=>{reads++;return reads===1?organizationData("Grupo"):pendingRead.promise;}};
+  await organizationRender(org);
+  await act(async()=>{document.dispatchEvent(new window.Event("visibilitychange"));document.dispatchEvent(new window.Event("visibilitychange"));});
+  assert.equal(reads,2);
+  await render({service:null});
+  await act(async()=>pendingRead.resolve(organizationData("Não restaurar")));
+  assert.equal(reads,2); assert.doesNotMatch(container.textContent,/Não restaurar/);
 });

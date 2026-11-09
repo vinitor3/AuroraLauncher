@@ -30,3 +30,11 @@ pub(super) const PLASMO_CONFIGURATION_NAME: &str = "config/plasmovoice/server/co
 pub(super) const PLASMO_CONFIGURATION: &[u8] = b"# Disposable Aurora Connect Plasmo Voice server lab.\ndebug = false\ncheck_for_updates = false\nuse_crowdin_translations = false\n\n[host]\nip = \"127.0.0.1\"\nport = 43003\n";
 pub(super) const PLASMO_CONFIGURATION_SHA256: &str =
     "2dfc96bc221060b2f6cb5ebc73a465893594ea036145fc14d54549bbd2d5634e";
+
+pub(super) const SVC_BRIDGE_CONFIGURATION: &[u8] = b"# Disposable Aurora Connect Simple Voice Chat server lab.\n# An explicit loopback bind avoids the mod fallback to a wildcard bind.\nport=43002\nbind_address=127.0.0.1\nvoice_host=127.0.0.1:35554\n";
+pub(super) const SVC_BRIDGE_CONFIGURATION_SHA256: &str =
+    "2d9fec03747ce1080496ba78113bea85012593f8028b300261412a2c93fd53a0";
+
+pub(super) const PLASMO_BRIDGE_CONFIGURATION: &[u8] = b"# Disposable Aurora Connect Plasmo Voice server lab.\ndebug = false\ncheck_for_updates = false\nuse_crowdin_translations = false\n\n[host]\nip = \"127.0.0.1\"\nport = 43003\n[host.public]\nip = \"127.0.0.1\"\nport = 35554\n";
+pub(super) const PLASMO_BRIDGE_CONFIGURATION_SHA256: &str =
+    "42eb890e22081f73838a68e64c50a8e609deadef5570e4fd560aaf9522d775c6";

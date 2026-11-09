@@ -889,3 +889,30 @@ fn both_kinds_enforce_the_original_byte_limit_and_reject_trailing_documents() {
         assert_eq!(read_manifest(&fixture.path), Err(Error::NeedsRecovery));
     }
 }
+
+#[test]
+fn loopback35554_policy_requires_its_own_compiled_initial_baseline() {
+    for profile in [StoredVoiceProfileV2::Svc, StoredVoiceProfileV2::Plasmo] {
+        let legacy = encoded_voice(profile);
+        let mut announced = voice(profile);
+        announced.observation_policy = ObservationPolicyV2::LiteralLoopback35554Durable;
+        assert!(decode_manifest(&serde_json::to_vec(&announced).unwrap()).is_err());
+        announced.initial_voice_configuration.observation.bytes =
+            announced.observation_policy.configuration(profile).len() as u64;
+        announced.initial_voice_configuration.observation.sha256 = announced
+            .observation_policy
+            .configuration_sha256(profile)
+            .into();
+        let bytes = serde_json::to_vec(&announced).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&decode_manifest(&bytes).unwrap()).unwrap(),
+            bytes
+        );
+        announced.observation_policy = ObservationPolicyV2::LiteralOnlyFirstPersisted;
+        assert!(decode_manifest(&serde_json::to_vec(&announced).unwrap()).is_err());
+        assert_eq!(
+            serde_json::to_vec(&decode_manifest(&legacy).unwrap()).unwrap(),
+            legacy
+        );
+    }
+}

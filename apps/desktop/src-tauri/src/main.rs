@@ -5,6 +5,7 @@
 )]
 
 mod commands;
+mod commands_native_voice;
 mod connect_commands;
 mod doctor_runs;
 mod launcher_sessions;
@@ -108,15 +109,25 @@ fn main() {
                             .map(ConnectManager::with_social_lab)
                             .unwrap_or_default()
                     } else {
-                        ConnectManager::default()
+                        SocialLabAuthority::from_compiled_online()
+                            .map(ConnectManager::with_social_lab)
+                            .unwrap_or_default()
                     }
                 }
-                #[cfg(not(all(debug_assertions, feature = "connect-lab")))]
+                #[cfg(all(not(debug_assertions), feature = "connect-lab"))]
+                {
+                    use aurora_launcher_core::engine::connect::{ConnectManager, SocialLabAuthority};
+                    SocialLabAuthority::from_compiled_online()
+                        .map(ConnectManager::with_social_lab)
+                        .unwrap_or_default()
+                }
+                #[cfg(not(feature = "connect-lab"))]
                 {
                     aurora_launcher_core::engine::connect::ConnectManager::default()
                 }
             };
             app.manage(connect);
+            app.manage(aurora_launcher_core::engine::connect_native_voice::NativeVoiceSessionManager::default());
             #[cfg(any(feature = "connect-lab", feature = "connect-voice-lab"))]
             app.manage(ExperimentalExitState::default());
             if create_launcher_tray(app).is_err() {
@@ -169,10 +180,15 @@ fn main() {
             voice_announcement_commands::voice_announcement_confirm_close,
             voice_announcement_commands::voice_announcement_finish_close,
             connect_commands::connect_capabilities,
+            commands_native_voice::native_voice_snapshot,
+            commands_native_voice::native_voice_execute,
+            commands_native_voice::native_voice_social_reserve,
             connect_commands::connect_social_capabilities,
             connect_commands::connect_social_reserve,
             connect_commands::connect_social_reserve_discovered,
             connect_commands::connect_social_authenticate,
+            connect_commands::connect_social_refresh_authentication,
+            connect_commands::connect_social_revoke_participant,
             connect_commands::connect_social_confirm_host,
             connect_commands::connect_account_transition_stop,
             connect_commands::connect_prove_social_key_binding,
@@ -197,6 +213,8 @@ fn main() {
             connect_commands::connect_confirm_ready_game_launch,
             connect_commands::connect_cancel_ready_game_launch,
             connect_commands::connect_ready_game_launch_snapshot,
+            connect_commands::connect_install_ready_copy,
+            connect_commands::connect_cancel_ready_copy_install,
             connect_commands::connect_prepare_session_guest,
             connect_commands::connect_prepare_session_host_discovered,
             connect_commands::connect_snapshot,
@@ -312,8 +330,13 @@ fn main() {
                         let voice = app.state::<VoiceManager>();
                         let outcome = voice.begin_exit().await;
                         if outcome.is_ok() && voice.exit_ready() {
+                            #[cfg(all(windows, feature = "connect-lab"))]
+                            commands::ready_game::shutdown_ready_copy_install().await;
                             // Ready+Exit is sealed: no cancel/finish/new writer
                             // can reopen voice admission while this await runs.
+                            app.state::<aurora_launcher_core::engine::connect_native_voice::NativeVoiceSessionManager>()
+                                .shutdown_all()
+                                .await;
                             app.state::<aurora_launcher_core::engine::connect::ConnectManager>()
                                 .shutdown_all()
                                 .await;

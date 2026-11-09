@@ -47,6 +47,20 @@ const TARGETS: [(&str, &str, &str, i32); 9] = [
     ("1.21.1", "forge", "52.1.12", 767),
 ];
 
+pub fn protocol_for_ready_profile(
+    profile: super::connect_ready_profile::ReadyProfile,
+) -> Option<i32> {
+    let runtime = profile.descriptor();
+    TARGETS
+        .iter()
+        .find_map(|&(minecraft, loader, version, protocol)| {
+            (minecraft == runtime.minecraft_version
+                && loader == runtime.loader
+                && version == runtime.loader_version)
+                .then_some(protocol)
+        })
+}
+
 fn component(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128

@@ -14,6 +14,8 @@ pub(super) struct GuestSource {
 enum GuestAuthority {
     Invitation(Box<Authority>),
     Social(Weak<social::ready_source::LaunchAuthority>),
+    #[cfg(all(windows, feature = "connect-voice-lab"))]
+    SocialHost(Weak<social::ready_source::HostPlayerLaunchAuthority>),
 }
 impl GuestAuthority {
     fn with_current<T>(
@@ -27,14 +29,65 @@ impl GuestAuthority {
                     .map_err(|_| ReadyGameLaunchError::Unavailable)?;
                 work()
             }
+            #[cfg(all(windows, feature = "connect-voice-lab"))]
+            Self::SocialHost(authority) => authority
+                .upgrade()
+                .ok_or(ReadyGameLaunchError::Unavailable)?
+                .with_current(work),
             Self::Social(authority) => authority
                 .upgrade()
                 .ok_or(ReadyGameLaunchError::Unavailable)?
                 .with_current(work),
         }
     }
+    fn voice_profile(
+        &self,
+    ) -> Result<Option<crate::engine::connect_native_voice::NativeVoiceProfile>, ReadyGameLaunchError>
+    {
+        match self {
+            Self::Invitation(_) => Ok(None),
+            Self::Social(authority) => {
+                let authority = authority
+                    .upgrade()
+                    .ok_or(ReadyGameLaunchError::Unavailable)?;
+                authority.voice_profile()
+            }
+            #[cfg(all(windows, feature = "connect-voice-lab"))]
+            Self::SocialHost(authority) => {
+                let authority = authority
+                    .upgrade()
+                    .ok_or(ReadyGameLaunchError::Unavailable)?;
+                authority.voice_profile()
+            }
+        }
+    }
+    fn runtime_profile(
+        &self,
+    ) -> Result<Option<crate::engine::connect_ready_profile::ReadyProfile>, ReadyGameLaunchError>
+    {
+        match self {
+            Self::Invitation(_) => Ok(None),
+            Self::Social(authority) => authority
+                .upgrade()
+                .ok_or(ReadyGameLaunchError::Unavailable)?
+                .runtime_profile(),
+            #[cfg(all(windows, feature = "connect-voice-lab"))]
+            Self::SocialHost(authority) => authority
+                .upgrade()
+                .ok_or(ReadyGameLaunchError::Unavailable)?
+                .runtime_profile(),
+        }
+    }
     fn check_epoch(&self, epoch: u64) -> Result<(), ReadyGameLaunchError> {
         match self {
+            #[cfg(all(windows, feature = "connect-voice-lab"))]
+            Self::SocialHost(authority)
+                if authority
+                    .upgrade()
+                    .is_none_or(|authority| authority.account_epoch() != epoch) =>
+            {
+                Err(ReadyGameLaunchError::Unavailable)
+            }
             Self::Social(authority)
                 if authority
                     .upgrade()
@@ -76,6 +129,29 @@ impl GuestSource {
             deadline,
             cancel: cancel.clone(),
         })
+    }
+    #[cfg(all(windows, feature = "connect-voice-lab"))]
+    pub(super) fn social_host(
+        guest: &Arc<lab::Guest>,
+        bridge: &Arc<lab::TcpBridge>,
+        authority: &Arc<social::ready_source::HostPlayerLaunchAuthority>,
+        deadline: Instant,
+        cancel: &CancellationToken,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            guest: Arc::downgrade(guest),
+            bridge: Arc::downgrade(bridge),
+            authority: GuestAuthority::SocialHost(Arc::downgrade(authority)),
+            deadline,
+            cancel: cancel.clone(),
+        })
+    }
+    fn allows_phase(&self, phase: &str) -> bool {
+        #[cfg(all(windows, feature = "connect-voice-lab"))]
+        if matches!(&self.authority, GuestAuthority::SocialHost(_)) {
+            return phase == "hostListening";
+        }
+        phase == "guestConnected"
     }
     #[cfg(test)]
     pub(super) fn bound_sockets_for_test(&self) -> Vec<SocketAddr> {
@@ -206,14 +282,17 @@ impl ReadyGameSpawnGate {
         self.epoch_rejected_before_spawn
             .load(std::sync::atomic::Ordering::SeqCst)
     }
-    pub fn with_current(
-        &self,
-        spawn_and_register: impl FnOnce() -> Result<ReadyGameLaunchResult, ReadyGameLaunchError>,
-    ) -> Result<ReadyGameLaunchResult, ReadyGameLaunchError> {
-        let mut state = self
+    /// Read-only precommit gate. File IO must not execute while holding Connect;
+    /// final child spawn still uses with_current and its registration barrier.
+    pub fn check_current(&self) -> Result<(), ReadyGameLaunchError> {
+        let state = self
             .state
             .lock()
             .map_err(|_| ReadyGameLaunchError::Internal)?;
+        self.validate(&state)?;
+        self.source.with_current(|| Ok(()))
+    }
+    fn validate(&self, state: &State) -> Result<(), ReadyGameLaunchError> {
         let a = state
             .attempt
             .as_ref()
@@ -223,7 +302,7 @@ impl ReadyGameSpawnGate {
             .as_ref()
             .ok_or(ReadyGameLaunchError::StaleOperation)?;
         if a.snapshot.operation_id.as_deref() != Some(&self.operation)
-            || a.snapshot.phase != "guestConnected"
+            || !self.source.allows_phase(a.snapshot.phase)
             || work.snapshot.plan_id.as_deref() != Some(&self.plan)
             || work.snapshot.phase != "starting"
             || a.guest_source
@@ -244,6 +323,17 @@ impl ReadyGameSpawnGate {
                 .store(true, std::sync::atomic::Ordering::SeqCst);
         });
         epoch_check?;
+        Ok(())
+    }
+    pub fn with_current(
+        &self,
+        spawn_and_register: impl FnOnce() -> Result<ReadyGameLaunchResult, ReadyGameLaunchError>,
+    ) -> Result<ReadyGameLaunchResult, ReadyGameLaunchError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ReadyGameLaunchError::Internal)?;
+        self.validate(&state)?;
         let result = self.source.with_current(spawn_and_register)?;
         let work = state
             .attempt
@@ -342,7 +432,11 @@ impl Manager {
         }
         let account_epoch = state.social_epoch;
         let a = selected_ready(&mut state, owner, &request.operation_id)?;
-        if a.snapshot.phase != "guestConnected" || a.cancel.is_cancelled() {
+        if a.guest_source
+            .as_ref()
+            .is_none_or(|source| !source.allows_phase(a.snapshot.phase))
+            || a.cancel.is_cancelled()
+        {
             return Err(ReadyGameLaunchError::Unavailable);
         }
         if !finished(a) {
@@ -412,7 +506,21 @@ impl Manager {
                         source.address().map(|_| ())
                     };
                     check()?;
-                    let prepared = backend.prepare(&request, endpoint, &cancel)?;
+                    let voice_profile = source.authority.voice_profile()?;
+                    let runtime_profile = source.authority.runtime_profile()?;
+                    let prepared = backend.prepare(
+                        &request,
+                        endpoint,
+                        voice_profile,
+                        runtime_profile,
+                        &cancel,
+                    )?;
+                    if prepared.voice_review().map(|review| review.profile) != voice_profile
+                        || (voice_profile.is_some() && runtime_profile.is_none())
+                        || runtime_profile.is_some_and(|runtime| prepared.profile() != runtime)
+                    {
+                        return Err(ReadyGameLaunchError::Unavailable);
+                    }
                     check()?;
                     // Preparation and approval are independently bounded, without
                     // replacing or extending the original session authority.
@@ -448,8 +556,21 @@ impl Manager {
                     ))
                     .map_err(|_| ReadyGameLaunchError::Internal)?;
                     let mut hash = Sha256::new();
-                    hash.update(b"aurora-connect-ready-game-v2\0");
-                    hash.update(material);
+                    if let Some(voice) = prepared.voice_review() {
+                        hash.update(b"aurora-connect-ready-game-voice-v4\0");
+                        hash.update(&material);
+                        hash.update(
+                            serde_json::to_vec(&(
+                                voice_profile,
+                                runtime_profile.map(|runtime| runtime.version_id()),
+                                voice,
+                            ))
+                            .map_err(|_| ReadyGameLaunchError::Internal)?,
+                        );
+                    } else {
+                        hash.update(b"aurora-connect-ready-game-v2\0");
+                        hash.update(material);
+                    }
                     let digest = format!("{:x}", hash.finalize());
                     let review = ReadyGameLaunchReview {
                         operation_id: operation.clone(),
@@ -472,6 +593,7 @@ impl Manager {
                         core_sha256: prepared.core_sha256().into(),
                         skins_version: runtime.skins_version,
                         skins_sha256: prepared.skins_sha256().into(),
+                        voice: prepared.voice_review().cloned(),
                     };
                     update_ready(&owned_state, &operation, &plan, |work| {
                         work.deadline = deadline;

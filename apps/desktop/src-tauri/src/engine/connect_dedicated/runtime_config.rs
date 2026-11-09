@@ -1,6 +1,9 @@
 //! Bounded runtime reads for the two compiled configuration paths. This module
 //! has no run/source, mutation guard, database, inventory or restore authority.
-use super::{manifest::StoredVoiceProfileV2, recovery, FileIdentity};
+use super::{
+    manifest::{ObservationPolicyV2, StoredVoiceProfileV2},
+    recovery, FileIdentity,
+};
 use crate::engine::recovery::RecoveryError;
 use sha2::{Digest, Sha256};
 use std::{
@@ -100,13 +103,29 @@ impl RuntimeConfigSample {
 pub(super) struct PinnedRuntimeConfiguration {
     path: PathBuf,
     profile: StoredVoiceProfileV2,
+    policy: ObservationPolicyV2,
     _parents: Vec<File>,
 }
 impl PinnedRuntimeConfiguration {
+    #[cfg(test)]
     pub(super) fn pin(
         copy_root: &Path,
         expected_root_identity: &FileIdentity,
         profile: StoredVoiceProfileV2,
+    ) -> Result<Self> {
+        Self::pin_with_policy(
+            copy_root,
+            expected_root_identity,
+            profile,
+            ObservationPolicyV2::LiteralOnlyFirstPersisted,
+        )
+    }
+
+    pub(super) fn pin_with_policy(
+        copy_root: &Path,
+        expected_root_identity: &FileIdentity,
+        profile: StoredVoiceProfileV2,
+        policy: ObservationPolicyV2,
     ) -> Result<Self> {
         internal_copy_path(copy_root)?;
         let mut parents = recovery::pin_directory(copy_root).map_err(path_error)?;
@@ -138,6 +157,7 @@ impl PinnedRuntimeConfiguration {
         Ok(Self {
             path,
             profile,
+            policy,
             _parents: parents,
         })
     }
@@ -195,7 +215,7 @@ impl PinnedRuntimeConfiguration {
         }
         drop(pathname);
         drop(first);
-        validate_configuration(self.profile, &bytes)?;
+        validate_configuration_with_policy(self.profile, self.policy, &bytes)?;
         let sample = RuntimeConfigSample {
             profile: self.profile,
             stamp: before,
@@ -270,13 +290,35 @@ fn internal_copy_path(path: &Path) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(test)]
 fn validate_configuration(profile: StoredVoiceProfileV2, bytes: &[u8]) -> Result<()> {
+    validate_configuration_with_policy(
+        profile,
+        ObservationPolicyV2::LiteralOnlyFirstPersisted,
+        bytes,
+    )
+}
+fn validate_configuration_with_policy(
+    profile: StoredVoiceProfileV2,
+    policy: ObservationPolicyV2,
+    bytes: &[u8],
+) -> Result<()> {
     if bytes.len() > MAX_BYTES {
         return Err(RuntimeConfigError::Limit);
     }
-    let parsed = match profile {
-        StoredVoiceProfileV2::Svc => validate_svc(bytes),
-        StoredVoiceProfileV2::Plasmo => super::super::plasmo::validate_runtime_configuration(bytes),
+    let parsed = match (profile, policy) {
+        (StoredVoiceProfileV2::Svc, ObservationPolicyV2::LiteralOnlyFirstPersisted) => {
+            validate_svc(bytes)
+        }
+        (StoredVoiceProfileV2::Svc, ObservationPolicyV2::LiteralLoopback35554Durable) => {
+            validate_svc_announcement(bytes, b"127.0.0.1:35554")
+        }
+        (StoredVoiceProfileV2::Plasmo, ObservationPolicyV2::LiteralOnlyFirstPersisted) => {
+            super::super::plasmo::validate_runtime_configuration(bytes)
+        }
+        (StoredVoiceProfileV2::Plasmo, ObservationPolicyV2::LiteralLoopback35554Durable) => {
+            super::super::plasmo::validate_runtime_configuration_for_bridge(bytes, true)
+        }
     };
     parsed.map_err(|error| match error {
         RecoveryError::Limit => RuntimeConfigError::Limit,
@@ -284,10 +326,16 @@ fn validate_configuration(profile: StoredVoiceProfileV2, bytes: &[u8]) -> Result
     })
 }
 fn validate_svc(bytes: &[u8]) -> std::result::Result<(), RecoveryError> {
+    validate_svc_announcement(bytes, b"")
+}
+fn validate_svc_announcement(
+    bytes: &[u8],
+    expected: &[u8],
+) -> std::result::Result<(), RecoveryError> {
     // Preserve 58/59 exactly: the old lexer first validates the complete input.
     // This additional finite pass checks only this runtime profile's fields.
     let announcement = super::super::svc_value_span(bytes)?;
-    if !bytes[announcement].is_empty() {
+    if &bytes[announcement] != expected {
         return Err(RecoveryError::Integrity);
     }
     let text = std::str::from_utf8(bytes).map_err(|_| RecoveryError::Integrity)?;
@@ -307,6 +355,12 @@ fn validate_svc(bytes: &[u8]) -> std::result::Result<(), RecoveryError> {
                     return Err(RecoveryError::Integrity);
                 }
                 port = true;
+            }
+            "mtu_size" if !expected.is_empty() => {
+                let mtu: usize = value.parse().map_err(|_| RecoveryError::Integrity)?;
+                if !(1..=4096).contains(&mtu) {
+                    return Err(RecoveryError::Integrity);
+                }
             }
             "bind_address" => {
                 if value != "127.0.0.1" {

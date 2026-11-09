@@ -185,7 +185,10 @@ fn issue(
         direct_address: operation.bind.to_string(),
         game_target: game.to_string(),
         udp_target: udp.to_string(),
-        announcement_policy: "defaultUnchanged",
+        announcement_policy: match sample.announcement {
+            crate::engine::connect_voice::dedicated::VoiceRuntimeAnnouncement::DefaultUnchanged => "defaultUnchanged",
+            crate::engine::connect_voice::dedicated::VoiceRuntimeAnnouncement::Loopback35554Durable => "loopback35554Durable",
+        },
         services,
         participants,
         expires_at_ms: expires,

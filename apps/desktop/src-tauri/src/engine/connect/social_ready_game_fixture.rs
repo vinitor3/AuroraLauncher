@@ -108,12 +108,15 @@ impl Drop for Fixture {
 struct Prepared {
     fixture: Arc<Fixture>,
     instance: String,
+    voice: Option<crate::engine::connect::ready_game_profile::ReadyVoiceReview>,
 }
 impl ReadyGameBackend for Arc<Fixture> {
     fn prepare(
         &self,
         request: &ReadyGameLaunchRequest,
         _: SocketAddr,
+        voice_profile: Option<crate::engine::connect_native_voice::NativeVoiceProfile>,
+        _runtime_profile: Option<crate::engine::connect_ready_profile::ReadyProfile>,
         _: &CancellationToken,
     ) -> Result<Box<dyn PreparedReadyGame>, ReadyGameLaunchError> {
         if let Some(gate) = &self.prepare_gate {
@@ -122,10 +125,27 @@ impl ReadyGameBackend for Arc<Fixture> {
         Ok(Box::new(Prepared {
             fixture: self.clone(),
             instance: request.instance_id.clone(),
+            voice: voice_profile.map(|profile| {
+                crate::engine::connect::ready_game_profile::ReadyVoiceReview {
+                    profile,
+                    mods: vec![crate::engine::connect::ready_game_profile::ReadyVoiceMod {
+                        relative: "mods/test-only-voice-fixture.jar".into(),
+                        bytes: 1,
+                        sha256: "cc".repeat(32),
+                        action:
+                            crate::engine::connect::ready_game_profile::ReadyVoiceAction::Install,
+                    }],
+                }
+            }),
         }))
     }
 }
 impl PreparedReadyGame for Prepared {
+    fn voice_review(
+        &self,
+    ) -> Option<&crate::engine::connect::ready_game_profile::ReadyVoiceReview> {
+        self.voice.as_ref()
+    }
     fn profile(&self) -> crate::engine::connect_ready_profile::ReadyProfile {
         crate::engine::connect_ready_profile::ReadyProfile::Fabric1211
     }

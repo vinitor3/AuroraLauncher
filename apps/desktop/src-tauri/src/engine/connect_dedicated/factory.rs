@@ -61,6 +61,7 @@ pub(crate) struct FactoryPlan {
     deadline: Instant,
     hooks: Hooks,
     kind: ManifestKind,
+    voice_policy: ObservationPolicyV2,
     #[cfg(test)]
     test_expected_pins: Option<Vec<resources::Pin>>,
     _pins: Vec<File>,
@@ -73,6 +74,8 @@ pub(crate) struct PreparedStatus {
     deadline: Instant,
     pub(super) hooks: Hooks,
     pub(super) approved_files: eula::ApprovedFiles,
+    pub(crate) announcement_recovery:
+        Option<(Instance, super::super::DurableRestorationController)>,
 }
 
 pub(crate) fn plan_status_factory(stage: &Path, jdk: &Path, accepted: bool) -> Result<FactoryPlan> {
@@ -128,6 +131,7 @@ pub(super) fn plan(
         deadline: Instant::now() + REVIEW_TTL,
         hooks,
         kind: ManifestKind::StatusV1,
+        voice_policy: ObservationPolicyV2::LiteralOnlyFirstPersisted,
         #[cfg(test)]
         test_expected_pins: None,
         _pins: directories,
@@ -209,6 +213,55 @@ fn voice_plan(
         }));
     Ok(plan)
 }
+/// The combined factory review authorizes only a new diagnostic copy and the
+/// exact compiled announcement. The independent execution review remains required.
+#[cfg(feature = "connect-voice-lab")]
+pub(super) fn plan_voice_bridge_factory_at(
+    lab: &Path,
+    stage: &Path,
+    jdk: &Path,
+    profile: NativeVoiceProfile,
+) -> Result<FactoryPlan> {
+    #[cfg(test)]
+    let hooks = Hooks::default();
+    #[cfg(not(test))]
+    let hooks = Hooks;
+    let plan = voice_plan(
+        lab,
+        stage,
+        jdk,
+        profile,
+        true,
+        resources::voice_pins(profile),
+        hooks,
+    )?;
+    bridge_plan(plan, profile)
+}
+
+fn bridge_plan(mut plan: FactoryPlan, profile: NativeVoiceProfile) -> Result<FactoryPlan> {
+    plan.voice_policy = ObservationPolicyV2::LiteralLoopback35554Durable;
+    let stored = profile.stored();
+    plan.review.digest = digest(&encode(&(
+        "native_voice_bridge_factory_v2",
+        &plan.review.digest,
+        plan.voice_policy,
+        stored.configuration_sha256(),
+        plan.voice_policy.configuration_sha256(stored),
+        "durable_recovery_receipt",
+        "127.0.0.1:35554",
+        digest(resources::BRIDGE_PROPERTIES),
+    ))?);
+    plan.review.purpose = "native_voice_bridge_factory_v2";
+    plan.review.before =
+        String::from_utf8(stored.configuration().to_vec()).map_err(|_| Error::Identity)?;
+    plan.review.after = String::from_utf8(plan.voice_policy.configuration(stored).to_vec())
+        .map_err(|_| Error::Identity)?;
+    plan.review.details.push(format!("Política2 LiteralLoopback35554Durable; baseline aplicado {}bytes/SHA256{}; política1 permanece somente a preimagem original antes da transação.", plan.voice_policy.configuration(stored).len(), plan.voice_policy.configuration_sha256(stored)));
+    plan.review.details.push("Jogo somente loopback43001; online-mode=false (login Minecraft offline), whitelist=false, max-players=8; autenticação de transporte Aurora obrigatória. Mundo novo descartável.".into());
+    plan.review.details.push("Criar cópia nova e aplicar somente anúncio 127.0.0.1:35554 com recibo durável Recovery; nenhum Java. Restaurar depois exige revisão própria. Todos os jogadores, inclusive o Host jogador, precisam de ponte local aprovada.".into());
+    Ok(plan)
+}
+
 #[cfg(test)]
 pub(super) fn fixture_voice_plan(
     lab: &Path,
@@ -222,6 +275,18 @@ pub(super) fn fixture_voice_plan(
     let mut plan = voice_plan(lab, stage, jdk, profile, accepted, expected.clone(), hooks)?;
     plan.test_expected_pins = Some(expected);
     Ok(plan)
+}
+#[cfg(all(test, debug_assertions))]
+pub(super) fn fixture_voice_bridge_plan(
+    lab: &Path,
+    stage: &Path,
+    jdk: &Path,
+    profile: NativeVoiceProfile,
+) -> Result<FactoryPlan> {
+    bridge_plan(
+        fixture_voice_plan(lab, stage, jdk, profile, true, Hooks::default())?,
+        profile,
+    )
 }
 fn voice_runtime() -> VoiceRuntimeV2 {
     VoiceRuntimeV2 {
@@ -317,12 +382,16 @@ impl FactoryPlan {
         let source_observation = recovery::capture_observation(&origin, &source_guard)?;
         let environment = diagnostic_lab::create(&origin, &source_guard, None, |_| {})?;
         let copy = layout.open(InstanceId::parse(environment.id).map_err(|_| Error::Identity)?);
-        let guard = lock(&copy)?;
+        let mut guard = lock(&copy)?;
         copy.ensure_layout().map_err(|_| Error::Io)?;
         self.resources.copy_artifacts(copy.root())?;
         recovery::write_new(
             &copy.root().join("server.properties"),
-            resources::PROPERTIES,
+            if self.voice_policy == ObservationPolicyV2::LiteralLoopback35554Durable {
+                resources::BRIDGE_PROPERTIES
+            } else {
+                resources::PROPERTIES
+            },
         )?;
         recovery::write_new(&copy.root().join("eula.txt"), EULA_FALSE)?;
         let mut installed = Vec::new();
@@ -365,12 +434,60 @@ impl FactoryPlan {
             installed,
             provenance,
         };
+        let mut announcement_recovery = None;
         let manifest = match self.kind {
             ManifestKind::StatusV1 => Manifest::StatusV1(common),
             ManifestKind::VoiceV2(profile) => {
                 // Only fresh factory data is moved here, before any manifest
                 // publication. No opened V1 bundle or Prepared is converted.
-                let initial_voice_configuration = create_voice_configuration(copy.root(), profile)?;
+                let mut initial_voice_configuration =
+                    create_voice_configuration(copy.root(), profile)?;
+                if self.voice_policy == ObservationPolicyV2::LiteralLoopback35554Durable {
+                    // The opaque process guard is acquired normally, after releasing
+                    // the factory lock. No borrowed ordinary guard bypasses its probe.
+                    drop(guard);
+                    let voice_guard = super::super::acquire_voice_mutation_guard(&copy)?;
+                    let prepare_announcement = super::super::prepare_durable_announcement;
+                    #[cfg(test)]
+                    let prepare_announcement = if self.test_expected_pins.is_some() {
+                        super::super::prepare_fixture_durable_announcement
+                    } else {
+                        prepare_announcement
+                    };
+                    let prepared = prepare_announcement(
+                        &copy,
+                        &voice_guard,
+                        super::super::AnnouncementRequest {
+                            voice_mod: match profile {
+                                StoredVoiceProfileV2::Svc => {
+                                    super::super::VoiceMod::SimpleVoiceChat
+                                }
+                                StoredVoiceProfileV2::Plasmo => super::super::VoiceMod::PlasmoVoice,
+                            },
+                            mode: super::super::AnnouncementMode::DedicatedAuroraOnly,
+                            guest_port: 35554,
+                            expected_source_sha256: profile.configuration_sha256().into(),
+                        },
+                    )?;
+                    // Factory approval already bound both complete compiled files.
+                    // Refuse any adapter output that differs from that approved diff.
+                    if prepared.review().replacement_sha256
+                        != self.voice_policy.configuration_sha256(profile)
+                    {
+                        return Err(Error::Changed);
+                    }
+                    let approval = prepared.review().digest.clone();
+                    let applied = prepared.confirm(&copy, &voice_guard, &approval)?;
+                    announcement_recovery = Some((copy.clone(), applied.receipt));
+                    drop(voice_guard);
+                    guard = lock(&copy)?;
+                    let (observation, bytes) =
+                        observe_file(&copy.root().join(profile.configuration_name()), 256 * 1024)?;
+                    if bytes != self.voice_policy.configuration(profile) {
+                        return Err(Error::Changed);
+                    }
+                    initial_voice_configuration.observation = observation;
+                }
                 Manifest::VoiceV2(VoiceManifestV2 {
                     schema: 2,
                     profile,
@@ -389,7 +506,7 @@ impl FactoryPlan {
                     provenance: common.provenance,
                     runtime: voice_runtime(),
                     initial_voice_configuration,
-                    observation_policy: ObservationPolicyV2::LiteralOnlyFirstPersisted,
+                    observation_policy: self.voice_policy,
                 })
             }
         };
@@ -423,6 +540,7 @@ impl FactoryPlan {
             deadline: Instant::now() + REVIEW_TTL,
             hooks: self.hooks,
             approved_files,
+            announcement_recovery,
         })
     }
     #[cfg(test)]
@@ -580,8 +698,9 @@ impl Bundle {
             || voice.provenance.len() != 6
             || voice.runtime != voice_runtime()
             || initial.name != profile.configuration_name()
-            || initial.observation.bytes != profile.configuration().len() as u64
-            || initial.observation.sha256 != profile.configuration_sha256()
+            || initial.observation.bytes
+                != voice.observation_policy.configuration(profile).len() as u64
+            || initial.observation.sha256 != voice.observation_policy.configuration_sha256(profile)
         {
             return Err(Error::Identity);
         }

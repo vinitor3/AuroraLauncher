@@ -6,6 +6,7 @@ pub mod connect;
 pub mod connect_discovery;
 #[cfg(all(windows, feature = "connect-lab"))]
 pub mod connect_java_probe;
+pub mod connect_native_voice;
 #[cfg(all(windows, feature = "connect-lab"))]
 pub(crate) mod connect_owned_run;
 #[cfg(feature = "connect-lab")]

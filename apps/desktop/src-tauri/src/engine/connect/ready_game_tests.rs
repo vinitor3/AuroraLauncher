@@ -73,6 +73,8 @@ impl ReadyGameBackend for Arc<FixtureBackend> {
         &self,
         request: &ReadyGameLaunchRequest,
         _: SocketAddr,
+        _: Option<crate::engine::connect_native_voice::NativeVoiceProfile>,
+        _: Option<crate::engine::connect_ready_profile::ReadyProfile>,
         cancel: &CancellationToken,
     ) -> Result<Box<dyn PreparedReadyGame>, Error> {
         if let Some(gate) = &self.before_prepare {

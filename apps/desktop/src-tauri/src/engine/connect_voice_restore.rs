@@ -7,6 +7,8 @@ mod controller;
 pub use controller::RestorationController;
 #[path = "connect_voice_durable.rs"]
 mod durable;
+#[cfg(test)]
+pub(in super::super) use durable::prepare_fixture_durable_announcement;
 pub use durable::{
     list_restoration_receipts, prepare_durable_announcement, prepare_retirement,
     resume_restoration, DurableAppliedAnnouncement, DurableReceiptState,

@@ -4,6 +4,10 @@ use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use reqwest::blocking::Client;
 use serde::Serialize;
@@ -11,9 +15,7 @@ use serde_json::Value;
 use thiserror::Error;
 use zip::ZipArchive;
 
-use super::download::{
-    download_many, download_one_with_progress, DownloadError, DownloadRequest, ExpectedHash,
-};
+use super::download::{download_many_cancellable, DownloadError, DownloadRequest, ExpectedHash};
 use super::process::background_command;
 use super::{Instance, TransferProgress, DEFAULT_DOWNLOAD_CONCURRENCY};
 
@@ -40,6 +42,8 @@ pub enum InstallError {
     JavaRequired { required: u32 },
     #[error("o instalador oficial do Forge falhou: {0}")]
     ForgeInstaller(String),
+    #[error("a instalação foi cancelada")]
+    Cancelled,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -55,6 +59,7 @@ pub struct InstallSummary {
 #[derive(Clone)]
 pub struct MinecraftInstaller {
     client: Client,
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Default for MinecraftInstaller {
@@ -73,7 +78,94 @@ impl MinecraftInstaller {
             .pool_max_idle_per_host(DEFAULT_DOWNLOAD_CONCURRENCY)
             .build()
             .expect("cliente HTTP do Aurora deve ser inicializável");
-        Self { client }
+        Self {
+            client,
+            cancel: None,
+        }
+    }
+
+    fn check_cancel(&self) -> Result<(), InstallError> {
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(|token| token.load(Ordering::Acquire))
+        {
+            return Err(InstallError::Cancelled);
+        }
+        Ok(())
+    }
+
+    fn download(
+        &self,
+        requests: Vec<DownloadRequest>,
+        concurrency: usize,
+        progress: impl FnMut(TransferProgress),
+    ) -> Result<(), InstallError> {
+        download_many_cancellable(&self.client, requests, concurrency, progress, &|| {
+            self.check_cancel().is_err()
+        })?;
+        Ok(())
+    }
+
+    #[cfg(all(windows, feature = "connect-lab"))]
+    pub fn prepare_ready_copy_java(
+        pending: &super::diagnostic_lab::PendingRuntimeCopy,
+        profile: super::connect_ready_profile::ReadyProfile,
+        cancelled: impl Fn() -> bool + Sync,
+        progress: impl FnMut(TransferProgress),
+    ) -> Result<PathBuf, super::jre::JavaRuntimeError> {
+        super::jre::ensure_managed_java_files(
+            &pending.instance().root().join("installers/aurora-managed"),
+            profile.descriptor().java_major,
+            progress,
+            Some(&cancelled),
+        )
+    }
+
+    #[cfg(all(windows, feature = "connect-lab"))]
+    pub fn install_ready_copy(
+        pending: &super::diagnostic_lab::PendingRuntimeCopy,
+        profile: super::connect_ready_profile::ReadyProfile,
+        java: &Path,
+        cancel: Arc<AtomicBool>,
+        progress: impl FnMut(TransferProgress),
+    ) -> Result<InstallSummary, InstallError> {
+        let client = Client::builder()
+            .user_agent("Aurora-Smart-Launcher/0.1")
+            .https_only(true)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
+        let installer = Self {
+            client,
+            cancel: Some(cancel),
+        };
+        let runtime = profile.descriptor();
+        let instance = pending.instance();
+        let result = if runtime.loader == "fabric" {
+            installer.install_fabric_in_range(
+                instance,
+                runtime.minecraft_version,
+                Some(runtime.loader_version),
+                true,
+                progress,
+            )?
+        } else {
+            installer.install_forge_with_java_and_progress(
+                instance,
+                runtime.minecraft_version,
+                runtime.loader_version,
+                Some(java),
+                progress,
+            )?
+        };
+        installer.check_cancel()?;
+        if result.version_id != profile.version_id() {
+            return Err(InstallError::Metadata(
+                "perfil instalado difere do perfil aprovado".into(),
+            ));
+        }
+        Ok(result)
     }
 
     /// Instala o cliente vanilla, assets, bibliotecas e natives Windows na instância.
@@ -108,6 +200,7 @@ impl MinecraftInstaller {
     where
         F: FnMut(TransferProgress),
     {
+        self.check_cancel()?;
         progress(stage_progress(
             format!("Consultando Minecraft {minecraft_version}"),
             start,
@@ -130,6 +223,11 @@ impl MinecraftInstaller {
             .as_str()
             .unwrap_or(minecraft_version)
             .to_owned();
+        if !valid_loader_version(&version_id) || version_id != minecraft_version {
+            return Err(InstallError::Metadata(
+                "id do perfil Minecraft divergente".into(),
+            ));
+        }
         let version_dir = instance.root().join("versions").join(&version_id);
         fs::create_dir_all(&version_dir)?;
         fs::write(
@@ -144,7 +242,7 @@ impl MinecraftInstaller {
             &client_jar,
             format!("Minecraft {version_id}.jar"),
         )?;
-        download_one_with_progress(&self.client, client_request, |item| {
+        self.download(vec![client_request], 1, |item| {
             progress(item.map_total(scale(start, end, 1.0), scale(start, end, 7.0)))
         })?;
 
@@ -162,6 +260,7 @@ impl MinecraftInstaller {
                 let path = artifact["path"]
                     .as_str()
                     .ok_or_else(|| InstallError::Metadata("path de biblioteca ausente".into()))?;
+                validate_artifact_path(path)?;
                 library_downloads.push(descriptor_request(
                     artifact,
                     &instance.root().join("libraries").join(path),
@@ -176,6 +275,7 @@ impl MinecraftInstaller {
                     let path = native["path"]
                         .as_str()
                         .ok_or_else(|| InstallError::Metadata("path de native ausente".into()))?;
+                    validate_artifact_path(path)?;
                     let native_path = instance.root().join("libraries").join(path);
                     library_downloads.push(descriptor_request(
                         native,
@@ -187,13 +287,11 @@ impl MinecraftInstaller {
                 }
             }
         }
-        download_many(
-            &self.client,
-            library_downloads,
-            DEFAULT_DOWNLOAD_CONCURRENCY,
-            |item| progress(item.map_total(scale(start, end, 7.0), scale(start, end, 45.0))),
-        )?;
+        self.download(library_downloads, DEFAULT_DOWNLOAD_CONCURRENCY, |item| {
+            progress(item.map_total(scale(start, end, 7.0), scale(start, end, 45.0)))
+        })?;
         for (native_path, excludes) in native_archives {
+            self.check_cancel()?;
             extract_native(&native_path, &instance.natives_dir(), excludes.as_ref())?;
         }
 
@@ -201,6 +299,11 @@ impl MinecraftInstaller {
         let asset_id = asset_index["id"]
             .as_str()
             .ok_or_else(|| InstallError::Metadata("assetIndex ausente".into()))?;
+        if !valid_loader_version(asset_id) {
+            return Err(InstallError::Metadata(
+                "id do índice de assets inválido".into(),
+            ));
+        }
         let asset_path = instance
             .root()
             .join("assets")
@@ -211,7 +314,7 @@ impl MinecraftInstaller {
             &asset_path,
             format!("Índice de assets {asset_id}"),
         )?;
-        download_one_with_progress(&self.client, asset_index_request, |item| {
+        self.download(vec![asset_index_request], 1, |item| {
             progress(item.map_total(scale(start, end, 45.0), scale(start, end, 49.0)))
         })?;
         let assets: Value =
@@ -224,6 +327,13 @@ impl MinecraftInstaller {
             let hash = object["hash"]
                 .as_str()
                 .ok_or_else(|| InstallError::Metadata("hash de asset ausente".into()))?;
+            if hash.len() != 40
+                || !hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err(InstallError::Metadata("hash de asset inválido".into()));
+            }
             let relative = format!("{}/{}", &hash[..2], hash);
             asset_downloads.push(DownloadRequest {
                 url: format!("{ASSET_HOST}/{relative}"),
@@ -237,12 +347,9 @@ impl MinecraftInstaller {
                 expected_size: object["size"].as_u64(),
             });
         }
-        download_many(
-            &self.client,
-            asset_downloads,
-            DEFAULT_DOWNLOAD_CONCURRENCY,
-            |item| progress(item.map_total(scale(start, end, 49.0), scale(start, end, 99.0))),
-        )?;
+        self.download(asset_downloads, DEFAULT_DOWNLOAD_CONCURRENCY, |item| {
+            progress(item.map_total(scale(start, end, 49.0), scale(start, end, 99.0)))
+        })?;
 
         progress(stage_progress(
             format!("Minecraft {minecraft_version} preparado"),
@@ -290,6 +397,26 @@ impl MinecraftInstaller {
         instance: &Instance,
         minecraft_version: &str,
         requested_loader_version: Option<&str>,
+        progress: F,
+    ) -> Result<InstallSummary, InstallError>
+    where
+        F: FnMut(TransferProgress),
+    {
+        self.install_fabric_in_range(
+            instance,
+            minecraft_version,
+            requested_loader_version,
+            false,
+            progress,
+        )
+    }
+
+    fn install_fabric_in_range<F>(
+        &self,
+        instance: &Instance,
+        minecraft_version: &str,
+        requested_loader_version: Option<&str>,
+        exact_matrix: bool,
         mut progress: F,
     ) -> Result<InstallSummary, InstallError>
     where
@@ -306,7 +433,9 @@ impl MinecraftInstaller {
             ));
         }
         let loader_version = match requested_loader_version {
-            Some(version) if fabric_loader_meets_minimum(minecraft_version, version) => {
+            Some(version)
+                if exact_matrix || fabric_loader_meets_minimum(minecraft_version, version) =>
+            {
                 version.to_owned()
             }
             requested => {
@@ -341,6 +470,12 @@ impl MinecraftInstaller {
         let version_id = profile["id"]
             .as_str()
             .ok_or_else(|| InstallError::Metadata("id do perfil Fabric ausente".into()))?;
+        if !valid_loader_version(version_id)
+            || version_id != format!("fabric-loader-{loader_version}-{minecraft_version}")
+            || profile["inheritsFrom"] != minecraft_version
+        {
+            return Err(InstallError::Metadata("perfil Fabric divergente".into()));
+        }
         let version_dir = instance.root().join("versions").join(version_id);
         fs::create_dir_all(&version_dir)?;
         fs::write(
@@ -357,6 +492,7 @@ impl MinecraftInstaller {
                     let path = artifact["path"].as_str().ok_or_else(|| {
                         InstallError::Metadata("path de biblioteca Fabric ausente".into())
                     })?;
+                    validate_artifact_path(path)?;
                     fabric_downloads.push(descriptor_request(
                         &artifact,
                         &instance.root().join("libraries").join(path),
@@ -366,12 +502,9 @@ impl MinecraftInstaller {
                 }
             }
         }
-        download_many(
-            &self.client,
-            fabric_downloads,
-            DEFAULT_DOWNLOAD_CONCURRENCY,
-            |item| progress(item.map_total(88.0, 99.0)),
-        )?;
+        self.download(fabric_downloads, DEFAULT_DOWNLOAD_CONCURRENCY, |item| {
+            progress(item.map_total(88.0, 99.0))
+        })?;
         summary.version_id = version_id.to_owned();
         progress(stage_progress("Fabric preparado", 100.0));
         Ok(summary)
@@ -426,6 +559,9 @@ impl MinecraftInstaller {
                 required: required_java,
             })?;
         let forge_id = format!("{minecraft_version}-{forge_version}");
+        if !valid_loader_version(forge_version) {
+            return Err(InstallError::Metadata("versão Forge inválida".into()));
+        }
         let base = format!(
             "https://maven.minecraftforge.net/net/minecraftforge/forge/{forge_id}/forge-{forge_id}-installer.jar"
         );
@@ -454,7 +590,7 @@ impl MinecraftInstaller {
             expected_hash: Some(ExpectedHash::Sha1(checksum.to_owned())),
             expected_size: None,
         };
-        download_one_with_progress(&self.client, request, |item| {
+        self.download(vec![request], 1, |item| {
             progress(item.map_total(84.0, 93.0))
         })?;
 
@@ -468,15 +604,37 @@ impl MinecraftInstaller {
 
         progress(stage_progress("Executando instalador do Forge", 95.0));
         let mut command = background_command(java);
+        if self.cancel.is_some() {
+            let home = instance.root().join("installers/aurora-forge-home");
+            let temp = home.join("tmp");
+            fs::create_dir_all(&temp)?;
+            for name in [
+                "JAVA_TOOL_OPTIONS",
+                "_JAVA_OPTIONS",
+                "JDK_JAVA_OPTIONS",
+                "CLASSPATH",
+            ] {
+                command.env_remove(name);
+            }
+            command
+                .arg(format!("-Duser.home={}", home.display()))
+                .arg(format!("-Djava.io.tmpdir={}", temp.display()))
+                .env("TEMP", &temp)
+                .env("TMP", &temp);
+        }
         configure_forge_installer_command(&mut command, &installer, instance.root());
         command.current_dir(instance.root());
-        let output = command.output()?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            return Err(InstallError::ForgeInstaller(forge_installer_failure(
-                &stderr, &stdout,
-            )));
+        if self.cancel.is_some() {
+            self.run_controlled_forge(command)?;
+        } else {
+            let output = command.output()?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                return Err(InstallError::ForgeInstaller(forge_installer_failure(
+                    &stderr, &stdout,
+                )));
+            }
         }
         summary.version_id = format!("{minecraft_version}-forge-{forge_version}");
         progress(stage_progress("Forge preparado", 100.0));
@@ -484,8 +642,60 @@ impl MinecraftInstaller {
     }
 
     fn get_json(&self, url: &str) -> Result<Value, InstallError> {
-        Ok(self.client.get(url).send()?.error_for_status()?.json()?)
+        self.check_cancel()?;
+        let value = self.client.get(url).send()?.error_for_status()?.json()?;
+        self.check_cancel()?;
+        Ok(value)
     }
+
+    fn run_controlled_forge(&self, mut command: Command) -> Result<(), InstallError> {
+        use std::{
+            process::Stdio,
+            thread,
+            time::{Duration, Instant},
+        };
+        self.check_cancel()?;
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let deadline = Instant::now() + Duration::from_secs(15 * 60);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => return self.check_cancel(),
+                Ok(Some(_)) => {
+                    return Err(InstallError::ForgeInstaller(
+                        "o processo oficial terminou com erro".into(),
+                    ))
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error.into());
+                }
+            }
+            if self.check_cancel().is_err() || Instant::now() >= deadline {
+                let kill = child.kill();
+                if kill.is_ok() || child.try_wait()?.is_some() {
+                    let _ = child.wait()?;
+                    self.check_cancel()?;
+                    return Err(InstallError::ForgeInstaller(
+                        "prazo do processo oficial excedido".into(),
+                    ));
+                }
+                // Keep the child and copy lock until process exit. A live
+                // installer must never leave behind a writable published copy.
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+fn validate_artifact_path(path: &str) -> Result<(), InstallError> {
+    super::recovery::valid_relative(path)
+        .map_err(|_| InstallError::Metadata("caminho oficial de artefato inválido".into()))
 }
 
 fn configure_forge_installer_command(command: &mut Command, installer: &Path, target: &Path) {

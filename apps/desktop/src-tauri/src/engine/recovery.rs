@@ -1685,6 +1685,11 @@ fn reject_pending(store: &Store) -> Result<()> {
     }
 }
 pub fn has_pending(instance: &Instance) -> Result<bool> {
+    if super::content_updates::has_pending_voice_install(instance)
+        .map_err(|_| RecoveryError::Pending)?
+    {
+        return Ok(true);
+    }
     if identity(instance, false)?.is_none() {
         return Ok(false);
     }
@@ -2193,13 +2198,15 @@ pub fn recover_pending(instance: &Instance, guard: &InstanceMutationGuard) -> Re
             |r| r.get(0),
         )
         .optional()?;
+    let regular = bytes.is_some();
     if let Some(bytes) = bytes {
         let j: Journal = parse(&bytes)?;
         rollback(instance, &store, &j)?;
-        Ok(true)
-    } else {
-        Ok(false)
     }
+    drop(_directories);
+    let voice = super::content_updates::recover_pending_voice_installs(instance)
+        .map_err(|_| RecoveryError::Pending)?;
+    Ok(regular || voice)
 }
 
 #[cfg(test)]

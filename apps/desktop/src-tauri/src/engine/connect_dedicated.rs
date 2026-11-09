@@ -29,9 +29,10 @@ mod runtime_config;
 mod voice_profile;
 
 pub(crate) use producer::{
-    DedicatedError, NativeVoiceHostBinding, ReservedVoiceQuery, VoiceRuntimeError,
-    VoiceRuntimeSample,
+    DedicatedError, NativeVoiceHostBinding, ReservedVoiceQuery, VoiceRuntimeAnnouncement,
+    VoiceRuntimeError, VoiceRuntimeSample,
 };
+pub(crate) use resources::{acquire_client_mods, client_voice_pins};
 pub(crate) use voice_profile::NativeVoiceProfile;
 
 #[cfg(test)]
@@ -84,6 +85,7 @@ pub(crate) enum Error {
     Consent,
     UnsafePath,
     Resources,
+    Cancelled,
     Changed,
     Identity,
     Busy,
@@ -350,3 +352,9 @@ fn fixture_recovery(
 #[cfg(test)]
 #[path = "connect_dedicated/tests.rs"]
 mod tests;
+
+#[cfg(feature = "connect-voice-lab")]
+#[path = "connect_dedicated/desktop.rs"]
+mod desktop;
+#[cfg(feature = "connect-voice-lab")]
+pub(crate) use desktop::DesktopVoiceManager;

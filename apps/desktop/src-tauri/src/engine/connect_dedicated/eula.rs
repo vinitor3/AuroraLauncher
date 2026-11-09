@@ -178,7 +178,7 @@ fn execution_observations(bundle: &Bundle) -> Result<ApprovedFiles> {
     let (eula, bytes) = observe_file(&bundle.copy.root().join("eula.txt"), 4096)?;
     let (properties, configuration) =
         observe_file(&bundle.copy.root().join("server.properties"), 4096)?;
-    if bytes != EULA_FALSE || configuration != resources::PROPERTIES {
+    if bytes != EULA_FALSE || configuration != resources::properties(&bundle.manifest) {
         return Err(Error::Changed);
     }
     match &bundle.manifest {
@@ -206,7 +206,7 @@ fn initial_voice_configuration(bundle: &Bundle) -> Result<Observation> {
         256 * 1024,
     )?;
     if observed != voice.initial_voice_configuration.observation
-        || bytes != voice.profile.configuration()
+        || bytes != voice.observation_policy.configuration(voice.profile)
     {
         return Err(Error::Changed);
     }
@@ -292,8 +292,8 @@ pub(super) fn execution_review(
                     details.push(format!(
                         "Configuração inicial compilada: {}; {} bytes; SHA-256 {}",
                         voice.profile.configuration_name(),
-                        voice.profile.configuration().len(),
-                        voice.profile.configuration_sha256(),
+                        voice.observation_policy.configuration(voice.profile).len(),
+                        voice.observation_policy.configuration_sha256(voice.profile),
                     ));
                     let initial = &voice.initial_voice_configuration.observation;
                     details.push(format!(
@@ -668,7 +668,8 @@ impl AppliedEula {
             .approved_files
             .require_manifest_kind(&bundle.manifest)?;
         let (observed, bytes) = observe_file(&bundle.copy.root().join("server.properties"), 4096)?;
-        if &observed != self.prepared.approved_files.properties() || bytes != resources::PROPERTIES
+        if &observed != self.prepared.approved_files.properties()
+            || bytes != resources::properties(&bundle.manifest)
         {
             return Err(Error::Changed);
         }

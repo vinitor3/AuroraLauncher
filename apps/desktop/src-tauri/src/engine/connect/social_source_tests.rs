@@ -31,6 +31,10 @@ fn reserve_run(
     let a = state.attempt.as_mut().unwrap();
     let control = a.social.as_mut().unwrap();
     let run = Run {
+        #[cfg(all(windows, feature = "connect-voice-lab"))]
+        native_voice_source: None,
+        #[cfg(all(windows, feature = "connect-voice-lab"))]
+        native_voice_local_key: None,
         state: manager.state.clone(),
         id: reserved.operation_id.clone(),
         generation: reserved.generation,

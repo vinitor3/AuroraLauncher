@@ -81,10 +81,48 @@ pub fn connect_social_confirm_host(
 pub async fn connect_account_transition_stop(
     window: WebviewWindow,
     manager: State<'_, ConnectManager>,
+    native_voice: State<
+        '_,
+        aurora_launcher_core::engine::connect_native_voice::NativeVoiceSessionManager,
+    >,
+) -> Result<ConnectSnapshot, &'static str> {
+    let owner = owner(&window)?;
+    #[cfg(all(windows, feature = "connect-lab"))]
+    let _ready_copy_transition = crate::commands::ready_game::CopyInstallAccountTransition::begin();
+    native_voice.cancel();
+    let result = manager
+        .account_transition_stop(owner)
+        .await
+        .map_err(|error| error.code());
+    native_voice.shutdown_all().await;
+    #[cfg(all(windows, feature = "connect-lab"))]
+    crate::commands::ready_game::wait_ready_copy_install().await;
+    result
+}
+
+#[tauri::command]
+pub fn connect_social_refresh_authentication(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    operation_id: String,
+    account_epoch: u64,
+    id_token: String,
+) -> Result<(), &'static str> {
+    manager
+        .social_refresh_authentication(owner(&window)?, &operation_id, account_epoch, id_token)
+        .map_err(|error| error.code())
+}
+
+#[tauri::command]
+pub fn connect_social_revoke_participant(
+    window: WebviewWindow,
+    manager: State<'_, ConnectManager>,
+    operation_id: String,
+    account_epoch: u64,
+    grant_id: String,
 ) -> Result<ConnectSnapshot, &'static str> {
     manager
-        .account_transition_stop(owner(&window)?)
-        .await
+        .social_revoke_participant(owner(&window)?, &operation_id, account_epoch, &grant_id)
         .map_err(|error| error.code())
 }
 
@@ -590,4 +628,59 @@ pub async fn connect_stop(
         .stop(owner(&window)?, &operation_id)
         .await
         .map_err(|error| error.code())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ReadyCopyInstallRequest {
+    pub(crate) operation_id: String,
+    pub(crate) source_instance_id: String,
+    pub(crate) profile_id: String,
+    pub(crate) approved: bool,
+}
+
+#[tauri::command]
+pub async fn connect_install_ready_copy(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    manager: State<'_, ConnectManager>,
+    request: ReadyCopyInstallRequest,
+) -> Result<aurora_launcher_core::engine::diagnostic_lab::LabEnvironment, &'static str> {
+    owner(&window)?;
+    #[cfg(all(windows, feature = "connect-lab"))]
+    {
+        if manager.capabilities().ready_game_launch.is_none() {
+            return Err("connect_ready_game_disabled");
+        }
+        crate::commands::ready_game::install_ready_copy(app, request).await
+    }
+    #[cfg(not(all(windows, feature = "connect-lab")))]
+    {
+        let _ = (
+            app,
+            manager,
+            request.operation_id,
+            request.source_instance_id,
+            request.profile_id,
+            request.approved,
+        );
+        Err("connect_ready_game_disabled")
+    }
+}
+
+#[tauri::command]
+pub fn connect_cancel_ready_copy_install(
+    window: WebviewWindow,
+    operation_id: String,
+) -> Result<(), &'static str> {
+    owner(&window)?;
+    #[cfg(all(windows, feature = "connect-lab"))]
+    {
+        crate::commands::ready_game::cancel_ready_copy_install(Some(&operation_id))
+    }
+    #[cfg(not(all(windows, feature = "connect-lab")))]
+    {
+        let _ = operation_id;
+        Err("connect_ready_game_disabled")
+    }
 }

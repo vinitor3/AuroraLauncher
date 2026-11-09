@@ -1,15 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
+import { readyGameError, type ReadyGameRuntime } from "./types";
 
 const idPattern = /^aurora-test-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 /** Presentation only. Native preparation independently verifies provenance,
  * physical identity, runtime, modules and that no process owns this copy. */
-export function readyCopyIdsFrom(value: unknown): string[] {
+type ReadyCopy = { id: string; originInstanceId?: string; java?: string };
+function readyCopiesFrom(value: unknown): ReadyCopy[] {
   if (!Array.isArray(value) || value.length > 64) throw new Error("Invalid diagnostic copy list");
   const seen = new Set<string>();
-  const ready: string[] = [];
+  const ready: ReadyCopy[] = [];
   for (const item of value) {
     if (!object(item) || typeof item.id !== "string" || !idPattern.test(item.id) || seen.has(item.id)
       || !["ready", "creating", "failed", "deleting"].includes(item.state as string)) throw new Error("Invalid diagnostic copy list");
@@ -17,47 +19,113 @@ export function readyCopyIdsFrom(value: unknown): string[] {
     if (item.state !== "ready") continue;
     if (typeof item.instanceUuid !== "string" || !uuidPattern.test(item.instanceUuid)
       || typeof item.originUuid !== "string" || !uuidPattern.test(item.originUuid)) throw new Error("Invalid ready copy identity");
-    ready.push(item.id);
+    const java = item.runtimeJavaExecutable;
+    if (java !== undefined && (typeof java !== "string" || java.length > 4096
+      || /[\u0000-\u001f]/u.test(java)
+      || !java.replaceAll("\\", "/").includes(`/instances/${item.id}/installers/aurora-managed/runtimes/`)
+      || !java.endsWith("java.exe"))) throw new Error("Invalid managed Java");
+    ready.push({ id: item.id, originInstanceId: typeof item.originInstanceId === "string" ? item.originInstanceId : undefined, java });
   }
   return ready;
 }
+export function readyCopyIdsFrom(value: unknown): string[] {
+  return readyCopiesFrom(value).map(copy => copy.id);
+}
 
-type Props = { sourceInstanceId: string; disabled: boolean; selectedId: string; onSelect: (id: string) => void };
-export function ReadyCopyPicker({ sourceInstanceId, disabled, selectedId, onSelect }: Props) {
-  const [ids, setIds] = useState<string[]>([]);
+const profileId = (runtime: ReadyGameRuntime) => runtime.loader === "fabric"
+  ? `fabric-loader-${runtime.loaderVersion}-${runtime.minecraftVersion}`
+  : `${runtime.minecraftVersion}-forge-${runtime.loaderVersion}`;
+type Props = { sourceInstanceId: string; contextKey?: string; disabled: boolean; selectedId: string; onSelect: (id: string, java?: string) => void; runtimes?: readonly ReadyGameRuntime[] };
+export function ReadyCopyPicker({ sourceInstanceId, contextKey, disabled, selectedId, onSelect, runtimes = [] }: Props) {
+  const [copies, setCopies] = useState<ReadyCopy[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [target, setTarget] = useState("");
+  const [approved, setApproved] = useState(false);
+  const [install, setInstall] = useState<string>();
+  const [cancelRequested, setCancelRequested] = useState(false);
   const epoch = useRef(0);
   const mounted = useRef(false);
   const current = useRef({ sourceInstanceId, disabled, onSelect });
   current.current = { sourceInstanceId, disabled, onSelect };
   useEffect(() => {
-    mounted.current = true; epoch.current++; setIds([]); setLoaded(false); setBusy(false); setError("");
+    mounted.current = true; epoch.current++; setCopies([]); setLoaded(false); setBusy(false); setError(""); setTarget(""); setApproved(false);
     current.current.onSelect("");
     return () => { mounted.current = false; epoch.current++; };
-  }, [sourceInstanceId]);
+  }, [sourceInstanceId, contextKey]);
   async function load() {
-    if (disabled || busy || !sourceInstanceId) return;
+    if (disabled || busy || install || !sourceInstanceId) return;
     const request = ++epoch.current;
     const source = sourceInstanceId;
-    setBusy(true); setError(""); setIds([]); setLoaded(false); onSelect("");
+    setBusy(true); setError(""); setCopies([]); setLoaded(false); onSelect("");
     const live = () => mounted.current && request === epoch.current && current.current.sourceInstanceId === source && !current.current.disabled;
     try {
-      const next = readyCopyIdsFrom(await invoke<unknown>("diagnostic_lab_list", { id: source }));
-      if (live()) { setIds(next); setLoaded(true); }
+      const next = readyCopiesFrom(await invoke<unknown>("diagnostic_lab_list", { id: source }));
+      if (live()) { setCopies(next); setLoaded(true); }
     } catch {
       if (live()) setError("Não foi possível conferir as cópias de teste. Atualize a lista antes de selecionar.");
     } finally { if (mounted.current && request === epoch.current) setBusy(false); }
   }
+  const targetRuntime = runtimes.find(runtime => profileId(runtime) === target);
+  async function prepareRuntime() {
+    if (disabled || busy || install || !targetRuntime || !approved || !sourceInstanceId) return;
+    const operationId = crypto.randomUUID();
+    const source = sourceInstanceId;
+    const request = ++epoch.current;
+    setInstall(operationId); setApproved(false); setCancelRequested(false); setError("");
+    const live = () => mounted.current && request === epoch.current && current.current.sourceInstanceId === source;
+    try {
+      const value = await invoke<unknown>("connect_install_ready_copy", {
+        request: { operationId, sourceInstanceId: source, profileId: profileId(targetRuntime), approved: true },
+      });
+      const [copy] = readyCopiesFrom([value]);
+      if (!copy?.java || copy.originInstanceId !== source) throw new Error("Wrong prepared copy");
+      if (live()) {
+        setCopies(previous => [...previous.filter(item => item.id !== copy.id), copy]);
+        setLoaded(true);
+        if (!current.current.disabled) current.current.onSelect(copy.id, copy.java);
+      }
+    } catch (cause) {
+      if (live()) setError(readyGameError(cause));
+    } finally {
+      if (mounted.current) { setInstall(undefined); setCancelRequested(false); }
+    }
+  }
+  async function cancelInstall() {
+    if (!install || cancelRequested) return;
+    setCancelRequested(true);
+    try { await invoke("connect_cancel_ready_copy_install", { operationId: install }); }
+    catch (cause) { if (mounted.current) { setError(readyGameError(cause)); setCancelRequested(false); } }
+  }
   return <section className="connect-fields" aria-label="Selecionar cópia pronta">
-    <button className="secondary" type="button" disabled={disabled || busy || !sourceInstanceId} onClick={() => { void load(); }}>Listar cópias prontas</button>
+    <button className="secondary" type="button" disabled={disabled || busy || !!install || !sourceInstanceId} onClick={() => { void load(); }}>Listar cópias prontas</button>
     {busy && <p role="status">Conferindo as cópias disponíveis…</p>}
     {error && <p role="alert">{error}</p>}
-    {loaded && ids.length === 0 && <p>Nenhuma cópia pronta disponível para esta instância. Prepare e feche uma cópia pela seção Cópias de teste antes de continuar.</p>}
-    {ids.length > 0 && <label>Cópia de teste para abrir<select value={selectedId} disabled={disabled || busy} onChange={event => {
-      const id = event.target.value; if (id === "" || ids.includes(id)) onSelect(id);
-    }}><option value="">Selecione uma cópia</option>{ids.map(id => <option value={id} key={id}>{id}</option>)}</select></label>}
-    <small>A seleção não instala arquivos. Minecraft, Fabric, Java, Core e Skins serão conferidos na revisão.</small>
+    {loaded && copies.length === 0 && <p>Nenhuma cópia pronta disponível para esta instância. Prepare uma cópia de runtime abaixo ou use Cópias de teste para partir do modpack existente.</p>}
+    {copies.length > 0 && <label>Cópia de teste para abrir<select value={selectedId} disabled={disabled || busy || !!install} onChange={event => {
+      const id = event.target.value;
+      const copy = copies.find(item => item.id === id);
+      if (copy || id === "") onSelect(id, copy?.java);
+    }}><option value="">Selecione uma cópia</option>{copies.map(copy => <option value={copy.id} key={copy.id}>{copy.id}{copy.java ? " · runtime oficial" : ""}</option>)}</select></label>}
+    <small>A seleção não instala arquivos. Minecraft, loader, Java, Core e Skins serão conferidos na revisão.</small>
+    {runtimes.length > 0 && <details>
+      <summary>Preparar uma nova cópia de runtime</summary>
+      <fieldset disabled={disabled || busy || !!install}>
+        <label>Perfil oficial da nova cópia<select value={target} onChange={event => { setTarget(event.target.value); setApproved(false); }}>
+          <option value="">Selecione o perfil</option>
+          {runtimes.map(runtime => <option key={profileId(runtime)} value={profileId(runtime)}>
+            Minecraft {runtime.minecraftVersion} · {runtime.loader === "forge" ? "Forge" : "Fabric"} {runtime.loaderVersion}
+          </option>)}
+        </select></label>
+        {targetRuntime && <>
+          <p>A cópia será criada com Java {targetRuntime.javaMajor}, Core {targetRuntime.coreVersion}, Skins {targetRuntime.skinsVersion} e os arquivos oficiais do perfil selecionado. Mundos, mods e configurações do modpack ficam na origem.</p>
+          {targetRuntime.loader === "forge" && <p>O preparo executa o instalador oficial do Forge com o Java da cópia.</p>}
+          <label><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)} />Autorizo baixar e instalar o perfil acima em uma nova cópia de teste.</label>
+          <button type="button" disabled={!approved} onClick={() => { void prepareRuntime(); }}>Criar cópia com este runtime</button>
+        </>}
+      </fieldset>
+      {install && <><p role="status">Preparando a cópia de runtime…</p><button type="button" disabled={cancelRequested} onClick={() => { void cancelInstall(); }}>Cancelar instalação da cópia</button></>}
+    </details>}
   </section>;
 }

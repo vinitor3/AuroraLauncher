@@ -129,6 +129,7 @@ pub(crate) struct Preparation {
     pub(crate) expires_at_ms: u64,
 }
 pub(super) struct Operation {
+    account_epoch: u64,
     binding: NativeVoiceHostBinding,
     key: lab::SecretKey,
     bind: SocketAddr,
@@ -141,6 +142,29 @@ pub(super) struct Operation {
 }
 
 impl ConnectManager {
+    pub(crate) fn native_voice_shared_manager(&self) -> ConnectManager {
+        ConnectManager {
+            live: Manager {
+                state: self.live.state.clone(),
+                social_authority: self.live.social_authority.clone(),
+            },
+        }
+    }
+    pub(crate) async fn wait_native_voice_source_work(&self, owner: &str, id: &str) -> Result<()> {
+        loop {
+            {
+                let mut state = lock(&self.live.state)?;
+                let a = selected(&mut state, owner, id)?;
+                if a.cancel.is_cancelled() {
+                    return Err(ConnectError::Cancelled.into());
+                }
+                if group_source::finished(a) {
+                    return Ok(());
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
     #[cfg(test)]
     pub(crate) fn native_voice_originals_for_test(
         &self,
@@ -256,8 +280,10 @@ impl Manager {
         snapshot.cleanup_state = "pending";
         snapshot.expires_at_ms = Some(expires);
         let generation = snapshot.generation;
+        let account_epoch = state.social_epoch;
         state.attempt = Some(Attempt {
             native_voice: Some(Operation {
+                account_epoch,
                 binding: binding.clone(),
                 key,
                 bind,
@@ -456,7 +482,15 @@ fn check(state: &mut State, owner: &str, id: &str, generation: u64, phase: &str)
     if state.shutting_down {
         return Err(ConnectError::Cancelled.into());
     }
+    let account_epoch = state.social_epoch;
     let a = selected(state, owner, id)?;
+    if a.native_voice
+        .as_ref()
+        .is_none_or(|operation| operation.account_epoch != account_epoch)
+    {
+        a.cancel.cancel();
+        return Err(ConnectError::Cancelled.into());
+    }
     if a.cancel.is_cancelled() {
         return Err(ConnectError::Cancelled.into());
     }

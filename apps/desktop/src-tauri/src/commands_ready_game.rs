@@ -4,14 +4,197 @@ use super::*;
 use aurora_launcher_core::engine::{
     connect::{
         PreparedReadyGame, ReadyGameBackend, ReadyGameLaunchError as Error, ReadyGameLaunchRequest,
-        ReadyGameLaunchResult, ReadyGameSpawnGate,
+        ReadyGameLaunchResult, ReadyGameSpawnGate, ReadyVoiceReview,
     },
     connect_java_probe::probe_java_major,
+    connect_native_voice::NativeVoiceProfile,
     connect_ready_profile::{select_ready_profile, ReadyProfile},
-    connect_ready_runtime::{inspect_ready_runtime, ReadyRuntime},
+    connect_ready_runtime::{inspect_ready_runtime_for_voice, ReadyRuntime, ReadyVoiceInstall},
+    connect_status_profile::protocol_for_ready_profile,
 };
 use std::net::SocketAddr;
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc,
+};
 use tokio_util::sync::CancellationToken;
+
+struct CopyInstall {
+    id: uuid::Uuid,
+    cancel: Arc<AtomicBool>,
+}
+static COPY_INSTALL: Mutex<Option<CopyInstall>> = Mutex::new(None);
+static COPY_INSTALL_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+static COPY_INSTALL_ACCOUNT_BLOCKS: AtomicUsize = AtomicUsize::new(0);
+
+struct CopyInstallOwner(uuid::Uuid);
+impl Drop for CopyInstallOwner {
+    fn drop(&mut self) {
+        if let Ok(mut active) = COPY_INSTALL.lock() {
+            if active.as_ref().is_some_and(|job| job.id == self.0) {
+                *active = None;
+            }
+        }
+    }
+}
+
+fn copy_install_id(value: &str) -> Result<uuid::Uuid, &'static str> {
+    let id = uuid::Uuid::parse_str(value).map_err(|_| "connect_ready_game_invalid_request")?;
+    if id.to_string() != value || id.is_nil() {
+        return Err("connect_ready_game_invalid_request");
+    }
+    Ok(id)
+}
+
+pub(crate) fn cancel_ready_copy_install(id: Option<&str>) -> Result<(), &'static str> {
+    let id = id.map(copy_install_id).transpose()?;
+    let job = COPY_INSTALL
+        .lock()
+        .map_err(|_| "connect_ready_game_internal")?;
+    if let Some(job) = job.as_ref().filter(|job| id.is_none_or(|id| id == job.id)) {
+        job.cancel.store(true, Ordering::Release);
+    }
+    Ok(())
+}
+
+pub(crate) async fn shutdown_ready_copy_install() {
+    COPY_INSTALL_SHUTDOWN.store(true, Ordering::Release);
+    let _ = cancel_ready_copy_install(None);
+    wait_ready_copy_install().await;
+}
+
+pub(crate) struct CopyInstallAccountTransition;
+impl CopyInstallAccountTransition {
+    pub(crate) fn begin() -> Self {
+        COPY_INSTALL_ACCOUNT_BLOCKS.fetch_add(1, Ordering::AcqRel);
+        let _ = cancel_ready_copy_install(None);
+        Self
+    }
+}
+impl Drop for CopyInstallAccountTransition {
+    fn drop(&mut self) {
+        COPY_INSTALL_ACCOUNT_BLOCKS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+pub(crate) async fn wait_ready_copy_install() {
+    while COPY_INSTALL.lock().is_ok_and(|active| active.is_some()) {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+pub(crate) async fn install_ready_copy(
+    app: AppHandle,
+    request: crate::connect_commands::ReadyCopyInstallRequest,
+) -> Result<diagnostic_lab::LabEnvironment, &'static str> {
+    if !request.approved {
+        return Err("connect_ready_game_approval_mismatch");
+    }
+    let operation = copy_install_id(&request.operation_id)?;
+    let source = InstanceId::parse(&request.source_instance_id)
+        .map_err(|_| "connect_ready_game_invalid_request")?;
+    let profile = ReadyProfile::from_version_id(&request.profile_id)
+        .ok_or("connect_ready_game_unsupported_runtime")?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut active = COPY_INSTALL
+            .lock()
+            .map_err(|_| "connect_ready_game_internal")?;
+        if COPY_INSTALL_SHUTDOWN.load(Ordering::Acquire)
+            || COPY_INSTALL_ACCOUNT_BLOCKS.load(Ordering::Acquire) != 0
+        {
+            return Err("connect_ready_game_cancelled");
+        }
+        if active.is_some() {
+            return Err("connect_ready_game_busy");
+        }
+        *active = Some(CopyInstall {
+            id: operation,
+            cancel: cancel.clone(),
+        });
+    }
+    let owner = CopyInstallOwner(operation);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _owner = owner;
+        let cancelled = || cancel.load(Ordering::Acquire);
+        let check = || {
+            if cancelled() {
+                Err("connect_ready_game_cancelled")
+            } else {
+                Ok(())
+            }
+        };
+        let install_error = || {
+            if cancelled() {
+                "connect_ready_game_cancelled"
+            } else {
+                "connect_ready_copy_install_failed"
+            }
+        };
+        check()?;
+        let running = app.state::<RunningInstances>();
+        if instance_is_running(&running, source.as_str())
+            .map_err(|_| "connect_ready_game_instance_busy")?
+        {
+            return Err("connect_ready_game_instance_busy");
+        }
+        let source = layout(&app)
+            .map_err(|_| "connect_ready_game_instance_not_ready")?
+            .open(source);
+        ensure_no_external_instance_game(source.root())
+            .map_err(|_| "connect_ready_game_instance_busy")?;
+        let guard =
+            acquire_idle_instance(&source).map_err(|_| "connect_ready_game_instance_busy")?;
+        ensure_no_external_instance_game(source.root())
+            .map_err(|_| "connect_ready_game_instance_busy")?;
+        check()?;
+        let pending =
+            diagnostic_lab::begin_runtime_copy(&source, &guard).map_err(|_| install_error())?;
+        drop(guard);
+        let progress = |transfer: TransferProgress| emit_transfer_progress(&app, transfer);
+        let java =
+            MinecraftInstaller::prepare_ready_copy_java(&pending, profile, cancelled, |item| {
+                progress(item.map_total(0.0, 15.0))
+            })
+            .map_err(|_| install_error())?;
+        check()?;
+        if probe_java_major(&java, cancelled).map_err(|_| install_error())?
+            != profile.descriptor().java_major
+        {
+            return Err("connect_ready_game_java_incompatible");
+        }
+        let installed = MinecraftInstaller::install_ready_copy(
+            &pending,
+            profile,
+            &java,
+            cancel.clone(),
+            |item| progress(item.map_total(15.0, 98.0)),
+        )
+        .map_err(|_| install_error())?;
+        check()?;
+        let instance = pending.instance();
+        let runtime = profile.descriptor();
+        install_embedded_core(instance, runtime.minecraft_version, runtime.loader)
+            .map_err(|_| install_error())?;
+        install_embedded_skins(instance, runtime.minecraft_version, runtime.loader)
+            .map_err(|_| install_error())?;
+        write_instance_profile(instance, &installed, runtime.loader)
+            .map_err(|_| install_error())?;
+        let verified =
+            aurora_launcher_core::engine::connect_ready_runtime::verify_installed_copy_runtime(
+                instance, profile, &java, cancelled,
+            )
+            .map_err(Error::code)?;
+        check()?;
+        let copy = pending
+            .publish(verified, cancelled)
+            .map_err(|_| install_error())?;
+        emit_download_progress(&app, "Cópia de runtime preparada", 100.0);
+        Ok(copy)
+    })
+    .await
+    .map_err(|_| "connect_ready_copy_install_failed")?
+}
 
 pub(crate) struct DesktopReadyGameBackend {
     app: AppHandle,
@@ -29,6 +212,7 @@ struct DesktopPrepared {
     core: String,
     skins: String,
     profile: ReadyProfile,
+    voice_install: Option<ReadyVoiceInstall>,
 }
 
 fn check_cancel(cancel: &CancellationToken) -> Result<(), Error> {
@@ -62,6 +246,8 @@ fn inspect(
     app: &AppHandle,
     request: &ReadyGameLaunchRequest,
     endpoint: SocketAddr,
+    voice_profile: Option<NativeVoiceProfile>,
+    runtime_profile: Option<ReadyProfile>,
     cancel: &CancellationToken,
 ) -> Result<
     (
@@ -89,7 +275,10 @@ fn inspect(
     }
     let instance = layout(app).map_err(|_| Error::InstanceNotReady)?.open(id);
     ensure_no_external_instance_game(instance.root()).map_err(|_| Error::InstanceBusy)?;
-    let guard = acquire_idle_instance(&instance).map_err(|_| Error::InstanceBusy)?;
+    let guard = acquire_instance_mutation_lock(&instance).map_err(|error| match error {
+        aurora_launcher_core::engine::ContentUpdateError::RecoveryPending => Error::RecoveryPending,
+        _ => Error::InstanceBusy,
+    })?;
     ensure_no_external_instance_game(instance.root()).map_err(|_| Error::InstanceBusy)?;
     let java_path = PathBuf::from(&request.java_executable);
     if java_path
@@ -103,7 +292,10 @@ fn inspect(
     // First verify the installed runtime shape and pin the executable/runtime
     // files, then run the bounded -version probe while those pins are retained.
     let selected_profile = select_ready_profile(&instance)?;
-    let proof = inspect_ready_runtime(
+    if runtime_profile.is_some_and(|expected| expected != selected_profile) {
+        return Err(Error::UnsupportedRuntime);
+    }
+    let proof = inspect_ready_runtime_for_voice(
         &instance,
         &guard,
         &request.source_instance_id,
@@ -111,6 +303,7 @@ fn inspect(
         skin.as_deref(),
         endpoint,
         selected_profile.descriptor().java_major,
+        voice_profile,
         || cancel.is_cancelled(),
     )?;
     check_cancel(cancel)?;
@@ -128,14 +321,63 @@ fn inspect(
     check_cancel(cancel)?;
     Ok((instance, guard, proof, java, skin))
 }
+
+fn check_server_status(
+    endpoint: SocketAddr,
+    profile: ReadyProfile,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
+    use aurora_connect_lab as lab;
+    let protocol = protocol_for_ready_profile(profile).ok_or(Error::UnsupportedRuntime)?;
+    let runtime = tokio::runtime::Handle::try_current().map_err(|_| Error::Internal)?;
+    let summary = runtime.block_on(async {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(Error::Cancelled),
+            result = lab::probe_minecraft_status(lab::MinecraftStatusRequest {
+                endpoint,
+                handshake_host: endpoint.ip().to_string(),
+                handshake_port: endpoint.port(),
+                protocol,
+                timeout: lab::MAX_MINECRAFT_STATUS_TIMEOUT,
+            }) => result.map_err(|_| Error::ServerStatusUnavailable)
+        }
+    })?;
+    check_cancel(cancel)?;
+    if !summary.protocol_matches_requested {
+        return Err(Error::ServerProtocolMismatch);
+    }
+    Ok(())
+}
+
 impl ReadyGameBackend for DesktopReadyGameBackend {
     fn prepare(
         &self,
         request: &ReadyGameLaunchRequest,
         endpoint: SocketAddr,
+        voice_profile: Option<NativeVoiceProfile>,
+        runtime_profile: Option<ReadyProfile>,
         cancel: &CancellationToken,
     ) -> Result<Box<dyn PreparedReadyGame>, Error> {
-        let (_, _, proof, _, _) = inspect(&self.app, request, endpoint, cancel)?;
+        let (_, _guard, proof, _, _) = inspect(
+            &self.app,
+            request,
+            endpoint,
+            voice_profile,
+            runtime_profile,
+            cancel,
+        )?;
+        check_server_status(endpoint, proof.profile, cancel)?;
+        let voice_install = if voice_profile.is_some() {
+            let data = self
+                .app
+                .path()
+                .app_local_data_dir()
+                .map_err(|_| Error::VoiceArtifactsUnavailable)?;
+            proof.prepare_voice_install(&data, || cancel.is_cancelled())?
+        } else {
+            None
+        };
         Ok(Box::new(DesktopPrepared {
             app: self.app.clone(),
             request: request.clone(),
@@ -144,6 +386,7 @@ impl ReadyGameBackend for DesktopReadyGameBackend {
             core: proof.core_sha256.clone(),
             skins: proof.skins_sha256.clone(),
             profile: proof.profile,
+            voice_install,
         }))
     }
 }
@@ -160,19 +403,38 @@ impl PreparedReadyGame for DesktopPrepared {
     fn skins_sha256(&self) -> &str {
         &self.skins
     }
+    fn voice_review(&self) -> Option<&ReadyVoiceReview> {
+        self.voice_install.as_ref().map(ReadyVoiceInstall::review)
+    }
     fn launch(
         self: Box<Self>,
         gate: &ReadyGameSpawnGate,
         cancel: &CancellationToken,
     ) -> Result<ReadyGameLaunchResult, Error> {
-        let (instance, mutation_lock, proof, java, skin) =
-            inspect(&self.app, &self.request, self.endpoint, cancel)?;
+        let voice_profile = self.voice_review().map(|review| review.profile);
+        let (instance, mutation_lock, mut proof, java, skin) = inspect(
+            &self.app,
+            &self.request,
+            self.endpoint,
+            voice_profile,
+            Some(self.profile),
+            cancel,
+        )?;
         if proof.profile != self.profile
             || proof.fingerprint != self.fingerprint
             || proof.core_sha256 != self.core
             || proof.skins_sha256 != self.skins
+            || proof.voice_review.as_ref() != self.voice_review()
         {
             return Err(Error::InstanceChanged);
+        }
+        check_server_status(self.endpoint, proof.profile, cancel)?;
+        gate.check_current()?;
+        if let Some(voice) = &self.voice_install {
+            ensure_no_external_instance_game(instance.root()).map_err(|_| Error::InstanceBusy)?;
+            voice.commit(&mut proof, &instance, &mutation_lock, || {
+                !cancel.is_cancelled() && gate.check_current().is_ok()
+            })?;
         }
         let mut spec = proof.spec.clone();
         let uuid =
@@ -334,5 +596,84 @@ impl PreparedReadyGame for DesktopPrepared {
         // Retain all immutable file pins through the actual spawn gate.
         drop(proof);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+    };
+
+    fn read_frame(stream: &mut TcpStream) -> Vec<u8> {
+        let mut length = [0];
+        stream.read_exact(&mut length).unwrap();
+        assert!(length[0] < 128);
+        let mut body = vec![0; usize::from(length[0])];
+        stream.read_exact(&mut body).unwrap();
+        body
+    }
+
+    #[tokio::test]
+    async fn ready_game_status_queries_the_exact_bridge_and_refuses_mismatched_protocol() {
+        for reported in [767, 763] {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let endpoint = listener.local_addr().unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let server = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && std::time::Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("status fixture accept failed: {error}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let hello = read_frame(&mut stream);
+                assert_eq!(&hello[..3], &[0, 0xff, 0x05]);
+                assert_eq!(&hello[4..hello.len() - 3], b"127.0.0.1");
+                assert_eq!(
+                    &hello[hello.len() - 3..hello.len() - 1],
+                    &endpoint.port().to_be_bytes()
+                );
+                assert_eq!(read_frame(&mut stream), [0]);
+                let body = format!(
+                    r#"{{"version":{{"name":"fixture","protocol":{reported}}},"description":"fixture"}}"#
+                );
+                let mut status = vec![(body.len() + 2) as u8, 0, body.len() as u8];
+                status.extend_from_slice(body.as_bytes());
+                stream.write_all(&status).unwrap();
+                let ping = read_frame(&mut stream);
+                assert_eq!((ping[0], ping.len()), (1, 9));
+                stream.write_all(&[9]).unwrap();
+                stream.write_all(&ping).unwrap();
+            });
+            let observed = tokio::task::spawn_blocking(move || {
+                check_server_status(
+                    endpoint,
+                    ReadyProfile::Fabric1211,
+                    &CancellationToken::new(),
+                )
+            })
+            .await
+            .unwrap();
+            server.join().unwrap();
+            if reported == 767 {
+                assert_eq!(observed, Ok(()));
+            } else {
+                assert_eq!(observed, Err(Error::ServerProtocolMismatch));
+            }
+        }
     }
 }

@@ -47,13 +47,32 @@ fn voice_fields(
     digest: &Option<String>,
     host_player: Option<bool>,
 ) -> bool {
-    if schema == 3 {
+    if matches!(schema, 3 | 4) {
         matches!(profile.as_deref(), Some("svc" | "plasmo"))
             && digest.as_deref().is_some_and(is_hex)
             && host_player.is_some()
     } else {
         profile.is_none() && digest.is_none() && host_player.is_none()
     }
+}
+fn runtime_fields(schema: u8, profile: Option<&str>, voice: Option<&str>) -> bool {
+    if schema != 4 {
+        return profile.is_none();
+    }
+    matches!(
+        profile,
+        Some(
+            "fabric-loader-0.16.14-1.21.1"
+                | "fabric-loader-0.16.14-1.20.1"
+                | "fabric-loader-0.16.14-1.19.2"
+                | "fabric-loader-0.13.3-1.16.5"
+                | "1.21.1-forge-52.1.12"
+                | "1.20.1-forge-47.4.23"
+                | "1.19.2-forge-43.4.16"
+                | "1.16.5-forge-36.2.42"
+                | "1.12.2-forge-14.23.5.2860"
+        )
+    ) && !(profile == Some("1.12.2-forge-14.23.5.2860") && voice == Some("plasmo"))
 }
 fn non_null_bool<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -187,6 +206,12 @@ pub struct SocialHostPolicy {
         deserialize_with = "non_null_bool"
     )]
     host_player: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null_string"
+    )]
+    runtime_profile: Option<String>,
 }
 impl SocialHostPolicy {
     pub fn review(
@@ -230,6 +255,7 @@ impl SocialHostPolicy {
             voice_profile: None,
             voice_source_digest: None,
             host_player: None,
+            runtime_profile: None,
         };
         value.validate()?;
         Ok(value)
@@ -278,11 +304,27 @@ impl SocialHostPolicy {
         self.validate()?;
         Ok(self)
     }
+    /// Upgrade an original native voice review with its closed, observed runtime.
+    /// Existing schema-three bytes remain unchanged until this explicit operation.
+    pub fn with_runtime_profile(mut self, runtime: &str) -> Result<Self> {
+        if self.schema_version != 3 {
+            return Err(SocialAdmissionError::Context);
+        }
+        self.schema_version = 4;
+        self.runtime_profile = Some(runtime.into());
+        self.validate()?;
+        Ok(self)
+    }
     pub fn max_guests(&self) -> u8 {
         self.max_guests
     }
     fn validate(&self) -> Result<()> {
-        if !matches!(self.schema_version, 1..=3)
+        if !matches!(self.schema_version, 1..=4)
+            || !runtime_fields(
+                self.schema_version,
+                self.runtime_profile.as_deref(),
+                self.voice_profile.as_deref(),
+            )
             || !voice_fields(
                 self.schema_version,
                 &self.voice_profile,
@@ -343,7 +385,7 @@ impl SocialHostPolicy {
             self.issued_at_unix_ms.to_string(),
             self.expires_at_unix_ms.to_string(),
         ];
-        if self.schema_version == 3 {
+        if matches!(self.schema_version, 3 | 4) {
             fields.push(self.voice_profile.clone().expect("validated voice profile"));
             fields.push(
                 self.voice_source_digest
@@ -351,6 +393,13 @@ impl SocialHostPolicy {
                     .expect("validated voice source"),
             );
             fields.push(self.host_player.expect("validated host player").to_string());
+        }
+        if self.schema_version == 4 {
+            fields.push(
+                self.runtime_profile
+                    .clone()
+                    .expect("validated runtime profile"),
+            );
         }
         preimage(POLICY_DOMAIN, &fields)
     }
@@ -391,6 +440,9 @@ impl SocialHostPolicy {
     }
     pub fn voice_source_digest(&self) -> Option<&str> {
         self.voice_source_digest.as_deref()
+    }
+    pub fn runtime_profile(&self) -> Option<&str> {
+        self.runtime_profile.as_deref()
     }
     pub fn matches_host(
         &self,
@@ -668,10 +720,21 @@ struct GrantBody {
         deserialize_with = "non_null_bool"
     )]
     host_player: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null_string"
+    )]
+    runtime_profile: Option<String>,
 }
 impl GrantBody {
     fn validate(&self) -> Result<()> {
-        if !matches!(self.schema_version, 1..=3)
+        if !matches!(self.schema_version, 1..=4)
+            || !runtime_fields(
+                self.schema_version,
+                self.runtime_profile.as_deref(),
+                self.voice_profile.as_deref(),
+            )
             || !voice_fields(
                 self.schema_version,
                 &self.voice_profile,
@@ -734,7 +797,7 @@ impl GrantBody {
             self.admission_expires_at_unix_ms.to_string(),
             self.session_expires_at_unix_ms.to_string(),
         ];
-        if self.schema_version == 3 {
+        if matches!(self.schema_version, 3 | 4) {
             fields.push(self.voice_profile.clone().expect("validated voice profile"));
             fields.push(
                 self.voice_source_digest
@@ -742,6 +805,13 @@ impl GrantBody {
                     .expect("validated voice source"),
             );
             fields.push(self.host_player.expect("validated host player").to_string());
+        }
+        if self.schema_version == 4 {
+            fields.push(
+                self.runtime_profile
+                    .clone()
+                    .expect("validated runtime profile"),
+            );
         }
         preimage(GRANT_DOMAIN, &fields)
     }
@@ -848,6 +918,7 @@ impl VerifiedSocialGrant {
             || b.voice_profile != p.voice_profile
             || b.voice_source_digest != p.voice_source_digest
             || b.host_player != p.host_player
+            || b.runtime_profile != p.runtime_profile
             || b.policy_id != p.policy_id
             || b.policy_digest != p.digest()
             || b.host_account_id != p.account_id
@@ -933,6 +1004,9 @@ impl VerifiedSocialGrant {
     }
     pub fn voice_source_digest(&self) -> Option<&str> {
         self.body.voice_source_digest.as_deref()
+    }
+    pub fn runtime_profile(&self) -> Option<&str> {
+        self.body.runtime_profile.as_deref()
     }
     pub fn session_deadline(&self) -> Instant {
         self.session_deadline
@@ -1159,6 +1233,7 @@ mod tests {
                 voice_profile: None,
                 voice_source_digest: None,
                 host_player: None,
+                runtime_profile: None,
             };
             let expected = SocialGuestExpectation {
                 host_account_id: hc.account_id().into(),
@@ -1316,6 +1391,113 @@ mod tests {
         }
         let mut legacy = serde_json::to_value(Fixture::new().grant).unwrap();
         legacy["voiceProfile"] = Value::Null;
+        assert!(serde_json::from_value::<GrantBody>(legacy).is_err());
+    }
+    #[test]
+    fn social_runtime_policy_matches_typescript_canonical_vector() {
+        let policy: SocialHostPolicy = serde_json::from_value(json!({
+            "schemaVersion":4,"purpose":"hostSocialSession","issuerInstance":"11".repeat(32),"policyId":"22".repeat(32),"accountId":"host",
+            "operationId":"11111111-2222-4333-8444-555555555555","generation":7,"publicKey":"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+            "sessionId":"22222222-2222-4333-8444-555555555555","sessionDigest":"33".repeat(32),"visibility":"friends","joinPolicy":"approval","serviceId":"game","protocol":"tcp",
+            "sourceDigest":"44".repeat(32),"maxGuests":7,"issuedAtUnixMs":1800000000000u64,"expiresAtUnixMs":1800000300000u64,
+            "voiceProfile":"svc","voiceSourceDigest":"55".repeat(32),"hostPlayer":true,"runtimeProfile":"1.12.2-forge-14.23.5.2860"
+        })).unwrap();
+        policy.validate().unwrap();
+        assert_eq!(
+            policy.digest(),
+            "e8a05fd40d0d2eedcb8a5f4249e2ce46e6be7061f02ff1e534786b57ec4aa71b"
+        );
+    }
+    #[test]
+    fn social_runtime_profile_has_closed_version_four_codec_and_original_host_congruence() {
+        let profiles = [
+            "fabric-loader-0.16.14-1.21.1",
+            "fabric-loader-0.16.14-1.20.1",
+            "fabric-loader-0.16.14-1.19.2",
+            "fabric-loader-0.13.3-1.16.5",
+            "1.21.1-forge-52.1.12",
+            "1.20.1-forge-47.4.23",
+            "1.19.2-forge-43.4.16",
+            "1.16.5-forge-36.2.42",
+            "1.12.2-forge-14.23.5.2860",
+        ];
+        for runtime in profiles {
+            let mut f = Fixture::new();
+            let legacy = SocialHostPolicy::review_online_voice(
+                &f.hc,
+                "friends",
+                "127.0.0.1:43001".parse().unwrap(),
+                "open",
+                f.hc.issued_at_unix_ms() + 300_000,
+                "svc",
+                &"77".repeat(32),
+                false,
+            )
+            .unwrap();
+            assert!(legacy.runtime_profile().is_none());
+            let review = legacy.clone().with_runtime_profile(runtime).unwrap();
+            assert_ne!(legacy.digest(), review.digest());
+            assert_eq!(review.runtime_profile(), Some(runtime));
+            assert!(review.bytes().ends_with(&preimage("", &[runtime.into()])));
+            f.policy = review.approve(&f.host, &review.digest(), f.cap).unwrap();
+            f.grant.schema_version = 4;
+            f.grant.policy_digest = review.digest();
+            f.expected.policy_digest = review.digest();
+            f.grant.session_expires_at_unix_ms = review.expires_at_unix_ms();
+            f.grant.voice_profile = Some("svc".into());
+            f.grant.voice_source_digest = Some("77".repeat(32));
+            f.grant.host_player = Some(false);
+            f.grant.runtime_profile = Some(runtime.into());
+            let encoded = f.encoded(&f.grant);
+            assert_eq!(
+                f.verify_host(&encoded).unwrap().runtime_profile(),
+                Some(runtime)
+            );
+            assert_eq!(
+                VerifiedSocialGrant::for_guest_online(
+                    &encoded,
+                    f.authority.public(),
+                    &f.gc,
+                    &f.context(&f.expected),
+                    f.cap
+                )
+                .unwrap()
+                .runtime_profile(),
+                Some(runtime)
+            );
+            let mut changed = f.grant.clone();
+            changed.runtime_profile = Some(
+                if runtime == profiles[0] {
+                    profiles[1]
+                } else {
+                    profiles[0]
+                }
+                .into(),
+            );
+            assert!(f.verify_host(&f.encoded(&changed)).is_err());
+            changed.schema_version = 3;
+            assert!(changed.validate().is_err());
+            assert!(legacy.with_runtime_profile("unknown-runtime").is_err());
+        }
+        let f = Fixture::new();
+        let plasmo = SocialHostPolicy::review_online_voice(
+            &f.hc,
+            "friends",
+            "127.0.0.1:43001".parse().unwrap(),
+            "open",
+            f.hc.issued_at_unix_ms() + 300_000,
+            "plasmo",
+            &"77".repeat(32),
+            false,
+        )
+        .unwrap();
+        assert!(
+            plasmo
+                .with_runtime_profile("1.12.2-forge-14.23.5.2860")
+                .is_err()
+        );
+        let mut legacy = serde_json::to_value(f.grant).unwrap();
+        legacy["runtimeProfile"] = Value::Null;
         assert!(serde_json::from_value::<GrantBody>(legacy).is_err());
     }
     #[test]

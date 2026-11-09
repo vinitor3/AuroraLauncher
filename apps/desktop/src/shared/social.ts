@@ -14,8 +14,26 @@ export type SocialSnapshot = {
   ownSession: SocialSession | null; presenceSharing: "friends" | "hidden"; modpackName: string | null;
 };
 export type SocialPage = { items: SocialSession[]; nextCursor: string | null };
+export type SocialGroup = { id: string; name: string; ownerUid: string; members: SocialPerson[]; invited: SocialPerson[]; expiresAtMs: number };
+export type SocialGroupInvite = { groupId: string; name: string; ownerUid: string; expiresAtMs: number };
+export type SocialJoinRequest = { sessionId: string; guest: SocialPerson; status: "pending" | "accepted"; expiresAtMs: number };
+export type SocialOrganizationService = {
+  snapshot(): Promise<{ group: SocialGroup | null; invitations: SocialGroupInvite[]; joinRequests: SocialJoinRequest[] }>;
+  createGroup(name: string): Promise<void>;
+  inviteToGroup(uid: string): Promise<void>;
+  acceptGroup(ownerUid: string): Promise<void>;
+  declineGroup(ownerUid: string): Promise<void>;
+  leaveGroup(): Promise<void>;
+  removeGroupMember(uid: string): Promise<void>;
+  requestJoin(sessionId: string): Promise<void>;
+  joinRequestStatus(sessionId: string): Promise<"none" | "pending" | "accepted">;
+  respondJoin(sessionId: string, guestUid: string, decision: "accept" | "decline"): Promise<void>;
+};
 export type SocialService = {
   readonly capabilities: { friends: boolean; catalog: boolean; publication: boolean; join: boolean };
+  readonly organization?: SocialOrganizationService;
+  /** Display-only, exact Aurora registry lookup in this authenticated service scope. */
+  profile?(uid: string): Promise<SocialPerson | null>;
   searchByNickname(nickname: string): Promise<SocialPerson | null>;
   snapshot(): Promise<SocialSnapshot>;
   requestFriend(uid: string): Promise<void>;

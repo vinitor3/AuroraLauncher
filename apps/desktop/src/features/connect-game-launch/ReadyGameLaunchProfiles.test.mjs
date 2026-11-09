@@ -46,3 +46,42 @@ test("legacy or missing capability never authorizes the additional runtime", () 
   assert.equal(types.readyGameCapabilitySupports(current, reviewed(previous).review), true);
   assert.equal(types.readyGameCapabilitySupports(undefined, reviewed(added).review), false);
 });
+
+test("voice review requires the matching Fabric profile and a complete closed diff", () => {
+  const state = reviewed(previous);
+  state.review.voice = { profile: "plasmoVoice", mods: [
+    { relative: "mods/plasmovoice-fabric-1.21.1-2.1.17.jar", bytes: 12_365_966, sha256: "a".repeat(64), action: "install" },
+    { relative: "mods/fabric-api-0.116.10+1.21.1.jar", bytes: 2_425_988, sha256: "b".repeat(64), action: "present" },
+  ] };
+  assert.deepEqual(types.readyGameSnapshotFrom(state), state);
+  for (const changed of [
+    { ...state.review, ...added },
+    { ...state.review, voice: { ...state.review.voice, profile: "simpleVoiceChat" } },
+    { ...state.review, voice: { ...state.review.voice, mods: state.review.voice.mods.slice(0, 1) } },
+    { ...state.review, voice: { ...state.review.voice, mods: [{ ...state.review.voice.mods[0], relative: "../outside.jar" }, state.review.voice.mods[1]] } },
+  ]) assert.throws(() => types.readyGameSnapshotFrom({ ...state, review: changed }));
+});
+
+test("schema3 requires each exact matrix target and keeps older capabilities closed", async () => {
+  const matrix = JSON.parse(await readFile(new URL("../../../../../scripts/active-mod-matrix.json", import.meta.url), "utf8"));
+  const runtimes = matrix.targets.map(target => ({
+    minecraftVersion: target.minecraft, loader: target.loader, loaderVersion: target.loaderVersion,
+    javaMajor: target.javaRuntime, coreVersion: "1.1.5", skinsVersion: "0.3.1",
+  }));
+  const full = { ...current, schemaVersion: 3, runtimes };
+  assert.deepEqual(types.readyGameCapabilityFrom(full), full);
+  for (const runtime of runtimes) {
+    const state = reviewed(runtime);
+    assert.deepEqual(types.readyGameSnapshotFrom(state), state);
+    assert.equal(types.readyGameCapabilitySupports(full, state.review), true);
+    assert.equal(types.readyGameCapabilitySupports(current, state.review),
+      runtime.loader === "fabric" && ["1.20.1", "1.21.1"].includes(runtime.minecraftVersion));
+  }
+  const [first, second, ...remaining] = runtimes;
+  for (const rejected of [
+    runtimes.slice(0, -1),
+    [second, second, ...remaining],
+    [{ ...first, loaderVersion: "14.23.5.2859" }, second, ...remaining],
+    [{ ...first, javaMajor: 17 }, second, ...remaining],
+  ]) assert.throws(() => types.readyGameCapabilityFrom({ ...full, runtimes: rejected }));
+});

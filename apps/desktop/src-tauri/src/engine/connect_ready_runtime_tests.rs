@@ -6,6 +6,8 @@ use crate::engine::{
 use serde_json::json;
 #[path = "connect_ready_runtime_fabric1201_tests.rs"]
 mod fabric1201;
+#[path = "connect_ready_runtime_matrix_tests.rs"]
+mod matrix;
 #[path = "connect_ready_runtime_readonly_tests.rs"]
 mod readonly;
 
@@ -138,6 +140,268 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+#[cfg(all(windows, feature = "connect-lab"))]
+#[test]
+fn ready_runtime_install_owns_fresh_copy_and_keeps_unverified_install_unpublished() {
+    let fixture = Fixture::new();
+    let source_profile = fs::read(fixture.source.root().join("aurora-instance.json")).unwrap();
+    let source_lock = acquire_instance_mutation_lock(&fixture.source).unwrap();
+    let pending = diagnostic_lab::begin_runtime_copy(&fixture.source, &source_lock).unwrap();
+    drop(source_lock);
+    let copy_id = pending.instance().id().as_str().to_owned();
+    let copy = InstanceLayout::new(&fixture.root).open(InstanceId::parse(&copy_id).unwrap());
+    assert!(!copy.root().join("config/fixture.json").exists());
+    assert!(!copy.root().join("versions/1.21.1/1.21.1.jar").exists());
+    assert!(diagnostic_lab::ensure_launchable(&copy).is_err());
+    assert!(
+        verify_installed_copy_runtime(&copy, ReadyProfile::Fabric1211, &fixture.java, || false)
+            .is_err()
+    );
+    drop(pending);
+    let listed = diagnostic_lab::list(&fixture.root).unwrap();
+    assert_eq!(
+        listed.iter().find(|item| item.id == copy_id).unwrap().state,
+        "failed"
+    );
+    let guard = crate::engine::acquire_instance_recovery_lock(&copy).unwrap();
+    diagnostic_lab::delete(&copy, &guard).unwrap();
+    assert!(!copy.root().exists());
+    assert_eq!(
+        fs::read(fixture.source.root().join("aurora-instance.json")).unwrap(),
+        source_profile
+    );
+}
+
+#[cfg(all(windows, feature = "connect-lab"))]
+#[test]
+#[ignore = "explicit official download and Java installer in an owned temporary copy; no Minecraft"]
+fn ready_runtime_install_downloads_exact_official_profile() {
+    use crate::engine::{connect_java_probe::probe_java_major, MinecraftInstaller};
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc, Arc,
+        },
+        time::Duration,
+    };
+    let selected = std::env::var("AURORA_CONNECT_READY_INSTALL_PROFILE")
+        .expect("explicit installed matrix version id required");
+    let profile = ReadyProfile::from_version_id(&selected).expect("closed matrix profile");
+    let runtime = profile.descriptor();
+    let fixture = Fixture::new();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let watchdog_cancel = cancel.clone();
+    let (complete, stopped) = mpsc::channel::<()>();
+    let watchdog = std::thread::spawn(move || {
+        if stopped.recv_timeout(Duration::from_secs(20 * 60))
+            == Err(mpsc::RecvTimeoutError::Timeout)
+        {
+            watchdog_cancel.store(true, Ordering::Release);
+        }
+    });
+    let result = std::panic::catch_unwind(|| {
+        let cancelled = || cancel.load(Ordering::Acquire);
+        let source_lock = acquire_instance_mutation_lock(&fixture.source).unwrap();
+        let pending = diagnostic_lab::begin_runtime_copy(&fixture.source, &source_lock).unwrap();
+        drop(source_lock);
+        println!("preparing Java {} for {selected}", runtime.java_major);
+        let java =
+            MinecraftInstaller::prepare_ready_copy_java(&pending, profile, cancelled, |_| {})
+                .expect("official Java package and safe extraction");
+        assert_eq!(
+            probe_java_major(&java, cancelled).expect("bounded Java probe"),
+            runtime.java_major
+        );
+        println!("installing {selected} inside the owned diagnostic copy");
+        let installed = MinecraftInstaller::install_ready_copy(
+            &pending,
+            profile,
+            &java,
+            cancel.clone(),
+            |_| {},
+        )
+        .expect("official exact-profile installer");
+        let instance = pending.instance();
+        install_embedded_core(instance, runtime.minecraft_version, runtime.loader).unwrap();
+        install_embedded_skins(instance, runtime.minecraft_version, runtime.loader).unwrap();
+        Fixture::write(instance.root(), "aurora-instance.json",
+            &serde_json::to_vec_pretty(&json!({
+                "minecraft": installed.minecraft_version, "versionId": installed.version_id, "source": runtime.loader,
+            })).unwrap());
+        let verified = verify_installed_copy_runtime(instance, profile, &java, cancelled)
+            .expect("official runtime, managed artifacts and Java files");
+        let environment = pending
+            .publish(verified, cancelled)
+            .expect("verified ready publication");
+        assert_eq!(environment.state, "ready");
+        assert_eq!(
+            environment
+                .runtime_java_executable
+                .as_deref()
+                .map(Path::new),
+            Some(java.as_path())
+        );
+        let copy =
+            InstanceLayout::new(&fixture.root).open(InstanceId::parse(&environment.id).unwrap());
+        let guard = acquire_instance_mutation_lock(&copy).unwrap();
+        let proof = inspect_ready_runtime(
+            &copy,
+            &guard,
+            fixture.source.id().as_str(),
+            &java,
+            None,
+            "127.0.0.1:42010".parse().unwrap(),
+            runtime.java_major,
+            cancelled,
+        )
+        .expect("complete ready-game inspection of the installed copy");
+        assert_eq!(proof.profile, profile);
+        proof.recheck_before_spawn().unwrap();
+        println!("verified installed {selected} without spawning Minecraft");
+    });
+    drop(complete);
+    watchdog.join().unwrap();
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+#[test]
+fn ready_voice_install_is_copy_only_and_uses_transactional_undo() {
+    use std::cell::Cell;
+    let f = Fixture::new();
+    let additions = [
+        ("mods/voice-a.jar", b"approved first fixture".as_slice()),
+        ("mods/voice-b.jar", b"approved second fixture".as_slice()),
+    ];
+    let guard = acquire_instance_mutation_lock(&f.source).unwrap();
+    assert!(super::super::content_updates::install_voice_mods(
+        &f.source,
+        &guard,
+        &additions,
+        || true,
+    )
+    .is_err());
+    drop(guard);
+
+    let guard = acquire_instance_mutation_lock(&f.copy).unwrap();
+    let checks = Cell::new(0);
+    assert!(matches!(
+        super::super::content_updates::install_voice_mods(&f.copy, &guard, &additions, || {
+            checks.set(checks.get() + 1);
+            checks.get() <= 3
+        }),
+        Err(super::super::ContentUpdateError::VoiceInstallCancelled)
+    ));
+    assert_eq!(checks.get(), 4);
+    assert!(!recovery::has_pending(&f.copy).unwrap());
+    for (path, _) in additions {
+        assert!(!f.copy.root().join(path).exists());
+    }
+    super::super::content_updates::install_voice_mods(&f.copy, &guard, &additions, || true)
+        .unwrap();
+    for (path, bytes) in additions {
+        assert_eq!(fs::read(f.copy.root().join(path)).unwrap(), bytes);
+        assert!(!f.source.root().join(path).exists());
+    }
+    drop(guard);
+    super::super::content_updates::rollback_last_content_update(&f.copy).unwrap();
+    for (path, _) in additions {
+        assert!(!f.copy.root().join(path).exists());
+    }
+}
+
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+#[test]
+fn ready_voice_install_plans_only_the_original_profile_and_rejects_conflicting_mod_ids() {
+    use std::io::Write;
+    let f = Fixture::new();
+    let guard = acquire_instance_mutation_lock(&f.copy).unwrap();
+    let inspect = || {
+        inspect_ready_runtime_for_voice(
+            &f.copy,
+            &guard,
+            "source-fixture",
+            &f.java,
+            None,
+            "127.0.0.1:42010".parse().unwrap(),
+            21,
+            Some(NativeVoiceProfile::SimpleVoiceChat),
+            || false,
+        )
+    };
+    let proof = inspect().unwrap();
+    let voice = proof.voice_review.as_ref().unwrap();
+    assert_eq!(voice.profile, NativeVoiceProfile::SimpleVoiceChat);
+    assert_eq!(voice.mods.len(), 1);
+    assert_eq!(voice.mods[0].action, ReadyVoiceAction::Install);
+    assert!(!f.copy.root().join(&voice.mods[0].relative).exists());
+    drop(proof);
+    let mut jar = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    jar.start_file("fabric.mod.json", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    jar.write_all(br#"{"id":"another","provides":["plasmovoice"]}"#)
+        .unwrap();
+    Fixture::write(
+        f.copy.root(),
+        "mods/conflict.jar",
+        &jar.finish().unwrap().into_inner(),
+    );
+    assert!(matches!(inspect(), Err(Error::ArtifactMismatch)));
+}
+
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+#[test]
+#[ignore = "fetches only the fixed client voice JARs into an isolated temp cache; no Java"]
+fn ready_voice_install_uses_official_plasmo_artifacts_after_approval() {
+    let f = Fixture::new();
+    let guard = acquire_instance_mutation_lock(&f.copy).unwrap();
+    let inspect = || {
+        inspect_ready_runtime_for_voice(
+            &f.copy,
+            &guard,
+            "source-fixture",
+            &f.java,
+            None,
+            "127.0.0.1:42010".parse().unwrap(),
+            21,
+            Some(NativeVoiceProfile::PlasmoVoice),
+            || false,
+        )
+    };
+    let mut proof = inspect().unwrap();
+    let staged = proof
+        .prepare_voice_install(&f.root.join("app-data"), || false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(staged.review().mods.len(), 2);
+    for file in &staged.review().mods {
+        assert_eq!(file.action, ReadyVoiceAction::Install);
+        assert!(!f.copy.root().join(&file.relative).exists());
+    }
+    staged.commit(&mut proof, &f.copy, &guard, || true).unwrap();
+    proof.recheck_before_spawn().unwrap();
+    drop(proof);
+    let present = inspect().unwrap();
+    assert!(present
+        .voice_review
+        .as_ref()
+        .unwrap()
+        .mods
+        .iter()
+        .all(|file| file.action == ReadyVoiceAction::Present));
+    for file in &staged.review().mods {
+        assert!(!f.source.root().join(&file.relative).exists());
+    }
+    drop(present);
+    drop(guard);
+    super::super::content_updates::rollback_last_content_update(&f.copy).unwrap();
+    for file in &staged.review().mods {
+        assert!(!f.copy.root().join(&file.relative).exists());
     }
 }
 

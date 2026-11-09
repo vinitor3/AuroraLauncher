@@ -1,19 +1,74 @@
 //! Read-only readiness proof for one existing diagnostic copy. Kept distinct
 //! from installation and repair. Pins live only while the caller holds its lock.
 use super::{
-    connect::ReadyGameLaunchError as Error,
+    connect::{ReadyGameLaunchError as Error, ReadyVoiceAction, ReadyVoiceMod, ReadyVoiceReview},
+    connect_native_voice::NativeVoiceProfile,
     connect_quick_play, connect_ready_files,
     connect_ready_profile::{self, ReadyProfile},
     diagnostic_lab, recovery, Instance, InstanceMutationGuard, VersionLaunchSpec,
 };
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
-    io::Read,
+    io::{Cursor, Read},
     net::SocketAddr,
     path::{Path, PathBuf},
 };
+
+#[path = "connect_ready_runtime_pins.rs"]
+mod runtime_pins;
+use runtime_pins::{verify_sha1, RuntimePins};
+
+pub struct ReadyVoiceInstall {
+    review: ReadyVoiceReview,
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    downloads: Vec<Vec<u8>>,
+}
+impl ReadyVoiceInstall {
+    pub fn review(&self) -> &ReadyVoiceReview {
+        &self.review
+    }
+    pub fn commit(
+        &self,
+        proof: &mut ReadyRuntime,
+        instance: &Instance,
+        guard: &InstanceMutationGuard,
+        authorized: impl Fn() -> bool,
+    ) -> Result<(), Error> {
+        #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+        {
+            if proof.root != instance.root() || proof.voice_review.as_ref() != Some(&self.review) {
+                return Err(Error::InstanceChanged);
+            }
+            proof.recheck_before_spawn()?;
+            let additions: Vec<_> = self
+                .review
+                .mods
+                .iter()
+                .filter(|file| file.action == ReadyVoiceAction::Install)
+                .zip(&self.downloads)
+                .map(|(file, bytes)| (file.relative.as_str(), bytes.as_slice()))
+                .collect();
+            if additions.is_empty() {
+                return Ok(());
+            }
+            super::content_updates::install_voice_mods(instance, guard, &additions, &authorized)
+                .map_err(|error| match error {
+                    super::ContentUpdateError::VoiceInstallCancelled => Error::Cancelled,
+                    super::ContentUpdateError::RecoveryPending => Error::RecoveryPending,
+                    _ => Error::InstanceChanged,
+                })?;
+            proof.pin_installed_voice_mods(&|| !authorized())?;
+            Ok(())
+        }
+        #[cfg(not(all(windows, feature = "connect-lab", feature = "connect-voice-lab")))]
+        {
+            let _ = (proof, instance, guard, authorized);
+            Err(Error::Disabled)
+        }
+    }
+}
 
 pub struct ReadyRuntime {
     pub profile: ReadyProfile,
@@ -21,6 +76,7 @@ pub struct ReadyRuntime {
     pub core_sha256: String,
     pub skins_sha256: String,
     pub spec: VersionLaunchSpec,
+    pub voice_review: Option<ReadyVoiceReview>,
     root: PathBuf,
     directory_observations: Vec<(&'static str, Vec<String>)>,
     deleting_marker: PathBuf,
@@ -51,6 +107,49 @@ fn directory_names(root: &Path, relative: &str) -> Result<Vec<String>, Error> {
     Ok(names)
 }
 impl ReadyRuntime {
+    pub fn prepare_voice_install(
+        &self,
+        app_data: &Path,
+        cancelled: impl Fn() -> bool + Sync,
+    ) -> Result<Option<ReadyVoiceInstall>, Error> {
+        let Some(review) = self.voice_review.as_ref() else {
+            return Ok(None);
+        };
+        #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+        {
+            use super::connect_voice::dedicated as voice;
+            let missing: Vec<_> = review
+                .mods
+                .iter()
+                .filter(|file| file.action == ReadyVoiceAction::Install)
+                .map(|file| file.relative.as_str())
+                .collect();
+            let downloads = voice::acquire_client_mods(
+                app_data,
+                dedicated_voice_profile(review.profile),
+                &missing,
+                &cancelled,
+            )
+            .map_err(|error| match error {
+                voice::Error::Cancelled => Error::Cancelled,
+                voice::Error::Busy => Error::Busy,
+                _ => Error::VoiceArtifactsUnavailable,
+            })?;
+            if missing.len() != downloads.len() {
+                return Err(Error::Internal);
+            }
+            Ok(Some(ReadyVoiceInstall {
+                review: review.clone(),
+                downloads,
+            }))
+        }
+        #[cfg(not(all(windows, feature = "connect-lab", feature = "connect-voice-lab")))]
+        {
+            let _ = (review, app_data, cancelled);
+            Err(Error::Disabled)
+        }
+    }
+
     /// Existing files remain pinned, but a directory pin does not forbid new
     /// children. Recheck its bounded names immediately before the spawn gate.
     /// This is still cooperative file isolation, never an OS sandbox.
@@ -68,6 +167,45 @@ impl ReadyRuntime {
             }
         }
         Ok(())
+    }
+
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    fn pin_installed_voice_mods(&mut self, cancelled: &impl Fn() -> bool) -> Result<(), Error> {
+        let review = self.voice_review.as_ref().ok_or(Error::Internal)?;
+        let (_, expected_names) = self
+            .directory_observations
+            .iter_mut()
+            .find(|(directory, _)| *directory == "mods")
+            .ok_or(Error::Internal)?;
+        let mut reader = Reader {
+            cancel: cancelled,
+            pins: Vec::new(),
+            hashes: Vec::new(),
+            bytes: 0,
+        };
+        for file in review
+            .mods
+            .iter()
+            .filter(|file| file.action == ReadyVoiceAction::Install)
+        {
+            let path =
+                recovery::path(&self.root, &file.relative).map_err(|_| Error::InstanceChanged)?;
+            let bytes = reader.read(&path, file.relative.clone(), file.bytes)?;
+            if bytes.len() as u64 != file.bytes
+                || format!("{:x}", Sha256::digest(&bytes)) != file.sha256
+            {
+                return Err(Error::ArtifactMismatch);
+            }
+            expected_names.push(
+                file.relative
+                    .strip_prefix("mods/")
+                    .ok_or(Error::Internal)?
+                    .into(),
+            );
+        }
+        expected_names.sort();
+        self._pins.extend(reader.pins);
+        self.recheck_before_spawn()
     }
 }
 struct Reader<'a> {
@@ -139,6 +277,153 @@ pub fn inspect_ready_runtime(
     skin_file: Option<&Path>,
     endpoint: SocketAddr,
     observed_java: u32,
+    cancelled: impl Fn() -> bool,
+) -> Result<ReadyRuntime, Error> {
+    inspect_ready_runtime_for_voice(
+        instance,
+        guard,
+        source_id,
+        java,
+        skin_file,
+        endpoint,
+        observed_java,
+        None,
+        cancelled,
+    )
+}
+
+/// Final check for a fresh, still-unpublished runtime copy. The installer
+/// already verified the downloaded assets. The normal ReadyGame launch later
+/// rechecks the copy, the full asset inventory and its authenticated bridge.
+#[cfg(all(windows, feature = "connect-lab"))]
+pub struct VerifiedInstalledReadyCopy {
+    pub(super) root: PathBuf,
+    pub(super) java: PathBuf,
+    pub(super) java_sha256: String,
+    _pins: Vec<recovery::SecureFile>,
+}
+
+#[cfg(all(windows, feature = "connect-lab"))]
+pub fn verify_installed_copy_runtime(
+    instance: &Instance,
+    profile: ReadyProfile,
+    java: &Path,
+    cancelled: impl Fn() -> bool,
+) -> Result<VerifiedInstalledReadyCopy, Error> {
+    if !diagnostic_lab::is_lab_candidate(instance)
+        || connect_ready_profile::select_ready_profile(instance)? != profile
+    {
+        return Err(Error::UnsupportedRuntime);
+    }
+    let runtime = profile.descriptor();
+    let mut reader = Reader {
+        cancel: &cancelled,
+        pins: Vec::new(),
+        hashes: Vec::new(),
+        bytes: 0,
+    };
+    let mut read_profile = |version: &str| {
+        let bytes = reader.instance(
+            instance,
+            &format!("versions/{version}/{version}.json"),
+            1024 * 1024,
+        )?;
+        serde_json::from_slice(&bytes).map_err(|_| Error::UnsupportedRuntime)
+    };
+    let base = read_profile(runtime.minecraft_version)?;
+    let child = read_profile(profile.version_id())?;
+    connect_quick_play::validate_profile_chain(&base, &child, profile)
+        .map_err(|_| Error::UnsupportedRuntime)?;
+    let pins = RuntimePins::from_profiles(profile, &base, &child)?;
+    let mut spec = super::resolve_launch_spec(instance, profile.version_id())
+        .map_err(|_| Error::UnsupportedRuntime)?;
+    connect_quick_play::apply_guest_entry(
+        instance,
+        &mut spec,
+        profile,
+        runtime.java_major,
+        SocketAddr::from(([127, 0, 0, 1], 1)),
+    )
+    .map_err(|_| Error::ConflictingArguments)?;
+    let mut observed = BTreeSet::new();
+    for path in spec
+        .libraries
+        .iter()
+        .chain(std::iter::once(&spec.client_jar))
+    {
+        let relative = path
+            .strip_prefix(instance.root())
+            .ok()
+            .and_then(Path::to_str)
+            .ok_or(Error::UnsupportedRuntime)?
+            .replace('\\', "/");
+        if !observed.insert(relative.clone()) {
+            return Err(Error::UnsupportedRuntime);
+        }
+        let bytes = reader.instance(instance, &relative, 256 * 1024 * 1024)?;
+        if let Some(pins) = &pins {
+            let expected = if path == &spec.client_jar {
+                &pins.client_sha1
+            } else {
+                pins.library_sha1
+                    .get(&relative)
+                    .ok_or(Error::UnsupportedRuntime)?
+            };
+            verify_sha1(&bytes, expected)?;
+        }
+    }
+    if let Some(pins) = &pins {
+        for (relative, expected) in &pins.additional_libraries {
+            let bytes = reader.instance(instance, relative, 256 * 1024 * 1024)?;
+            verify_sha1(&bytes, expected)?;
+        }
+        for (name, expected) in &pins.extracted_natives {
+            let bytes = reader.instance(instance, &format!("natives/{name}"), 64 * 1024 * 1024)?;
+            verify_sha1(&bytes, expected)?;
+        }
+    }
+    let asset_index = reader.instance(
+        instance,
+        &format!("assets/indexes/{}.json", spec.asset_index),
+        16 * 1024 * 1024,
+    )?;
+    if let Some(pins) = &pins {
+        verify_sha1(&asset_index, &pins.asset_index_sha1)?;
+    }
+    let managed =
+        connect_ready_files::verify_managed_files_for_profile(instance, profile, &cancelled)
+            .map_err(|error| match error {
+                connect_ready_files::ReadyFilesError::Cancelled => Error::Cancelled,
+                _ => Error::ArtifactMismatch,
+            })?;
+    for file in managed.fingerprints {
+        let bytes = reader.instance(instance, &file.relative, file.bytes)?;
+        if bytes.len() as u64 != file.bytes
+            || format!("{:x}", Sha256::digest(&bytes)) != file.sha256
+        {
+            return Err(Error::ArtifactMismatch);
+        }
+    }
+    let java_sha256 = pin_and_measure_java(&mut reader, java, runtime.java_major)?;
+    Ok(VerifiedInstalledReadyCopy {
+        root: instance.root().to_owned(),
+        java: java.to_owned(),
+        java_sha256,
+        _pins: reader.pins,
+    })
+}
+
+/// The profile is supplied only by the original native Connect source.
+#[allow(clippy::too_many_arguments)]
+pub fn inspect_ready_runtime_for_voice(
+    instance: &Instance,
+    guard: &InstanceMutationGuard,
+    source_id: &str,
+    java: &Path,
+    skin_file: Option<&Path>,
+    endpoint: SocketAddr,
+    observed_java: u32,
+    voice: Option<NativeVoiceProfile>,
     cancelled: impl Fn() -> bool,
 ) -> Result<ReadyRuntime, Error> {
     if cancelled() {
@@ -249,27 +534,45 @@ pub fn inspect_ready_runtime(
         }
     }
     let profile = connect_ready_profile::profile_from_metadata(&root_profiles)?;
-    for version in [profile.descriptor().minecraft_version, profile.version_id()] {
-        reader.instance(
+    let voice_pins = match voice {
+        None => &[][..],
+        Some(profile_voice) => {
+            if profile != ReadyProfile::Fabric1211 {
+                return Err(Error::UnsupportedRuntime);
+            }
+            voice_artifact_pins(profile_voice)?
+        }
+    };
+    let mut read_profile = |version: &str| {
+        let bytes = reader.instance(
             instance,
             &format!("versions/{version}/{version}.json"),
             1024 * 1024,
         )?;
-    }
+        serde_json::from_slice(&bytes).map_err(|_| Error::UnsupportedRuntime)
+    };
+    let base = read_profile(profile.descriptor().minecraft_version)?;
+    let child = read_profile(profile.version_id())?;
+    // The general resolver follows arbitrary inheritsFrom strings. Validate the
+    // two retained files first, so it cannot read a third or external profile.
+    connect_quick_play::validate_profile_chain(&base, &child, profile)
+        .map_err(|_| Error::UnsupportedRuntime)?;
+    let pins = RuntimePins::from_profiles(profile, &base, &child)?;
     let mut spec = super::resolve_launch_spec(instance, profile.version_id())
         .map_err(|_| Error::UnsupportedRuntime)?;
-    connect_quick_play::apply_guest_quick_play(instance, &mut spec, observed_java, endpoint)
+    connect_quick_play::apply_guest_entry(instance, &mut spec, profile, observed_java, endpoint)
         .map_err(|error| match error {
             connect_quick_play::QuickPlayError::ConflictingArguments => Error::ConflictingArguments,
             _ => Error::UnsupportedRuntime,
         })?;
-    let managed =
-        connect_ready_files::verify_managed_files_for_profile(instance, profile, &cancelled)
-            .map_err(|e| match e {
-                connect_ready_files::ReadyFilesError::Cancelled => Error::Cancelled,
-                connect_ready_files::ReadyFilesError::Missing => Error::MissingArtifact,
-                _ => Error::ArtifactMismatch,
-            })?;
+    let managed = connect_ready_files::verify_managed_files_with_voice(
+        instance, profile, voice, voice_pins, &cancelled,
+    )
+    .map_err(|e| match e {
+        connect_ready_files::ReadyFilesError::Cancelled => Error::Cancelled,
+        connect_ready_files::ReadyFilesError::Missing => Error::MissingArtifact,
+        _ => Error::ArtifactMismatch,
+    })?;
     for file in &managed.fingerprints {
         let bytes = reader.instance(instance, &file.relative, 128 * 1024 * 1024)?;
         if bytes.len() as u64 != file.bytes
@@ -279,6 +582,8 @@ pub fn inspect_ready_runtime(
         }
     }
     let mut paths = BTreeSet::new();
+    let mut classpath_native_hashes = BTreeMap::new();
+    let observed_natives = &directory_observations[1].1;
     for path in spec
         .libraries
         .iter()
@@ -293,7 +598,32 @@ pub fn inspect_ready_runtime(
         if !paths.insert(relative.clone()) {
             return Err(Error::UnsupportedRuntime);
         }
-        reader.instance(instance, &relative, 256 * 1024 * 1024)?;
+        let bytes = reader.instance(instance, &relative, 256 * 1024 * 1024)?;
+        if let Some(pins) = &pins {
+            let expected = if path == &spec.client_jar {
+                &pins.client_sha1
+            } else {
+                pins.library_sha1
+                    .get(&relative)
+                    .ok_or(Error::UnsupportedRuntime)?
+            };
+            verify_sha1(&bytes, expected)?;
+            if !observed_natives.is_empty()
+                && pins.extracted_natives.is_empty()
+                && relative.ends_with("-natives-windows.jar")
+            {
+                collect_classpath_native_hashes(&bytes, &mut classpath_native_hashes)?;
+            }
+        }
+    }
+    if let Some(pins) = &pins {
+        for (relative, expected) in &pins.additional_libraries {
+            if !paths.insert(relative.clone()) {
+                return Err(Error::Internal);
+            }
+            let bytes = reader.instance(instance, relative, 256 * 1024 * 1024)?;
+            verify_sha1(&bytes, expected)?;
+        }
     }
     if spec.assets_dir != instance.root().join("assets")
         || spec.asset_index.is_empty()
@@ -310,6 +640,9 @@ pub fn inspect_ready_runtime(
         &format!("assets/indexes/{}.json", spec.asset_index),
         16 * 1024 * 1024,
     )?;
+    if let Some(pins) = &pins {
+        verify_sha1(&index, &pins.asset_index_sha1)?;
+    }
     let index: serde_json::Value =
         serde_json::from_slice(&index).map_err(|_| Error::MissingArtifact)?;
     let objects = index["objects"].as_object().ok_or(Error::MissingArtifact)?;
@@ -338,61 +671,37 @@ pub fn inspect_ready_runtime(
             }
         }
     }
-    let natives = instance.natives_dir();
-    let mut native_paths = Vec::<PathBuf>::new();
-    for entry in fs::read_dir(&natives).map_err(|_| Error::MissingArtifact)? {
-        let path = entry.map_err(|_| Error::MissingArtifact)?.path();
-        if native_paths.len() >= 256 || !path.is_file() {
+    if let Some(pins) = &pins {
+        if pins
+            .extracted_natives
+            .keys()
+            .any(|name| !observed_natives.contains(name))
+        {
             return Err(Error::MissingArtifact);
         }
-        native_paths.push(path);
     }
-    if native_paths.is_empty() {
-        return Err(Error::MissingArtifact);
-    }
-    native_paths.sort();
-    for path in native_paths {
-        let relative = path
-            .strip_prefix(instance.root())
-            .map_err(|_| Error::MissingArtifact)?
-            .to_str()
-            .ok_or(Error::MissingArtifact)?
-            .replace('\\', "/");
-        reader.instance(instance, &relative, 64 * 1024 * 1024)?;
-    }
-    if !java.is_absolute() {
-        return Err(Error::JavaUnavailable);
-    }
-    reader
-        .read(java, "selected-java-executable".into(), 64 * 1024 * 1024)
-        .map_err(|e| {
-            if e == Error::Cancelled {
-                e
+    for name in observed_natives {
+        let bytes = reader.instance(instance, &format!("natives/{name}"), 64 * 1024 * 1024)?;
+        if let Some(pins) = &pins {
+            let expected = if pins.extracted_natives.is_empty() {
+                classpath_native_hashes.get(name)
             } else {
-                Error::JavaUnavailable
+                pins.extracted_natives.get(name)
             }
-        })?;
-    let java_home = java
-        .parent()
-        .and_then(Path::parent)
-        .ok_or(Error::JavaUnavailable)?;
-    for relative in [
-        "release",
-        "lib/modules",
-        "bin/server/jvm.dll",
-        "bin/java.dll",
-        "bin/jli.dll",
-    ] {
-        let path = recovery::path(java_home, relative).map_err(|_| Error::JavaUnavailable)?;
-        reader
-            .read(&path, format!("java-runtime/{relative}"), 512 * 1024 * 1024)
-            .map_err(|e| {
-                if e == Error::Cancelled {
-                    e
-                } else {
-                    Error::JavaUnavailable
-                }
-            })?;
+            .ok_or(Error::ArtifactMismatch)?;
+            verify_sha1(&bytes, expected)?;
+        }
+    }
+    let managed_java =
+        diagnostic_lab::installed_runtime_java(instance).map_err(|_| Error::JavaUnavailable)?;
+    if let Some((expected_path, expected_sha256)) = managed_java {
+        if expected_path != java
+            || pin_and_measure_java(&mut reader, java, observed_java)? != expected_sha256
+        {
+            return Err(Error::JavaUnavailable);
+        }
+    } else {
+        pin_java_runtime(&mut reader, java, observed_java)?;
     }
     if let Some(path) = skin_file {
         reader.read(path, "selected-local-skin".into(), 5 * 1024 * 1024)?;
@@ -401,6 +710,26 @@ pub fn inspect_ready_runtime(
         return Err(Error::Cancelled);
     }
     reader.hashes.sort();
+    let voice_review = voice.map(|profile| ReadyVoiceReview {
+        profile,
+        mods: voice_pins
+            .iter()
+            .map(|(relative, bytes, sha256)| ReadyVoiceMod {
+                relative: (*relative).into(),
+                bytes: *bytes,
+                sha256: (*sha256).into(),
+                action: if managed
+                    .fingerprints
+                    .iter()
+                    .any(|file| file.relative == *relative)
+                {
+                    ReadyVoiceAction::Present
+                } else {
+                    ReadyVoiceAction::Install
+                },
+            })
+            .collect(),
+    });
     let mut hash = Sha256::new();
     hash.update(b"aurora-connect-ready-runtime-v1\0");
     hash.update(
@@ -421,6 +750,7 @@ pub fn inspect_ready_runtime(
         core_sha256: managed.core_sha256,
         skins_sha256: managed.skins_sha256,
         spec,
+        voice_review,
         root: instance.root().to_owned(),
         directory_observations,
         deleting_marker,
@@ -430,6 +760,139 @@ pub fn inspect_ready_runtime(
     proof.recheck_before_spawn()?;
     Ok(proof)
 }
+
+type VoiceArtifactPin = (&'static str, u64, &'static str);
+
+fn voice_artifact_pins(profile: NativeVoiceProfile) -> Result<&'static [VoiceArtifactPin], Error> {
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    {
+        use super::connect_voice::dedicated as voice;
+        Ok(voice::client_voice_pins(dedicated_voice_profile(profile)))
+    }
+    #[cfg(not(all(windows, feature = "connect-lab", feature = "connect-voice-lab")))]
+    {
+        let _ = profile;
+        Err(Error::Disabled)
+    }
+}
+
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+fn dedicated_voice_profile(
+    profile: NativeVoiceProfile,
+) -> super::connect_voice::dedicated::NativeVoiceProfile {
+    use super::connect_voice::dedicated as voice;
+    match profile {
+        NativeVoiceProfile::SimpleVoiceChat => voice::NativeVoiceProfile::SimpleVoiceChat,
+        NativeVoiceProfile::PlasmoVoice => voice::NativeVoiceProfile::PlasmoVoice,
+    }
+}
+
+fn collect_classpath_native_hashes(
+    bytes: &[u8],
+    hashes: &mut BTreeMap<String, String>,
+) -> Result<(), Error> {
+    let mut archive =
+        zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| Error::ArtifactMismatch)?;
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index(index)
+            .map_err(|_| Error::ArtifactMismatch)?;
+        let name = entry.name().rsplit('/').next().unwrap_or_default();
+        if !name.ends_with(".dll") {
+            continue;
+        }
+        let name = name.to_owned();
+        let mut contents = Vec::new();
+        entry
+            .take(64 * 1024 * 1024 + 1)
+            .read_to_end(&mut contents)
+            .map_err(|_| Error::ArtifactMismatch)?;
+        if contents.len() > 64 * 1024 * 1024 {
+            return Err(Error::ArtifactMismatch);
+        }
+        hashes.insert(name, format!("{:x}", sha1::Sha1::digest(contents)));
+    }
+    Ok(())
+}
+
+fn pin_and_measure_java(reader: &mut Reader<'_>, java: &Path, major: u32) -> Result<String, Error> {
+    let start = reader.hashes.len();
+    pin_java_runtime(reader, java, major)?;
+    let material = serde_json::to_vec(&reader.hashes[start..]).map_err(|_| Error::Internal)?;
+    let mut digest = Sha256::new();
+    digest.update(b"aurora-ready-managed-java-v1\0");
+    digest.update(material);
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn pin_java_runtime(reader: &mut Reader<'_>, java: &Path, java_major: u32) -> Result<(), Error> {
+    fn java_error(error: Error) -> Error {
+        match error {
+            Error::Cancelled => error,
+            _ => Error::JavaUnavailable,
+        }
+    }
+    if !java.is_absolute() {
+        return Err(Error::JavaUnavailable);
+    }
+    reader
+        .read(java, "selected-java-executable".into(), 64 * 1024 * 1024)
+        .map_err(java_error)?;
+    let java_home = java
+        .parent()
+        .and_then(Path::parent)
+        .ok_or(Error::JavaUnavailable)?;
+    let mut pin = |relative: &str| -> Result<(), Error> {
+        let path = recovery::path(java_home, relative).map_err(|_| Error::JavaUnavailable)?;
+        reader
+            .read(&path, format!("java-runtime/{relative}"), 512 * 1024 * 1024)
+            .map_err(java_error)?;
+        Ok(())
+    };
+    if java_major != 8 {
+        for relative in [
+            "release",
+            "lib/modules",
+            "bin/server/jvm.dll",
+            "bin/java.dll",
+            "bin/jli.dll",
+        ] {
+            pin(relative)?;
+        }
+        return Ok(());
+    }
+
+    // A selected Java 8 launcher can live in a standalone JRE or at the
+    // top of a JDK, whose HotSpot DLLs and bootstrap JARs live under jre/.
+    let nested = recovery::path(java_home, "jre/lib/rt.jar").map_err(|_| Error::JavaUnavailable)?;
+    let prefix = if nested.try_exists().map_err(|_| Error::JavaUnavailable)? {
+        pin("bin/jli.dll")?;
+        "jre/"
+    } else {
+        ""
+    };
+    let release = recovery::path(java_home, "release").map_err(|_| Error::JavaUnavailable)?;
+    if release.try_exists().map_err(|_| Error::JavaUnavailable)? {
+        pin("release")?;
+    } else if !prefix.is_empty() {
+        return Err(Error::JavaUnavailable);
+    }
+    for file in [
+        "bin/java.dll",
+        "bin/jli.dll",
+        "bin/server/jvm.dll",
+        "lib/amd64/jvm.cfg",
+        "lib/rt.jar",
+        "lib/resources.jar",
+        "lib/charsets.jar",
+        "lib/jce.jar",
+        "lib/jsse.jar",
+    ] {
+        pin(&format!("{prefix}{file}"))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "connect_ready_runtime_tests.rs"]
 mod tests;

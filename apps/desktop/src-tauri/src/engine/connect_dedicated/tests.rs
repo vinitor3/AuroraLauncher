@@ -25,6 +25,9 @@ mod native_voice_host;
 mod native_voice_host_cases;
 #[path = "tests/native_voice_review.rs"]
 mod native_voice_review;
+#[cfg(debug_assertions)]
+#[path = "tests/native_voice_social.rs"]
+mod native_voice_social;
 #[path = "tests/probe.rs"]
 mod probe;
 #[path = "tests/producer_boot_bounds.rs"]

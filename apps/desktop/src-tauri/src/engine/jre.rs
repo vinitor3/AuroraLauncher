@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use reqwest::blocking::Client;
@@ -9,7 +9,7 @@ use serde_json::Value;
 use thiserror::Error;
 use zip::ZipArchive;
 
-use super::download::{download_one_with_progress, DownloadError, DownloadRequest, ExpectedHash};
+use super::download::{download_many_cancellable, DownloadError, DownloadRequest, ExpectedHash};
 use super::process::background_command;
 use super::TransferProgress;
 
@@ -48,17 +48,40 @@ pub fn ensure_managed_java(
 pub fn ensure_managed_java_with_progress<F>(
     data_directory: &Path,
     major: u32,
-    mut progress: F,
+    progress: F,
 ) -> Result<JavaRuntime, JavaRuntimeError>
 where
     F: FnMut(TransferProgress),
 {
+    JavaRuntime::from_executable(ensure_managed_java_files(
+        data_directory,
+        major,
+        progress,
+        None,
+    )?)
+}
+
+pub(crate) fn ensure_managed_java_files(
+    data_directory: &Path,
+    major: u32,
+    mut progress: impl FnMut(TransferProgress),
+    cancel: Option<&(dyn Fn() -> bool + Sync)>,
+) -> Result<PathBuf, JavaRuntimeError> {
+    let cancelled = cancel.unwrap_or(&|| false);
+    let check = || {
+        if cancelled() {
+            Err(JavaRuntimeError::Download(DownloadError::Cancelled))
+        } else {
+            Ok(())
+        }
+    };
+    check()?;
     let runtime_directory = data_directory
         .join("runtimes")
         .join(format!("java-{major}"));
     if let Some(executable) = find_java_executable(&runtime_directory) {
         progress(java_stage(format!("Java {major} já está instalado"), 100.0));
-        return JavaRuntime::from_executable(executable);
+        return Ok(executable);
     }
 
     progress(java_stage(format!("Consultando Java {major}"), 2.0));
@@ -66,7 +89,11 @@ where
     let client = Client::builder()
         .user_agent("Aurora-Smart-Launcher/0.1")
         .connect_timeout(std::time::Duration::from_secs(15))
-        .timeout(std::time::Duration::from_secs(10 * 60))
+        .timeout(std::time::Duration::from_secs(if cancel.is_some() {
+            30
+        } else {
+            10 * 60
+        }))
         .pool_idle_timeout(std::time::Duration::from_secs(90))
         .build()?;
     let (package, package_type) = match latest_java_package(&client, major, "jre")? {
@@ -80,6 +107,12 @@ where
         .as_str()
         .filter(|url| url.starts_with("https://"))
         .ok_or(JavaRuntimeError::Metadata)?;
+    if cancel.is_some() {
+        let url = reqwest::Url::parse(download_url).map_err(|_| JavaRuntimeError::Metadata)?;
+        if url.host_str() != Some("github.com") || !url.path().starts_with("/adoptium/temurin") {
+            return Err(JavaRuntimeError::Metadata);
+        }
+    }
     let expected_sha256 = package["checksum"]
         .as_str()
         .ok_or(JavaRuntimeError::Metadata)?;
@@ -94,17 +127,58 @@ where
         expected_hash: Some(ExpectedHash::Sha256(expected_sha256.to_owned())),
         expected_size: package["size"].as_u64(),
     };
-    download_one_with_progress(&client, request, |item| {
-        progress(item.map_total(3.0, 88.0));
-    })?;
+    if cancel.is_some()
+        && request
+            .expected_size
+            .is_none_or(|bytes| bytes == 0 || bytes > 512 * 1024 * 1024)
+    {
+        return Err(JavaRuntimeError::Metadata);
+    }
+    download_many_cancellable(
+        &client,
+        vec![request],
+        1,
+        |item| {
+            progress(item.map_total(3.0, 88.0));
+        },
+        cancelled,
+    )?;
 
     let mut archive = ZipArchive::new(File::open(&archive_path)?)?;
+    if cancel.is_some() && (archive.is_empty() || archive.len() > 4096) {
+        return Err(JavaRuntimeError::Integrity);
+    }
+    let mut expanded = 0_u64;
     let archive_entries = archive.len().max(1);
     for index in 0..archive.len() {
+        check()?;
         let mut entry = archive.by_index(index)?;
         let Some(relative) = entry.enclosed_name() else {
+            if cancel.is_some() {
+                return Err(JavaRuntimeError::Integrity);
+            }
             continue;
         };
+        if cancel.is_some() {
+            let name = relative
+                .to_str()
+                .ok_or(JavaRuntimeError::Integrity)?
+                .replace('\\', "/");
+            super::recovery::valid_relative(name.trim_end_matches('/'))
+                .map_err(|_| JavaRuntimeError::Integrity)?;
+            if entry
+                .unix_mode()
+                .is_some_and(|mode| mode & 0o170000 == 0o120000)
+            {
+                return Err(JavaRuntimeError::Integrity);
+            }
+            expanded = expanded
+                .checked_add(entry.size())
+                .ok_or(JavaRuntimeError::Integrity)?;
+            if expanded > 768 * 1024 * 1024 {
+                return Err(JavaRuntimeError::Integrity);
+            }
+        }
         let destination = runtime_directory.join(relative);
         if entry.is_dir() {
             fs::create_dir_all(destination)?;
@@ -113,8 +187,33 @@ where
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut destination_file = File::create(destination)?;
-        io::copy(&mut entry, &mut destination_file)?;
+        if cancel.is_some() {
+            let mut destination_file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(destination)?;
+            let expected = entry.size();
+            let mut written = 0_u64;
+            let mut buffer = [0_u8; 64 * 1024];
+            loop {
+                check()?;
+                let bytes = entry.read(&mut buffer)?;
+                if bytes == 0 {
+                    break;
+                }
+                written += bytes as u64;
+                if written > expected {
+                    return Err(JavaRuntimeError::Integrity);
+                }
+                destination_file.write_all(&buffer[..bytes])?;
+            }
+            if written != expected {
+                return Err(JavaRuntimeError::Integrity);
+            }
+        } else {
+            let mut destination_file = File::create(destination)?;
+            io::copy(&mut entry, &mut destination_file)?;
+        }
         if index % 25 == 0 || index + 1 == archive_entries {
             progress(java_stage(
                 format!("Extraindo Java {major}"),
@@ -123,8 +222,9 @@ where
         }
     }
     let executable = find_java_executable(&runtime_directory).ok_or(JavaRuntimeError::Metadata)?;
+    check()?;
     progress(java_stage(format!("Java {major} pronto"), 100.0));
-    JavaRuntime::from_executable(executable)
+    Ok(executable)
 }
 
 fn latest_java_package(

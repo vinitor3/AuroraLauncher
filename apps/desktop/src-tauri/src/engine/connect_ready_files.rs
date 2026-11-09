@@ -13,7 +13,10 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
-use super::{connect_ready_profile::ReadyProfile, core, recovery, skins, Instance};
+use super::{
+    connect_native_voice::NativeVoiceProfile, connect_ready_profile::ReadyProfile, core, recovery,
+    skins, Instance,
+};
 
 pub const READY_CORE_FILE: &str = "mods/aurora-core-fabric-1.21.1.jar";
 pub const READY_SKINS_FILE: &str = "mods/aurora-skins-fabric-1.21.1.jar";
@@ -75,13 +78,22 @@ pub fn verify_managed_files_for_profile(
     profile: ReadyProfile,
     cancelled: impl Fn() -> bool,
 ) -> Result<ReadyManagedFiles, ReadyFilesError> {
+    verify_managed_files_with_voice(instance, profile, None, &[], cancelled)
+}
+
+pub(super) fn verify_managed_files_with_voice(
+    instance: &Instance,
+    profile: ReadyProfile,
+    voice: Option<NativeVoiceProfile>,
+    voice_pins: &[(&str, u64, &str)],
+    cancelled: impl Fn() -> bool,
+) -> Result<ReadyManagedFiles, ReadyFilesError> {
     check_cancel(&cancelled)?;
-    let expected_core =
-        core::verified_embedded_core(profile.descriptor().minecraft_version, "fabric")
-            .map_err(|_| ReadyFilesError::Mismatch)?;
-    let expected_skins =
-        skins::embedded_skins_artifact(profile.descriptor().minecraft_version, "fabric")
-            .map_err(|_| ReadyFilesError::Mismatch)?;
+    let runtime = profile.descriptor();
+    let expected_core = core::verified_embedded_core(runtime.minecraft_version, runtime.loader)
+        .map_err(|_| ReadyFilesError::Mismatch)?;
+    let expected_skins = skins::embedded_skins_artifact(runtime.minecraft_version, runtime.loader)
+        .map_err(|_| ReadyFilesError::Mismatch)?;
     let mods = recovery::path(instance.root(), "mods").map_err(|_| ReadyFilesError::Unsafe)?;
     let _pins = recovery::pin_directory(&mods).map_err(|_| ReadyFilesError::Unsafe)?;
     let entries = fs::read_dir(&mods).map_err(|_| ReadyFilesError::Missing)?;
@@ -101,8 +113,7 @@ pub fn verify_managed_files_for_profile(
         let path =
             recovery::path(instance.root(), &relative).map_err(|_| ReadyFilesError::Unsafe)?;
         let metadata = fs::symlink_metadata(&path).map_err(|_| ReadyFilesError::Unsafe)?;
-        // This action intentionally does not infer Fabric's recursive directory
-        // discovery rules. A subdirectory makes the ready proof incomplete.
+        // Nested mod directories can change loader discovery outside this proof.
         if !metadata.is_file() {
             return Err(ReadyFilesError::Unsafe);
         }
@@ -142,8 +153,22 @@ pub fn verify_managed_files_for_profile(
                 return Err(ReadyFilesError::Mismatch);
             }
             skins_hash = Some(sha256.clone());
+        } else if let Some((_, size, expected)) =
+            voice_pins.iter().find(|(name, _, _)| *name == relative)
+        {
+            if bytes.len() as u64 != *size || sha256.as_str() != *expected {
+                return Err(ReadyFilesError::Mismatch);
+            }
         } else {
-            inspect_extra_jar(&bytes, 0, &mut nested_count, &mut total, &cancelled)?;
+            inspect_extra_jar(
+                &bytes,
+                runtime.loader == "forge",
+                voice,
+                0,
+                &mut nested_count,
+                &mut total,
+                &cancelled,
+            )?;
         }
         fingerprints.push(ReadyFileFingerprint {
             relative,
@@ -163,8 +188,17 @@ fn protected_identity(value: &str) -> bool {
     matches!(value, "aurora_core" | "aurora_skins" | "aurora_companion")
 }
 
+fn protected_voice_identity(value: &str, voice: Option<NativeVoiceProfile>) -> bool {
+    voice.is_some_and(|profile| {
+        matches!(value, "voicechat" | "plasmovoice")
+            || (profile == NativeVoiceProfile::PlasmoVoice && value == "fabric-api")
+    })
+}
+
 fn inspect_extra_jar(
     bytes: &[u8],
+    forge: bool,
+    voice: Option<NativeVoiceProfile>,
     depth: usize,
     nested_count: &mut usize,
     total: &mut u64,
@@ -200,49 +234,134 @@ fn inspect_extra_jar(
             return Err(ReadyFilesError::Conflict);
         }
     }
-    let metadata = match archive.by_name("fabric.mod.json") {
-        Ok(entry) => Some(read_zip_member(entry, MAX_METADATA_BYTES)?),
-        Err(zip::result::ZipError::FileNotFound) => None,
-        Err(_) => return Err(ReadyFilesError::InvalidJar),
-    };
-    let Some(metadata) = metadata else {
-        return Ok(());
-    };
-    let metadata: Value =
-        serde_json::from_slice(&metadata).map_err(|_| ReadyFilesError::InvalidJar)?;
-    let id = metadata["id"].as_str().ok_or(ReadyFilesError::InvalidJar)?;
-    if protected_identity(id) {
-        return Err(ReadyFilesError::Conflict);
+    let mut nested_jars = BTreeSet::new();
+    if let Some(metadata) = optional_metadata(&mut archive, "fabric.mod.json")? {
+        let metadata: Value =
+            serde_json::from_slice(&metadata).map_err(|_| ReadyFilesError::InvalidJar)?;
+        let id = metadata["id"].as_str().ok_or(ReadyFilesError::InvalidJar)?;
+        if protected_identity(id) || protected_voice_identity(id, voice) {
+            return Err(ReadyFilesError::Conflict);
+        }
+        if let Some(provides) = metadata.get("provides") {
+            for alias in provides.as_array().ok_or(ReadyFilesError::InvalidJar)? {
+                let alias = alias.as_str().ok_or(ReadyFilesError::InvalidJar)?;
+                if protected_identity(alias) || protected_voice_identity(alias, voice) {
+                    return Err(ReadyFilesError::Conflict);
+                }
+            }
+        }
+        read_nested_paths(&metadata, "file", &mut nested_jars)?;
     }
-    if let Some(provides) = metadata.get("provides") {
-        for alias in provides.as_array().ok_or(ReadyFilesError::InvalidJar)? {
-            if protected_identity(alias.as_str().ok_or(ReadyFilesError::InvalidJar)?) {
-                return Err(ReadyFilesError::Conflict);
+    if forge {
+        inspect_forge_identities(&mut archive)?;
+        if let Some(metadata) = optional_metadata(&mut archive, "META-INF/jarjar/metadata.json")? {
+            let metadata: Value =
+                serde_json::from_slice(&metadata).map_err(|_| ReadyFilesError::InvalidJar)?;
+            read_nested_paths(&metadata, "path", &mut nested_jars)?;
+        }
+        // FML's legacy ContainedDeps entries can name embedded jars without a
+        // JarJar manifest. Inspect physical jar members before approving Forge.
+        for name in archive
+            .file_names()
+            .filter(|name| name.to_ascii_lowercase().ends_with(".jar"))
+        {
+            nested_jars.insert(name.to_owned());
+            if nested_jars.len() > MAX_NESTED_COUNT {
+                return Err(ReadyFilesError::Limit);
             }
         }
     }
+    for name in nested_jars {
+        check_cancel(cancelled)?;
+        *nested_count += 1;
+        if *nested_count > MAX_NESTED_COUNT {
+            return Err(ReadyFilesError::Limit);
+        }
+        recovery::valid_relative(&name).map_err(|_| ReadyFilesError::InvalidJar)?;
+        let nested = read_zip_member(
+            archive
+                .by_name(&name)
+                .map_err(|_| ReadyFilesError::InvalidJar)?,
+            MAX_NESTED_BYTES,
+        )?;
+        *total = total
+            .checked_add(nested.len() as u64)
+            .ok_or(ReadyFilesError::Limit)?;
+        if *total > MAX_TOTAL_BYTES {
+            return Err(ReadyFilesError::Limit);
+        }
+        inspect_extra_jar(
+            &nested,
+            forge,
+            voice,
+            depth + 1,
+            nested_count,
+            total,
+            cancelled,
+        )?;
+    }
+    Ok(())
+}
+
+fn optional_metadata(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    name: &str,
+) -> Result<Option<Vec<u8>>, ReadyFilesError> {
+    match archive.by_name(name) {
+        Ok(entry) => read_zip_member(entry, MAX_METADATA_BYTES).map(Some),
+        Err(zip::result::ZipError::FileNotFound) => Ok(None),
+        Err(_) => Err(ReadyFilesError::InvalidJar),
+    }
+}
+
+fn read_nested_paths(
+    metadata: &Value,
+    key: &str,
+    paths: &mut BTreeSet<String>,
+) -> Result<(), ReadyFilesError> {
     if let Some(jars) = metadata.get("jars") {
         for jar in jars.as_array().ok_or(ReadyFilesError::InvalidJar)? {
-            check_cancel(cancelled)?;
-            *nested_count += 1;
-            if *nested_count > MAX_NESTED_COUNT {
+            let name = jar[key].as_str().ok_or(ReadyFilesError::InvalidJar)?;
+            paths.insert(name.to_owned());
+            if paths.len() > MAX_NESTED_COUNT {
                 return Err(ReadyFilesError::Limit);
             }
-            let name = jar["file"].as_str().ok_or(ReadyFilesError::InvalidJar)?;
-            recovery::valid_relative(name).map_err(|_| ReadyFilesError::InvalidJar)?;
-            let nested = read_zip_member(
-                archive
-                    .by_name(name)
-                    .map_err(|_| ReadyFilesError::InvalidJar)?,
-                MAX_NESTED_BYTES,
-            )?;
-            *total = total
-                .checked_add(nested.len() as u64)
-                .ok_or(ReadyFilesError::Limit)?;
-            if *total > MAX_TOTAL_BYTES {
-                return Err(ReadyFilesError::Limit);
+        }
+    }
+    Ok(())
+}
+
+fn inspect_forge_identities(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+) -> Result<(), ReadyFilesError> {
+    if let Some(metadata) = optional_metadata(archive, "META-INF/mods.toml")? {
+        let contents = std::str::from_utf8(&metadata).map_err(|_| ReadyFilesError::InvalidJar)?;
+        let metadata: toml::Value =
+            toml::from_str(contents).map_err(|_| ReadyFilesError::InvalidJar)?;
+        if let Some(mods) = metadata.get("mods") {
+            for item in mods.as_array().ok_or(ReadyFilesError::InvalidJar)? {
+                let id = item
+                    .get("modId")
+                    .and_then(toml::Value::as_str)
+                    .ok_or(ReadyFilesError::InvalidJar)?;
+                if protected_identity(id) {
+                    return Err(ReadyFilesError::Conflict);
+                }
             }
-            inspect_extra_jar(&nested, depth + 1, nested_count, total, cancelled)?;
+        }
+    }
+    if let Some(metadata) = optional_metadata(archive, "mcmod.info")? {
+        let metadata: Value =
+            serde_json::from_slice(&metadata).map_err(|_| ReadyFilesError::InvalidJar)?;
+        let mods = metadata
+            .as_array()
+            .or_else(|| metadata["modList"].as_array())
+            .ok_or(ReadyFilesError::InvalidJar)?;
+        for item in mods {
+            let id = item["modid"].as_str().ok_or(ReadyFilesError::InvalidJar)?;
+            if protected_identity(id) {
+                return Err(ReadyFilesError::Conflict);
+            }
         }
     }
     Ok(())
@@ -275,12 +394,17 @@ mod tests {
     }
     impl Fixture {
         fn new() -> Self {
+            Self::with_profile(ReadyProfile::Fabric1211)
+        }
+
+        fn with_profile(profile: ReadyProfile) -> Self {
+            let runtime = profile.descriptor();
             let root =
                 std::env::temp_dir().join(format!("aurora-ready-files-{}", uuid::Uuid::new_v4()));
             let instance =
                 InstanceLayout::new(&root).open(InstanceId::parse("ready-files").unwrap());
-            install_embedded_core(&instance, "1.21.1", "fabric").unwrap();
-            install_embedded_skins(&instance, "1.21.1", "fabric").unwrap();
+            install_embedded_core(&instance, runtime.minecraft_version, runtime.loader).unwrap();
+            install_embedded_skins(&instance, runtime.minecraft_version, runtime.loader).unwrap();
             Self { root, instance }
         }
         fn add(&self, name: &str, data: &[u8]) {
@@ -380,6 +504,41 @@ mod tests {
             ]),
         );
         assert_eq!(fixture.verify(), Err(ReadyFilesError::Conflict));
+    }
+
+    #[test]
+    fn connect_ready_files_checks_all_embedded_pairs_and_forge_mod_identities() {
+        for profile in ReadyProfile::ALL {
+            let fixture = Fixture::with_profile(profile);
+            let runtime = profile.descriptor();
+            let verify = || verify_managed_files_for_profile(&fixture.instance, profile, || false);
+            assert_eq!(verify().unwrap().fingerprints.len(), 2);
+            if runtime.loader == "forge" {
+                let regular = jar(&[(
+                    "META-INF/mods.toml",
+                    b"[[mods]]
+modId = 'other'
+",
+                )]);
+                fixture.add("other.jar", &regular);
+                assert_eq!(verify().unwrap().fingerprints.len(), 3);
+                let alias = jar(&[(
+                    "META-INF/mods.toml",
+                    b"[[mods]]
+modId = 'aurora_core'
+",
+                )]);
+                let legacy = jar(&[("mcmod.info", br#"[{"modid":"aurora_skins"}]"#)]);
+                for archive in [
+                    alias.clone(),
+                    legacy,
+                    jar(&[("META-INF/jarjar/nested.jar", &alias)]),
+                ] {
+                    fixture.add("other.jar", &archive);
+                    assert_eq!(verify(), Err(ReadyFilesError::Conflict));
+                }
+            }
+        }
     }
 
     #[test]

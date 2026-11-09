@@ -11,13 +11,38 @@ use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 const POLL: Duration = Duration::from_millis(20);
 
 pub(super) fn start(
+    command: Command,
+    instance_id: &str,
+    limits: OwnedRunLimits,
+    cancel: CancellationToken,
+    hooks: Hooks,
+) -> Result<OwnedRun, OwnedRunError> {
+    if !limits.valid() {
+        return Err(OwnedRunError::InvalidRequest);
+    }
+    start_validated(command, instance_id, limits, cancel, hooks)
+}
+#[cfg(feature = "connect-voice-lab")]
+pub(super) fn start_voice_bridge(
+    command: Command,
+    instance_id: &str,
+    limits: OwnedRunLimits,
+    cancel: CancellationToken,
+    hooks: Hooks,
+) -> Result<OwnedRun, OwnedRunError> {
+    if !limits.valid_voice_bridge() {
+        return Err(OwnedRunError::InvalidRequest);
+    }
+    start_validated(command, instance_id, limits, cancel, hooks)
+}
+fn start_validated(
     mut command: Command,
     instance_id: &str,
     limits: OwnedRunLimits,
     cancel: CancellationToken,
     hooks: Hooks,
 ) -> Result<OwnedRun, OwnedRunError> {
-    if instance_id.is_empty() || instance_id.len() > 128 || !limits.valid() {
+    if instance_id.is_empty() || instance_id.len() > 128 {
         return Err(OwnedRunError::InvalidRequest);
     }
     if cancel.is_cancelled() {

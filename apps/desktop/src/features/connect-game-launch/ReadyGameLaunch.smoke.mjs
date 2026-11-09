@@ -174,6 +174,52 @@ test("ready launch performs explicit copy selection, matching review and fresh c
   assert.equal(calls.some(c => ["launch_instance", "launch_instance_with_doctor_run", "install_java", "install_fabric", "save_settings"].includes(c.command)), false);
 });
 
+test("an authorized local host player can review voice files and confirm the same native operation", async () => {
+  fixtures();
+  const host = { ...connection, role: "host", phase: "hostListening", transportState: "admitted",
+    social: { role: "host", hostPlayer: true, readyGameLaunchAvailable: true } };
+  handlers.set("connect_prepare_ready_game_launch", ({ request }) => {
+    nativeSnapshot = reviewed();
+    nativeSnapshot.review = { ...nativeSnapshot.review, ...request, voice: { profile: "simpleVoiceChat", mods: [
+      { relative: "mods/voicechat-fabric-1.21.1-2.6.22.jar", bytes: 5_369_475, sha256: "d".repeat(64), action: "install" },
+    ] } };
+    return structuredClone(nativeSnapshot);
+  });
+  await panel({ session: host }); await chooseCopy(); await click("Revisar entrada no servidor");
+  assert.match(container.textContent, /Adicionar à cópia.*voicechat-fabric-1.21.1-2.6.22/);
+  assert.match(container.textContent, /Autorizo instalar os mods listados nesta cópia de teste/);
+  assert.deepEqual(calls.find(c => c.command === "connect_prepare_ready_game_launch").args, { request: { operationId, instanceId: copyId, ...context } });
+  assert.equal(button("Iniciar cópia e tentar entrar").disabled, true);
+  await consent(); await click("Iniciar cópia e tentar entrar");
+  assert.equal(count("connect_confirm_ready_game_launch"), 1);
+});
+
+test("a reviewed official runtime copy supplies its own Java on a fresh launcher", async () => {
+  fixtures();
+  const ownJava = `C:/fixture/instances/${copyId}/installers/aurora-managed/runtimes/java-21/jre/bin/java.exe`;
+  handlers.set("connect_install_ready_copy", () => ({ ...copy(), originInstanceId: context.sourceInstanceId, runtimeJavaExecutable: ownJava }));
+  await panel({ launchContext: { ...context, javaExecutable: "" } });
+  const select = container.querySelector(".connect-fields details select");
+  assert.ok(select);
+  await act(async () => {
+    [...select.querySelectorAll("option")].find(option => option.value === "fabric-loader-0.16.14-1.21.1").selected = true;
+    select.dispatchEvent(new window.Event("change", { bubbles: true }));
+  });
+  assert.equal(button("Criar cópia com este runtime").disabled, true);
+  const approval = container.querySelector(".connect-fields details input[type=checkbox]");
+  await act(async () => { approval.checked = true; approval.dispatchEvent(new window.Event("click", { bubbles: true })); });
+  await click("Criar cópia com este runtime");
+  const install = calls.find(call => call.command === "connect_install_ready_copy").args.request;
+  assert.match(install.operationId, /^[a-f0-9-]{36}$/);
+  assert.deepEqual({ ...install, operationId: undefined }, {
+    operationId: undefined, sourceInstanceId: context.sourceInstanceId, profileId: "fabric-loader-0.16.14-1.21.1", approved: true,
+  });
+  assert.equal(count("connect_prepare_ready_game_launch"), 0);
+  await click("Revisar entrada no servidor");
+  assert.equal(calls.find(call => call.command === "connect_prepare_ready_game_launch").args.request.javaExecutable, ownJava);
+  assert.equal(button("Iniciar cópia e tentar entrar").disabled, true);
+});
+
 const profile1211 = { minecraftVersion: "1.21.1", loader: "fabric", loaderVersion: "0.16.14", javaMajor: 21, coreVersion: "1.1.5", skinsVersion: "0.3.1" };
 const profile1201 = { ...profile1211, minecraftVersion: "1.20.1", javaMajor: 17 };
 const capability93 = { schemaVersion: 2, instanceScope: "diagnosticCopy", maxPlanSeconds: 60, runtimes: [profile1211, profile1201] };
@@ -204,6 +250,29 @@ test("losing schema2 authorization disables a Fabric1201 review while keeping ca
   assert.equal(count("connect_confirm_ready_game_launch"), 0);
   await click("Cancelar preparo do jogo");
   assert.equal(count("connect_cancel_ready_game_launch"), 1);
+});
+
+test("a Forge Java 8 review needs matrix capability and renewed consent after capability loss", async () => {
+  const matrix = JSON.parse(await readFile(new URL("../../../../../scripts/active-mod-matrix.json", import.meta.url), "utf8"));
+  const runtimes = matrix.targets.map(target => ({
+    minecraftVersion: target.minecraft, loader: target.loader, loaderVersion: target.loaderVersion,
+    javaMajor: target.javaRuntime, coreVersion: "1.1.5", skinsVersion: "0.3.1",
+  }));
+  const full = { ...capability93, schemaVersion: 3, runtimes };
+  const initial = reviewed();
+  initial.review = { ...initial.review, ...runtimes.find(runtime => runtime.minecraftVersion === "1.12.2") };
+  fixtures(initial); await panel({ capability: full });
+  assert.match(container.textContent, /Minecraft 1\.12\.2 \/ Forge 14\.23\.5\.2860/);
+  assert.match(container.textContent, /\(Java 8\)/);
+  assert.equal(button("Iniciar cópia e tentar entrar").disabled, true);
+  await consent();
+  assert.equal(button("Iniciar cópia e tentar entrar").disabled, false);
+  await panel({ capability: capability93 });
+  assert.equal(button("Iniciar cópia e tentar entrar").disabled, true);
+  await panel({ capability: full });
+  assert.equal(button("Iniciar cópia e tentar entrar").disabled, true);
+  await consent(); await click("Iniciar cópia e tentar entrar");
+  assert.deepEqual(calls.find(c => c.command === "connect_confirm_ready_game_launch").args, { operationId, planId, digest: "a".repeat(64) });
 });
 
 test("remount recovers a native review but never recovers consent or launches automatically", async () => {

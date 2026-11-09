@@ -11,7 +11,7 @@ import { guardSessionProfile, startSessionStartup, type SessionStartupState } fr
 import { browserLauncherAuthScope, prepareLauncherServices } from "./lib/launcherAuthScope";
 import {
   bundledFirebaseConfig,
-  socialLabBuild,
+  socialFeatureBuild,
   createFirebaseServices,
   clearRemoteSkinLibrary,
   loadAuroraProfile,
@@ -50,6 +50,7 @@ import { DoctorView } from "./features/doctor/DoctorView";
 import { RecoveryView } from "./features/recovery/RecoveryView";
 import { DiagnosticLabView } from "./features/diagnostic-lab/DiagnosticLabView";
 import { ConnectView } from "./features/connect/ConnectView";
+import { NativeVoicePanel } from "./features/connect-native-voice/NativeVoicePanel";
 import { ExitLauncherButton } from "./features/connect/ExitLauncherButton";
 import { SocialView } from "./features/social/SocialView";
 import { createSocialConnectController, emptySocialConnectState, type SocialConnectController, type SocialConnectState } from "./features/social/connect-controller";
@@ -1074,13 +1075,13 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const skinOwnerRef = useRef("");
   const libraryLoadGeneration = useRef(0);
   const [instanceFilter, setInstanceFilter] = useState("");
-  const [activeSection, setActiveSection] = useState<LauncherSection>(socialLabBuild ? "social" : "instances");
-  const baseSocialService = useMemo(() => socialLabBuild && profile && services.auth.currentUser?.uid === profile.uid
+  const [activeSection, setActiveSection] = useState<LauncherSection>(socialFeatureBuild ? "social" : "instances");
+  const baseSocialService = useMemo(() => socialFeatureBuild && profile && services.auth.currentUser?.uid === profile.uid
     ? createSocialFirebaseService(services) : null, [services, profile?.uid, services.auth.currentUser?.uid]);
   useEffect(() => {
     const user = services.auth.currentUser, accountId = profile?.uid;
     setSocialConnectState({ accountId: accountId ?? "", value: emptySocialConnectState() });
-    if (!socialLabBuild || !isTauri() || !accountId || user?.uid !== accountId || connectAccountBarrier !== "idle") return;
+    if (!socialFeatureBuild || !isTauri() || !accountId || user?.uid !== accountId || connectAccountBarrier !== "idle") return;
     const controller = createSocialConnectController({ accountId, user, currentUser: () => services.auth.currentUser, invoke,
       publish: value => setSocialConnectState({ accountId, value }) });
     socialConnectOwner.current = controller;
@@ -3539,7 +3540,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     && wardrobeReadyOwner === profile.uid && isCurrentSkinOwner(profile.uid) && !signingOut
     && connectAccountBarrier === "idle";
   const connectLaunchContext = useMemo(() => {
-    if (!connectAppearanceReady || !profile || !targetInstance || !javaPath.trim()) return undefined;
+    if (!connectAppearanceReady || !profile || !targetInstance) return undefined;
     return {
       sourceInstanceId: targetInstance,
       javaExecutable: javaPath.trim(),
@@ -3660,7 +3661,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
             onClick={() => setActiveSection("connect")}
             type="button"
           ><span aria-hidden="true">⇄</span>Connect · experimental</button>}
-          {socialLabBuild && <button
+          {socialFeatureBuild && <button
             aria-current={activeSection === "social" ? "page" : undefined}
             className={activeSection === "social" ? "nav-item active" : "nav-item"}
             onClick={() => setActiveSection("social")} type="button"
@@ -3690,7 +3691,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           connection={socialConnection}
           onOpenConnectedGame={connectAvailable ? () => setActiveSection("connect") : undefined}
           currentModpack={runningInstances.length === 1 ? instances.find(item => item.id === runningInstances[0].instanceId)?.displayName || runningInstances[0].instanceId : undefined} /></div>}
-        {connectAvailable && (connectVisited || activeSection === "connect") && <div className="section-connect" hidden={activeSection !== "connect"} inert={signingOut || activeSection !== "connect"}><ConnectView launchContext={connectLaunchContext} /></div>}
+        {connectAvailable && (connectVisited || activeSection === "connect") && <div className="section-connect" hidden={activeSection !== "connect"} inert={signingOut || activeSection !== "connect"}><ConnectView launchContext={connectLaunchContext} /><NativeVoicePanel disabled={signingOut} /></div>}
         <article className="panel instances section-instances">
           <div className="panel-heading">
             <div>

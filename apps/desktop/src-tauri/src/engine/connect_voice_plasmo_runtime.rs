@@ -1,7 +1,6 @@
 //! Pure validation of the closed Plasmo 2.1.17 runtime profile. No filesystem,
 //! mutation, announcement rendering or proof of a running voice service.
 use super::*;
-use serde::de::IgnoredAny;
 
 #[derive(Deserialize)]
 struct RuntimeDocument {
@@ -15,29 +14,56 @@ struct RuntimeDocument {
 struct RuntimeHost {
     ip: Spanned<String>,
     port: Spanned<i64>,
-    public: Option<IgnoredAny>,
+    public: Option<Public>,
 }
 
 /// Returns only a closed success/error. Unknown defaults and identifiers are
 /// bounded and validated as TOML, but never interpreted or returned as proof.
 pub(in super::super) fn validate_runtime_configuration(bytes: &[u8]) -> Result<()> {
+    validate_runtime_configuration_for_bridge(bytes, false)
+}
+
+pub(in super::super) fn validate_runtime_configuration_for_bridge(
+    bytes: &[u8],
+    bridge: bool,
+) -> Result<()> {
     let text = check_text(bytes)?;
     let shape = inspect_shape(text)?;
-    if shape.public {
+    if shape.public != bridge {
         return Err(RecoveryError::Integrity);
     }
     let document: RuntimeDocument = toml::from_str(text).map_err(|_| RecoveryError::Integrity)?;
     // Keep the complete semantic validation used by the legacy inspection,
     // including unknown fields, without exposing their keys/values in errors.
-    let _: Value = toml::from_str(text).map_err(|_| RecoveryError::Integrity)?;
+    let full: Value = toml::from_str(text).map_err(|_| RecoveryError::Integrity)?;
+    if bridge {
+        if let Some(mtu) = full.get("voice").and_then(|voice| voice.get("mtu_size")) {
+            if !mtu
+                .as_integer()
+                .is_some_and(|value| (1..=4096).contains(&value))
+            {
+                return Err(RecoveryError::Integrity);
+            }
+        }
+    }
     if document.debug
         || document.check_for_updates
         || document.use_crowdin_translations
-        || document.host.public.is_some()
+        || document.host.public.is_some() != bridge
         || document.host.ip.get_ref() != "127.0.0.1"
         || *document.host.port.get_ref() != 43003
     {
         return Err(RecoveryError::Integrity);
+    }
+    if let Some(public) = &document.host.public {
+        let (ip, port) = raw_public(text, &shape, public)?;
+        if public.ip.get_ref() != "127.0.0.1"
+            || *public.port.get_ref() != 35554
+            || !matches!(ip, "'127.0.0.1'" | "\"127.0.0.1\"")
+            || port != "35554"
+        {
+            return Err(RecoveryError::Integrity);
+        }
     }
     let raw_ip = text
         .get(document.host.ip.span())

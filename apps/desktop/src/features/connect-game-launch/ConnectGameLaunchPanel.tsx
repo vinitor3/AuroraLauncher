@@ -11,15 +11,25 @@ import {
 type Props = { capability?: ReadyGameLaunchCapability; session?: ConnectSnapshot; launchContext?: ReadyGameLaunchContext; observeExisting?: boolean; sessionStale?: boolean };
 type Action = "prepare" | "confirm" | "cancel";
 const active = (snapshot?: ReadyGameLaunchSnapshot) => !!snapshot && ["preparing", "reviewed", "starting"].includes(snapshot.phase);
-const connected = (session?: ConnectSnapshot) => session?.role === "guest" && session.phase === "guestConnected"
-  && session.transportState === "authenticated" && !["complete", "failed"].includes(session.cleanupState) && !!session.tcpAddress;
+const hostPlayer = (session?: ConnectSnapshot) => session?.role === "host" && session.social?.role === "host"
+  && session.social.hostPlayer === true;
+const launchParticipant = (session?: ConnectSnapshot) => session?.role === "guest" || hostPlayer(session);
+const connected = (session?: ConnectSnapshot) => !!session?.tcpAddress
+  && !["complete", "failed"].includes(session.cleanupState)
+  && (session.role === "guest" && session.phase === "guestConnected" && session.transportState === "authenticated"
+    || hostPlayer(session) && session.phase === "hostListening" && session.social?.readyGameLaunchAvailable
+      && ["authenticated", "admitted"].includes(session.transportState));
 const date = (value: number) => new Date(value).toLocaleTimeString("pt-BR");
 
-export function ConnectGameLaunchPanel({ capability, session, launchContext, observeExisting = false, sessionStale = false }: Props) {
+export function ConnectGameLaunchPanel({ capability, session, launchContext: sourceLaunchContext, observeExisting = false, sessionStale = false }: Props) {
   const operationId = session?.operationId ?? undefined;
-  const fingerprint = readyGameContextFingerprint(launchContext);
   const [snapshot, setSnapshot] = useState<ReadyGameLaunchSnapshot>();
   const [selectedId, setSelectedId] = useState("");
+  const [copyJava, setCopyJava] = useState<{ id: string; source: string; path: string }>();
+  const launchContext = sourceLaunchContext && copyJava && selectedId === copyJava.id && sourceLaunchContext.sourceInstanceId === copyJava.source
+    ? { ...sourceLaunchContext, javaExecutable: copyJava.path } : sourceLaunchContext;
+  const fingerprint = readyGameContextFingerprint(launchContext);
+  const sourceFingerprint = readyGameContextFingerprint(sourceLaunchContext);
   const [acknowledged, setAcknowledged] = useState(false);
   const [pending, setPending] = useState<Action>();
   const [uncertain, setUncertain] = useState(false);
@@ -29,9 +39,9 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext, obs
   const [now, setNow] = useState(Date.now());
   const observed = useRef<ReadyGameLaunchSnapshot | undefined>(undefined);
   const watchedOperation = useRef<string | undefined>(undefined);
-  if (operationId && session?.role === "guest" && (capability || observeExisting)) watchedOperation.current = operationId;
+  if (operationId && launchParticipant(session) && (capability || observeExisting)) watchedOperation.current = operationId;
   const watch = !!operationId && watchedOperation.current === operationId;
-  const previousContext = useRef(fingerprint);
+  const previousContext = useRef(sourceFingerprint);
   const current = useRef({ operationId, capability, session, launchContext, fingerprint, sessionStale });
   current.current = { operationId, capability, session, launchContext, fingerprint, sessionStale };
   const mounted = useRef(false);
@@ -140,24 +150,25 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext, obs
   }, [operationId, watch]);
 
   useEffect(() => {
-    if (previousContext.current === fingerprint) return;
-    previousContext.current = fingerprint;
+    if (previousContext.current === sourceFingerprint) return;
+    previousContext.current = sourceFingerprint;
     setSelectedId(""); setAcknowledged(false);
     invalidated.current = true;
     if (active(observed.current) || mutation.current) setContextChanged(true);
     if (active(observed.current) && observed.current?.planId) {
       automaticCancellation.current.add(observed.current.planId); void cancel();
     }
-  }, [fingerprint]);
+  }, [sourceFingerprint]);
 
-  useEffect(() => {
-    if (sessionStale || !capability || !connected(session)) setAcknowledged(false);
-  }, [sessionStale, capability, session?.phase, session?.transportState, session?.cleanupState, session?.tcpAddress]);
 
-  const canStartNew = !!capability && connected(session) && !sessionStale && validReadyGameContext(launchContext)
+  const canChooseCopy = !!capability && connected(session) && !sessionStale
     && !!snapshot && !active(snapshot) && !pending && !uncertain && !warning;
+  const canStartNew = canChooseCopy && validReadyGameContext(launchContext);
   const review = snapshot?.review && sameReadyGameContext(snapshot.review, launchContext) && !contextChanged ? snapshot.review : null;
   const supportedReview = !!review && readyGameCapabilitySupports(capability, review);
+  useEffect(() => {
+    if (sessionStale || !capability || !connected(session) || !supportedReview) setAcknowledged(false);
+  }, [sessionStale, capability, supportedReview, session?.phase, session?.transportState, session?.cleanupState, session?.tcpAddress]);
   const currentReview = review && supportedReview && review.instanceId === selectedId && review.expiresAtMs > now && review.sessionExpiresAtMs > now;
   const canConfirm = !!capability && connected(session) && !sessionStale && !!currentReview && acknowledged && !pending && !uncertain && !warning;
 
@@ -183,30 +194,36 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext, obs
   }
 
   if (!capability && !snapshot && !pending && !warning) return null;
-  if (session?.role !== "guest" && !snapshot && !pending && !warning) return null;
+  if (!launchParticipant(session) && !snapshot && !pending && !warning) return null;
   return <section className="connect-card" aria-label="Abrir cópia pelo Connect">
     <h3>Abrir o Minecraft nesta conexão</h3>
-    <p>Experimental: abre uma cópia de teste já preparada e tenta entrar pelo Connect. Exige Fabric 0.16.14, Core 1.1.5 e Skins 0.3.1. {capability?.schemaVersion === 2 ? "Minecraft 1.21.1 usa Java 21; Minecraft 1.20.1 usa Java 17." : "Minecraft 1.21.1 usa Java 21."} Este botão não baixa nem instala arquivos.</p>
+    <p>Revisa uma cópia de teste preparada com Core 1.1.5 e Skins 0.3.1 antes de tentar entrar pelo Connect. A revisão confere o Minecraft, o loader e o Java instalados.</p>
     {!capability && <p role="status">Novos lançamentos estão indisponíveis. O preparo existente ainda pode ser consultado ou cancelado.</p>}
     {!connected(session) && <p>Conecte como convidado antes de preparar a entrada. Uma consulta ao servidor ou conexão TCP não confirma entrada no mundo.</p>}
     {sessionStale && <p role="status">Aguarde uma observação atual do Connect antes de autorizar a entrada.</p>}
-    {!validReadyGameContext(launchContext) && <p>Selecione uma instância, um Java disponível e aguarde o perfil e a aparência ficarem prontos no launcher.</p>}
+    {!validReadyGameContext(launchContext) && <p>Selecione uma instância e aguarde o perfil e a aparência. Escolha um Java disponível ou prepare uma cópia de runtime com Java próprio.</p>}
     {contextChanged && <p role="status">O perfil ou a seleção mudou. O preparo anterior foi invalidado; aguarde a confirmação de cancelamento antes de revisar novamente.</p>}
     {error && <p role="alert">{error}</p>}
     {warning && <p role="alert">{warning}</p>}
     {uncertain && <p role="status">Aguardando uma observação que confirme o resultado. Nenhum lançamento será repetido automaticamente.</p>}
     {pending && <p role="status">{pending === "prepare" ? "Conferindo a cópia…" : pending === "confirm" ? "Iniciando a cópia…" : "Cancelando o preparo…"}</p>}
-    {launchContext && <ReadyCopyPicker sourceInstanceId={launchContext.sourceInstanceId} disabled={!canStartNew} selectedId={selectedId}
-      onSelect={id => { setSelectedId(id); setAcknowledged(false); }} />}
+    {launchContext && <ReadyCopyPicker sourceInstanceId={launchContext.sourceInstanceId} contextKey={launchContext.contextKey}
+      disabled={!canChooseCopy} selectedId={selectedId}
+      runtimes={capability && (capability.schemaVersion === 1 ? [capability] : capability.runtimes)}
+      onSelect={(id, java) => {
+        setSelectedId(id);
+        setCopyJava(java ? { id, source: launchContext.sourceInstanceId, path: java } : undefined);
+        setAcknowledged(false);
+      }} />}
     <button className="secondary" type="button" disabled={!canStartNew || !selectedId} onClick={prepare}>Revisar entrada no servidor</button>
     {operationId && <button className="secondary" type="button" onClick={() => { void read(); }}>Atualizar preparo do jogo</button>}
-    {snapshot?.phase === "preparing" && <p role="status">Verificando cópia, versões, arquivos e Java. Nenhum Minecraft foi iniciado por esta preparação.</p>}
+    {snapshot?.phase === "preparing" && <p role="status">Verificando a cópia, o Java e o protocolo informado pelo servidor. Os mods fixados de uma sessão com voz podem ser baixados para revisão.</p>}
     {review && <section className="connect-review" aria-label="Revisão para abrir a cópia">
       <h4>Confira antes de iniciar</h4>
       <dl>
         <dt>Cópia de teste</dt><dd>{review.instanceId}</dd>
         <dt>Destino desta conexão</dt><dd>{review.gameAddress}</dd>
-        <dt>Jogo e loader</dt><dd>Minecraft {review.minecraftVersion} / Fabric {review.loaderVersion}</dd>
+        <dt>Jogo e loader</dt><dd>Minecraft {review.minecraftVersion} / {review.loader === "forge" ? "Forge" : "Fabric"} {review.loaderVersion}</dd>
         <dt>Java verificado</dt><dd>{review.javaExecutable} (Java {review.javaMajor})</dd>
         <dt>Apelido</dt><dd>{review.nickname}</dd>
         <dt>Aparência</dt><dd>{review.appearance.skinFile ? "Skin local selecionada" : review.appearance.skinUrl ? "Skin do perfil selecionada" : "Skin padrão"}; {review.appearance.capeUrl ? "capa do perfil" : "sem capa"}; modelo {review.appearance.skinModel ?? "padrão"}.</dd>
@@ -214,11 +231,20 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext, obs
         <dt>Autorizar até</dt><dd>{date(review.expiresAtMs)}</dd>
         <dt>Conexão termina até</dt><dd>{date(review.sessionExpiresAtMs)}</dd>
       </dl>
+      {review.voice && <div>
+        <h5>Voz da sessão · {review.voice.profile === "simpleVoiceChat" ? "Simple Voice Chat" : "Plasmo Voice"}</h5>
+        <ul>{review.voice.mods.map(mod => <li key={mod.relative}>
+          {mod.action === "install" ? "Adicionar à cópia" : "Já presente e verificado"} · <code>{mod.relative}</code> · SHA-256 <code>{mod.sha256}</code>
+        </li>)}</ul>
+        {review.voice.mods.some(mod => mod.action === "install") && <p>A confirmação instala os arquivos indicados somente nesta cópia de teste. A instalação pode ser desfeita nas atualizações de conteúdo da cópia, com o jogo fechado.</p>}
+      </div>}
       <p>O jogo pode gravar dados nesta cópia, no cache de aparência do launcher e nos registros do Doctor e logs. Iniciar o processo não confirma entrada no mundo, áudio ou compatibilidade de contas.</p>
       {!currentReview && <p role="status">Esta revisão venceu ou mudou. Prepare uma nova revisão.</p>}
       {!supportedReview && <p role="status">Esta versão do launcher não oferece o perfil desta cópia. Atualize os dados ou cancele o preparo.</p>}
       <label className="connect-consent"><input type="checkbox" checked={acknowledged} disabled={!currentReview || !!pending || uncertain || !capability || !connected(session) || sessionStale || !!warning}
-        onChange={event => setAcknowledged(event.target.checked)} />Autorizo abrir esta cópia com os dados acima e tentar entrar nesta conexão.</label>
+        onChange={event => setAcknowledged(event.target.checked)} />{review.voice?.mods.some(mod => mod.action === "install")
+          ? "Autorizo instalar os mods listados nesta cópia de teste e abrir a cópia para tentar entrar nesta conexão."
+          : "Autorizo abrir esta cópia com os dados acima e tentar entrar nesta conexão."}</label>
       <button className="primary" type="button" disabled={!canConfirm} onClick={confirm}>Iniciar cópia e tentar entrar</button>
     </section>}
     {snapshot?.phase === "starting" && <p role="status">A criação do processo está em andamento. Consulte o resultado antes de tentar outro lançamento.</p>}

@@ -18,7 +18,9 @@ pub(super) use restoration::reconcile;
 #[path = "connect_voice_plasmo_runtime.rs"]
 mod runtime;
 #[cfg(all(windows, feature = "connect-lab"))]
-pub(super) use runtime::validate_runtime_configuration;
+pub(super) use runtime::{
+    validate_runtime_configuration, validate_runtime_configuration_for_bridge,
+};
 
 #[derive(Deserialize)]
 struct Document {

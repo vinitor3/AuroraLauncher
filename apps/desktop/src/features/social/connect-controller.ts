@@ -1,9 +1,10 @@
 import { snapshotFrom, type ConnectSnapshot } from "../connect/types";
 import { socialConnectCapabilitiesFrom, socialConnectError, socialReservationFrom, socialSessionId, type SocialConnectCapabilities } from "./connect-types";
+import { nativeVoiceSnapshotFrom, type VoiceProfile } from "../connect-native-voice/types";
 
-export type SocialConnectState = { available: boolean; ownedGameTcpDiscovery?: boolean; pending: boolean; error: string; snapshot?: ConnectSnapshot };
+export type SocialConnectState = { available: boolean; maxSessionSeconds?: 60 | 14400; ownedGameTcpDiscovery?: boolean; nativeVoiceReady?: VoiceProfile; pending: boolean; error: string; snapshot?: ConnectSnapshot };
 export const emptySocialConnectState = (): SocialConnectState => ({ available: false, pending: false, error: "" });
-type AuthUser = { uid: string; getIdToken(): Promise<string> };
+type AuthUser = { uid: string; getIdToken(forceRefresh?: boolean): Promise<string> };
 type Options = {
   accountId: string; user: AuthUser; currentUser: () => AuthUser | null;
   invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -19,6 +20,8 @@ export function createSocialConnectController(options: Options) {
   let busy = false;
   let stopping = false;
   let capabilities: SocialConnectCapabilities | undefined;
+  let refreshDue = Date.now() + 20 * 60_000;
+  let voiceCheckDue = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const accountMatches = () => alive && options.currentUser() === options.user && options.user.uid === options.accountId;
   function emit(update: Partial<SocialConnectState>) {
@@ -44,6 +47,28 @@ export function createSocialConnectController(options: Options) {
   async function poll() {
     if (!alive) return;
     if (!busy) await observe();
+    if (!busy && capabilities?.maxSessionSeconds === 14400 && Date.now() >= voiceCheckDue) {
+      const generation = revision; voiceCheckDue = Date.now() + 2000;
+      try {
+        const voice = nativeVoiceSnapshotFrom(await options.invoke("native_voice_snapshot")); check(generation);
+        emit({ nativeVoiceReady: voice.available && voice.phase === "ready" && voice.profile !== null ? voice.profile : undefined });
+      } catch { if (alive && generation === revision) emit({ nativeVoiceReady: undefined }); }
+    }
+    if (!busy && capabilities?.maxSessionSeconds === 14400 && Date.now() >= refreshDue && state.snapshot?.operationId
+      && !["closed", "failed", "closing"].includes(state.snapshot.phase)) {
+      const operationId = state.snapshot.operationId, generation = revision;
+      refreshDue = Date.now() + 20 * 60_000;
+      try {
+        let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+        let idToken: string;
+        try { idToken = await Promise.race([options.user.getIdToken(true), new Promise<never>((_, reject) => {
+          refreshTimer = setTimeout(() => reject("connect_social_auth_failed"), 10_000);
+        })]); } finally { if (refreshTimer !== undefined) clearTimeout(refreshTimer); }
+        check(generation);
+        if (state.snapshot?.operationId !== operationId) throw "connect_stale_operation";
+        await options.invoke("connect_social_refresh_authentication", { operationId, accountEpoch: capabilities.accountEpoch, idToken }); check(generation);
+      } catch (cause) { if (alive && generation === revision) emit({ error: socialConnectError(cause) }); }
+    }
     if (alive) timer = setTimeout(() => { void poll(); }, 500);
   }
   async function start() {
@@ -52,7 +77,7 @@ export function createSocialConnectController(options: Options) {
       check(generation);
       const value = await options.invoke("connect_social_capabilities");
       check(generation); capabilities = socialConnectCapabilitiesFrom(value);
-      emit({ available: capabilities.available, ownedGameTcpDiscovery: capabilities.ownedGameTcpDiscovery === true });
+      emit({ available: capabilities.available, maxSessionSeconds: capabilities.maxSessionSeconds, ownedGameTcpDiscovery: capabilities.ownedGameTcpDiscovery === true });
       await poll();
     } catch (cause) { if (alive && generation === revision) emit({ error: socialConnectError(cause), available: false }); }
   }
@@ -64,22 +89,28 @@ export function createSocialConnectController(options: Options) {
     catch (cause) { if (alive && generation === revision) emit({ error: socialConnectError(cause) }); }
     finally { if (alive && generation === revision) { busy = false; emit({ pending: false }); await observe(); } }
   }
-  async function reserve(role: "host" | "guest", sessionId: string, visibility?: "public" | "friends", selectionId?: string) {
+  async function reserve(role: "host" | "guest", sessionId: string, visibility?: "public" | "friends", selectionId?: string, nativeVoice?: { hostPlayer: boolean }) {
     if (!socialSessionId(sessionId)) { emit({ error: socialConnectError("connect_social_failed") }); return; }
     if (selectionId !== undefined && (!socialSessionId(selectionId) || capabilities?.ownedGameTcpDiscovery !== true)) {
+      emit({ error: socialConnectError("connect_social_unavailable") }); return;
+    }
+    if (nativeVoice && (role !== "host" || capabilities?.maxSessionSeconds !== 14400 || !state.nativeVoiceReady)) {
       emit({ error: socialConnectError("connect_social_unavailable") }); return;
     }
     await perform(async generation => {
       let reserved: { operationId: string; generation: number } | undefined;
       try {
         check(generation);
-        reserved = socialReservationFrom(await options.invoke(selectionId ? "connect_social_reserve_discovered" : "connect_social_reserve", selectionId ? {
+        reserved = socialReservationFrom(await options.invoke(nativeVoice ? "native_voice_social_reserve" : selectionId ? "connect_social_reserve_discovered" : "connect_social_reserve", nativeVoice ? {
+          request: { accountEpoch: capabilities!.accountEpoch, accountId: options.accountId, sessionId, visibility }, hostPlayer: nativeVoice.hostPlayer,
+        } : selectionId ? {
           request: { accountEpoch: capabilities!.accountEpoch, accountId: options.accountId, sessionId, visibility }, selectionId,
         } : { request: {
           accountEpoch: capabilities!.accountEpoch, accountId: options.accountId, sessionId, role,
           ...(role === "host" ? { gameTarget: "127.0.0.1:43001", visibility } : {}),
         } }));
         check(generation);
+        if (nativeVoice) emit({ nativeVoiceReady: undefined });
         const pending = snapshotFrom(await options.invoke("connect_snapshot")); check(generation);
         if (pending.operationId !== reserved.operationId || pending.generation !== reserved.generation || pending.social?.sessionId !== sessionId || pending.role !== role) throw "connect_stale_operation";
         accept(pending); // Cancellation stays visible while the SDK is pending.
@@ -111,6 +142,14 @@ export function createSocialConnectController(options: Options) {
     join: (sessionId: string) => reserve("guest", sessionId),
     prepareHost: (sessionId: string, visibility: "public" | "friends") => reserve("host", sessionId, visibility),
     prepareHostDiscovered: (sessionId: string, visibility: "public" | "friends", selectionId: string) => reserve("host", sessionId, visibility, selectionId),
+    prepareHostNativeVoice: (sessionId: string, visibility: "public" | "friends", hostPlayer: boolean) => reserve("host", sessionId, visibility, undefined, { hostPlayer }),
+    revokeParticipant: (grantId: string) => perform(async generation => {
+      const snapshot = state.snapshot;
+      if (capabilities?.maxSessionSeconds !== 14400 || !snapshot?.operationId || snapshot.role !== "host" || snapshot.phase !== "hostListening"
+        || !snapshot.social?.participants?.some(person => person.grantId === grantId && person.state !== "removing")) throw "connect_stale_operation";
+      const value = await options.invoke("connect_social_revoke_participant", { operationId: snapshot.operationId, accountEpoch: capabilities.accountEpoch, grantId });
+      check(generation); accept(value);
+    }),
     confirmHost: () => perform(async generation => {
       const snapshot = state.snapshot, social = snapshot?.social;
       if (!snapshot?.operationId || social?.stage !== "hostReview" || !social.digest || !social.expiresAtMs || social.expiresAtMs <= Date.now()) throw "connect_plan_expired";

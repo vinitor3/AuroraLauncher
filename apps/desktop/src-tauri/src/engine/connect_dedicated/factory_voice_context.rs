@@ -106,6 +106,9 @@ impl ImmutableVoiceContext {
     pub(in super::super) fn profile(&self) -> StoredVoiceProfileV2 {
         self.profile
     }
+    pub(in super::super) fn policy(&self) -> manifest::ObservationPolicyV2 {
+        self.manifest.observation_policy
+    }
     pub(in super::super) fn native_nonce(&self) -> Uuid {
         self.native_nonce
     }

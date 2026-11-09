@@ -213,7 +213,7 @@ fn rules_allow_windows(value: &Value) -> bool {
     allowed
 }
 
-fn library_path(library: &Value) -> Result<Option<PathBuf>, VersionResolveError> {
+pub(super) fn library_path(library: &Value) -> Result<Option<PathBuf>, VersionResolveError> {
     if let Some(path) = library
         .pointer("/downloads/artifact/path")
         .and_then(Value::as_str)

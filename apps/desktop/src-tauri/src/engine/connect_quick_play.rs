@@ -10,12 +10,18 @@ use serde_json::Value;
 
 use super::{connect_ready_profile::ReadyProfile, recovery, Instance, VersionLaunchSpec};
 
+#[path = "connect_legacy_entry.rs"]
+mod legacy_entry;
+
 pub const CONNECT_QUICK_PLAY_VERSION_ID: &str = "fabric-loader-0.16.14-1.21.1";
 pub const CONNECT_QUICK_PLAY_MINECRAFT_VERSION: &str = "1.21.1";
 pub const CONNECT_QUICK_PLAY_JAVA_MAJOR: u32 = 21;
+#[cfg(test)]
 const FABRIC_MAIN: &str = "net.fabricmc.loader.impl.launch.knot.KnotClient";
 const VANILLA_MAIN: &str = "net.minecraft.client.main.Main";
+#[cfg(test)]
 const LOADER_COORDINATE: &str = "net.fabricmc:fabric-loader:0.16.14";
+#[cfg(test)]
 const LOADER_PATH: &str = "libraries/net/fabricmc/fabric-loader/0.16.14/fabric-loader-0.16.14.jar";
 #[cfg(test)]
 const CLIENT_PATH: &str = "versions/1.21.1/1.21.1.jar";
@@ -55,23 +61,76 @@ pub fn apply_guest_quick_play(
     observed_java_major: u32,
     endpoint: SocketAddr,
 ) -> Result<(), QuickPlayError> {
-    if endpoint.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) || endpoint.port() == 0 {
+    if !valid_endpoint(endpoint) {
         return Err(QuickPlayError::InvalidEndpoint);
     }
     let profile = ReadyProfile::from_version_id(&spec.version_name)
+        .filter(|profile| profile.uses_quick_play() && profile.descriptor().loader == "fabric")
         .ok_or(QuickPlayError::UnsupportedRuntime)?;
-    if observed_java_major != profile.descriptor().java_major || spec.main_class != FABRIC_MAIN {
+    let child = read_profile(instance, profile.version_id())?;
+    let base = read_profile(instance, profile.descriptor().minecraft_version)?;
+    validate_profile_chain(&base, &child, profile)?;
+    apply_guest_entry(instance, spec, profile, observed_java_major, endpoint)
+}
+
+/// The ready-copy caller validates the pinned profile chain and, for Forge,
+/// its official launch metadata before invoking this argv adapter.
+pub(super) fn apply_guest_entry(
+    instance: &Instance,
+    spec: &mut VersionLaunchSpec,
+    profile: ReadyProfile,
+    observed_java_major: u32,
+    endpoint: SocketAddr,
+) -> Result<(), QuickPlayError> {
+    if !valid_endpoint(endpoint) {
+        return Err(QuickPlayError::InvalidEndpoint);
+    }
+    let runtime = profile.descriptor();
+    if spec.version_name != profile.version_id()
+        || observed_java_major != runtime.java_major
+        || spec.main_class != profile.main_class()
+    {
         return Err(QuickPlayError::UnsupportedRuntime);
     }
+    let client = recovery::path(
+        instance.root(),
+        &format!("versions/{0}/{0}.jar", runtime.minecraft_version),
+    )
+    .map_err(|_| QuickPlayError::InvalidProfile)?;
+    if spec.client_jar != client {
+        return Err(QuickPlayError::UnsupportedRuntime);
+    }
+    if runtime.loader == "fabric" {
+        let (_, loader) = fabric_loader(profile);
+        let loader =
+            recovery::path(instance.root(), &loader).map_err(|_| QuickPlayError::InvalidProfile)?;
+        if spec
+            .libraries
+            .iter()
+            .filter(|path| *path == &loader)
+            .count()
+            != 1
+        {
+            return Err(QuickPlayError::UnsupportedRuntime);
+        }
+    }
     if spec.game_args.iter().any(|arg| conflicting_argument(arg))
-        || conflicting_jvm_arguments(&spec.jvm_args, &instance.natives_dir())
+        || conflicting_jvm_arguments(spec, instance, profile)
     {
         return Err(QuickPlayError::ConflictingArguments);
     }
-    validate_installed_runtime(instance, spec, profile)?;
-    spec.game_args
-        .extend(["--quickPlayMultiplayer".into(), endpoint.to_string()]);
+    if profile.uses_quick_play() {
+        spec.game_args
+            .extend(["--quickPlayMultiplayer".into(), endpoint.to_string()]);
+    } else {
+        legacy_entry::append(spec, endpoint)?;
+    }
+    spec.apply_offline_compatibility(runtime.minecraft_version);
     Ok(())
+}
+
+fn valid_endpoint(endpoint: SocketAddr) -> bool {
+    endpoint.ip() == IpAddr::V4(Ipv4Addr::LOCALHOST) && endpoint.port() != 0
 }
 
 fn conflicting_argument(value: &str) -> bool {
@@ -79,7 +138,7 @@ fn conflicting_argument(value: &str) -> bool {
         return true;
     }
     let value = value.trim();
-    if value == "--" || value.starts_with('@') {
+    if value == "--" || value.starts_with('@') || value.contains("${") {
         // An option terminator would turn our appended pair into positionals.
         return true;
     }
@@ -115,11 +174,21 @@ fn conflicting_argument(value: &str) -> bool {
             .any(|protected| protected.starts_with(&name)))
 }
 
-fn conflicting_jvm_arguments(args: &[String], natives: &std::path::Path) -> bool {
+fn conflicting_jvm_arguments(
+    spec: &VersionLaunchSpec,
+    instance: &Instance,
+    profile: ReadyProfile,
+) -> bool {
+    let args = &spec.jvm_args;
+    let natives = instance.natives_dir();
     let mut index = 0;
+    let mut module_path_seen = false;
     while index < args.len() {
         let argument = &args[index];
-        if !argument.starts_with('-') || argument.chars().any(char::is_control) {
+        if !argument.starts_with('-')
+            || argument.contains("${")
+            || argument.chars().any(char::is_control)
+        {
             return true;
         }
         let name = argument.split('=').next().unwrap_or_default();
@@ -173,6 +242,24 @@ fn conflicting_jvm_arguments(args: &[String], natives: &std::path::Path) -> bool
             // only after this check, just as the engine supplies its own -cp.
             return true;
         }
+        if argument == "-p" && profile.uses_forge_module_path() && !module_path_seen {
+            index += 1;
+            let Some(value) = args.get(index) else {
+                return true;
+            };
+            let libraries = instance.root().join("libraries");
+            let mut seen = std::collections::BTreeSet::new();
+            if std::env::split_paths(value).any(|path| {
+                !path.starts_with(&libraries)
+                    || !spec.libraries.contains(&path)
+                    || !seen.insert(path)
+            }) {
+                return true;
+            }
+            module_path_seen = true;
+            index += 1;
+            continue;
+        }
         if matches!(
             name,
             "-jar"
@@ -207,6 +294,7 @@ fn conflicting_jvm_arguments(args: &[String], natives: &std::path::Path) -> bool
                 | "--add-reads"
                 | "--enable-native-access"
                 | "--limit-modules"
+                | "--add-modules"
         ) {
             index += 1;
             if args.get(index).is_none_or(|value| {
@@ -219,7 +307,7 @@ fn conflicting_jvm_arguments(args: &[String], natives: &std::path::Path) -> bool
         }
         index += 1;
     }
-    false
+    module_path_seen != profile.uses_forge_module_path()
 }
 
 fn read_profile(instance: &Instance, id: &str) -> Result<Value, QuickPlayError> {
@@ -230,17 +318,23 @@ fn read_profile(instance: &Instance, id: &str) -> Result<Value, QuickPlayError> 
     serde_json::from_slice(&bytes).map_err(|_| QuickPlayError::InvalidProfile)
 }
 
-fn validate_installed_runtime(
-    instance: &Instance,
-    spec: &VersionLaunchSpec,
+fn fabric_loader(profile: ReadyProfile) -> (String, String) {
+    let version = profile.descriptor().loader_version;
+    (
+        format!("net.fabricmc:fabric-loader:{version}"),
+        format!("libraries/net/fabricmc/fabric-loader/{version}/fabric-loader-{version}.jar"),
+    )
+}
+
+pub(super) fn validate_profile_chain(
+    base: &Value,
+    child: &Value,
     profile: ReadyProfile,
 ) -> Result<(), QuickPlayError> {
     let runtime = profile.descriptor();
-    let child = read_profile(instance, profile.version_id())?;
-    let base = read_profile(instance, runtime.minecraft_version)?;
     if child["id"] != profile.version_id()
         || child["inheritsFrom"] != runtime.minecraft_version
-        || child["mainClass"] != FABRIC_MAIN
+        || child["mainClass"] != profile.main_class()
         || child.get("jar").is_some()
         || child
             .get("javaVersion")
@@ -256,56 +350,41 @@ fn validate_installed_runtime(
     {
         return Err(QuickPlayError::UnsupportedRuntime);
     }
+    if runtime.loader != "fabric" {
+        // The ready runtime additionally checks the exact Forge metadata
+        // projection, including both arg lists and every Maven library.
+        return Ok(());
+    }
+    let (coordinate, loader_path) = fabric_loader(profile);
     let libraries = child["libraries"]
         .as_array()
         .ok_or(QuickPlayError::InvalidProfile)?;
-    let loaders: Vec<_> = libraries
-        .iter()
-        .filter(|library| {
-            library["name"]
-                .as_str()
-                .is_some_and(|name| name.starts_with("net.fabricmc:fabric-loader:"))
-        })
-        .collect();
-    if loaders.len() != 1 || loaders[0]["name"] != LOADER_COORDINATE {
-        return Err(QuickPlayError::UnsupportedRuntime);
-    }
-    if loaders[0]
-        .pointer("/downloads/artifact/path")
-        .is_some_and(|path| path.as_str() != Some(LOADER_PATH.trim_start_matches("libraries/")))
+    let mut loaders = libraries.iter().filter(|library| {
+        library["name"]
+            .as_str()
+            .is_some_and(|name| name.starts_with("net.fabricmc:fabric-loader:"))
+    });
+    let loader = loaders.next().ok_or(QuickPlayError::UnsupportedRuntime)?;
+    if loader["name"] != coordinate
+        || loaders.next().is_some()
+        || loader
+            .pointer("/downloads/artifact/path")
+            .is_some_and(|path| path.as_str() != Some(loader_path.trim_start_matches("libraries/")))
     {
         return Err(QuickPlayError::UnsupportedRuntime);
     }
-    for profile in [&base, &child] {
-        if profile["libraries"].as_array().is_some_and(|libraries| {
+    for document in [base, child] {
+        if document["libraries"].as_array().is_some_and(|libraries| {
             libraries.iter().any(|library| {
                 library["name"].as_str().is_some_and(|name| {
                     name.starts_with("net.minecraftforge:")
                         || name.starts_with("net.neoforged:")
-                        || (name.starts_with("net.fabricmc:fabric-loader:")
-                            && name != LOADER_COORDINATE)
+                        || (name.starts_with("net.fabricmc:fabric-loader:") && name != coordinate)
                 })
             })
         }) {
             return Err(QuickPlayError::UnsupportedRuntime);
         }
-    }
-    let client = recovery::path(
-        instance.root(),
-        &format!("versions/{0}/{0}.jar", runtime.minecraft_version),
-    )
-    .map_err(|_| QuickPlayError::InvalidProfile)?;
-    let loader =
-        recovery::path(instance.root(), LOADER_PATH).map_err(|_| QuickPlayError::InvalidProfile)?;
-    if spec.client_jar != client
-        || spec
-            .libraries
-            .iter()
-            .filter(|path| *path == &loader)
-            .count()
-            != 1
-    {
-        return Err(QuickPlayError::UnsupportedRuntime);
     }
     Ok(())
 }

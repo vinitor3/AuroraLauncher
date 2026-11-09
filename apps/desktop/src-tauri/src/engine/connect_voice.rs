@@ -46,6 +46,8 @@ mod process;
 pub use process::{acquire_voice_mutation_guard, VoiceMutationGuard};
 #[path = "connect_voice_restore.rs"]
 mod restoration;
+#[cfg(test)]
+pub(super) use restoration::prepare_fixture_durable_announcement;
 pub use restoration::{
     list_restoration_receipts, prepare_durable_announcement, prepare_retirement,
     resume_restoration, DurableAppliedAnnouncement, DurableReceiptState,
@@ -328,6 +330,16 @@ pub fn prepare_announcement(
     guard: &VoiceMutationGuard,
     request: AnnouncementRequest,
 ) -> Result<PreparedAnnouncement> {
+    let artifact = request.voice_mod.artifact();
+    prepare_announcement_with_artifact(instance, guard, request, artifact)
+}
+
+fn prepare_announcement_with_artifact(
+    instance: &Instance,
+    guard: &VoiceMutationGuard,
+    request: AnnouncementRequest,
+    (artifact_hash, artifact_bytes): (&str, u64),
+) -> Result<PreparedAnnouncement> {
     require_test_copy(instance)?;
     let AnnouncementMode::DedicatedAuroraOnly = request.mode;
     if request.expected_source_sha256.len() != 64
@@ -340,7 +352,6 @@ pub fn prepare_announcement(
     }
     guard.recheck()?;
     let current = recovery::capture_observation(instance, guard.inner())?;
-    let (artifact_hash, artifact_bytes) = request.voice_mod.artifact();
     let config = request.voice_mod.config();
     // Runtime claims must agree; the adapter does not infer a loader from a filename.
     let minecraft: Vec<_> = current

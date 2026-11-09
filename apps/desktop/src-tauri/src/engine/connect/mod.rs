@@ -352,6 +352,10 @@ pub enum ConnectError {
     SourceChanged,
     #[error("connect_cleanup_failed")]
     CleanupFailed,
+    #[error("connect_social_quota")]
+    SocialQuota,
+    #[error("connect_social_unavailable")]
+    SocialUnavailable,
 }
 impl ConnectError {
     pub fn code(self) -> &'static str {
@@ -371,6 +375,8 @@ impl ConnectError {
             Self::Internal => "connect_internal",
             Self::SourceChanged => "connect_source_changed",
             Self::CleanupFailed => "connect_cleanup_failed",
+            Self::SocialQuota => "connect_social_quota",
+            Self::SocialUnavailable => "connect_social_unavailable",
         }
     }
 }

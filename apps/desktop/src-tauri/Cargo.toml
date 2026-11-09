@@ -6,7 +6,7 @@ description = "Aurora Smart Launcher - Module A engine"
 license = "GPL-3.0-only"
 
 [features]
-connect-lab = ["dep:aurora-connect-lab", "dep:tokio", "dep:tokio-util", "dep:windows-sys"]
+connect-lab = ["dep:aurora-connect-lab", "dep:tokio", "dep:tokio-util", "dep:windows-sys", "dep:toml"]
 connect-voice-lab = ["dep:toml"]
 
 [dependencies]
@@ -39,4 +39,4 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dev-dependencies]
 # Same locked local crate. Normal builds do not activate its fixture gates.
-aurora-connect-lab = { path = "../../connect-lab", features = ["native-voice-test-support"] }
+aurora-connect-lab = { path = "../../connect-lab", features = ["native-voice-test-support", "local-relay-lab"] }

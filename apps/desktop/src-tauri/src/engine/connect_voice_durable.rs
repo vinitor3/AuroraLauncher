@@ -68,7 +68,32 @@ pub fn prepare_durable_announcement(
     guard: &VoiceMutationGuard,
     request: AnnouncementRequest,
 ) -> Result<PreparedDurableAnnouncement> {
-    let mut prepared = prepare_announcement(instance, guard, request)?;
+    durable_plan(prepare_announcement(instance, guard, request)?)
+}
+
+/// Only the two compiled synthetic fixture byte strings are accepted here. The
+/// normal adapter never uses this path, including real-artifact tests.
+#[cfg(test)]
+pub(in super::super::super) fn prepare_fixture_durable_announcement(
+    instance: &Instance,
+    guard: &VoiceMutationGuard,
+    request: AnnouncementRequest,
+) -> Result<PreparedDurableAnnouncement> {
+    let filename = match request.voice_mod {
+        VoiceMod::SimpleVoiceChat => "mods/voicechat-fabric-1.21.1-2.6.22.jar",
+        VoiceMod::PlasmoVoice => "mods/plasmovoice-fabric-1.21.1-2.1.17.jar",
+    };
+    let artifact = format!("fixture:{filename}\n");
+    let hash = digest(artifact.as_bytes());
+    durable_plan(prepare_announcement_with_artifact(
+        instance,
+        guard,
+        request,
+        (&hash, artifact.len() as u64),
+    )?)
+}
+
+fn durable_plan(mut prepared: PreparedAnnouncement) -> Result<PreparedDurableAnnouncement> {
     prepared.review.warning.push_str(" Recibo durável de restauração no armazenamento Recovery desta cópia. A revisão expira e a restauração posterior exige nova aprovação; nada é restaurado automaticamente.");
     prepared.review.digest.clear();
     prepared.review.digest = digest(

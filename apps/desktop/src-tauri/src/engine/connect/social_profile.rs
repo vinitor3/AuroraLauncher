@@ -1,4 +1,4 @@
-//! Closed desktop API for the explicitly provisioned local social experiment.
+//! Closed desktop API for social admission within the existing Connect attempt.
 use super::*;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -35,6 +35,13 @@ pub struct SocialCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owned_game_tcp_discovery: Option<bool>,
 }
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SocialParticipant {
+    pub grant_id: String,
+    pub account_id: String,
+    pub state: &'static str,
+}
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SocialSnapshot {
@@ -47,15 +54,33 @@ pub struct SocialSnapshot {
     pub expires_at_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ready_game_launch_available: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_state: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_player_voice_state: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_player: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_guests: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub participants: Option<Vec<SocialParticipant>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_profile: Option<String>,
 }
 
-/// Supplied by the trusted local process launcher, never by an IPC command.
-/// Only the fixed loopback authority is supported; ordinary builds use None.
+/// Supplied by the trusted process launcher or the compiled HTTPS origin.
+/// Renderer IPC cannot supply an authority URL, issuer or verification key.
 #[cfg(feature = "connect-lab")]
 #[derive(Clone)]
 pub struct SocialLabAuthority {
     pub(super) pin: aurora_connect_lab::EndpointId,
     pub(super) issuer: String,
+    pub(super) online_origin: Option<&'static str>,
+    pub(super) join_policy: String,
+    pub(super) session_expiry: u64,
+    pub(super) max_players: u8,
 }
 #[cfg(feature = "connect-lab")]
 impl SocialLabAuthority {
@@ -72,11 +97,60 @@ impl SocialLabAuthority {
         Ok(Self {
             pin: pin.parse().map_err(|_| ConnectError::InvalidRequest)?,
             issuer: issuer.into(),
+            online_origin: None,
+            join_policy: "open".into(),
+            session_expiry: 0,
+            max_players: 1,
+        })
+    }
+    /// Build-owned HTTPS authority. No IPC or saved user configuration can change it.
+    /// The provisional key is unusable: execute() must fetch authenticated bootstrap first.
+    pub fn from_compiled_online() -> Result<Self, ConnectError> {
+        let origin = option_env!("AURORA_SOCIAL_ORIGIN").ok_or(ConnectError::Disabled)?;
+        let url = reqwest::Url::parse(origin).map_err(|_| ConnectError::InvalidRequest)?;
+        if url.scheme() != "https"
+            || url.origin().ascii_serialization() != origin
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || url.port().is_some()
+            || url
+                .host_str()
+                .is_none_or(|host| host == "localhost" || host.parse::<std::net::IpAddr>().is_ok())
+        {
+            return Err(ConnectError::InvalidRequest);
+        }
+        Ok(Self {
+            pin: aurora_connect_lab::generate_key().public(),
+            issuer: String::new(),
+            online_origin: Some(origin),
+            join_policy: "open".into(),
+            session_expiry: 0,
+            max_players: 0,
         })
     }
 }
 
 impl ConnectManager {
+    pub fn social_revoke_participant(
+        &self,
+        owner: &str,
+        operation_id: &str,
+        account_epoch: u64,
+        grant_id: &str,
+    ) -> Result<ConnectSnapshot, ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live
+                .social_revoke_participant(owner, operation_id, account_epoch, grant_id)
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, operation_id, account_epoch, grant_id);
+            Err(ConnectError::Disabled)
+        }
+    }
     #[cfg(feature = "connect-lab")]
     pub fn with_social_lab(authority: SocialLabAuthority) -> Self {
         Self {
@@ -129,6 +203,35 @@ impl ConnectManager {
         #[cfg(not(feature = "connect-lab"))]
         {
             let _ = (owner, operation_id, generation, id_token);
+            Err(ConnectError::Disabled)
+        }
+    }
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    pub(crate) fn social_reserve_native_voice(
+        &self,
+        owner: &str,
+        request: SocialDiscoveredReserveRequest,
+        binding: crate::engine::connect_voice::dedicated::NativeVoiceHostBinding,
+        host_player: bool,
+    ) -> Result<SocialReservation, ConnectError> {
+        self.live
+            .social_reserve_native_voice(owner, request, binding, host_player)
+    }
+    pub fn social_refresh_authentication(
+        &self,
+        owner: &str,
+        operation_id: &str,
+        account_epoch: u64,
+        id_token: String,
+    ) -> Result<(), ConnectError> {
+        #[cfg(feature = "connect-lab")]
+        {
+            self.live
+                .social_refresh_authentication(owner, operation_id, account_epoch, id_token)
+        }
+        #[cfg(not(feature = "connect-lab"))]
+        {
+            let _ = (owner, operation_id, account_epoch, id_token);
             Err(ConnectError::Disabled)
         }
     }

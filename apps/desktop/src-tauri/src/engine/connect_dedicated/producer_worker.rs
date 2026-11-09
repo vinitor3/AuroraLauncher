@@ -3,7 +3,7 @@
 use super::super::producer::*;
 use super::*;
 #[cfg(not(test))]
-use crate::engine::connect_owned_run::start_owned_run;
+use crate::engine::connect_owned_run::{start_owned_run, start_owned_voice_bridge};
 use crate::engine::connect_owned_run::{
     OwnedRun, OwnedRunCompletion, OwnedRunError, OwnedRunLimits, OwnedRunReport,
 };
@@ -191,16 +191,39 @@ impl Worker {
             }
         };
         let id = applied.prepared.bundle.copy.id().as_str();
+        let voice_bridge = applied
+            .prepared
+            .bundle
+            .manifest
+            .voice_v2()
+            .is_ok_and(|voice| {
+                voice.observation_policy
+                    == super::super::manifest::ObservationPolicyV2::LiteralLoopback35554Durable
+            });
         #[cfg(not(test))]
-        let result = start_owned_run(command, id, limits, self.shared.child_cancel.clone());
+        let result = if voice_bridge {
+            start_owned_voice_bridge(command, id, limits, self.shared.child_cancel.clone())
+        } else {
+            start_owned_run(command, id, limits, self.shared.child_cancel.clone())
+        };
         #[cfg(test)]
-        let result = crate::engine::connect_owned_run::start_owned_run_dedicated_test(
-            command,
-            id,
-            limits,
-            self.shared.child_cancel.clone(),
-            self.hooks.owned.clone(),
-        );
+        let result = if voice_bridge {
+            crate::engine::connect_owned_run::start_owned_voice_bridge_test(
+                command,
+                id,
+                limits,
+                self.shared.child_cancel.clone(),
+                self.hooks.owned.clone(),
+            )
+        } else {
+            crate::engine::connect_owned_run::start_owned_run_dedicated_test(
+                command,
+                id,
+                limits,
+                self.shared.child_cancel.clone(),
+                self.hooks.owned.clone(),
+            )
+        };
         let run = Arc::new(result.map_err(DedicatedFailure::Spawn)?);
         let completion = run.completion();
         {

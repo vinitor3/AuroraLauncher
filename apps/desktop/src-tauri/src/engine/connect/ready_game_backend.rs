@@ -1,7 +1,8 @@
 //! Trusted native implementation boundary. No constructor here accepts a transport permit.
 use super::ready_game_profile::{
-    ReadyGameLaunchError, ReadyGameLaunchRequest, ReadyGameLaunchResult,
+    ReadyGameLaunchError, ReadyGameLaunchRequest, ReadyGameLaunchResult, ReadyVoiceReview,
 };
+use crate::engine::connect_native_voice::NativeVoiceProfile;
 use std::net::SocketAddr;
 use tokio_util::sync::CancellationToken;
 
@@ -11,6 +12,8 @@ pub trait ReadyGameBackend: Send + Sync + 'static {
         &self,
         request: &ReadyGameLaunchRequest,
         endpoint: SocketAddr,
+        voice_profile: Option<NativeVoiceProfile>,
+        runtime_profile: Option<crate::engine::connect_ready_profile::ReadyProfile>,
         cancel: &CancellationToken,
     ) -> Result<Box<dyn PreparedReadyGame>, ReadyGameLaunchError>;
 }
@@ -22,6 +25,9 @@ pub trait PreparedReadyGame: Send {
     fn fingerprint(&self) -> &str;
     fn core_sha256(&self) -> &str;
     fn skins_sha256(&self) -> &str;
+    fn voice_review(&self) -> Option<&ReadyVoiceReview> {
+        None
+    }
     fn launch(
         self: Box<Self>,
         gate: &super::live::ready_game::ReadyGameSpawnGate,

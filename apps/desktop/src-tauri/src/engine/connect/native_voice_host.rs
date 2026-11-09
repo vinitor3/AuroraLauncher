@@ -52,6 +52,26 @@ impl HostObservation {
 }
 impl ConnectManager {
     #[cfg(test)]
+    pub(crate) fn native_voice_failure_matches_for_test(
+        &self,
+        owner: &str,
+        id: &str,
+        expected: VoiceRuntimeError,
+    ) -> bool {
+        self.native_voice_host_observation(owner, id)
+            .is_ok_and(|value| value.reason == Some(Reason::Voice(expected.into())))
+    }
+    #[cfg(test)]
+    pub(crate) fn native_voice_invalidate_for_test(&self, epoch: bool) {
+        let mut state = self.live.state.lock().unwrap();
+        if epoch {
+            state.social_epoch = state.social_epoch.saturating_add(1);
+        } else {
+            let a = state.attempt.as_mut().unwrap();
+            a.snapshot.generation = a.snapshot.generation.saturating_add(1);
+        }
+    }
+    #[cfg(test)]
     pub(crate) fn native_voice_late_ready_for_test(&self, owner: &str, id: &str) -> Result<bool> {
         let mut state = lock(&self.live.state)?;
         let a = selected(&mut state, owner, id)?;
@@ -470,6 +490,9 @@ impl Actor {
                     && !a.cancel.is_cancelled()
                     && a.native_voice
                         .as_ref()
+                        .is_some_and(|operation| operation.account_epoch == state.social_epoch)
+                    && a.native_voice
+                        .as_ref()
                         .and_then(|operation| operation.review.as_ref())
                         .is_some_and(|review| review.review.data.review_id == self.review_id)
             })
@@ -478,10 +501,14 @@ impl Actor {
         let Ok(mut state) = lock(&self.shared) else {
             return;
         };
+        let account_epoch = state.social_epoch;
         let Ok(a) = selected(&mut state, &self.owner, &self.id) else {
             return;
         };
-        if a.snapshot.generation != self.generation
+        if a.native_voice
+            .as_ref()
+            .is_none_or(|operation| operation.account_epoch != account_epoch)
+            || a.snapshot.generation != self.generation
             || a.cancel.is_cancelled()
             || !a
                 .native_voice
@@ -685,8 +712,12 @@ impl Actor {
         if state.shutting_down {
             return Err(ConnectError::Cancelled.into());
         }
+        let account_epoch = state.social_epoch;
         let a = selected(&mut state, &self.owner, &self.id)?;
-        if a.cancel.is_cancelled()
+        if a.native_voice
+            .as_ref()
+            .is_none_or(|operation| operation.account_epoch != account_epoch)
+            || a.cancel.is_cancelled()
             || a.snapshot.generation != self.generation
             || a.snapshot.phase != "nativeStarting"
         {

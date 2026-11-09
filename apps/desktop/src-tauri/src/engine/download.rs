@@ -88,6 +88,8 @@ pub enum DownloadError {
     Resume(PathBuf),
     #[error("dois downloads diferentes tentaram gravar no mesmo destino: {0}")]
     ConflictingDestination(PathBuf),
+    #[error("download cancelado")]
+    Cancelled,
 }
 
 enum WorkerEvent {
@@ -118,11 +120,27 @@ pub fn download_many<F>(
     client: &Client,
     requests: Vec<DownloadRequest>,
     concurrency: usize,
-    mut progress: F,
+    progress: F,
 ) -> Result<DownloadBatchSummary, DownloadError>
 where
     F: FnMut(TransferProgress),
 {
+    download_many_cancellable(client, requests, concurrency, progress, &|| false)
+}
+
+pub(crate) fn download_many_cancellable<F>(
+    client: &Client,
+    requests: Vec<DownloadRequest>,
+    concurrency: usize,
+    mut progress: F,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<DownloadBatchSummary, DownloadError>
+where
+    F: FnMut(TransferProgress),
+{
+    if cancelled() {
+        return Err(DownloadError::Cancelled);
+    }
     let requests = deduplicate_requests(requests)?;
     if requests.is_empty() {
         return Ok(DownloadBatchSummary::default());
@@ -159,11 +177,14 @@ where
             let sender = sender.clone();
             let client = client.clone();
             scope.spawn(move || loop {
+                if cancelled() {
+                    break;
+                }
                 let next = queue.lock().ok().and_then(|mut queue| queue.pop_front());
                 let Some((index, request)) = next else {
                     break;
                 };
-                match download_one(&client, index, &request, &sender) {
+                match download_one(&client, index, &request, &sender, cancelled) {
                     Ok(cached) => {
                         let _ = sender.send(WorkerEvent::Finished { index, cached });
                     }
@@ -267,6 +288,9 @@ where
         }
     });
 
+    if cancelled() {
+        return Err(DownloadError::Cancelled);
+    }
     if let Some(error) = first_error {
         return Err(error);
     }
@@ -317,6 +341,7 @@ fn download_one(
     index: usize,
     request: &DownloadRequest,
     sender: &mpsc::Sender<WorkerEvent>,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<bool, DownloadError> {
     if request.destination.is_file()
         && request.expected_size.is_none_or(|expected| {
@@ -366,7 +391,10 @@ fn download_one(
 
     let mut last_error = None;
     for attempt in 0..MAX_ATTEMPTS {
-        match download_attempt(client, index, request, &temporary, sender) {
+        if cancelled() {
+            return Err(DownloadError::Cancelled);
+        }
+        match download_attempt(client, index, request, &temporary, sender, cancelled) {
             Ok(()) => {
                 if let Some(expected) = &request.expected_hash {
                     if !hash_matches(&temporary, expected) {
@@ -378,6 +406,9 @@ fn download_one(
                         }
                         break;
                     }
+                }
+                if cancelled() {
+                    return Err(DownloadError::Cancelled);
                 }
                 if request.destination.exists() {
                     fs::remove_file(&request.destination).map_err(|source| DownloadError::Io {
@@ -394,6 +425,9 @@ fn download_one(
                 return Ok(false);
             }
             Err(error) => {
+                if matches!(error, DownloadError::Cancelled) {
+                    return Err(error);
+                }
                 if matches!(error, DownloadError::Integrity(_)) {
                     let _ = fs::remove_file(&temporary);
                 }
@@ -413,6 +447,7 @@ fn download_attempt(
     request: &DownloadRequest,
     temporary: &Path,
     sender: &mpsc::Sender<WorkerEvent>,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<(), DownloadError> {
     let resumable = request.expected_hash.is_some();
     let resume_from = if resumable {
@@ -480,6 +515,9 @@ fn download_attempt(
     let mut buffer = vec![0u8; COPY_BUFFER_SIZE];
     let mut current = starting_bytes;
     loop {
+        if cancelled() {
+            return Err(DownloadError::Cancelled);
+        }
         let size = response
             .read(&mut buffer)
             .map_err(|source| DownloadError::Io {
@@ -687,7 +725,8 @@ mod tests {
         let client = Client::builder().build().unwrap();
         let (sender, _receiver) = mpsc::channel();
         let temporary = directory.join("file.bin.aurora-download");
-        let error = download_attempt(&client, 0, &request, &temporary, &sender).unwrap_err();
+        let error =
+            download_attempt(&client, 0, &request, &temporary, &sender, &|| false).unwrap_err();
         server.join().unwrap();
         let _ = fs::remove_dir_all(directory);
         error

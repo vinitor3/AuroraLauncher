@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import { createSocialBindingAuthority, socialKeyProofPreimage, SocialBindingError } from "./connectSocialBinding.ts";
 import { createSocialAdmissionAuthority, hostSocialPolicyDigest, hostSocialPolicyPreimage, socialAdmissionPreimage, socialContinuityPreimage,
-  socialJoinContextPreimage, validateHostSocialPolicy, validateSocialAdmissionGrant, validateSocialContinuityLease, validateSocialJoinContext } from "./connectSocialAdmission.ts";
+  SOCIAL_RUNTIME_PROFILES, socialJoinContextPreimage, validateHostSocialPolicy, validateSocialAdmissionGrant, validateSocialContinuityLease, validateSocialJoinContext } from "./connectSocialAdmission.ts";
 import type { SocialBindingSession } from "./connectSocialBinding.ts";
 
 const req = (uid = "guest", signal?: AbortSignal) => new Request("http://127.0.0.1/local", { signal, headers: { Authorization: `Bearer fixture-${uid}` } });
@@ -590,6 +591,54 @@ test("online observation sharing saves reads without moving original host freshn
   assert.equal(shared.body.sequence, first.body.sequence + 1);
   f.advance(500); await assert.rejects(f.authority.continuity(req(), { grantId: packet.grant.body.grantId }), code("session_not_authorized"));
   f.unblock(); await assert.rejects(f.authority.continuity(req(), { grantId: packet.grant.body.grantId }), code("grant_terminal"));
+});
+
+test("schema four signs and propagates exactly the seventeen supported native voice/runtime pairs", async () => {
+  let pairs = 0;
+  for (const [runtimeProfile, [minecraftVersion, loader]] of Object.entries(SOCIAL_RUNTIME_PROFILES)) {
+    for (const voiceProfile of ["svc", "plasmo"]) {
+      const f = await fixture(true); f.session.minecraftVersion = minecraftVersion; f.session.loader = loader;
+      const host = await f.prepared("host", "host");
+      const body = { ...host.policySigned.body, schemaVersion: 4, voiceProfile, voiceSourceDigest: "d".repeat(64), hostPlayer: false, runtimeProfile };
+      if (voiceProfile === "plasmo" && minecraftVersion === "1.12.2") { assert.throws(() => validateHostSocialPolicy(body)); continue; }
+      pairs++;
+      const bytes = hostSocialPolicyPreimage(body);
+      assert.deepEqual(bytes, hostSocialPolicyPreimage(Object.fromEntries(Object.entries(body).reverse())));
+      const signature = hex(await crypto.subtle.sign("Ed25519", host.keys.privateKey, bytes));
+      const { policyId } = await f.authority.registerHost(req("host"), { proof: host.proof, policySigned: { body, signature } });
+      const guest = await f.prepared(), packet = await f.authority.join(req(), { proof: guest.proof, policyId });
+      assert.equal(packet.grant.body.schemaVersion, 4);
+      assert.equal(packet.grant.body.runtimeProfile, runtimeProfile);
+      assert.equal(await verify(f.authority.admissionPublicKey, packet.grant, socialAdmissionPreimage(packet.grant.body)), true);
+      const changed = runtimeProfile === "fabric-loader-0.16.14-1.21.1" ? "fabric-loader-0.16.14-1.20.1" : "fabric-loader-0.16.14-1.21.1";
+      assert.equal(await verify(f.authority.admissionPublicKey, packet.grant, socialAdmissionPreimage({ ...packet.grant.body, runtimeProfile: changed })), false);
+      for (const runtime of [null, "forge-unknown", "fabric-loader-0.16.15-1.21.1"])
+        assert.throws(() => validateSocialAdmissionGrant({ ...packet.grant.body, runtimeProfile: runtime }));
+      assert.throws(() => validateHostSocialPolicy({ ...body, schemaVersion: 3 }), "legacy schema cannot acquire a runtime extension");
+      const { runtimeProfile: _runtime, ...missing } = body;
+      assert.throws(() => validateHostSocialPolicy(missing));
+    }
+  }
+  assert.equal(pairs, 17);
+});
+
+test("signed native runtime must match advertisement metadata without treating advertisement as authority", async () => {
+  const f = await fixture(true), host = await f.prepared("host", "host");
+  const body = { ...host.policySigned.body, schemaVersion: 4, voiceProfile: "svc", voiceSourceDigest: "d".repeat(64), hostPlayer: false, runtimeProfile: "fabric-loader-0.16.14-1.19.2" };
+  const signature = hex(await crypto.subtle.sign("Ed25519", host.keys.privateKey, hostSocialPolicyPreimage(body)));
+  await assert.rejects(f.authority.registerHost(req("host"), { proof: host.proof, policySigned: { body, signature } }), code("session_changed"));
+});
+
+test("schema four runtime table matches the active matrix and the independent Rust canonical vector", async () => {
+  const matrix = JSON.parse(await readFile(new URL("../../../scripts/active-mod-matrix.json", import.meta.url), "utf8"));
+  assert.deepEqual(Object.keys(SOCIAL_RUNTIME_PROFILES).sort(), matrix.targets.map((target: { loader: string; loaderVersion: string; minecraft: string }) =>
+    target.loader === "fabric" ? `fabric-loader-${target.loaderVersion}-${target.minecraft}` : `${target.minecraft}-forge-${target.loaderVersion}`).sort());
+  const body = { schemaVersion: 4, purpose: "hostSocialSession", issuerInstance: "11".repeat(32), policyId: "22".repeat(32), accountId: "host",
+    operationId: "11111111-2222-4333-8444-555555555555", generation: 7, publicKey: "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    sessionId: "22222222-2222-4333-8444-555555555555", sessionDigest: "33".repeat(32), visibility: "friends", joinPolicy: "approval", serviceId: "game", protocol: "tcp",
+    sourceDigest: "44".repeat(32), maxGuests: 7, issuedAtUnixMs: 1800000000000, expiresAtUnixMs: 1800000300000,
+    voiceProfile: "svc", voiceSourceDigest: "55".repeat(32), hostPlayer: true, runtimeProfile: "1.12.2-forge-14.23.5.2860" };
+  assert.equal(await hostSocialPolicyDigest(body), "e8a05fd40d0d2eedcb8a5f4249e2ce46e6be7061f02ff1e534786b57ec4aa71b");
 });
 
 test("original host removal is idempotent, durable for that account in this policy and leaves the other guest live", async () => {

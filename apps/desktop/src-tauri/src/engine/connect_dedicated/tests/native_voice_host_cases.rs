@@ -539,3 +539,125 @@ async fn udp_listener_loss_withdraws_only_udp_then_distinct_tcp_loss_closes_host
         fixture.finish(guests).await;
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_voice_configuration_faults_withdraw_all_original_leases_and_keep_tcp() {
+    use producer::VoiceRuntimeError;
+    for profile in PROFILES {
+        for fault in 0..4 {
+            let gate = Arc::new(Gate::default());
+            let called = gate.clone();
+            let armed = Arc::new(AtomicBool::new(false));
+            let active = armed.clone();
+            let hooks = Arc::new(TestHooks {
+                point: Some(Arc::new(move |point| {
+                    if point == ProducerPoint::VoiceAfterConfigurationA
+                        && active.swap(false, Ordering::AcqRel)
+                    {
+                        called.reach();
+                    }
+                })),
+                ..TestHooks::default()
+            });
+            let mut fixture = Fixture::prepared(profile, hooks, [(15, 18); 2]).await;
+            let _release = Release(gate.clone());
+            fixture.start().await;
+            let guests = vec![fixture.guest(0).await, fixture.guest(1).await];
+            for guest in &guests {
+                fixture.tcp(guest, 81).await;
+            }
+            let path = fixture._lab.configuration_path(&fixture.paths);
+            let alias = path.with_file_name("native-voice-hardlink-fixture");
+            let expected = match fault {
+                0 => {
+                    fixture.harness.command(Action::RemoveConfiguration);
+                    VoiceRuntimeError::ConfigurationMissing
+                }
+                1 => {
+                    fixture.harness.command(Action::OversizeConfiguration);
+                    VoiceRuntimeError::ConfigurationLimit
+                }
+                2 => {
+                    fs::hard_link(&path, &alias).expect("native86_unsafe_hardlink");
+                    VoiceRuntimeError::ConfigurationUnsafe
+                }
+                _ => {
+                    armed.store(true, Ordering::Release);
+                    gate.reached();
+                    fixture.harness.command(Action::RenameIdentical);
+                    gate.release();
+                    VoiceRuntimeError::ConfigurationChanged
+                }
+            };
+            fixture.retired().await;
+            assert!(fixture.manager.native_voice_failure_matches_for_test(
+                "main",
+                &fixture.id,
+                expected
+            ));
+            for guest in &guests {
+                fixture.tcp(guest, 83).await;
+                assert!(matches!(
+                    bounded(guest.open_udp_fragmented("aux", 1)).await,
+                    Err(lab::Error::ServiceDenied)
+                ));
+                assert!(guest.connection().close_reason().is_none());
+            }
+            if fault == 2 {
+                fs::remove_file(alias).unwrap();
+            }
+            fixture.harness.command(Action::RestoreValid);
+            // The actor is terminally retired even though a fresh source sample
+            // sees the same real process/listeners and a valid configuration.
+            assert!(fixture.binding.reserve_voice().unwrap().execute().is_ok());
+            fixture.retired().await;
+            for guest in &guests {
+                fixture.tcp(guest, 89).await;
+            }
+            fixture.finish(guests).await;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_voice_epoch_and_generation_changes_deny_late_publication() {
+    for profile in PROFILES {
+        for epoch in [false, true] {
+            let gate = Arc::new(Gate::default());
+            let called = gate.clone();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let count = calls.clone();
+            let hooks = Arc::new(TestHooks {
+                point: Some(Arc::new(move |point| {
+                    if point == ProducerPoint::VoiceBeforeFinalGate
+                        && count.fetch_add(1, Ordering::AcqRel) + 1 == 4
+                    {
+                        called.reach();
+                    }
+                })),
+                ..TestHooks::default()
+            });
+            let mut fixture = Fixture::prepared(profile, hooks, [(15, 18); 2]).await;
+            let _release = Release(gate.clone());
+            fixture.held.take();
+            let pending = fixture
+                .manager
+                .confirm_native_voice_group(
+                    "main",
+                    &fixture.id,
+                    fixture.generation,
+                    &fixture.digest,
+                )
+                .unwrap();
+            gate.reached();
+            fixture.manager.native_voice_invalidate_for_test(epoch);
+            gate.release();
+            assert!(bounded(pending.wait()).await.is_err());
+            assert!(fixture
+                .manager
+                .export_native_voice_invitation("main", &fixture.id, &fixture.participants[0])
+                .is_err());
+            fixture.finish(Vec::new()).await;
+        }
+    }
+}

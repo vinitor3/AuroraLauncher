@@ -10,6 +10,7 @@ pub(crate) struct NativeVoiceHostBinding {
     shared: Weak<Shared>,
     native_nonce: Uuid,
     profile: StoredVoiceProfileV2,
+    policy: super::super::manifest::ObservationPolicyV2,
     deadline: Instant,
 }
 
@@ -34,6 +35,7 @@ impl DedicatedRun {
             shared: Arc::downgrade(&self.shared),
             native_nonce: self.shared.native_nonce,
             profile: context.profile(),
+            policy: context.policy(),
             deadline: self.shared.deadline,
         })
     }
@@ -84,7 +86,53 @@ impl NativeVoiceHostBinding {
             && sample.loader == "fabric"
             && sample.loader_version == "0.16.14"
             && sample.binding == VoiceRuntimeBinding::Ipv4Literal
-            && sample.announcement == VoiceRuntimeAnnouncement::DefaultUnchanged
+            && sample.announcement
+                == match self.policy {
+                    super::super::manifest::ObservationPolicyV2::LiteralOnlyFirstPersisted => {
+                        VoiceRuntimeAnnouncement::DefaultUnchanged
+                    }
+                    super::super::manifest::ObservationPolicyV2::LiteralLoopback35554Durable => {
+                        VoiceRuntimeAnnouncement::Loopback35554Durable
+                    }
+                }
+    }
+
+    /// Signed social policy material derived only from the same native run.
+    /// A hash is descriptive authorization context, never a reconstructible binding.
+    pub(crate) fn online_voice_policy(
+        &self,
+    ) -> std::result::Result<(&'static str, String), VoiceRuntimeError> {
+        self.check_current()?;
+        if self.policy != super::super::manifest::ObservationPolicyV2::LiteralLoopback35554Durable {
+            return Err(VoiceRuntimeError::Context(Error::Identity));
+        }
+        let profile = self.identity_preimage().1;
+        let bytes = serde_json::to_vec(&(
+            "aurora.connect.native-online-voice-source/v1",
+            self.native_nonce,
+            profile,
+            self.targets(),
+            self.policy,
+            self.policy.configuration_sha256(self.profile),
+            super::super::digest(super::super::resources::BRIDGE_PROPERTIES),
+            "127.0.0.1:35554",
+            4096_u16,
+            1264_u16,
+            16384_u32,
+            20_u32,
+        ))
+        .map_err(|_| VoiceRuntimeError::Context(Error::Identity))?;
+        Ok((profile, super::super::digest(&bytes)))
+    }
+
+    pub(crate) fn online_runtime_profile(
+        &self,
+    ) -> std::result::Result<crate::engine::connect_ready_profile::ReadyProfile, VoiceRuntimeError>
+    {
+        self.check_current()?;
+        // V2 admitted exactly this compiled runtime. ManifestV3 will dispatch
+        // through its original closed runtime proof; no renderer claim enters.
+        Ok(crate::engine::connect_ready_profile::ReadyProfile::Fabric1211)
     }
 
     pub(crate) fn targets(&self) -> (SocketAddr, SocketAddr) {
@@ -112,7 +160,9 @@ impl NativeVoiceHostBinding {
             if shared.native_nonce != self.native_nonce
                 || shared.deadline != self.deadline
                 || !shared.voice_context.as_ref().is_some_and(|context| {
-                    context.native_nonce() == self.native_nonce && context.profile() == self.profile
+                    context.native_nonce() == self.native_nonce
+                        && context.profile() == self.profile
+                        && context.policy() == self.policy
                 })
             {
                 return Err(DedicatedError::Preparation(Error::Identity));
@@ -128,6 +178,21 @@ impl NativeVoiceHostBinding {
         Ok(ReservedTcpQuery {
             job: shared.reserve(QueryKind::Tcp)?,
         })
+    }
+
+    /// Final native Host-player spawn gate. Keep this exact dedicated lifecycle
+    /// locked across child registration; an observation cannot be substituted.
+    pub(crate) fn with_current<T>(
+        &self,
+        work: impl FnOnce() -> T,
+    ) -> std::result::Result<T, VoiceRuntimeError> {
+        let shared = self.current().map_err(VoiceRuntimeError::from)?;
+        let mut state = shared.lock();
+        shared.refresh(&mut state);
+        if state.reason.is_some() || state.phase != DedicatedPhase::Ready {
+            return Err(VoiceRuntimeError::from(DedicatedError::Closed));
+        }
+        Ok(work())
     }
 
     pub(crate) fn reserve_voice(
