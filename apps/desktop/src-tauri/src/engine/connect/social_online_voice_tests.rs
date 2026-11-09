@@ -192,6 +192,7 @@ impl ConnectManager {
         .unwrap();
         run.stage("waitingGuest", "hostListening");
         let original = local.authority.as_ref().unwrap().clone();
+        let mut observed_failure = None;
         assert!(
             original.with_current(|| Ok(())).is_err(),
             "no Host poll cannot permit a spawn"
@@ -295,9 +296,26 @@ impl ConnectManager {
                     );
                 }
                 3 => {
-                    assert!(original
-                        .refresh_host_poll(lab::unix_millis().saturating_sub(3001))
-                        .is_err());
+                    run.observe_host_poll(Duration::from_millis(2000), None);
+                    let error = local
+                        .refresh_poll(
+                            &run,
+                            &json!({"checkedAtUnixMs":lab::unix_millis().saturating_sub(3001)}),
+                        )
+                        .unwrap_err();
+                    assert_eq!(
+                        error,
+                        ConnectError::SocialFailure(
+                            SocialFailureStage::SessionContinuity,
+                            SocialFailureReason::ContinuityLost
+                        )
+                    );
+                    assert_eq!(local.tick(&run).await, Err(error));
+                    assert!(
+                        run.deadline > Instant::now(),
+                        "the original session has not expired"
+                    );
+                    observed_failure = Some(error);
                 }
                 _ => panic!("closed fixture mode"),
             }
@@ -330,6 +348,21 @@ impl ConnectManager {
         drop(host.take());
         relay.shutdown().await.unwrap();
         release(&sockets, None).await.unwrap();
+        if let Some(error) = observed_failure {
+            super::super::super::super::finish(&run.state, &run.id, Some(error));
+            let snapshot = manager.snapshot("main").unwrap();
+            assert_eq!(snapshot.phase, "failed");
+            assert_eq!(snapshot.error_code, Some("connect_social_continuity_lost"));
+            let social = snapshot.social.unwrap();
+            assert_eq!(
+                social.failure_stage,
+                Some(SocialFailureStage::SessionContinuity)
+            );
+            let observed = social.failure_observation.unwrap();
+            assert_eq!(observed.gate, SocialFailureGate::HostPoll);
+            assert_eq!(observed.host_poll_elapsed_ms, Some(2000));
+            assert!(observed.session_remaining_ms > 0);
+        }
         manager.shutdown_all().await;
     }
 }

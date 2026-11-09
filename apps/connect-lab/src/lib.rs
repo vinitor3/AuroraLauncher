@@ -46,7 +46,9 @@ pub use minecraft_status::{
 pub use model::*;
 pub use native_voice_budget::NativeVoiceBudget;
 pub use network_online::OnlineNetworkTicket;
-pub use online_clock::{OnlineClock, OnlineClockBinding, OnlineClockBootstrapError};
+pub use online_clock::{
+    OnlineClock, OnlineClockBinding, OnlineClockBootstrapError, OnlineClockBootstrapRestriction,
+};
 pub use path_observation::{PathObservation, PathState};
 pub use plan::{MAX_PLAN_BYTES, PlanError, ValidatedPlan, load_fragmented_plan, load_plan};
 pub use session_invitation::{

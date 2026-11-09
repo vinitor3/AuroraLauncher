@@ -51,6 +51,21 @@ test("Social failures expose only a closed terminal stage and localized reason",
   assert.throws(() => snapshotFrom({ ...failure, social: { ...failure.social, stage: "authenticating" } }));
 });
 
+test("continuity interruption preserves long session remainder without exposing arbitrary diagnostic data", () => {
+  const observation = { gate: "hostPoll", bootstrapRoundtripMs: 2800, bootstrapUncertaintyMs: 1200,
+    hostPollElapsedMs: 1800, hostPollAgeMs: 3000, sessionRemainingMs: 14_000_000 };
+  const failure = { ...active("host", "failed"), phase: "failed", errorCode: "connect_social_continuity_lost" };
+  failure.social.failureStage = "sessionContinuity"; failure.social.failureObservation = observation;
+  assert.deepEqual(snapshotFrom(failure).social.failureObservation, observation);
+  assert.match(socialConnectError(failure.errorCode), /continuidade/);
+  assert.doesNotMatch(socialConnectError(failure.errorCode), /prazo da sessão terminou/);
+  for (const altered of [{ ...observation, token: "NEVER" }, { ...observation, gate: "constructor" }, { ...observation, gate: "https://private.invalid" },
+    { ...observation, hostPollAgeMs: -1 }, { ...observation, hostPollElapsedMs: "2000" }, { ...observation, sessionRemainingMs: 14_400_001 }, Object.values(observation)]) {
+    assert.throws(() => snapshotFrom({ ...failure, social: { ...failure.social, failureObservation: altered } }));
+  }
+  assert.throws(() => snapshotFrom({ ...failure, social: { ...failure.social, stage: "waitingGuest" } }));
+});
+
 test("catalog observation uses scoped credentials without reserving, starting or renewing an attempt", async () => {
   const f = await fixture({ online: true }); f.handlers.connect_social_observe_sessions = () => [availableSession()];
   const before = performance.now(), values = await f.controller.observeSessions([session]);

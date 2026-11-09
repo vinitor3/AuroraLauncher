@@ -421,7 +421,10 @@ impl LocalPlayer {
         let checked = response["checkedAtUnixMs"]
             .as_u64()
             .ok_or(ConnectError::InvitationRejected)?;
-        authority.refresh_host_poll(checked)?;
+        if let Err(error) = authority.refresh_host_poll(checked) {
+            run.observe_failure(authority.failure_gate());
+            return Err(error);
+        }
         self.seen_poll = true;
         update(&run.state, &run.id, |a| {
             if let Some(social) = &mut a.snapshot.social {
@@ -443,13 +446,13 @@ impl LocalPlayer {
         });
     }
     pub(super) async fn tick(&mut self, run: &Run) -> Result<(), ConnectError> {
-        if self.seen_poll
-            && self
-                .authority
-                .as_ref()
-                .is_some_and(|authority| authority.with_current(|| Ok(())).is_err())
-        {
-            return Err(ConnectError::PlanExpired);
+        if self.seen_poll {
+            if let Some(authority) = &self.authority {
+                if let Err(error) = authority.check_transport_current() {
+                    run.observe_failure(authority.failure_gate());
+                    return Err(error);
+                }
+            }
         }
 
         if self

@@ -205,7 +205,38 @@ fn native_profile(
 #[cfg(all(windows, feature = "connect-voice-lab"))]
 struct HostPlayerCurrent {
     terminal: bool,
+    failure: Option<(SocialFailureGate, ConnectError)>,
     host_poll: Option<(u64, Instant)>,
+}
+
+#[cfg(all(windows, feature = "connect-voice-lab"))]
+const HOST_CONTINUITY_LOST: ConnectError = ConnectError::SocialFailure(
+    SocialFailureStage::SessionContinuity,
+    SocialFailureReason::ContinuityLost,
+);
+
+#[cfg(all(windows, feature = "connect-voice-lab"))]
+impl HostPlayerCurrent {
+    fn reject(&mut self, gate: SocialFailureGate, error: ConnectError) -> ConnectError {
+        self.terminal = true;
+        self.failure.get_or_insert((gate, error)).1
+    }
+    fn check_poll(&mut self, now: u64, require_poll: bool) -> Result<(), ConnectError> {
+        if self.terminal {
+            return Err(self
+                .failure
+                .map_or(ConnectError::Cancelled, |(_, error)| error));
+        }
+        if self.host_poll.is_some_and(|(issued, deadline)| {
+            now < issued || now >= issued.saturating_add(3000) || Instant::now() >= deadline
+        }) {
+            return Err(self.reject(SocialFailureGate::HostPoll, HOST_CONTINUITY_LOST));
+        }
+        if require_poll && self.host_poll.is_none() {
+            return Err(HOST_CONTINUITY_LOST);
+        }
+        Ok(())
+    }
 }
 
 /// Original Host-player authority. It owns no endpoint and cannot authorize a
@@ -324,6 +355,7 @@ impl HostPlayerLaunchAuthority {
         Ok(Arc::new(Self {
             current: Mutex::new(HostPlayerCurrent {
                 terminal: false,
+                failure: None,
                 host_poll: None,
             }),
             policy: policy.clone(),
@@ -342,41 +374,59 @@ impl HostPlayerLaunchAuthority {
         &self,
         current: &mut HostPlayerCurrent,
         require_poll: bool,
-    ) -> Result<(), ReadyGameLaunchError> {
+    ) -> Result<(), ConnectError> {
         let now = self
             .clock
             .as_ref()
             .map_or_else(lab::unix_millis, lab::OnlineClock::upper_now);
-        if current.terminal
-            || self.cancel.is_cancelled()
-            || Instant::now() >= self.deadline
+        if current.terminal {
+            return Err(current
+                .failure
+                .map_or(ConnectError::Cancelled, |(_, error)| error));
+        }
+        let failure = if self.cancel.is_cancelled() {
+            Some((SocialFailureGate::Other, ConnectError::Cancelled))
+        } else if Instant::now() >= self.deadline
             || now >= self.expiry
             || now >= self.policy.body().expires_at_unix_ms()
-            || self.ticket.check_current().is_err()
-            || self.invitation.check_session_current().is_err()
-            || self
-                .host
-                .upgrade()
-                .is_none_or(|host| !host.invitation_active(self.invitation.invitation_id()))
-            || current.host_poll.is_some_and(|(issued, deadline)| {
-                now < issued || now >= issued.saturating_add(3000) || Instant::now() >= deadline
-            })
         {
-            current.terminal = true;
-            return Err(ReadyGameLaunchError::Unavailable);
+            Some((SocialFailureGate::Session, ConnectError::PlanExpired))
+        } else if self.ticket.check_current().is_err() {
+            Some((
+                SocialFailureGate::RelayTicket,
+                ConnectError::SocialFailure(
+                    SocialFailureStage::Relay,
+                    SocialFailureReason::AuthorityChanged,
+                ),
+            ))
+        } else if self.invitation.check_session_current().is_err() {
+            Some((SocialFailureGate::Invitation, ConnectError::PlanExpired))
+        } else if self
+            .host
+            .upgrade()
+            .is_none_or(|host| !host.invitation_active(self.invitation.invitation_id()))
+        {
+            Some((
+                SocialFailureGate::HostTransport,
+                ConnectError::SocialFailure(
+                    SocialFailureStage::SessionContinuity,
+                    SocialFailureReason::AuthorityChanged,
+                ),
+            ))
+        } else {
+            None
+        };
+        if let Some((gate, error)) = failure {
+            return Err(current.reject(gate, error));
         }
-        if require_poll && current.host_poll.is_none() {
-            return Err(ReadyGameLaunchError::Unavailable);
-        }
-        Ok(())
+        current.check_poll(now, require_poll)
     }
     pub(in crate::engine::connect::live) fn refresh_host_poll(
         &self,
         checked_at_unix_ms: u64,
     ) -> Result<(), ConnectError> {
         let mut current = self.current.lock().map_err(|_| ConnectError::Internal)?;
-        self.valid(&mut current, false)
-            .map_err(|_| ConnectError::PlanExpired)?;
+        self.valid(&mut current, false)?;
         let now = self
             .clock
             .as_ref()
@@ -387,14 +437,13 @@ impl HostPlayerLaunchAuthority {
                 .host_poll
                 .is_some_and(|(previous, _)| checked_at_unix_ms < previous)
         {
-            current.terminal = true;
-            return Err(ConnectError::PlanExpired);
+            return Err(current.reject(SocialFailureGate::HostPoll, HOST_CONTINUITY_LOST));
         }
         let freshness = checked_at_unix_ms.saturating_add(3000).min(self.expiry);
         let deadline = match &self.clock {
             Some(clock) => clock
                 .deadline_for(freshness)
-                .map_err(|_| ConnectError::PlanExpired)?,
+                .map_err(|_| current.reject(SocialFailureGate::HostPoll, HOST_CONTINUITY_LOST))?,
             None => Instant::now() + Duration::from_millis(freshness.saturating_sub(now)),
         };
         // A cached response keeps the earlier monotonic cap as well as its wall expiry.
@@ -413,10 +462,25 @@ impl HostPlayerLaunchAuthority {
             .current
             .lock()
             .map_err(|_| ReadyGameLaunchError::Unavailable)?;
-        self.valid(&mut current, true)?;
+        self.valid(&mut current, true)
+            .map_err(|_| ReadyGameLaunchError::Unavailable)?;
         self.binding
             .with_current(work)
             .map_err(|_| ReadyGameLaunchError::Unavailable)?
+    }
+    pub(super) fn check_transport_current(&self) -> Result<(), ConnectError> {
+        let mut current = self.current.lock().map_err(|_| ConnectError::Internal)?;
+        self.valid(&mut current, true)?;
+        self.binding
+            .with_current(|| ())
+            .map_err(|_| current.reject(SocialFailureGate::Source, ConnectError::SourceChanged))
+    }
+    pub(super) fn failure_gate(&self) -> SocialFailureGate {
+        self.current
+            .lock()
+            .ok()
+            .and_then(|current| current.failure.map(|(gate, _)| gate))
+            .unwrap_or(SocialFailureGate::Other)
     }
     pub(in crate::engine::connect::live) fn account_epoch(&self) -> u64 {
         self.account_epoch
@@ -443,4 +507,40 @@ impl HostPlayerLaunchAuthority {
             current.terminal = true;
         }
     }
+}
+
+#[cfg(all(test, windows, feature = "connect-voice-lab"))]
+#[test]
+fn social_host_player_poll_loss_is_not_session_expiry_and_cannot_reopen() {
+    let mut current = HostPlayerCurrent {
+        terminal: false,
+        failure: None,
+        host_poll: Some((10_000, Instant::now() + Duration::from_secs(3600))),
+    };
+    assert_eq!(current.check_poll(12_999, true), Ok(()));
+    assert_eq!(current.check_poll(13_000, true), Err(HOST_CONTINUITY_LOST));
+    assert_ne!(HOST_CONTINUITY_LOST, ConnectError::PlanExpired);
+    assert_eq!(
+        current.failure,
+        Some((SocialFailureGate::HostPoll, HOST_CONTINUITY_LOST))
+    );
+    // A later observation cannot resurrect this original authority.
+    current.host_poll = Some((13_000, Instant::now() + Duration::from_secs(3)));
+    assert_eq!(current.check_poll(13_001, true), Err(HOST_CONTINUITY_LOST));
+}
+
+#[cfg(all(test, windows, feature = "connect-voice-lab"))]
+#[test]
+fn social_host_player_poll_keeps_the_original_monotonic_cap_and_failure() {
+    let mut current = HostPlayerCurrent {
+        terminal: false,
+        failure: None,
+        host_poll: Some((10_000, Instant::now() - Duration::from_millis(1))),
+    };
+    assert_eq!(current.check_poll(10_001, true), Err(HOST_CONTINUITY_LOST));
+    assert_eq!(
+        current.reject(SocialFailureGate::Session, ConnectError::PlanExpired),
+        HOST_CONTINUITY_LOST
+    );
+    assert_eq!(current.failure.unwrap().0, SocialFailureGate::HostPoll);
 }

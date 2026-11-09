@@ -103,6 +103,32 @@ impl OnlineNetworkTicket {
             encoded, pin, issuer, account_id, session_id, peer, host, origin, false, clock,
         )
     }
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn verify_clock_for_test(
+        encoded: &str,
+        pin: EndpointId,
+        issuer: &str,
+        account_id: &str,
+        session_id: &str,
+        peer: EndpointId,
+        host: EndpointId,
+        clock: &OnlineClock,
+    ) -> Result<Self> {
+        // Exercise the production verifier without a build-time service or I/O.
+        Self::verify_at(
+            encoded,
+            pin,
+            issuer,
+            account_id,
+            session_id,
+            peer,
+            host,
+            "https://relay.invalid",
+            false,
+            Some(clock),
+        )
+    }
     #[allow(clippy::too_many_arguments)]
     fn verify_at(
         encoded: &str,

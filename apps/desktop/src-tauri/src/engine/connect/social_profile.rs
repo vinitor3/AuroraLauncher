@@ -68,6 +68,7 @@ pub enum SocialFailureReason {
     ServiceUnavailable,
     RequestRejected,
     RequestTimedOut,
+    ContinuityLost,
     Quota,
 }
 impl SocialFailureReason {
@@ -82,9 +83,34 @@ impl SocialFailureReason {
             Self::ServiceUnavailable => "connect_social_service_unavailable",
             Self::RequestRejected => "connect_social_request_rejected",
             Self::RequestTimedOut => "connect_social_request_timed_out",
+            Self::ContinuityLost => "connect_social_continuity_lost",
             Self::Quota => "connect_social_quota",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SocialFailureGate {
+    HostPoll,
+    Source,
+    RelayTicket,
+    Invitation,
+    Session,
+    HostTransport,
+    Other,
+}
+
+/// Relative observations only. No authority, identity, endpoint or credential.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SocialFailureObservation {
+    pub gate: SocialFailureGate,
+    pub bootstrap_roundtrip_ms: Option<u64>,
+    pub bootstrap_uncertainty_ms: Option<u64>,
+    pub host_poll_elapsed_ms: Option<u64>,
+    pub host_poll_age_ms: Option<u64>,
+    pub session_remaining_ms: u64,
 }
 impl std::fmt::Display for SocialFailureReason {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -122,6 +148,8 @@ pub struct SocialSnapshot {
     pub voice_transport_profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_stage: Option<SocialFailureStage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_observation: Option<SocialFailureObservation>,
 }
 
 /// Supplied by the trusted process launcher or the compiled HTTPS origin.

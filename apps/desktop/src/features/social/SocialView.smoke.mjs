@@ -404,6 +404,21 @@ function connectionSnapshot(stage = "hostReview", role = "host") {
     social: { sessionId: baseSession.id, role, stage, digest: role === "host" ? "a".repeat(64) : null,
       gameTarget: role === "host" ? "127.0.0.1:43001" : null, visibility: role === "host" ? "public" : null, expiresAtMs: fixedNow + 60_000 } };
 }
+test("lost host continuity reports its relative observation separately from the long session deadline", async () => {
+  const snapshot = connectionSnapshot("failed"); snapshot.phase = "failed"; snapshot.cleanupState = "complete";
+  snapshot.errorCode = "connect_social_continuity_lost";
+  snapshot.social.digest = null; snapshot.social.failureStage = "sessionContinuity";
+  snapshot.social.failureObservation = { gate: "hostPoll", bootstrapRoundtripMs: 2800, bootstrapUncertaintyMs: 1200,
+    hostPollElapsedMs: 1800, hostPollAgeMs: 3000, sessionRemainingMs: 14_000_000 };
+  await render({ connection: connection(snapshot) });
+  assert.match(container.textContent, /Não foi possível confirmar a continuidade da sessão a tempo/);
+  assert.doesNotMatch(container.textContent, /prazo da sessão terminou/);
+  const details = [...container.querySelectorAll("details")].find(item => item.querySelector("summary")?.textContent === "Detalhes da interrupção");
+  assert.ok(details); assert.equal(details.hasAttribute("open"), false);
+  assert.match(details.textContent, /Atualização da autorização do anfitrião/);
+  assert.match(details.textContent, /1200 ms/); assert.match(details.textContent, /3000 ms/); assert.match(details.textContent, /14000 s/);
+  assert.equal(calls.filter(call => call.name.startsWith("connect:")).length, 0);
+});
 test("the original host attempt locks its advertisement through review, listening and unfinished cleanup", async () => {
   state.ownSession = { ...baseSession, hostUid: "owner-uid" };
   const own = connectionSnapshot();

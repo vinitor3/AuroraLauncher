@@ -6,6 +6,9 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
+#[path = "social_host_poll_probe.rs"]
+mod host_poll_probe;
+
 thread_local! {
     // Only the explicit current-thread ignored probe enables these traces.
     static HTTP_DIAGNOSTIC_SAMPLE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
@@ -183,7 +186,7 @@ async fn social_bootstrap_real_http_diagnostic() {
         );
         let (outcome, expiry) = match sample {
             Ok(clock) => ("accepted", clock.session_expiry()),
-            Err(lab::OnlineClockBootstrapError::Uncertain { session_expiry }) => {
+            Err(lab::OnlineClockBootstrapError::Uncertain { session_expiry, .. }) => {
                 ("clock_uncertain", session_expiry)
             }
             Err(_) => panic!("signed diagnostic sample rejected"),
@@ -207,9 +210,12 @@ async fn social_bootstrap_real_http_diagnostic() {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Reply {
+    Cold,
+    Cancel,
     Slow,
+    ContradictorySlow,
     Timeout,
     Unavailable,
     Disconnect,
@@ -217,7 +223,16 @@ enum Reply {
     InvalidSignature,
     Expired,
     Denied,
+    ForbiddenBroker,
+    ForbiddenBackend,
+    UnauthorizedForged,
+    QuotaForged,
     ChangedExpiry,
+    ChangedPin,
+    ChangedIssuer,
+    ChangedGeneration,
+    ChangedSession,
+    ChangedNonce,
 }
 
 #[derive(Serialize)]
@@ -269,9 +284,18 @@ async fn bootstrap_request(listener: &TcpListener, session: &str) -> (TcpStream,
 }
 
 async fn exercise(script: &[Reply], expected: Result<(), ConnectError>) {
+    exercise_with_expiry(script, expected, 20_000).await;
+}
+
+async fn exercise_with_expiry(
+    script: &[Reply],
+    expected: Result<(), ConnectError>,
+    session_remaining_ms: u64,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = Box::leak(format!("http://{}", listener.local_addr().unwrap()).into_boxed_str());
     let authority = lab::generate_key();
+    let other_authority = lab::generate_key();
     let issuer = "33".repeat(32);
     let operation = uuid::Uuid::new_v4().to_string();
     let session = uuid::Uuid::new_v4().to_string();
@@ -279,7 +303,7 @@ async fn exercise(script: &[Reply], expected: Result<(), ConnectError>) {
     let account = "bootstrap_fixture";
     let original_deadline = Instant::now() + Duration::from_secs(15);
     let initial_expiry = lab::unix_millis() + 15_000;
-    let signed_expiry = lab::unix_millis() + 20_000;
+    let signed_expiry = lab::unix_millis() + session_remaining_ms;
     let mut run = Run {
         state: Arc::new(Mutex::new(State::default())),
         id: operation.clone(),
@@ -327,6 +351,7 @@ async fn exercise(script: &[Reply], expected: Result<(), ConnectError>) {
         session_id: session.clone(),
         online: true,
     };
+    let cancellation = run.cancel.clone();
     let responses = async {
         let mut nonces = HashSet::new();
         for reply in script {
@@ -337,6 +362,13 @@ async fn exercise(script: &[Reply], expected: Result<(), ConnectError>) {
             let nonce = request["nonce"].as_str().unwrap();
             assert_eq!(nonce.len(), 32);
             assert!(nonces.insert(nonce.to_owned()));
+            if matches!(reply, Reply::Cancel) {
+                cancellation.cancel();
+                return;
+            }
+            if matches!(reply, Reply::Cold) {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
             if matches!(reply, Reply::Disconnect) {
                 drop(socket);
                 continue;
@@ -346,7 +378,7 @@ async fn exercise(script: &[Reply], expected: Result<(), ConnectError>) {
             }
             if matches!(
                 reply,
-                Reply::Slow | Reply::InvalidSignature | Reply::Expired
+                Reply::Slow | Reply::ContradictorySlow | Reply::InvalidSignature | Reply::Expired
             ) {
                 // Simulate delay before DO entry, which the signed server
                 // interval cannot deduct from the HTTP round trip.
@@ -362,17 +394,56 @@ async fn exercise(script: &[Reply], expected: Result<(), ConnectError>) {
                 (503, json!({"code":"backend_unavailable"}))
             } else if matches!(reply, Reply::Denied) {
                 (403, json!({"code":"session_not_authorized"}))
+            } else if matches!(reply, Reply::ForbiddenBroker) {
+                (403, json!({"code":"broker_unavailable"}))
+            } else if matches!(reply, Reply::ForbiddenBackend) {
+                (403, json!({"code":"backend_unavailable"}))
+            } else if matches!(reply, Reply::UnauthorizedForged) {
+                (401, json!({"code":"broker_unavailable"}))
+            } else if matches!(reply, Reply::QuotaForged) {
+                (429, json!({"code":"backend_unavailable"}))
             } else {
+                let alternate_issuer = "44".repeat(32);
+                let alternate_session = uuid::Uuid::new_v4().to_string();
+                let alternate_nonce = uuid::Uuid::new_v4().simple().to_string();
+                let selected_issuer = if matches!(reply, Reply::ChangedIssuer) {
+                    &alternate_issuer
+                } else {
+                    &issuer
+                };
+                let selected_authority = if matches!(reply, Reply::ChangedPin) {
+                    &other_authority
+                } else {
+                    &authority
+                };
                 let body = ClockBody {
                     schema_version: 1,
-                    issuer_instance: &issuer,
+                    issuer_instance: selected_issuer,
                     account_id: account,
-                    session_id: &session,
+                    session_id: if matches!(reply, Reply::ChangedSession) {
+                        &alternate_session
+                    } else {
+                        &session
+                    },
                     operation_id: &operation,
-                    generation,
-                    nonce,
-                    server_received_at_unix_ms: now,
-                    server_now_unix_ms: now,
+                    generation: generation + u64::from(matches!(reply, Reply::ChangedGeneration)),
+                    nonce: if matches!(reply, Reply::ChangedNonce) {
+                        &alternate_nonce
+                    } else {
+                        nonce
+                    },
+                    server_received_at_unix_ms: now
+                        + if matches!(reply, Reply::ContradictorySlow) {
+                            5000
+                        } else {
+                            0
+                        },
+                    server_now_unix_ms: now
+                        + if matches!(reply, Reply::ContradictorySlow) {
+                            5000
+                        } else {
+                            0
+                        },
                     session_expires_at_unix_ms: expiry,
                 };
                 let mut bytes = b"aurora/connect/social-clock/v1\0".to_vec();
@@ -380,7 +451,7 @@ async fn exercise(script: &[Reply], expected: Result<(), ConnectError>) {
                 let signature = if matches!(reply, Reply::InvalidSignature) {
                     "00".repeat(64)
                 } else {
-                    authority
+                    selected_authority
                         .sign(&bytes)
                         .to_bytes()
                         .iter()
@@ -391,7 +462,7 @@ async fn exercise(script: &[Reply], expected: Result<(), ConnectError>) {
                     200,
                     json!({
                         "schemaVersion":1,"accountId":account,"sessionId":session,
-                        "admissionPublicKey":authority.public().to_string(),"issuerInstance":issuer,
+                        "admissionPublicKey":selected_authority.public().to_string(),"issuerInstance":selected_issuer,
                         "joinPolicy":"open","maxPlayers":8,"expiresAtUnixMs":expiry,
                         "clock":{"body":body,"signature":signature},
                     }),
@@ -422,7 +493,12 @@ async fn exercise(script: &[Reply], expected: Result<(), ConnectError>) {
     if expected.is_ok() {
         assert!(run.deadline <= original_deadline);
         assert_eq!(http.deadline, run.deadline);
-        assert_eq!(run.clock.unwrap().session_expiry(), signed_expiry);
+        let clock = run.clock.unwrap();
+        assert_eq!(clock.session_expiry(), signed_expiry);
+        if script.contains(&Reply::Cold) && script.contains(&Reply::Valid) {
+            assert!(clock.bootstrap_uncertainty() < Duration::from_millis(200));
+            assert!(clock.bootstrap_round_trip() < Duration::from_millis(200));
+        }
     } else {
         assert_eq!(run.deadline, original_deadline);
         assert_eq!(http.deadline, original_deadline);
@@ -469,9 +545,9 @@ async fn social_bootstrap_retry_cannot_replace_the_original_signed_expiry() {
 #[tokio::test]
 async fn social_bootstrap_transient_requests_retry_within_the_same_three_sample_budget() {
     tokio::join!(
-        exercise(&[Reply::Timeout, Reply::Valid], Ok(())),
-        exercise(&[Reply::Unavailable, Reply::Valid], Ok(())),
-        exercise(&[Reply::Disconnect, Reply::Valid], Ok(())),
+        exercise(&[Reply::Timeout, Reply::Valid, Reply::Valid], Ok(())),
+        exercise(&[Reply::Unavailable, Reply::Valid, Reply::Valid], Ok(())),
+        exercise(&[Reply::Disconnect, Reply::Valid, Reply::Valid], Ok(())),
         exercise(
             &[Reply::Unavailable, Reply::Unavailable, Reply::Unavailable],
             Err(ConnectError::SocialFailure(
@@ -498,6 +574,74 @@ async fn social_bootstrap_transient_requests_retry_within_the_same_three_sample_
             ))
         ),
     );
+}
+
+#[tokio::test]
+async fn social_bootstrap_selects_the_best_sample_before_publishing_one_clock() {
+    tokio::join!(
+        exercise(&[Reply::Cold, Reply::Valid, Reply::Cold], Ok(())),
+        exercise(&[Reply::Valid, Reply::Unavailable, Reply::Timeout], Ok(())),
+        exercise(&[Reply::Valid, Reply::Cancel], Err(ConnectError::Cancelled)),
+        exercise_with_expiry(
+            &[Reply::Valid, Reply::Timeout],
+            Err(ConnectError::PlanExpired),
+            500,
+        ),
+    );
+}
+
+#[tokio::test]
+async fn social_bootstrap_discards_an_earlier_candidate_after_any_authority_rejection() {
+    for reply in [
+        Reply::ChangedPin,
+        Reply::ChangedIssuer,
+        Reply::ChangedGeneration,
+        Reply::ChangedSession,
+        Reply::ChangedNonce,
+        Reply::ChangedExpiry,
+        Reply::InvalidSignature,
+        Reply::ContradictorySlow,
+    ] {
+        exercise(&[Reply::Valid, reply], Err(BOOTSTRAP_CLOCK_UNVERIFIED)).await;
+    }
+    exercise(
+        &[Reply::Valid, Reply::Expired],
+        Err(ConnectError::PlanExpired),
+    )
+    .await;
+    exercise(
+        &[Reply::Valid, Reply::Denied],
+        Err(ConnectError::SocialFailure(
+            SocialFailureStage::Bootstrap,
+            SocialFailureReason::NotAuthorized,
+        )),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn social_bootstrap_denials_cannot_claim_a_retryable_body() {
+    for (reply, reason) in [
+        (Reply::ForbiddenBroker, SocialFailureReason::RequestRejected),
+        (
+            Reply::ForbiddenBackend,
+            SocialFailureReason::RequestRejected,
+        ),
+        (
+            Reply::UnauthorizedForged,
+            SocialFailureReason::Authentication,
+        ),
+        (Reply::QuotaForged, SocialFailureReason::Quota),
+    ] {
+        exercise(
+            &[Reply::Valid, reply],
+            Err(ConnectError::SocialFailure(
+                SocialFailureStage::Bootstrap,
+                reason,
+            )),
+        )
+        .await;
+    }
 }
 
 async fn delayed_request(

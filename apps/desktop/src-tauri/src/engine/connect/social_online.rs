@@ -574,18 +574,21 @@ pub(super) async fn host_registered(
                     let host_player_connected = local.transport_connected();
                     #[cfg(not(all(windows, feature = "connect-voice-lab")))]
                     let host_player_connected = false;
+                    let querying_started = Instant::now();
+                    run.observe_host_poll(Duration::ZERO, None);
                     let querying = http.post(SocialRoute::HostPoll, json!({"policyId":policy_id, "transport": {
                         "observedAtUnixMs":run.server_issue_time(), "connectedGrantIds":connected, "hostPlayerConnected":host_player_connected
                     }})); tokio::pin!(querying);
                     let response = loop { tokio::select! { biased;
                         _ = run.cancel.cancelled() => return Ok(()),
-                        _ = tick.tick() => { group.monitor(run, &host).await?; #[cfg(all(windows, feature = "connect-voice-lab"))] local.tick(run).await?; },
-                        result = &mut querying => break result?,
+                        _ = tick.tick() => { run.observe_host_poll(querying_started.elapsed(), None); group.monitor(run, &host).await?; #[cfg(all(windows, feature = "connect-voice-lab"))] local.tick(run).await?; },
+                        result = &mut querying => { run.observe_host_poll(querying_started.elapsed(), None); break result?; },
                     }};
                     group.monitor(run, &host).await?;
                     inbox.observe(&response)?;
                     #[cfg(all(windows, feature = "connect-voice-lab"))]
                     local.refresh_poll(run, &response)?;
+                    run.observe_host_poll(querying_started.elapsed(), response["checkedAtUnixMs"].as_u64());
                     let deliveries = deliveries(&response)?;
                     for (id, participant) in &mut group.participants {
                         if !participant.terminal && !deliveries.iter().any(|item| item["grant"]["body"]["grantId"].as_str() == Some(id.as_str())) {
@@ -667,6 +670,19 @@ pub(super) async fn host_registered(
             }
         }
     }.await;
+    if let Err(error) = result {
+        run.observe_failure(match error {
+            ConnectError::PlanExpired => SocialFailureGate::Session,
+            ConnectError::SourceChanged => SocialFailureGate::Source,
+            ConnectError::SocialFailure(SocialFailureStage::SessionContinuity, _) => {
+                SocialFailureGate::HostPoll
+            }
+            ConnectError::SocialFailure(SocialFailureStage::Relay, _) => {
+                SocialFailureGate::RelayTicket
+            }
+            _ => SocialFailureGate::Other,
+        });
+    }
     #[cfg(all(windows, feature = "connect-voice-lab"))]
     local.invalidate(run);
     if let Some(host) = host {

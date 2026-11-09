@@ -22,6 +22,14 @@ export const socialFailureStageText = {
   relay: "Autorização da rota de conexão",
   sessionControl: "Controle da sessão",
 } as const;
+export const socialFailureGateText = {
+  hostPoll: "Atualização da autorização do anfitrião", source: "Origem dedicada", relayTicket: "Autorização da rota",
+  invitation: "Convite original", session: "Prazo da sessão", hostTransport: "Transporte do anfitrião", other: "Conexão",
+} as const;
+export type SocialFailureObservation = {
+  gate: keyof typeof socialFailureGateText; bootstrapRoundtripMs: number | null; bootstrapUncertaintyMs: number | null;
+  hostPollElapsedMs: number | null; hostPollAgeMs: number | null; sessionRemainingMs: number;
+};
 export type SocialConnectProjection = {
   sessionId: string; role: "host" | "guest"; stage: SocialConnectStage;
   digest: string | null; gameTarget: string | null; visibility: "public" | "friends" | null; expiresAtMs: number | null;
@@ -32,6 +40,7 @@ export type SocialConnectProjection = {
   runtimeProfile?: keyof typeof socialRuntimeLabels;
   voiceTransportProfile?: "nativeVoice8V1";
   failureStage?: keyof typeof socialFailureStageText;
+  failureObservation?: SocialFailureObservation;
   participants?: { grantId: string; accountId: string; state: "waiting" | "connected" | "disconnected" | "removing" }[];
 };
 export type SocialConnectCapabilities = { available: boolean; experimental: true; accountEpoch: number; maxSessionSeconds: 60 | 14400; ownedGameTcpDiscovery?: boolean };
@@ -40,6 +49,12 @@ export const socialSessionId = (value: unknown): value is string => typeof value
 export const socialGameTarget = (value: unknown): value is string => typeof value === "string" && /^127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(value) && Number(value.split(":")[1]) <= 65535;
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 const invalid = (): never => { throw new Error("Invalid social Connect projection"); };
+function failureObservation(value: unknown): value is SocialFailureObservation {
+  const optional = ["bootstrapRoundtripMs", "bootstrapUncertaintyMs", "hostPollElapsedMs", "hostPollAgeMs"];
+  const bounded = (value: unknown) => integer(value) && value <= 14_400_000;
+  return record(value) && Object.keys(value).length === 6 && typeof value.gate === "string" && Object.hasOwn(socialFailureGateText, value.gate)
+    && optional.every(key => Object.hasOwn(value, key) && (value[key] === null || bounded(value[key]))) && bounded(value.sessionRemainingMs);
+}
 export function socialConnectCapabilitiesFrom(value: unknown): SocialConnectCapabilities {
   if (!record(value) || Object.keys(value).some(key => !["available", "experimental", "accountEpoch", "maxSessionSeconds", "ownedGameTcpDiscovery"].includes(key)) || typeof value.available !== "boolean" || value.experimental !== true
     || !(value.ownedGameTcpDiscovery === undefined || typeof value.ownedGameTcpDiscovery === "boolean") || (value.ownedGameTcpDiscovery === true && value.available !== true)
@@ -47,9 +62,10 @@ export function socialConnectCapabilitiesFrom(value: unknown): SocialConnectCapa
   return value as SocialConnectCapabilities;
 }
 export function socialConnectProjectionFrom(value: unknown): SocialConnectProjection {
-  if (!record(value) || Object.keys(value).length < 7 || Object.keys(value).length > 17
-    || Object.keys(value).some(key => !["sessionId", "role", "stage", "digest", "gameTarget", "visibility", "expiresAtMs", "readyGameLaunchAvailable", "voiceProfile", "voiceState", "hostPlayer", "hostPlayerVoiceState", "maxGuests", "participants", "runtimeProfile", "failureStage", "voiceTransportProfile"].includes(key))
+  if (!record(value) || Object.keys(value).length < 7 || Object.keys(value).length > 18
+    || Object.keys(value).some(key => !["sessionId", "role", "stage", "digest", "gameTarget", "visibility", "expiresAtMs", "readyGameLaunchAvailable", "voiceProfile", "voiceState", "hostPlayer", "hostPlayerVoiceState", "maxGuests", "participants", "runtimeProfile", "failureStage", "voiceTransportProfile", "failureObservation"].includes(key))
     || !(value.failureStage === undefined || value.stage === "failed" && typeof value.failureStage === "string" && Object.hasOwn(socialFailureStageText, value.failureStage))
+    || !(value.failureObservation === undefined || value.stage === "failed" && failureObservation(value.failureObservation))
     || !(value.voiceProfile === undefined || ["svc", "plasmo"].includes(String(value.voiceProfile)))
     || !(value.runtimeProfile === undefined || value.voiceProfile !== undefined && typeof value.runtimeProfile === "string" && Object.hasOwn(socialRuntimeLabels, value.runtimeProfile)
       && !(value.runtimeProfile === "1.12.2-forge-14.23.5.2860" && value.voiceProfile === "plasmo"))
@@ -97,6 +113,7 @@ export function socialConnectError(cause: unknown): string {
     connect_social_clock_uncertain: "O horário do serviço não pôde ser confirmado dentro do prazo. Tente iniciar uma nova conexão.",
     connect_social_clock_unverified: "A validação do horário assinado do serviço falhou. Atualize o Aurora antes de tentar novamente.",
     connect_social_request_timed_out: "O serviço online não respondeu dentro do prazo. A tentativa foi encerrada; prepare uma nova sessão.",
+    connect_social_continuity_lost: "Não foi possível confirmar a continuidade da sessão a tempo. A conexão foi encerrada; prepare uma nova sessão.",
     connect_social_service_unavailable: "Não foi possível obter resposta do serviço online. Tente novamente em instantes.",
     connect_social_request_rejected: "Os dados desta etapa da conexão não puderam ser validados. Atualize a sessão antes de tentar novamente.",
     connect_social_epoch_mismatch: "A sessão da conta mudou. Atualize antes de continuar.",

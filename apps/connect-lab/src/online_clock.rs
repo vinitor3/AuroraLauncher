@@ -24,19 +24,22 @@ pub struct OnlineClockBinding<'a> {
     pub nonce: &'a str,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum OnlineClockBootstrapError {
     #[error("{0}")]
     Rejected(Error),
     #[error("expired_clock_session")]
     Expired,
     /// A valid signed response for a live session whose round trip leaves
-    /// too much unobserved time. No clock anchor is created.
+    /// too much unobserved time. Its opaque restriction cannot serve as a clock.
     #[error("uncertain_clock_sample")]
-    Uncertain { session_expiry: u64 },
+    Uncertain {
+        session_expiry: u64,
+        restriction: OnlineClockBootstrapRestriction,
+    },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Body {
     schema_version: u8,
@@ -65,6 +68,118 @@ struct Anchor {
     sent: Instant,
     received: Instant,
     deadline: Instant,
+    consistency: BootstrapConsistency,
+}
+
+/// Intersection of every authenticated sample seen before publication. Keep
+/// nanosecond precision when rebasing so repeated selections cannot widen it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BootstrapConsistency {
+    observed: Instant,
+    lower: Duration,
+    upper: Duration,
+}
+
+/// Authenticated evidence that can only narrow another sample before it is
+/// published. No public constructor, clock projection, or authority conversion.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OnlineClockBootstrapRestriction(Box<BootstrapRestriction>);
+impl std::fmt::Debug for OnlineClockBootstrapRestriction {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AuthenticatedBootstrapRestriction")
+            .finish_non_exhaustive()
+    }
+}
+#[derive(Clone, PartialEq, Eq)]
+struct BootstrapRestriction {
+    body: Body,
+    pin: EndpointId,
+    sent: Instant,
+    deadline: Instant,
+    consistency: BootstrapConsistency,
+}
+impl OnlineClockBootstrapRestriction {
+    pub fn check_current(&self) -> Result<()> {
+        if Instant::now() >= self.0.deadline {
+            Err(Error::Expired)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn merge(self, mut next: Self) -> Result<Self> {
+        let now = Instant::now();
+        if now >= self.0.deadline || now >= next.0.deadline {
+            return Err(Error::Expired);
+        }
+        if !same_bootstrap_scope(&self.0.body, self.0.pin, &next.0.body, next.0.pin)
+            || self.0.body.nonce == next.0.body.nonce
+            || next.0.sent < self.0.sent
+        {
+            return Err(Error::Unauthorized);
+        }
+        next.0.consistency = self.0.consistency.intersect(&next.0.consistency, now)?;
+        next.0.deadline = self.0.deadline.min(next.0.deadline);
+        Ok(next)
+    }
+
+    pub fn constrain_unpublished(self, clock: OnlineClock) -> Result<OnlineClock> {
+        clock.check_current()?;
+        let now = Instant::now();
+        if now >= self.0.deadline {
+            return Err(Error::Expired);
+        }
+        if !same_bootstrap_scope(&self.0.body, self.0.pin, &clock.0.body, clock.0.pin)
+            || self.0.body.nonce == clock.0.body.nonce
+        {
+            return Err(Error::Unauthorized);
+        }
+        let consistency = self.0.consistency.intersect(&clock.0.consistency, now)?;
+        let mut anchor = Arc::try_unwrap(clock.0).map_err(|_| Error::Unauthorized)?;
+        anchor.consistency = consistency;
+        anchor.deadline = anchor.deadline.min(self.0.deadline);
+        let clock = OnlineClock(Arc::new(anchor));
+        clock.check_current()?;
+        Ok(clock)
+    }
+}
+
+fn same_bootstrap_scope(
+    left: &Body,
+    left_pin: EndpointId,
+    right: &Body,
+    right_pin: EndpointId,
+) -> bool {
+    left_pin == right_pin
+        && left.issuer_instance == right.issuer_instance
+        && left.account_id == right.account_id
+        && left.session_id == right.session_id
+        && left.operation_id == right.operation_id
+        && left.generation == right.generation
+        && left.session_expires_at_unix_ms == right.session_expires_at_unix_ms
+}
+impl BootstrapConsistency {
+    fn intersect(&self, next: &Self, observed: Instant) -> Result<Self> {
+        let elapsed = observed.saturating_duration_since(self.observed);
+        let next_elapsed = observed.saturating_duration_since(next.observed);
+        let lower = self
+            .lower
+            .saturating_add(elapsed)
+            .max(next.lower.saturating_add(next_elapsed));
+        let upper = self
+            .upper
+            .saturating_add(elapsed)
+            .min(next.upper.saturating_add(next_elapsed));
+        if lower > upper {
+            return Err(Error::Unauthorized);
+        }
+        Ok(Self {
+            observed,
+            lower,
+            upper,
+        })
+    }
 }
 
 /// A clone keeps the same signed scope, round trip and expiry.
@@ -73,6 +188,46 @@ pub struct OnlineClock(Arc<Anchor>);
 
 impl OnlineClock {
     pub const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(6);
+
+    pub fn bootstrap_round_trip(&self) -> Duration {
+        self.0.received.duration_since(self.0.sent)
+    }
+
+    pub fn bootstrap_uncertainty(&self) -> Duration {
+        let processing = Duration::from_millis(
+            self.0.body.server_now_unix_ms - self.0.body.server_received_at_unix_ms,
+        )
+        .saturating_sub(SAMPLE_RESOLUTION);
+        self.bootstrap_round_trip().saturating_sub(processing)
+    }
+
+    /// Choose only before distributing the clock to policy/grant consumers.
+    /// Both samples are consumed exclusively; the retained session cap can only
+    /// shorten, even when a warmer sample improves future freshness checks.
+    pub fn select_unpublished_bootstrap(self, next: Self) -> Result<Self> {
+        self.check_current()?;
+        next.check_current()?;
+        let previous = &self.0.body;
+        let candidate = &next.0.body;
+        let now = Instant::now();
+        if !same_bootstrap_scope(previous, self.0.pin, candidate, next.0.pin)
+            || previous.nonce == candidate.nonce
+            || next.0.sent < self.0.sent
+        {
+            return Err(Error::Unauthorized);
+        }
+        let consistency = self.0.consistency.intersect(&next.0.consistency, now)?;
+        let prefer_next = next.bootstrap_uncertainty() < self.bootstrap_uncertainty();
+        let previous = Arc::try_unwrap(self.0).map_err(|_| Error::Unauthorized)?;
+        let candidate = Arc::try_unwrap(next.0).map_err(|_| Error::Unauthorized)?;
+        let deadline = previous.deadline.min(candidate.deadline);
+        let mut selected = if prefer_next { candidate } else { previous };
+        selected.deadline = deadline;
+        selected.consistency = consistency;
+        let clock = Self(Arc::new(selected));
+        clock.check_current()?;
+        Ok(clock)
+    }
 
     pub fn verify_bootstrap(
         encoded: &str,
@@ -173,10 +328,23 @@ impl OnlineClock {
         }
         // The server's signed samples bracket its work in one authority. The
         // unobserved remainder includes both network directions and rounding.
+        let consistency = BootstrapConsistency {
+            observed: received,
+            lower: Duration::from_millis(body.server_now_unix_ms),
+            upper: Duration::from_millis(body.server_received_at_unix_ms + 1)
+                .saturating_add(round_trip),
+        };
         let processing_credit = server_elapsed.saturating_sub(SAMPLE_RESOLUTION);
         if round_trip - processing_credit > MAX_UNCERTAINTY {
             return Err(Uncertain {
                 session_expiry: body.session_expires_at_unix_ms,
+                restriction: OnlineClockBootstrapRestriction(Box::new(BootstrapRestriction {
+                    body,
+                    pin,
+                    sent,
+                    deadline,
+                    consistency,
+                })),
             });
         }
         let clock = Self(Arc::new(Anchor {
@@ -185,6 +353,7 @@ impl OnlineClock {
             sent,
             received,
             deadline,
+            consistency,
         }));
         clock.check_current().map_err(|_| Expired)?;
         Ok(clock)
@@ -214,7 +383,8 @@ impl OnlineClock {
             return Err(Error::Unauthorized);
         }
         let deadline =
-            project_deadline(self.0.sent, self.0.body.server_received_at_unix_ms, expiry)?;
+            project_deadline(self.0.sent, self.0.body.server_received_at_unix_ms, expiry)?
+                .min(self.0.deadline);
         if Instant::now() >= deadline {
             return Err(Error::Expired);
         }
@@ -511,7 +681,9 @@ pub(crate) mod tests {
             .err()
         };
         let proof = signed(&authority, server_now, session_expiry);
-        assert_eq!(verify(&proof), Some(Uncertain { session_expiry }));
+        assert!(
+            matches!(verify(&proof), Some(Uncertain { session_expiry: expiry, .. }) if expiry == session_expiry)
+        );
         let mut damaged: serde_json::Value = serde_json::from_str(&proof).unwrap();
         damaged["signature"] = json!("00".repeat(64));
         assert_eq!(
@@ -536,6 +708,341 @@ pub(crate) mod tests {
             )),
             Some(Rejected(Error::Expired)),
         );
+    }
+
+    #[test]
+    fn bootstrap_selection_uses_authenticated_uncertainty_and_preserves_session_cap() {
+        let authority = generate_key();
+        let at = Instant::now();
+        let wall = crate::unix_millis();
+        let expiry = wall + 20_000;
+        let first = OnlineClock::verify_bootstrap(
+            &signed_for(&authority, &binding(), wall - 1020, wall - 1000, expiry),
+            authority.public(),
+            binding(),
+            at - Duration::from_millis(1100),
+            at - Duration::from_millis(1000),
+        )
+        .unwrap();
+        let original_cap = first.deadline_for(expiry).unwrap();
+        let next_scope = OnlineClockBinding {
+            nonce: "1123456789abcdef0123456789abcdef",
+            ..binding()
+        };
+        let next = OnlineClock::verify_bootstrap(
+            &signed_for(&authority, &next_scope, wall - 880, wall - 20, expiry),
+            authority.public(),
+            next_scope,
+            at - Duration::from_millis(900),
+            at,
+        )
+        .unwrap();
+        assert_eq!(first.bootstrap_uncertainty(), Duration::from_millis(81));
+        assert_eq!(next.bootstrap_uncertainty(), Duration::from_millis(41));
+        assert!(next.bootstrap_round_trip() > first.bootstrap_round_trip());
+        assert!(next.deadline_for(expiry).unwrap() > original_cap);
+        let selected = first.select_unpublished_bootstrap(next).unwrap();
+        assert_eq!(selected.bootstrap_round_trip(), Duration::from_millis(900));
+        assert_eq!(selected.bootstrap_uncertainty(), Duration::from_millis(41));
+        assert_eq!(selected.deadline_for(expiry).unwrap(), original_cap);
+        // Earlier expiries use the better bound; the original session cap still
+        // governs every ticket and invitation projected through this clock.
+        assert_eq!(
+            selected.deadline_for(wall + 3_000).unwrap(),
+            at + Duration::from_millis(2979)
+        );
+        let third_scope = OnlineClockBinding {
+            nonce: "2123456789abcdef0123456789abcdef",
+            ..binding()
+        };
+        let third = OnlineClock::verify_bootstrap(
+            &signed_for(&authority, &third_scope, wall, wall, expiry),
+            authority.public(),
+            third_scope,
+            at,
+            at,
+        )
+        .unwrap();
+        let selected = selected.select_unpublished_bootstrap(third).unwrap();
+        assert_eq!(selected.deadline_for(expiry).unwrap(), original_cap);
+        let host = generate_key();
+        let guest = generate_key();
+        let invitation = SessionInvitation::issue_online_with_clock(
+            &host,
+            guest.public(),
+            SESSION,
+            &[crate::Service {
+                service_id: "game".into(),
+                protocol: crate::Protocol::Tcp,
+                endpoint: "127.0.0.1:25565".parse().unwrap(),
+                revision: 1,
+                max_datagram_bytes: 1400,
+                required_capability: crate::Capability::ReliableStream,
+                udp_return_policy: crate::UdpReturnPolicy::ReplyBudget,
+            }],
+            SessionDeadlines {
+                admission_expires_at_unix_ms: wall + 10_000,
+                session_expires_at_unix_ms: expiry,
+            },
+            false,
+            &selected,
+        )
+        .unwrap();
+        let before_remaining = Instant::now();
+        assert!(
+            invitation.session_remaining().unwrap()
+                <= original_cap.saturating_duration_since(before_remaining)
+        );
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct TicketBody<'a> {
+            schema_version: u8,
+            session_id: &'a str,
+            issuer_instance: &'a str,
+            peer_id: String,
+            host_peer_id: String,
+            account_id: &'a str,
+            generation: u64,
+            issued_at_unix_ms: u64,
+            expires_at_unix_ms: u64,
+            direct_addresses: Vec<String>,
+        }
+        let body = TicketBody {
+            schema_version: 1,
+            session_id: SESSION,
+            issuer_instance: ISSUER,
+            peer_id: host.public().to_string(),
+            host_peer_id: host.public().to_string(),
+            account_id: ACCOUNT,
+            generation: 3,
+            issued_at_unix_ms: wall,
+            expires_at_unix_ms: expiry,
+            direct_addresses: vec![],
+        };
+        let mut bytes = b"aurora/connect/relay-ticket/v1\0".to_vec();
+        bytes.extend(serde_json::to_vec(&body).unwrap());
+        let signature = authority
+            .sign(&bytes)
+            .to_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let ticket = crate::OnlineNetworkTicket::verify_clock_for_test(
+            &json!({"body":body,"signature":signature}).to_string(),
+            authority.public(),
+            ISSUER,
+            ACCOUNT,
+            SESSION,
+            host.public(),
+            host.public(),
+            &selected,
+        )
+        .unwrap();
+        assert_eq!(ticket.deadline(), original_cap);
+    }
+
+    #[test]
+    fn bootstrap_selection_rejects_changed_scope_shared_clock_and_disjoint_samples() {
+        for mode in 0..10 {
+            let authority = generate_key();
+            let other = generate_key();
+            let at = Instant::now();
+            let wall = crate::unix_millis();
+            let expiry = wall + 20_000;
+            let first = OnlineClock::verify_bootstrap(
+                &signed(&authority, wall, expiry),
+                authority.public(),
+                binding(),
+                at - Duration::from_millis(20),
+                at,
+            )
+            .unwrap();
+            let retained = (mode == 8).then(|| first.clone());
+            let mut scope = OnlineClockBinding {
+                nonce: "1123456789abcdef0123456789abcdef",
+                ..binding()
+            };
+            match mode {
+                1 => {
+                    scope.issuer =
+                        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+                }
+                2 => scope.account = "another_account",
+                3 => scope.session = OTHER_OPERATION,
+                4 => scope.operation = OTHER_OPERATION,
+                5 => scope.generation += 1,
+                7 => scope.nonce = NONCE,
+                _ => (),
+            }
+            let key = if mode == 0 { &other } else { &authority };
+            let server_now = if mode == 9 { wall + 1000 } else { wall };
+            let proof = signed_for(
+                key,
+                &scope,
+                server_now,
+                server_now,
+                expiry + u64::from(mode == 6),
+            );
+            let next = OnlineClock::verify_bootstrap(&proof, key.public(), scope, at, at).unwrap();
+            assert!(
+                first.select_unpublished_bootstrap(next).is_err(),
+                "mode {mode}"
+            );
+            if let Some(retained) = retained {
+                assert!(retained.check_current().is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn bootstrap_selection_keeps_the_intersection_of_discarded_samples() {
+        for compatible in [false, true] {
+            let authority = generate_key();
+            let at = Instant::now();
+            let wall = crate::unix_millis();
+            let expiry = wall + 20_000;
+            let sample = |nonce, server_now, sent_ms, received_ms| {
+                let scope = OnlineClockBinding { nonce, ..binding() };
+                OnlineClock::verify_bootstrap(
+                    &signed_for(&authority, &scope, server_now, server_now, expiry),
+                    authority.public(),
+                    scope,
+                    at - Duration::from_millis(sent_ms),
+                    at - Duration::from_millis(received_ms),
+                )
+                .unwrap()
+            };
+            // At `at`, A=[wall,wall+10], B=[wall+9,wall+20]. A wins
+            // on uncertainty, but the cumulative interval remains [9,10].
+            let first = sample(NONCE, wall - 31, 40, 31);
+            let second = sample("1123456789abcdef0123456789abcdef", wall - 11, 30, 20);
+            let selected = first.select_unpublished_bootstrap(second).unwrap();
+            assert_eq!(selected.bootstrap_round_trip(), Duration::from_millis(9));
+            assert_eq!(selected.bootstrap_uncertainty(), Duration::from_millis(9));
+            // The incompatible C=[wall-5,wall+4] overlaps A and is narrower,
+            // but contradicts discarded B. A compatible C still may win.
+            let third = if compatible {
+                sample("2123456789abcdef0123456789abcdef", wall + 10, 3, 0)
+            } else {
+                sample("2123456789abcdef0123456789abcdef", wall - 5, 8, 0)
+            };
+            let result = selected.select_unpublished_bootstrap(third);
+            assert_eq!(result.is_ok(), compatible);
+            if let Ok(clock) = result {
+                assert_eq!(clock.bootstrap_round_trip(), Duration::from_millis(3));
+            }
+        }
+    }
+
+    #[test]
+    fn bootstrap_uncertain_restrictions_never_supply_a_clock_or_extend_its_cap() {
+        let authority = generate_key();
+        let at = Instant::now();
+        let wall = crate::unix_millis();
+        let expiry = wall + 20_000;
+        let uncertain = OnlineClock::verify_bootstrap_sample(
+            &signed(&authority, wall - 100, expiry),
+            authority.public(),
+            binding(),
+            at - Duration::from_millis(2200),
+            at - Duration::from_millis(100),
+        )
+        .unwrap_err();
+        let rendered = format!("{uncertain:?}");
+        for secret in [ACCOUNT, SESSION, OPERATION, NONCE, ISSUER] {
+            assert!(!rendered.contains(secret));
+        }
+        let OnlineClockBootstrapError::Uncertain { restriction, .. } = uncertain else {
+            panic!("expected authenticated uncertainty");
+        };
+        let cap = restriction.0.deadline;
+        let scope = OnlineClockBinding {
+            nonce: "1123456789abcdef0123456789abcdef",
+            ..binding()
+        };
+        let valid = |server_now| {
+            OnlineClock::verify_bootstrap(
+                &signed_for(&authority, &scope, server_now, server_now, expiry),
+                authority.public(),
+                OnlineClockBinding {
+                    nonce: scope.nonce,
+                    ..binding()
+                },
+                at - Duration::from_millis(50),
+                at,
+            )
+            .unwrap()
+        };
+        assert!(
+            restriction
+                .clone()
+                .constrain_unpublished(valid(wall - 200))
+                .is_err()
+        );
+        let selected = restriction.constrain_unpublished(valid(wall)).unwrap();
+        assert_eq!(selected.bootstrap_round_trip(), Duration::from_millis(50));
+        assert_eq!(selected.deadline_for(expiry).unwrap(), cap);
+        assert_eq!(selected.lower_at(at), wall);
+        // A later signed but uncertain response must also constrain an earlier
+        // usable sample; it cannot be ignored just because it will not win.
+        let later_scope = OnlineClockBinding {
+            nonce: "2123456789abcdef0123456789abcdef",
+            ..binding()
+        };
+        let later = OnlineClock::verify_bootstrap_sample(
+            &signed_for(&authority, &later_scope, wall + 100, wall + 100, expiry),
+            authority.public(),
+            later_scope,
+            at - Duration::from_millis(2100),
+            at,
+        )
+        .unwrap_err();
+        let OnlineClockBootstrapError::Uncertain { restriction, .. } = later else {
+            panic!("expected authenticated uncertainty");
+        };
+        assert!(restriction.constrain_unpublished(selected).is_err());
+    }
+
+    #[test]
+    fn bootstrap_uncertain_restrictions_keep_cumulative_scope_and_intersection() {
+        let authority = generate_key();
+        let at = Instant::now();
+        let wall = crate::unix_millis();
+        let expiry = wall + 30_000;
+        let uncertain = |nonce, server_now, sent_ms, received_ms| {
+            let scope = OnlineClockBinding { nonce, ..binding() };
+            let error = OnlineClock::verify_bootstrap_sample(
+                &signed_for(&authority, &scope, server_now, server_now, expiry),
+                authority.public(),
+                scope,
+                at - Duration::from_millis(sent_ms),
+                at - Duration::from_millis(received_ms),
+            )
+            .unwrap_err();
+            let OnlineClockBootstrapError::Uncertain { restriction, .. } = error else {
+                panic!("expected authenticated uncertainty");
+            };
+            restriction
+        };
+        // A=[0,2101], B=[2000,4101] relative to wall. No clock exists yet.
+        let first = uncertain(NONCE, wall - 100, 2200, 100);
+        let second = uncertain("1123456789abcdef0123456789abcdef", wall + 2000, 2100, 0);
+        let cap = first.0.deadline.min(second.0.deadline);
+        let merged = first.merge(second).unwrap();
+        assert_eq!(merged.0.deadline, cap);
+        let scope = OnlineClockBinding {
+            nonce: "2123456789abcdef0123456789abcdef",
+            ..binding()
+        };
+        let candidate = OnlineClock::verify_bootstrap(
+            &signed_for(&authority, &scope, wall + 10, wall + 10, expiry),
+            authority.public(),
+            scope,
+            at - Duration::from_millis(50),
+            at,
+        )
+        .unwrap();
+        assert!(merged.constrain_unpublished(candidate).is_err());
     }
 
     #[test]

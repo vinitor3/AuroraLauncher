@@ -379,6 +379,7 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
             udp.close();
         }
         a.snapshot.error_code = error.map(ConnectError::code);
+        let failure_observation = error.and_then(|_| social::failure_observation(a));
         if let Some(social) = &mut a.snapshot.social {
             social.stage = if error.is_some() { "failed" } else { "closed" };
             social.digest = None;
@@ -386,6 +387,7 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
                 Some(ConnectError::SocialFailure(stage, _)) => Some(stage),
                 _ => None,
             };
+            social.failure_observation = failure_observation;
         }
         social::clear(a);
         a.export = None;

@@ -35,6 +35,7 @@ pub(super) struct Control {
     token: Option<Weak<Mutex<String>>>,
     revocations: std::collections::HashSet<String>,
     online: bool,
+    observation: FailureObservation,
     #[cfg(all(windows, feature = "connect-voice-lab"))]
     native_voice_source: Option<crate::engine::connect_voice::dedicated::NativeVoiceHostBinding>,
     #[cfg(all(windows, feature = "connect-voice-lab"))]
@@ -42,6 +43,19 @@ pub(super) struct Control {
 
     #[cfg(test)]
     guard_probe: Option<Arc<ready_source::fixture::Pause>>,
+}
+
+#[derive(Default)]
+struct FailureObservation {
+    bootstrap_roundtrip_ms: Option<u64>,
+    bootstrap_uncertainty_ms: Option<u64>,
+    host_poll_elapsed_ms: Option<u64>,
+    last_host_poll_unix_ms: Option<u64>,
+    failure: Option<SocialFailureObservation>,
+}
+
+pub(super) fn failure_observation(attempt: &Attempt) -> Option<SocialFailureObservation> {
+    attempt.social.as_ref()?.observation.failure.clone()
 }
 pub(super) fn clear(a: &mut Attempt) {
     if let Some(social) = &mut a.snapshot.social {
@@ -353,6 +367,7 @@ impl Manager {
             participants: None,
             runtime_profile: None,
             failure_stage: None,
+            failure_observation: None,
         });
         state.attempt = Some(Attempt {
             #[cfg(all(windows, feature = "connect-voice-lab"))]
@@ -371,6 +386,7 @@ impl Manager {
                     .social_authority
                     .as_ref()
                     .is_some_and(|authority| authority.online_origin.is_some()),
+                observation: FailureObservation::default(),
                 #[cfg(all(windows, feature = "connect-voice-lab"))]
                 native_voice_source: None,
                 #[cfg(all(windows, feature = "connect-voice-lab"))]
@@ -702,6 +718,43 @@ struct Run {
     guard_probe: Option<Arc<ready_source::fixture::Pause>>,
 }
 impl Run {
+    fn observe_failure(&self, gate: SocialFailureGate) {
+        let now = self.server_now();
+        let remaining = self
+            .deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(14_400_000) as u64;
+        update(&self.state, &self.id, |attempt| {
+            if let Some(control) = &mut attempt.social {
+                let observed = &mut control.observation;
+                // Preserve the first gate even if cleanup discovers another failure.
+                if observed.failure.is_none() {
+                    observed.failure = Some(SocialFailureObservation {
+                        gate,
+                        bootstrap_roundtrip_ms: observed.bootstrap_roundtrip_ms,
+                        bootstrap_uncertainty_ms: observed.bootstrap_uncertainty_ms,
+                        host_poll_elapsed_ms: observed.host_poll_elapsed_ms,
+                        host_poll_age_ms: observed
+                            .last_host_poll_unix_ms
+                            .map(|at| now.saturating_sub(at).min(14_400_000)),
+                        session_remaining_ms: remaining,
+                    });
+                }
+            }
+        });
+    }
+    fn observe_host_poll(&self, elapsed: Duration, checked: Option<u64>) {
+        update(&self.state, &self.id, |attempt| {
+            if let Some(control) = &mut attempt.social {
+                control.observation.host_poll_elapsed_ms =
+                    Some(elapsed.as_millis().min(14_400_000) as u64);
+                if let Some(checked) = checked {
+                    control.observation.last_host_poll_unix_ms = Some(checked);
+                }
+            }
+        });
+    }
     fn clock(&self) -> Result<&lab::OnlineClock, ConnectError> {
         self.clock.as_ref().ok_or(ConnectError::InvitationRejected)
     }
@@ -1010,7 +1063,16 @@ impl Http {
                 } else {
                     None
                 };
-                let (reason, legacy) = http_failure(status, reply.as_ref());
+                let (mut reason, legacy) = http_failure(status, reply.as_ref());
+                if route == SocialRoute::Bootstrap
+                    && status == reqwest::StatusCode::FORBIDDEN
+                    && reason == SocialFailureReason::ServiceUnavailable
+                {
+                    // A denial is terminal even if its body names a transient
+                    // backend condition. Only bootstrap transport/5xx failures
+                    // may consume another sample from the original budget.
+                    reason = SocialFailureReason::RequestRejected;
+                }
                 return Err(self.failure(route.stage(), reason, legacy));
             }
             let result = self.read_reply(route, &mut response, MAX_HTTP_BYTES).await;
@@ -1109,6 +1171,13 @@ const BOOTSTRAP_CLOCK_UNVERIFIED: ConnectError = ConnectError::SocialFailure(
     SocialFailureStage::Bootstrap,
     SocialFailureReason::ClockUnverified,
 );
+fn bootstrap_selection_failure(error: lab::Error) -> ConnectError {
+    if matches!(error, lab::Error::Expired) {
+        ConnectError::PlanExpired
+    } else {
+        BOOTSTRAP_CLOCK_UNVERIFIED
+    }
+}
 fn challenge_failure(http: &Http, error: lab::SocialKeyBindingError) -> ConnectError {
     if error == lab::SocialKeyBindingError::Expired {
         http.failure(
@@ -1208,10 +1277,26 @@ async fn challenge(
 async fn bootstrap_clock(run: &mut Run, http: &mut Http) -> Result<(), ConnectError> {
     use lab::OnlineClockBootstrapError as SampleError;
 
+    if run.clock.is_some() {
+        return Err(BOOTSTRAP_CLOCK_UNVERIFIED);
+    }
     let route = SocialRoute::Bootstrap;
     let mut original = None;
-    for attempt in 0..3 {
+    let mut best: Option<(lab::OnlineClock, String, u8)> = None;
+    let mut restrictions: Option<lab::OnlineClockBootstrapRestriction> = None;
+    let mut last_failure = BOOTSTRAP_CLOCK_UNCERTAIN;
+    for _ in 0..3 {
         run.current()?;
+        if let Some((clock, _, _)) = &best {
+            clock
+                .check_current()
+                .map_err(|_| ConnectError::PlanExpired)?;
+        }
+        if let Some(restriction) = &restrictions {
+            restriction
+                .check_current()
+                .map_err(bootstrap_selection_failure)?;
+        }
         let nonce = uuid::Uuid::new_v4().simple().to_string();
         let sent = Instant::now();
         let response = http
@@ -1224,14 +1309,17 @@ async fn bootstrap_clock(run: &mut Run, http: &mut Http) -> Result<(), ConnectEr
             .await;
         let bootstrap = match response {
             Ok(value) => value,
-            Err(ConnectError::SocialFailure(
-                SocialFailureStage::Bootstrap,
-                SocialFailureReason::RequestTimedOut | SocialFailureReason::ServiceUnavailable,
-            )) if attempt < 2 => {
+            Err(
+                error @ ConnectError::SocialFailure(
+                    SocialFailureStage::Bootstrap,
+                    SocialFailureReason::RequestTimedOut | SocialFailureReason::ServiceUnavailable,
+                ),
+            ) => {
                 // Bootstrap consumes no admission proof or participant slot.
                 // A transient request may retry only within this same attempt;
                 // a new nonce cannot replace an already signed authority scope.
                 run.current()?;
+                last_failure = error;
                 continue;
             }
             Err(error) => return Err(error),
@@ -1270,9 +1358,12 @@ async fn bootstrap_clock(run: &mut Run, http: &mut Http) -> Result<(), ConnectEr
             sent,
             received,
         );
-        let (session_expiry, clock) = match sample {
-            Ok(clock) => (clock.session_expiry(), Some(clock)),
-            Err(SampleError::Uncertain { session_expiry }) => (session_expiry, None),
+        let (session_expiry, clock, restriction) = match sample {
+            Ok(clock) => (clock.session_expiry(), Some(clock), None),
+            Err(SampleError::Uncertain {
+                session_expiry,
+                restriction,
+            }) => (session_expiry, None, Some(restriction)),
             Err(SampleError::Expired) => return Err(ConnectError::PlanExpired),
             Err(SampleError::Rejected(_)) => return Err(BOOTSTRAP_CLOCK_UNVERIFIED),
         };
@@ -1284,42 +1375,97 @@ async fn bootstrap_clock(run: &mut Run, http: &mut Http) -> Result<(), ConnectEr
         {
             return Err(BOOTSTRAP_CLOCK_UNVERIFIED);
         }
-        let Some(clock) = clock else {
-            // The signed sample was too uncertain to use. Keep the original
-            // local deadline and authority scope while requesting a fresh nonce.
-            original = Some(authority);
-            continue;
-        };
-        run.current()?;
-        run.authority.pin = authority.0;
-        run.authority.issuer = authority.1;
-        run.authority.join_policy = policy.into();
-        run.authority.session_expiry = session_expiry;
-        run.authority.max_players = max_players;
-        run.expiry = clock
-            .lower_now()
-            .saturating_add(
-                run.deadline
-                    .saturating_duration_since(Instant::now())
-                    .as_millis() as u64,
-            )
-            .min(clock.session_expiry());
-        run.deadline = run.deadline.min(
-            clock
-                .deadline_for(run.expiry)
-                .map_err(|_| ConnectError::PlanExpired)?,
-        );
-        http.deadline = run.deadline;
-        run.clock = Some(clock);
-        update(&run.state, &run.id, |attempt| {
-            attempt.prepared_deadline = run.deadline;
-            if let Some(social) = &mut attempt.snapshot.social {
-                social.expires_at_ms = Some(run.display_expiry(run.expiry));
+        original = Some(authority);
+        if let Some(restriction) = restriction {
+            if let Some((clock, policy, maximum)) = best.take() {
+                best = Some((
+                    restriction
+                        .constrain_unpublished(clock)
+                        .map_err(bootstrap_selection_failure)?,
+                    policy,
+                    maximum,
+                ));
+            } else {
+                restrictions = Some(match restrictions.take() {
+                    Some(previous) => previous
+                        .merge(restriction)
+                        .map_err(bootstrap_selection_failure)?,
+                    None => restriction,
+                });
             }
+            // The signed sample was too uncertain to use. Keep the original
+            // constraints while requesting a fresh nonce, without using it as a clock.
+            last_failure = BOOTSTRAP_CLOCK_UNCERTAIN;
+            continue;
+        }
+        let mut clock = clock.ok_or(BOOTSTRAP_CLOCK_UNVERIFIED)?;
+        if let Some(restriction) = restrictions.take() {
+            clock = restriction
+                .constrain_unpublished(clock)
+                .map_err(bootstrap_selection_failure)?;
+        }
+        run.current()?;
+        best = Some(match best.take() {
+            Some((previous, old_policy, old_maximum)) => {
+                let prefer_next = clock.bootstrap_uncertainty() < previous.bootstrap_uncertainty();
+                let selected = previous
+                    .select_unpublished_bootstrap(clock)
+                    .map_err(bootstrap_selection_failure)?;
+                if prefer_next {
+                    (selected, policy.into(), max_players)
+                } else {
+                    (selected, old_policy, old_maximum)
+                }
+            }
+            None => (clock, policy.into(), max_players),
         });
-        return run.current();
     }
-    Err(BOOTSTRAP_CLOCK_UNCERTAIN)
+    if let Some(restriction) = &restrictions {
+        restriction
+            .check_current()
+            .map_err(bootstrap_selection_failure)?;
+    }
+    let (clock, policy, max_players) = best.ok_or(last_failure)?;
+    let authority = original.ok_or(BOOTSTRAP_CLOCK_UNVERIFIED)?;
+    run.current()?;
+    clock
+        .check_current()
+        .map_err(|_| ConnectError::PlanExpired)?;
+    let expiry = clock
+        .lower_now()
+        .saturating_add(
+            run.deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis() as u64,
+        )
+        .min(clock.session_expiry());
+    let deadline = run.deadline.min(
+        clock
+            .deadline_for(expiry)
+            .map_err(|_| ConnectError::PlanExpired)?,
+    );
+    let roundtrip_ms = clock.bootstrap_round_trip().as_millis() as u64;
+    let uncertainty_ms = clock.bootstrap_uncertainty().as_millis() as u64;
+    run.authority.pin = authority.0;
+    run.authority.issuer = authority.1;
+    run.authority.join_policy = policy;
+    run.authority.session_expiry = authority.2;
+    run.authority.max_players = max_players;
+    run.expiry = expiry;
+    run.deadline = deadline;
+    http.deadline = deadline;
+    run.clock = Some(clock);
+    update(&run.state, &run.id, |attempt| {
+        if let Some(control) = &mut attempt.social {
+            control.observation.bootstrap_roundtrip_ms = Some(roundtrip_ms);
+            control.observation.bootstrap_uncertainty_ms = Some(uncertainty_ms);
+        }
+        attempt.prepared_deadline = run.deadline;
+        if let Some(social) = &mut attempt.snapshot.social {
+            social.expires_at_ms = Some(run.display_expiry(run.expiry));
+        }
+    });
+    run.current()
 }
 
 async fn execute(mut run: Run, token: String) -> Result<(), ConnectError> {

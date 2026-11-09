@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { SocialService, SocialSession } from "../../shared/social";
-import { socialConnectError, socialFailureStageText, socialGameTarget, socialRuntimeLabels, socialStageText } from "./connect-types";
+import { socialConnectError, socialFailureGateText, socialFailureStageText, socialGameTarget, socialRuntimeLabels, socialStageText } from "./connect-types";
 import { DiscoveryPicker, type DiscoveredTarget } from "../connect/DiscoveryPicker";
 import type { SocialConnectController, SocialConnectState } from "./connect-controller";
 
@@ -81,6 +81,17 @@ export function SocialConnectionPanel({ connection, ownSession, now, catalogNow 
       {social?.failureStage && <><strong>{socialFailureStageText[social.failureStage]}.</strong>{" "}</>}
       {socialConnectError(snapshot.errorCode)}
     </p>}
+    {snapshot?.errorCode && social?.failureObservation && <details className="social-notice">
+      <summary>Detalhes da interrupção</summary>
+      <p>Verificação interrompida: {socialFailureGateText[social.failureObservation.gate]}.</p>
+      <ul>
+        {social.failureObservation.bootstrapRoundtripMs !== null && <li>Abertura do serviço: {social.failureObservation.bootstrapRoundtripMs} ms.</li>}
+        {social.failureObservation.bootstrapUncertaintyMs !== null && <li>Incerteza do horário confirmado: {social.failureObservation.bootstrapUncertaintyMs} ms.</li>}
+        {social.failureObservation.hostPollElapsedMs !== null && <li>Última consulta de autorização: {social.failureObservation.hostPollElapsedMs} ms.</li>}
+        {social.failureObservation.hostPollAgeMs !== null && <li>Idade da última autorização confirmada: {social.failureObservation.hostPollAgeMs} ms.</li>}
+        <li>Prazo de sessão ainda restante: {Math.ceil(social.failureObservation.sessionRemainingMs / 1000)} s.</li>
+      </ul>
+    </details>}
     {active && !social && <p>Encerre a conexão anterior para compartilhar ou entrar em uma sessão.</p>}
     {!active && !voiceReady && state.available && onPrepareDedicatedServer && <div className="social-notice">
       <p>Para hospedar uma cópia dedicada, revise o preparo do servidor e depois escolha a origem pronta aqui.</p>
