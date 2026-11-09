@@ -243,6 +243,10 @@ impl Drop for Fixture {
     }
 }
 async fn fixture(script: Script) -> Fixture {
+    fixture_for_protocol(script, PROTOCOL).await
+}
+
+async fn fixture_for_protocol(script: Script, expected_protocol: i32) -> Fixture {
     let listener = TcpListener::bind(local()).await.unwrap();
     let address = listener.local_addr().unwrap();
     let accepts = Arc::new(AtomicUsize::new(0));
@@ -253,7 +257,7 @@ async fn fixture(script: Script) -> Fixture {
         let hello = fixture_frame(&mut socket).await;
         let mut cursor = hello.as_slice();
         assert_eq!(fixture_int(&mut cursor), 0);
-        assert_eq!(fixture_int(&mut cursor), PROTOCOL);
+        assert_eq!(fixture_int(&mut cursor), expected_protocol);
         let host_length = fixture_int(&mut cursor) as usize;
         assert_eq!(&cursor[..host_length], HOST.as_bytes());
         cursor = &cursor[host_length..];
@@ -452,6 +456,8 @@ async fn json_utf8_types_duplicates_and_trailing_content_are_rejected() {
         (&[0xff], InvalidUtf8),
         (b"{", InvalidJson),
         (br#"[]"#, InvalidSchema),
+        (br#"{"description":"x","version":null}"#, InvalidSchema),
+        (br#"{"version":{"name":"x","protocol":767},"description":null}"#, InvalidSchema),
         (br#"{"version":{"name":"x","protocol":"767"},"description":"x"}"#, InvalidSchema),
         (br#"{"version":{"name":"x","protocol":767.5},"description":"x"}"#, InvalidSchema),
         (br#"{"version":{"name":"x","protocol":2147483648},"description":"x"}"#, InvalidSchema),
@@ -499,6 +505,36 @@ async fn json_utf8_types_duplicates_and_trailing_content_are_rejected() {
             .await
             .unwrap_err(),
         InvalidJson
+    );
+    f.finish().await;
+}
+
+#[tokio::test]
+async fn absent_startup_metadata_is_not_a_successful_status_observation() {
+    const LEGACY_PROTOCOL: i32 = 754;
+    for json in [
+        br#"{}"#.as_slice(),
+        br#"{"description":{"text":"Preparing world"}}"#,
+        br#"{"version":{"name":"1.16.5","protocol":754}}"#,
+    ] {
+        let f = fixture_for_protocol(Script::Raw(status_packet(json)), LEGACY_PROTOCOL).await;
+        let mut probe = request(f.address);
+        probe.protocol = LEGACY_PROTOCOL;
+        assert_eq!(
+            probe_minecraft_status(probe).await.unwrap_err(),
+            MinecraftStatusError::MetadataIncomplete
+        );
+        f.finish().await;
+    }
+    let ready = br#"{"version":{"name":"1.16.5","protocol":754},"description":{"text":"Ready"}}"#;
+    let f = fixture_for_protocol(exchange(ready, Pong::Echo), LEGACY_PROTOCOL).await;
+    let mut probe = request(f.address);
+    probe.protocol = LEGACY_PROTOCOL;
+    assert!(
+        probe_minecraft_status(probe)
+            .await
+            .unwrap()
+            .protocol_matches_requested
     );
     f.finish().await;
 }

@@ -93,6 +93,9 @@ impl Host {
     ) -> Result<Self> {
         invitation.check_host_online(&config)?;
         ticket.check_host(&config)?;
+        if !crate::OnlineClock::same_scope(invitation.online_clock(), ticket.clock()) {
+            return Err(Error::Unauthorized);
+        }
         let authority = OnlineAuthority {
             first: invitation.clone(),
             ticket: ticket.clone(),
@@ -113,6 +116,9 @@ impl Host {
     ) -> Result<Self> {
         invitation.check_host_online_fragmented(&config)?;
         ticket.check_host(&config)?;
+        if !crate::OnlineClock::same_scope(invitation.online_clock(), ticket.clock()) {
+            return Err(Error::Unauthorized);
+        }
         let authority = OnlineAuthority {
             first: invitation.clone(),
             ticket: ticket.clone(),

@@ -78,6 +78,8 @@ pub enum MinecraftStatusError {
     InvalidJson,
     #[error("invalid_status_schema")]
     InvalidSchema,
+    #[error("status_metadata_incomplete")]
+    MetadataIncomplete,
     #[error("status_pong_mismatch")]
     PongMismatch,
 }
@@ -284,11 +286,12 @@ impl<'de> Deserialize<'de> for Description {
 
 #[derive(Deserialize)]
 struct StatusResponse {
-    version: VersionInfo,
+    #[serde(default)]
+    version: Optional<VersionInfo>,
     #[serde(default)]
     players: Optional<PlayersInfo>,
-    #[serde(rename = "description")]
-    _description: Description,
+    #[serde(default)]
+    description: Optional<Description>,
     #[serde(default, rename = "favicon")]
     _favicon: Optional<String>,
     #[serde(default, rename = "enforcesSecureChat")]
@@ -297,7 +300,7 @@ struct StatusResponse {
     _previews_chat: Optional<bool>,
 }
 
-fn parse_status(frame: &[u8]) -> Result<StatusResponse> {
+fn parse_status(frame: &[u8]) -> Result<(VersionInfo, Option<PlayersInfo>)> {
     let mut bytes = frame;
     if take_varint(&mut bytes)? != 0 {
         return Err(MinecraftStatusError::InvalidPacket);
@@ -325,15 +328,19 @@ fn parse_status(frame: &[u8]) -> Result<StatusResponse> {
             MinecraftStatusError::InvalidJson
         }
     })?;
-    if status
-        .players
-        .0
-        .as_ref()
-        .is_some_and(|players| players.max > i32::MAX as u32 || players.online > i32::MAX as u32)
+    if !json.trim_start().starts_with('{')
+        || status.players.0.as_ref().is_some_and(|players| {
+            players.max > i32::MAX as u32 || players.online > i32::MAX as u32
+        })
     {
         return Err(MinecraftStatusError::InvalidSchema);
     }
-    Ok(status)
+    // Older dedicated servers can answer on their bound listener while world
+    // setup is still running. Their serializer omits fields initialized later.
+    let (Some(version), Some(_)) = (status.version.0, status.description.0) else {
+        return Err(MinecraftStatusError::MetadataIncomplete);
+    };
+    Ok((version, status.players.0))
 }
 
 fn micros(elapsed: Duration) -> u64 {
@@ -367,7 +374,7 @@ pub async fn probe_minecraft_status(
         append_frame(&mut outbound, &[0]); // Empty status request.
         socket.write_all(&outbound).await.map_err(io_error)?;
         let frame = read_frame(&mut socket, MAX_STATUS_FRAME_BYTES).await?;
-        let status = parse_status(&frame)?;
+        let (version, players) = parse_status(&frame)?;
         let status_micros = micros(status_started.elapsed());
 
         // Fresh opaque 64 public bits, not secret-key material or a persistent identity.
@@ -390,10 +397,10 @@ pub async fn probe_minecraft_status(
         socket.shutdown().await.map_err(io_error)?;
         Ok(MinecraftStatusSummary {
             requested_protocol: request.protocol,
-            reported_protocol: status.version.protocol,
-            protocol_matches_requested: status.version.protocol == request.protocol,
-            reported_players_online: status.players.0.as_ref().map(|value| value.online),
-            reported_players_max: status.players.0.as_ref().map(|value| value.max),
+            reported_protocol: version.protocol,
+            protocol_matches_requested: version.protocol == request.protocol,
+            reported_players_online: players.as_ref().map(|value| value.online),
+            reported_players_max: players.as_ref().map(|value| value.max),
             connect_micros,
             status_micros,
             ping_micros,

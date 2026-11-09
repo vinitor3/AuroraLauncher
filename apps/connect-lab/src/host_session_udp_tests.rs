@@ -90,6 +90,7 @@ async fn original_schema_three_authority_rejects_civil_jumps_before_watcher() {
             &association.lease_cancel,
             association.lease_unix_deadline,
             association.lease_deadline,
+            None,
         ));
         assert!(!association.fragment_authorized());
         wall.store(issued, Ordering::SeqCst);

@@ -1,6 +1,8 @@
 //! Signed social admission. These typed signatures are separate from key
 //! possession, manual invitations and the transport's existing TLS authority.
-use crate::{EndpointId, SecretKey, SocialKeyChallenge, SocialKeyRole, unix_millis};
+#[cfg(test)]
+use crate::unix_millis;
+use crate::{EndpointId, OnlineClock, SecretKey, SocialKeyChallenge, SocialKeyRole};
 use iroh::Signature;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -140,15 +142,36 @@ fn verify_signature(pin: EndpointId, bytes: &[u8], signature: &str) -> Result<()
     pin.verify(bytes, &Signature::from_bytes(&decoded))
         .map_err(|_| SocialAdmissionError::Signature)
 }
-fn current(issued: u64, expires: u64, deadline: Instant) -> Result<()> {
-    let now = unix_millis();
-    if now < issued || now >= expires || Instant::now() >= deadline {
+fn current(
+    issued: u64,
+    expires: u64,
+    deadline: Instant,
+    clock: Option<&OnlineClock>,
+) -> Result<()> {
+    let (at, now) = OnlineClock::observe(clock);
+    if now < issued
+        || now >= expires
+        || at >= deadline
+        || clock.is_some_and(|clock| clock.check_current().is_err())
+    {
         Err(SocialAdmissionError::Expired)
     } else {
         Ok(())
     }
 }
-fn deadline(at: Instant, now: u64, expiry: u64, cap: Instant) -> Result<Instant> {
+fn deadline(
+    at: Instant,
+    now: u64,
+    expiry: u64,
+    cap: Instant,
+    clock: Option<&OnlineClock>,
+) -> Result<Instant> {
+    if let Some(clock) = clock {
+        return clock
+            .deadline_for(expiry)
+            .map(|deadline| deadline.min(cap))
+            .map_err(|_| SocialAdmissionError::Expired);
+    }
     Ok(at
         .checked_add(Duration::from_millis(
             expiry
@@ -157,6 +180,13 @@ fn deadline(at: Instant, now: u64, expiry: u64, cap: Instant) -> Result<Instant>
         ))
         .ok_or(SocialAdmissionError::Invalid)?
         .min(cap))
+}
+fn validate_challenge(challenge: &SocialKeyChallenge, clock: Option<&OnlineClock>) -> Result<()> {
+    match clock {
+        Some(clock) => challenge.validate_with_clock(clock),
+        None => challenge.validate(),
+    }
+    .map_err(|_| SocialAdmissionError::Expired)
 }
 pub fn social_source_digest(source: SocketAddr) -> Result<String> {
     if !matches!(source,SocketAddr::V4(v4) if v4.ip().octets()==[127,0,0,1] && v4.port()!=0) {
@@ -227,9 +257,16 @@ impl SocialHostPolicy {
         source: SocketAddr,
         join_policy: &str,
     ) -> Result<Self> {
-        challenge
-            .validate()
-            .map_err(|_| SocialAdmissionError::Expired)?;
+        Self::review_at(challenge, visibility, source, join_policy, None)
+    }
+    fn review_at(
+        challenge: &SocialKeyChallenge,
+        visibility: &str,
+        source: SocketAddr,
+        join_policy: &str,
+        clock: Option<&OnlineClock>,
+    ) -> Result<Self> {
+        validate_challenge(challenge, clock)?;
         if challenge.role() != SocialKeyRole::Host {
             return Err(SocialAdmissionError::Context);
         }
@@ -267,7 +304,29 @@ impl SocialHostPolicy {
         join_policy: &str,
         session_expiry: u64,
     ) -> Result<Self> {
-        let mut policy = Self::review_with_join_policy(challenge, visibility, source, join_policy)?;
+        Self::review_online_with_clock(
+            challenge,
+            visibility,
+            source,
+            join_policy,
+            session_expiry,
+            None,
+        )
+    }
+    pub fn review_online_with_clock(
+        challenge: &SocialKeyChallenge,
+        visibility: &str,
+        source: SocketAddr,
+        join_policy: &str,
+        session_expiry: u64,
+        clock: Option<&OnlineClock>,
+    ) -> Result<Self> {
+        let mut policy = Self::review_at(challenge, visibility, source, join_policy, clock)?;
+        if let Some(clock) = clock {
+            clock
+                .deadline_for(session_expiry)
+                .map_err(|_| SocialAdmissionError::Expired)?;
+        }
         policy.schema_version = 2;
         policy.max_guests = 8;
         policy.expires_at_unix_ms = session_expiry;
@@ -285,8 +344,38 @@ impl SocialHostPolicy {
         voice_source_digest: &str,
         host_player: bool,
     ) -> Result<Self> {
-        let mut policy =
-            Self::review_online(challenge, visibility, source, join_policy, session_expiry)?;
+        Self::review_online_voice_with_clock(
+            challenge,
+            visibility,
+            source,
+            join_policy,
+            session_expiry,
+            voice_profile,
+            voice_source_digest,
+            host_player,
+            None,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn review_online_voice_with_clock(
+        challenge: &SocialKeyChallenge,
+        visibility: &str,
+        source: SocketAddr,
+        join_policy: &str,
+        session_expiry: u64,
+        voice_profile: &str,
+        voice_source_digest: &str,
+        host_player: bool,
+        clock: Option<&OnlineClock>,
+    ) -> Result<Self> {
+        let mut policy = Self::review_online_with_clock(
+            challenge,
+            visibility,
+            source,
+            join_policy,
+            session_expiry,
+            clock,
+        )?;
         policy.schema_version = 3;
         policy.voice_profile = Some(voice_profile.into());
         policy.voice_source_digest = Some(voice_source_digest.into());
@@ -412,11 +501,35 @@ impl SocialHostPolicy {
         digest: &str,
         prepared_deadline: Instant,
     ) -> Result<SignedSocialHostPolicy> {
+        self.approve_with_clock(key, digest, prepared_deadline, None)
+    }
+    pub fn approve_with_clock(
+        &self,
+        key: &SecretKey,
+        digest: &str,
+        prepared_deadline: Instant,
+        clock: Option<&OnlineClock>,
+    ) -> Result<SignedSocialHostPolicy> {
         self.validate()?;
+        if let Some(clock) = clock {
+            if !clock.matches_attempt(
+                &self.issuer_instance,
+                &self.account_id,
+                &self.session_id,
+                &self.operation_id,
+                self.generation,
+            ) {
+                return Err(SocialAdmissionError::Context);
+            }
+            clock
+                .deadline_for(self.expires_at_unix_ms)
+                .map_err(|_| SocialAdmissionError::Expired)?;
+        }
         current(
             self.issued_at_unix_ms,
             self.expires_at_unix_ms,
             prepared_deadline,
+            clock,
         )?;
         if digest != self.digest() {
             return Err(SocialAdmissionError::Approval);
@@ -612,6 +725,7 @@ pub struct VerifiedSocialJoinContext {
     body: JoinContextBody,
     pin: EndpointId,
     deadline: Instant,
+    clock: Option<OnlineClock>,
 }
 impl VerifiedSocialJoinContext {
     pub fn verify(
@@ -621,8 +735,24 @@ impl VerifiedSocialJoinContext {
         session_id: &str,
         prepared_deadline: Instant,
     ) -> Result<Self> {
-        let at = Instant::now();
-        let now = unix_millis();
+        Self::verify_with_clock(
+            text,
+            pin,
+            recipient_account_id,
+            session_id,
+            prepared_deadline,
+            None,
+        )
+    }
+    pub fn verify_with_clock(
+        text: &str,
+        pin: EndpointId,
+        recipient_account_id: &str,
+        session_id: &str,
+        prepared_deadline: Instant,
+        clock: Option<&OnlineClock>,
+    ) -> Result<Self> {
+        let (at, now) = OnlineClock::observe(clock);
         if !uid(recipient_account_id) || !uuid(session_id) {
             return Err(SocialAdmissionError::Context);
         }
@@ -633,17 +763,24 @@ impl VerifiedSocialJoinContext {
         if body.recipient_account_id != recipient_account_id || body.session_id != session_id {
             return Err(SocialAdmissionError::Context);
         }
-        let deadline = deadline(at, now, body.expires_at_unix_ms, prepared_deadline)?;
+        if clock.is_some_and(|clock| {
+            !clock.matches_recipient(pin, &body.issuer_instance, recipient_account_id, session_id)
+        }) {
+            return Err(SocialAdmissionError::Context);
+        }
+        let deadline = deadline(at, now, body.expires_at_unix_ms, prepared_deadline, clock)?;
         let value = Self {
             body,
             pin,
             deadline,
+            clock: clock.cloned(),
         };
         value.check_current()?;
         Ok(value)
     }
     pub fn check_current(&self) -> Result<()> {
-        self.check_at(unix_millis(), Instant::now())
+        let (at, wall) = OnlineClock::observe(self.clock.as_ref());
+        self.check_at(wall, at)
     }
     fn check_at(&self, wall: u64, monotonic: Instant) -> Result<()> {
         if wall < self.body.issued_at_unix_ms
@@ -657,9 +794,7 @@ impl VerifiedSocialJoinContext {
     }
     pub fn check_challenge(&self, challenge: &SocialKeyChallenge) -> Result<()> {
         self.check_current()?;
-        challenge
-            .validate()
-            .map_err(|_| SocialAdmissionError::Expired)?;
+        validate_challenge(challenge, self.clock.as_ref())?;
         if challenge.role() != SocialKeyRole::Guest
             || challenge.issuer_instance() != self.body.issuer_instance
             || challenge.account_id() != self.body.recipient_account_id
@@ -830,6 +965,7 @@ pub struct VerifiedSocialGrant {
     pin: EndpointId,
     admission_deadline: Instant,
     session_deadline: Instant,
+    clock: Option<OnlineClock>,
 }
 impl VerifiedSocialGrant {
     fn verified(
@@ -838,13 +974,29 @@ impl VerifiedSocialGrant {
         challenge: &SocialKeyChallenge,
         prepared_deadline: Instant,
         online: bool,
+        clock: Option<&OnlineClock>,
     ) -> Result<Self> {
-        let at = Instant::now();
-        let now = unix_millis();
+        let (at, now) = OnlineClock::observe(clock);
+        if clock.is_some_and(|clock| {
+            !online
+                || !clock.matches_recipient(
+                    pin,
+                    challenge.issuer_instance(),
+                    challenge.account_id(),
+                    challenge.session_id(),
+                )
+                || !clock.matches_attempt(
+                    challenge.issuer_instance(),
+                    challenge.account_id(),
+                    challenge.session_id(),
+                    challenge.operation_id(),
+                    challenge.generation(),
+                )
+        }) {
+            return Err(SocialAdmissionError::Context);
+        }
         if !(online && challenge.role() == SocialKeyRole::Host) {
-            challenge
-                .validate()
-                .map_err(|_| SocialAdmissionError::Expired)?;
+            validate_challenge(challenge, clock)?;
         }
         let envelope: GrantEnvelope = parse(text)?;
         let b = envelope.body;
@@ -867,6 +1019,7 @@ impl VerifiedSocialGrant {
                 now,
                 b.admission_expires_at_unix_ms,
                 prepared_deadline,
+                clock,
             )?,
             session_deadline: deadline(
                 at,
@@ -877,9 +1030,11 @@ impl VerifiedSocialGrant {
                 } else {
                     prepared_deadline
                 },
+                clock,
             )?,
             body: b,
             pin,
+            clock: clock.cloned(),
         };
         value.check_admission()?;
         Ok(value)
@@ -892,6 +1047,25 @@ impl VerifiedSocialGrant {
         source: SocketAddr,
         prepared_deadline: Instant,
     ) -> Result<Self> {
+        Self::for_host_with_clock(
+            text,
+            pin,
+            challenge,
+            policy,
+            source,
+            prepared_deadline,
+            None,
+        )
+    }
+    pub fn for_host_with_clock(
+        text: &str,
+        pin: EndpointId,
+        challenge: &SocialKeyChallenge,
+        policy: &SignedSocialHostPolicy,
+        source: SocketAddr,
+        prepared_deadline: Instant,
+        clock: Option<&OnlineClock>,
+    ) -> Result<Self> {
         policy.verify()?;
         let value = Self::verified(
             text,
@@ -899,6 +1073,7 @@ impl VerifiedSocialGrant {
             challenge,
             prepared_deadline,
             policy.body.schema_version != 1,
+            clock,
         )?;
         let b = &value.body;
         let p = &policy.body;
@@ -962,7 +1137,14 @@ impl VerifiedSocialGrant {
             return Err(SocialAdmissionError::Context);
         }
         let expected = &context.body;
-        let value = Self::verified(text, pin, challenge, prepared_deadline, online)?;
+        let value = Self::verified(
+            text,
+            pin,
+            challenge,
+            prepared_deadline,
+            online,
+            context.clock.as_ref(),
+        )?;
         let b = &value.body;
         if challenge.role() != SocialKeyRole::Guest
             || b.guest_account_id != challenge.account_id()
@@ -987,6 +1169,7 @@ impl VerifiedSocialGrant {
             self.body.issued_at_unix_ms,
             self.body.admission_expires_at_unix_ms,
             self.admission_deadline,
+            self.clock.as_ref(),
         )
     }
     pub fn check_session(&self) -> Result<()> {
@@ -994,6 +1177,7 @@ impl VerifiedSocialGrant {
             self.body.issued_at_unix_ms,
             self.body.session_expires_at_unix_ms,
             self.session_deadline,
+            self.clock.as_ref(),
         )
     }
     pub fn host_player(&self) -> bool {
@@ -1098,8 +1282,8 @@ pub struct SocialContinuity {
 }
 impl SocialContinuity {
     fn verify(text: &str, grant: &VerifiedSocialGrant) -> Result<(LeaseBody, Instant)> {
-        let at = Instant::now();
-        let now = unix_millis();
+        let clock = grant.clock.as_ref();
+        let (at, now) = OnlineClock::observe(clock);
         grant.check_session()?;
         let envelope: LeaseEnvelope = parse(text)?;
         let b = envelope.body;
@@ -1113,8 +1297,8 @@ impl SocialContinuity {
         {
             return Err(SocialAdmissionError::Context);
         }
-        let end = deadline(at, now, b.expires_at_unix_ms, grant.session_deadline)?;
-        current(b.issued_at_unix_ms, b.expires_at_unix_ms, end)?;
+        let end = deadline(at, now, b.expires_at_unix_ms, grant.session_deadline, clock)?;
+        current(b.issued_at_unix_ms, b.expires_at_unix_ms, end, clock)?;
         Ok((b, end))
     }
     pub fn start(text: &str, grant: &VerifiedSocialGrant) -> Result<Self> {
@@ -1159,6 +1343,7 @@ impl SocialContinuity {
             self.lease.issued_at_unix_ms,
             self.lease.expires_at_unix_ms,
             self.deadline,
+            self.grant.clock.as_ref(),
         )
     }
     pub fn sequence(&self) -> u64 {

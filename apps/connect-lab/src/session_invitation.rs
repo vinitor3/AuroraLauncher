@@ -2,8 +2,8 @@
 //! Admission and the admitted session have independent absolute deadlines.
 //! Host owns admission, consumption and revocation; this value never renews.
 use crate::{
-    Capability, EndpointId, Error, HostConfig, Lease, Protocol, Result, SecretKey, Service,
-    UdpReturnPolicy, generate_key, invitation::InvitationAddressMode as AddressMode,
+    Capability, EndpointId, Error, HostConfig, Lease, OnlineClock, Protocol, Result, SecretKey,
+    Service, UdpReturnPolicy, generate_key, invitation::InvitationAddressMode as AddressMode,
     model::valid_id, unix_millis, wire::InvitationProof,
 };
 use iroh::Signature;
@@ -266,6 +266,7 @@ pub struct SessionInvitation {
     guest: EndpointId,
     admission_deadline: Instant,
     session_deadline: Instant,
+    authority_clock: Option<OnlineClock>,
     #[cfg(test)]
     wall_override: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
 }
@@ -288,6 +289,81 @@ struct VerificationOptions {
     profile: SessionInvitationProfile,
 }
 impl SessionInvitation {
+    pub fn issue_online_with_clock(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        services: &[Service],
+        deadlines: SessionDeadlines,
+        fragmented: bool,
+        clock: &OnlineClock,
+    ) -> Result<Self> {
+        if !clock.session_matches(session_id) {
+            return Err(Error::Unauthorized);
+        }
+        Self::issue_using_clock(
+            host,
+            guest,
+            session_id,
+            "0.0.0.0:0".parse().expect("route sentinel"),
+            services,
+            IssueOptions {
+                timing: IssueTiming::Absolute(deadlines),
+                mode: AddressMode::Loopback,
+                profile: if fragmented {
+                    SessionInvitationProfile::OnlineFragmentedGameUdp
+                } else {
+                    SessionInvitationProfile::OnlineGameTcp
+                },
+            },
+            Some(clock),
+        )
+    }
+
+    pub fn verify_online_with_clock(
+        encoded: &str,
+        expected_host: EndpointId,
+        guest: EndpointId,
+        fragmented: bool,
+        clock: &OnlineClock,
+    ) -> Result<Self> {
+        let (monotonic, unix_ms) = OnlineClock::observe(Some(clock));
+        Self::verify_in_profile(
+            encoded,
+            expected_host,
+            guest,
+            VerificationOptions {
+                clock: Clock { monotonic, unix_ms },
+                mode: AddressMode::Loopback,
+                profile: if fragmented {
+                    SessionInvitationProfile::OnlineFragmentedGameUdp
+                } else {
+                    SessionInvitationProfile::OnlineGameTcp
+                },
+            },
+        )?
+        .bind_clock(clock)
+    }
+
+    fn bind_clock(mut self, clock: &OnlineClock) -> Result<Self> {
+        if !clock.session_matches(self.session_id()) {
+            return Err(Error::Unauthorized);
+        }
+        self.admission_deadline = self
+            .admission_deadline
+            .min(clock.deadline_for(self.admission_expires_at_unix_ms())?);
+        self.session_deadline = self
+            .session_deadline
+            .min(clock.deadline_for(self.session_expires_at_unix_ms())?);
+        self.authority_clock = Some(clock.clone());
+        self.check_admission_current()?;
+        Ok(self)
+    }
+
+    pub(crate) fn online_clock(&self) -> Option<&OnlineClock> {
+        self.authority_clock.as_ref()
+    }
+
     /// Online routing comes from an independently authenticated native ticket.
     /// The sentinel is never interpreted as a network destination.
     pub fn issue_online(
@@ -330,7 +406,7 @@ impl SessionInvitation {
         self.check_host_profile_at(
             config,
             VerificationOptions {
-                clock: Clock::now(),
+                clock: self.current_clock(),
                 mode: AddressMode::Loopback,
                 profile: SessionInvitationProfile::OnlineGameTcp,
             },
@@ -378,14 +454,16 @@ impl SessionInvitation {
         self.check_host_profile_at(
             config,
             VerificationOptions {
-                clock: Clock::now(),
+                clock: self.current_clock(),
                 mode: AddressMode::Loopback,
                 profile: SessionInvitationProfile::OnlineFragmentedGameUdp,
             },
         )
     }
     pub(crate) fn check_same_online_profile(&self, other: &Self) -> Result<()> {
-        if !other.profile.online() {
+        if !other.profile.online()
+            || !OnlineClock::same_scope(self.online_clock(), other.online_clock())
+        {
             return Err(Error::Configuration);
         }
         self.check_profile(other.profile)
@@ -618,7 +696,28 @@ impl SessionInvitation {
         services: &[Service],
         options: IssueOptions,
     ) -> Result<Self> {
-        let clock = Clock::now();
+        Self::issue_using_clock(host, guest, session_id, direct, services, options, None)
+    }
+
+    fn issue_using_clock(
+        host: &SecretKey,
+        guest: EndpointId,
+        session_id: &str,
+        direct: SocketAddr,
+        services: &[Service],
+        options: IssueOptions,
+        authority_clock: Option<&OnlineClock>,
+    ) -> Result<Self> {
+        let clock = match authority_clock {
+            Some(authority) => {
+                authority.check_current()?;
+                Clock {
+                    monotonic: Instant::now(),
+                    unix_ms: authority.lower_now(),
+                }
+            }
+            None => Clock::now(),
+        };
         let deadlines = match options.timing {
             IssueTiming::Absolute(value) => value,
             IssueTiming::Lifetimes { admission, session } => {
@@ -670,8 +769,13 @@ impl SessionInvitation {
             guest,
             verification,
         )?;
-        value.check_admission_current()?;
-        Ok(value)
+        match authority_clock {
+            Some(clock) => value.bind_clock(clock),
+            None => {
+                value.check_admission_current()?;
+                Ok(value)
+            }
+        }
     }
 
     /// expected_host must come from an independently approved public-key pin.
@@ -849,6 +953,7 @@ impl SessionInvitation {
             digest,
             host: expected_host,
             guest,
+            authority_clock: None,
             #[cfg(test)]
             wall_override: None,
         })
@@ -871,7 +976,8 @@ impl SessionInvitation {
         self.session_remaining_at(self.current_clock())
     }
     fn current_clock(&self) -> Clock {
-        let clock = Clock::now();
+        let (monotonic, unix_ms) = OnlineClock::observe(self.authority_clock.as_ref());
+        let clock = Clock { monotonic, unix_ms };
         #[cfg(test)]
         if let Some(wall) = &self.wall_override {
             return Clock {

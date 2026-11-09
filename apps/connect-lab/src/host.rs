@@ -31,6 +31,12 @@ enum InvitationAuthority {
     Session(SessionInvitation),
 }
 impl InvitationAuthority {
+    fn online_clock(&self) -> Option<&OnlineClock> {
+        match self {
+            Self::Legacy(_) => None,
+            Self::Session(value) => value.online_clock(),
+        }
+    }
     fn lease_id(&self) -> String {
         match self {
             Self::Legacy(value) => value.lease().lease_id,
@@ -725,6 +731,8 @@ impl Host {
         control.disable().await;
         Ok(())
     }
+    /// Wait for owned peer work and close the transport. Iroh's UDP sockets
+    /// are released after the last endpoint owner drops.
     pub async fn shutdown(&self) {
         self.state.cancel.cancel();
         let task = self.task.lock().unwrap().take();
@@ -801,7 +809,13 @@ fn authorize_session(state: &State, lease_id: &str, peer: EndpointId) -> Result<
     if lease.value.peer != peer {
         return Err(Error::Unauthorized);
     }
-    if lease.cancel.is_cancelled() || unix_millis() >= lease.value.expires_at_unix_ms {
+    let (_, wall) = OnlineClock::observe(
+        lease
+            .invitation
+            .as_ref()
+            .and_then(InvitationAuthority::online_clock),
+    );
+    if lease.cancel.is_cancelled() || wall >= lease.value.expires_at_unix_ms {
         return Err(Error::Expired);
     }
     if let Some(invitation) = &lease.invitation {
@@ -936,6 +950,9 @@ impl Association {
                 &self.lease_cancel,
                 self.lease_unix_deadline,
                 self.lease_deadline,
+                self.session_authority
+                    .as_ref()
+                    .and_then(SessionInvitation::online_clock),
             )
             && self
                 .session_authority
@@ -948,11 +965,13 @@ fn fragment_authority_valid(
     lease: &CancellationToken,
     unix_deadline: u64,
     monotonic_deadline: Instant,
+    clock: Option<&OnlineClock>,
 ) -> bool {
+    let (at, wall) = OnlineClock::observe(clock);
     !cancel.is_cancelled()
         && !lease.is_cancelled()
-        && unix_millis() < unix_deadline
-        && Instant::now() < monotonic_deadline
+        && wall < unix_deadline
+        && at < monotonic_deadline
 }
 
 struct UdpLimiter {
@@ -1000,8 +1019,13 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
         connection.close(1u32.into(), b"authorization failed");
         return;
     };
-    let mut remaining =
-        Duration::from_millis(lease.value.expires_at_unix_ms.saturating_sub(unix_millis()));
+    let (at, wall) = OnlineClock::observe(
+        lease
+            .invitation
+            .as_ref()
+            .and_then(InvitationAuthority::online_clock),
+    );
+    let mut remaining = Duration::from_millis(lease.value.expires_at_unix_ms.saturating_sub(wall));
     if let Some(invitation) = &lease.invitation {
         remaining = remaining.min(invitation.session_remaining());
     }
@@ -1009,7 +1033,7 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
         remaining = remaining.min(online.remaining());
     }
     let cancel = state.cancel.child_token();
-    let lease_deadline = Instant::now() + remaining;
+    let lease_deadline = at + remaining;
     let tcp = Arc::new(Semaphore::new(state.limits.max_tcp_per_peer));
     let associations: Associations = Arc::new(Mutex::new(HashMap::new()));
     let mut tasks = JoinSet::new();
@@ -1621,7 +1645,8 @@ mod fragment_authority_tests {
             &downstream,
             &original,
             unix,
-            monotonic
+            monotonic,
+            None,
         ));
         original.cancel();
         assert!(!downstream.is_cancelled(), "watcher_was_not_run");
@@ -1629,20 +1654,23 @@ mod fragment_authority_tests {
             &downstream,
             &original,
             unix,
-            monotonic
+            monotonic,
+            None,
         ));
         let original = CancellationToken::new();
         assert!(!fragment_authority_valid(
             &downstream,
             &original,
             unix_millis(),
-            monotonic
+            monotonic,
+            None,
         ));
         assert!(!fragment_authority_valid(
             &downstream,
             &original,
             unix,
-            Instant::now()
+            Instant::now(),
+            None,
         ));
     }
 }

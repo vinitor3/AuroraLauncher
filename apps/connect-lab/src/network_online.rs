@@ -1,6 +1,8 @@
 //! Build-owned relay route, bound to the authenticated social authority and original session.
 //! Relay permission does not admit a game participant or authorize any application service.
-use crate::{EndpointAddr, EndpointId, Error, GuestConfig, HostConfig, Result, unix_millis};
+#[cfg(test)]
+use crate::unix_millis;
+use crate::{EndpointAddr, EndpointId, Error, GuestConfig, HostConfig, OnlineClock, Result};
 use iroh::{RelayConfig, RelayMap, RelayUrl, Signature};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -39,6 +41,7 @@ struct Inner {
     host: EndpointId,
     direct: Vec<SocketAddr>,
     deadline: Instant,
+    clock: Option<OnlineClock>,
 }
 #[derive(Clone)]
 pub struct OnlineNetworkTicket(Arc<Inner>);
@@ -67,7 +70,7 @@ impl OnlineNetworkTicket {
             return Err(Error::Configuration);
         }
         Self::verify_at(
-            encoded, pin, issuer, account, session, peer, host, origin, true,
+            encoded, pin, issuer, account, session, peer, host, origin, true, None,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -80,9 +83,24 @@ impl OnlineNetworkTicket {
         peer: EndpointId,
         host: EndpointId,
     ) -> Result<Self> {
+        Self::verify_with_clock(
+            encoded, pin, issuer, account_id, session_id, peer, host, None,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_with_clock(
+        encoded: &str,
+        pin: EndpointId,
+        issuer: &str,
+        account_id: &str,
+        session_id: &str,
+        peer: EndpointId,
+        host: EndpointId,
+        clock: Option<&OnlineClock>,
+    ) -> Result<Self> {
         let origin = option_env!("AURORA_SOCIAL_ORIGIN").ok_or(Error::Configuration)?;
         Self::verify_at(
-            encoded, pin, issuer, account_id, session_id, peer, host, origin, false,
+            encoded, pin, issuer, account_id, session_id, peer, host, origin, false, clock,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -96,6 +114,7 @@ impl OnlineNetworkTicket {
         host: EndpointId,
         origin: &str,
         local_test: bool,
+        clock: Option<&OnlineClock>,
     ) -> Result<Self> {
         if encoded.len() > 4096
             || !encoded.is_ascii()
@@ -105,8 +124,7 @@ impl OnlineNetworkTicket {
         }
         let envelope: Envelope = serde_json::from_str(encoded).map_err(|_| Error::Protocol)?;
         let body = envelope.body;
-        let observed_at = Instant::now();
-        let now = unix_millis();
+        let (observed_at, now) = OnlineClock::observe(clock);
         if body.schema_version != 1
             || body.session_id != session_id
             || body.issuer_instance != issuer
@@ -126,6 +144,10 @@ impl OnlineNetworkTicket {
             || body.expires_at_unix_ms - body.issued_at_unix_ms > MAX_LIFETIME_MS
             || now < body.issued_at_unix_ms
             || now >= body.expires_at_unix_ms
+            || clock.is_some_and(|clock| {
+                !clock.matches_recipient(pin, issuer, account_id, session_id)
+                    || clock.generation() != body.generation
+            })
         {
             return Err(Error::Unauthorized);
         }
@@ -163,7 +185,10 @@ impl OnlineNetworkTicket {
             }
             direct.push(address);
         }
-        let deadline = observed_at + Duration::from_millis(body.expires_at_unix_ms - now);
+        let deadline = match clock {
+            Some(clock) => clock.deadline_for(body.expires_at_unix_ms)?,
+            None => observed_at + Duration::from_millis(body.expires_at_unix_ms - now),
+        };
         let ticket = Self(Arc::new(Inner {
             body,
             bearer: encoded.to_owned(),
@@ -172,13 +197,14 @@ impl OnlineNetworkTicket {
             host,
             direct,
             deadline,
+            clock: clock.cloned(),
         }));
         ticket.check_current()?;
         Ok(ticket)
     }
     pub fn check_current(&self) -> Result<()> {
-        let now = unix_millis();
-        if Instant::now() >= self.0.deadline
+        let (at, now) = OnlineClock::observe(self.0.clock.as_ref());
+        if at >= self.0.deadline
             || now < self.0.body.issued_at_unix_ms
             || now >= self.0.body.expires_at_unix_ms
         {
@@ -188,6 +214,9 @@ impl OnlineNetworkTicket {
     }
     pub fn deadline(&self) -> Instant {
         self.0.deadline
+    }
+    pub(crate) fn clock(&self) -> Option<&OnlineClock> {
+        self.0.clock.as_ref()
     }
     pub fn local_peer(&self) -> EndpointId {
         self.0.peer
@@ -255,11 +284,15 @@ fn decode_signature(value: &str) -> Result<[u8; 64]> {
     Ok(bytes)
 }
 
+#[cfg(all(test, feature = "local-relay-lab"))]
+#[path = "network_online_clock_tests.rs"]
+mod clock_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::generate_key;
-    fn signed(key: &crate::SecretKey, body: &Body) -> String {
+    pub(super) fn signed(key: &crate::SecretKey, body: &Body) -> String {
         let mut bytes = DOMAIN.to_vec();
         bytes.extend(serde_json::to_vec(body).unwrap());
         let signature = key
@@ -308,6 +341,7 @@ mod tests {
                 remote,
                 origin,
                 false,
+                None,
             )
         };
         let ticket = verify(

@@ -567,6 +567,7 @@ impl Guest {
             || ticket.session_id() != invitation.session_id()
             || ticket.host_peer() != invitation.host_key()
             || ticket.local_peer() != invitation.guest_key()
+            || !crate::OnlineClock::same_scope(invitation.online_clock(), ticket.clock())
         {
             return Err(Error::Unauthorized);
         }
@@ -840,6 +841,8 @@ impl Guest {
         }
         transport::payload_limit(&self.inner.connection, service_max)
     }
+    /// Wait for owned guest work and close the transport. Iroh's UDP sockets
+    /// are released after the last endpoint owner drops.
     pub async fn shutdown(&self) {
         self.inner.cancel.cancel();
         self.inner.connection.close(0u32.into(), b"guest closed");

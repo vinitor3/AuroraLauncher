@@ -3,7 +3,7 @@
 //! This is not a transport invitation, admission, or account authentication.
 //! A verifier must independently authenticate the account and consume its own
 //! original challenge once. No caller-selected bytes can be signed by this API.
-use crate::{EndpointId, SecretKey, unix_millis};
+use crate::{EndpointId, OnlineClock, SecretKey, unix_millis};
 use iroh::Signature;
 use serde::{Deserialize, Serialize};
 
@@ -60,17 +60,40 @@ pub struct SocialKeyChallenge {
 }
 impl SocialKeyChallenge {
     pub fn parse(encoded: &str) -> Result<Self> {
+        Self::parse_at(encoded, unix_millis())
+    }
+    pub fn parse_with_clock(encoded: &str, clock: &OnlineClock) -> Result<Self> {
+        let challenge = Self::parse_at(encoded, clock.upper_now())?;
+        challenge.validate_with_clock(clock)?;
+        Ok(challenge)
+    }
+    fn parse_at(encoded: &str, now: u64) -> Result<Self> {
         if encoded.is_empty() || encoded.len() > MAX_SOCIAL_KEY_CHALLENGE_BYTES {
             return Err(SocialKeyBindingError::InvalidChallenge);
         }
         let value: Self =
             serde_json::from_str(encoded).map_err(|_| SocialKeyBindingError::InvalidChallenge)?;
-        value.validate()?;
+        value.validate_at(now)?;
         Ok(value)
     }
     /// Rechecks the original absolute timestamps. It never grants extra time.
     pub fn validate(&self) -> Result<()> {
         self.validate_at(unix_millis())
+    }
+    pub fn validate_with_clock(&self, clock: &OnlineClock) -> Result<()> {
+        if !clock.matches_attempt(
+            &self.issuer_instance,
+            &self.account_id,
+            &self.session_id,
+            &self.operation_id,
+            self.generation,
+        ) {
+            return Err(SocialKeyBindingError::InvalidChallenge);
+        }
+        clock
+            .deadline_for(self.expires_at_unix_ms)
+            .map_err(|_| SocialKeyBindingError::Expired)?;
+        self.validate_at(clock.upper_now())
     }
     fn validate_at(&self, now: u64) -> Result<()> {
         if self.schema_version != 1
@@ -105,6 +128,14 @@ impl SocialKeyChallenge {
     }
     pub fn sign(&self, key: &SecretKey) -> Result<SocialKeyBindingProof> {
         self.sign_at(key, unix_millis())
+    }
+    pub fn sign_with_clock(
+        &self,
+        key: &SecretKey,
+        clock: &OnlineClock,
+    ) -> Result<SocialKeyBindingProof> {
+        self.validate_with_clock(clock)?;
+        self.sign_at(key, clock.upper_now())
     }
     fn sign_at(&self, key: &SecretKey, now: u64) -> Result<SocialKeyBindingProof> {
         self.validate_at(now)?;

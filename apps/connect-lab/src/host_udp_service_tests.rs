@@ -149,11 +149,13 @@ impl Fixture {
         send.finish().unwrap();
     }
 
-    async fn finish(self) {
+    async fn release(self) -> BTreeSet<SocketAddr> {
         bounded(self.guest.shutdown()).await;
         bounded(self.host.shutdown()).await;
         let tcp_address = self.tcp.local_addr().unwrap();
-        let addresses = self.addresses;
+        let destination_address = self.destination.local_addr().unwrap();
+        let mut endpoints = self.addresses;
+        assert!(endpoints.remove(&destination_address));
         drop((
             self.guest,
             self.host,
@@ -165,13 +167,26 @@ impl Fixture {
             std::net::TcpListener::bind(tcp_address).is_ok(),
             "tcp_fixture_released"
         );
-        for address in addresses {
-            assert!(
-                std::net::UdpSocket::bind(address).is_ok(),
-                "udp_fixture_released"
-            );
-        }
+        assert!(
+            std::net::UdpSocket::bind(destination_address).is_ok(),
+            "udp_fixture_destination_released"
+        );
+        endpoints
     }
+
+    async fn finish(self) {
+        assert_endpoint_sockets_released(self.release().await);
+    }
+}
+
+fn assert_endpoint_sockets_released(addresses: BTreeSet<SocketAddr>) {
+    let _rebound: Vec<_> = addresses
+        .into_iter()
+        .map(|address| {
+            std::net::UdpSocket::bind(address)
+                .unwrap_or_else(|error| panic!("udp_fixture_endpoint_released {address}: {error}"))
+        })
+        .collect();
 }
 
 fn assert_socket_held(address: SocketAddr) {
@@ -925,7 +940,7 @@ async fn close_udp_cleanup_and_disable_wait_for_the_same_return_owner() {
     fixture.finish().await;
 }
 
-async fn concurrent_terminal(shutdown: bool) {
+async fn concurrent_terminal(shutdown: bool) -> BTreeSet<SocketAddr> {
     let fixture = Fixture::new().await;
     let permits = fixture.host.state.udp.available_permits();
     let original_expiry = fixture
@@ -979,17 +994,28 @@ async fn concurrent_terminal(shutdown: bool) {
     gate.open();
     bounded(association.shutdown()).await;
     drop(association);
-    fixture.finish().await;
+    assert_eq!(Arc::strong_count(&fixture.host), 1);
+    fixture.release().await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn revocation_converges_with_service_cleanup_and_releases_held_return() {
-    concurrent_terminal(false).await;
+    assert_endpoint_sockets_released(concurrent_terminal(false).await);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn host_shutdown_converges_with_service_cleanup_and_releases_held_return() {
-    concurrent_terminal(true).await;
+#[test]
+fn host_shutdown_converges_with_service_cleanup_and_releases_held_return() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let endpoints = runtime.block_on(concurrent_terminal(true));
+    // The held return socket, permit and raw fixture sockets already passed
+    // their immediate assertions. Join the runtime that owns Iroh's private
+    // actor abort before checking rebind of the dropped transport endpoints.
+    runtime.shutdown_timeout(WAIT);
+    assert_endpoint_sockets_released(endpoints);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
