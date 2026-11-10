@@ -25,8 +25,9 @@ function Empty({ title, children }: { title: string; children: ReactNode }) {
   return <div className="social-empty"><span className="social-empty-mark" aria-hidden="true">◇</span><strong>{title}</strong><p>{children}</p></div>;
 }
 
-function SessionCard({ session, now, joinEnabled, pending, onJoin, availability }: {
+function SessionCard({ session, now, joinEnabled, pending, waitingForApproval, onJoin, availability }: {
   session: SocialSession; now: number; joinEnabled: boolean; pending: boolean; onJoin: (id: string) => void;
+  waitingForApproval: boolean;
   availability: ReturnType<typeof useSocialAvailability>;
 }) {
   const image = socialArtwork(session.imageUrl);
@@ -43,8 +44,8 @@ function SessionCard({ session, now, joinEnabled, pending, onJoin, availability 
       <SocialAvailabilityBadge sessionId={session.id} value={availability.values.get(session.id)} observe={availability.observe} />
       <small>{expired ? "Anúncio expirado" : session.visibility === "friends" ? "Para amigos" : "Sessão da comunidade"}</small>
     </div>
-    <div className="social-session-footer"><small>{!joinEnabled ? "Entrada indisponível" : session.joinPolicy === "approval" ? "O anfitrião aprova a entrada" : "Ingresso aberto"}</small>
-      <button disabled={!joinEnabled || pending || expired} onClick={() => onJoin(session.id)}>{session.joinPolicy === "approval" ? "Pedir para entrar" : "Entrar"}</button></div>
+    <div className="social-session-footer"><small>{!joinEnabled ? "Entrada indisponível" : waitingForApproval ? "Aguardando aprovação" : session.joinPolicy === "approval" ? "O anfitrião aprova a entrada" : "Ingresso aberto"}</small>
+      <button disabled={!joinEnabled || pending || expired} onClick={() => onJoin(session.id)}>{session.joinPolicy === "approval" ? waitingForApproval ? "Verificar pedido" : "Pedir para entrar" : "Entrar"}</button></div>
   </article>;
 }
 
@@ -63,6 +64,7 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [waitingJoinRequests, setWaitingJoinRequests] = useState<Record<string, number>>({});
   const [query, setQuery] = useState("");
   const [searched, setSearched] = useState(false);
   const [result, setResult] = useState<SocialPerson | null>(null);
@@ -108,6 +110,7 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
     active.current = true; const generation = ++epoch.current; busy.current = false;
     setSnapshot(undefined); setSessions([]); setNextCursor(null); setPending(false); setLoading(available);
     setError(""); setMessage(""); setQuery(""); setSearched(false); setResult(null); setFilter("");
+    setWaitingJoinRequests({});
     draftSession.current = undefined; draftEdited.current = false;
     setDraft(emptyDraft()); setPublicationConsent(false); setFriendTab("friends"); setScope("public");
     if (available) void readAll(generation).catch((reason: unknown) => {
@@ -136,17 +139,37 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
   }
 
   async function enterSession(session: SocialSession) {
-    if (!service?.capabilities.join || !(session.expiresAtMs > readNow())) return;
+    const generation = epoch.current;
+    const live = () => current(generation) && service?.capabilities.join && session.expiresAtMs > readNow();
+    if (!service || !live()) return;
     if (session.joinPolicy === "approval") {
       if (!service.organization) throw new Error("Os pedidos de entrada não estão disponíveis neste serviço.");
+      const checkingExisting = waitingForApproval(session);
       const status = await service.organization.joinRequestStatus(session.id);
+      if (!live()) return;
+      if (status === "none" && checkingExisting) {
+        setWaitingJoinRequests(previous => { const next = { ...previous }; delete next[session.id]; return next; });
+        return "Este pedido não está mais disponível. Use Pedir para entrar para enviar outro.";
+      }
       if (status !== "accepted") {
         if (status === "none") await service.organization.requestJoin(session.id);
-        return "Pedido enviado. Após a aprovação do anfitrião, clique novamente para entrar.";
+        if (!live()) return;
+        // This account-scoped hint is presentation only. Every explicit check
+        // still reads the service; it never admits a guest from cached state.
+        setWaitingJoinRequests(previous => ({ ...Object.fromEntries(Object.entries(previous)
+          .filter(([id, expires]) => id !== session.id && expires > readNow()).slice(-(MAX_VISIBLE_SESSIONS - 1))),
+          [session.id]: session.expiresAtMs }));
+        return status === "none" ? "Pedido enviado. Use Verificar pedido para consultar a aprovação."
+          : "Aguardando aprovação do anfitrião. Use Verificar pedido para consultar novamente.";
       }
+      setWaitingJoinRequests(previous => { const next = { ...previous }; delete next[session.id]; return next; });
     }
+    if (!live()) return;
     await service.prepareJoin(session.id);
   }
+
+  const waitingForApproval = (session: SocialSession) => session.joinPolicy === "approval"
+    && session.expiresAtMs > now && waitingJoinRequests[session.id] === session.expiresAtMs;
 
   async function search(event: FormEvent) {
     event.preventDefault();
@@ -236,7 +259,7 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
               {friendTab === "incoming" && <><button disabled={disabled || expiredRequest || !Number.isFinite(now)} onClick={() => actOn(person, "accept")}>Aceitar</button><button className="secondary" disabled={disabled} onClick={() => actOn(person, "decline")}>Recusar</button></>}
               {friendTab === "outgoing" && <button className="secondary" disabled={disabled} onClick={() => actOn(person, "cancel")}>Cancelar pedido</button>}
               {friendTab === "blocked" && <button className="secondary" disabled={disabled} onClick={() => actOn(person, "unblock")}>Desbloquear</button>}
-              {friendTab === "friends" && friend?.session && <><SocialAvailabilityBadge sessionId={friend.session.id} value={availability.values.get(friend.session.id)} observe={availability.observe} /><button disabled={disabled || connectionBusy || !service?.capabilities.join || (friend.session.joinPolicy === "approval" && !service.organization) || !(friend.session.expiresAtMs > now)} onClick={() => { if (!connectionBusy && friend.session && friend.session.expiresAtMs > readNow() && service?.capabilities.join) void run(() => enterSession(friend.session!), "", false); }}>{friend.session.joinPolicy === "approval" ? "Pedir para entrar" : "Entrar"}</button></>}
+              {friendTab === "friends" && friend?.session && <><SocialAvailabilityBadge sessionId={friend.session.id} value={availability.values.get(friend.session.id)} observe={availability.observe} />{waitingForApproval(friend.session) && <small>Aguardando aprovação</small>}<button disabled={disabled || connectionBusy || !service?.capabilities.join || (friend.session.joinPolicy === "approval" && !service.organization) || !(friend.session.expiresAtMs > now)} onClick={() => { if (!connectionBusy && friend.session && friend.session.expiresAtMs > readNow() && service?.capabilities.join) void run(() => enterSession(friend.session!), "", false); }}>{friend.session.joinPolicy === "approval" ? waitingForApproval(friend.session) ? "Verificar pedido" : "Pedir para entrar" : "Entrar"}</button></>}
               {friendTab !== "blocked" && <details className="social-person-menu"><summary>Opções</summary><div>{friendTab === "friends" && <button className="secondary" disabled={disabled} onClick={() => actOn(person, "remove")}>Remover amigo</button>}<button className="danger" disabled={disabled} onClick={() => actOn(person, "block")}>Bloquear</button></div></details>}
             </div></li>;
         })}</ul>}
@@ -251,7 +274,7 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
         <header className="social-community-heading"><div><h3>Mundos da comunidade</h3><p>Encontre uma sessão para a sua próxima aventura.</p></div><div className="social-layout-switch" aria-label="Visualização das sessões"><button aria-pressed={layout === "grid"} onClick={() => setLayout("grid")}>Grade</button><button aria-pressed={layout === "list"} onClick={() => setLayout("list")}>Lista</button></div></header>
         <div className="social-filters"><div className="social-tabs" aria-label="Origem das sessões"><button aria-pressed={scope === "public"} onClick={() => setScope("public")}>Comunidade</button><button aria-pressed={scope === "friends"} onClick={() => setScope("friends")}>Dos amigos</button></div><input aria-label="Filtrar sessões carregadas" placeholder="Filtrar modpack ou versão" value={filter} onChange={event => setFilter(event.target.value)} /></div>
         {available && !service?.capabilities.join && <p className="social-notice">O serviço online não está ativado neste executável. Você pode organizar amizades e descobrir anúncios.</p>}
-        {!visibleSessions.length ? <Empty title={loading ? "Procurando sessões…" : "Nenhuma sessão disponível"}>{filter ? "Nenhum anúncio carregado corresponde ao filtro." : scope === "friends" ? "As sessões compartilhadas pelos seus amigos aparecerão aqui." : "Os mundos publicados voluntariamente pelos anfitriões aparecerão aqui."}</Empty> : <div className="social-catalog" data-layout={layout}>{visibleSessions.map(session => <SessionCard key={session.id} session={session} now={now} availability={availability} pending={disabled || connectionBusy || session.hostUid === accountId} joinEnabled={service?.capabilities.join === true && (session.joinPolicy === "open" || !!service.organization)} onJoin={() => { if (!connectionBusy && session.hostUid !== accountId && session.expiresAtMs > readNow() && service?.capabilities.join) void run(() => enterSession(session), "", false); }} />)}</div>}
+        {!visibleSessions.length ? <Empty title={loading ? "Procurando sessões…" : "Nenhuma sessão disponível"}>{filter ? "Nenhum anúncio carregado corresponde ao filtro." : scope === "friends" ? "As sessões compartilhadas pelos seus amigos aparecerão aqui." : "Os mundos publicados voluntariamente pelos anfitriões aparecerão aqui."}</Empty> : <div className="social-catalog" data-layout={layout}>{visibleSessions.map(session => <SessionCard key={session.id} session={session} now={now} availability={availability} waitingForApproval={waitingForApproval(session)} pending={disabled || connectionBusy || session.hostUid === accountId} joinEnabled={service?.capabilities.join === true && (session.joinPolicy === "open" || !!service.organization)} onJoin={() => { if (!connectionBusy && session.hostUid !== accountId && session.expiresAtMs > readNow() && service?.capabilities.join) void run(() => enterSession(session), "", false); }} />)}</div>}
         {scope === "public" && nextCursor && <div className="social-pagination"><button className="secondary" disabled={disabled} onClick={() => void more()}>Carregar mais</button></div>}
         {sessions.length >= MAX_VISIBLE_SESSIONS && <small>Exibindo até 100 anúncios. Atualize para consultar a lista novamente.</small>}
         {available && service?.capabilities.publication && snapshot && <details className="social-publish"><summary>{snapshot.ownSession ? "Meu anúncio de sessão" : "Compartilhar uma sessão"}</summary>

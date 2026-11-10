@@ -483,6 +483,91 @@ test("approval-only and self-owned cards stay disabled after join capability ena
   await render({ connection: connection() }); assert.equal(button("Pedir para entrar").disabled, true); assert.equal(button("Entrar").disabled, true);
   assert.equal(count("prepareJoin"), 0);
 });
+function approvalJoinFixture() {
+  service.capabilities.join = true;
+  page.items = [{ ...baseSession, joinPolicy: "approval" }];
+  handlers.prepareJoin = () => undefined;
+  service.organization = { snapshot: async () => ({ group: null, invitations: [], joinRequests: [] }) };
+  for (const name of ["joinRequestStatus", "requestJoin"]) service.organization[name] = async (...args) => {
+    calls.push({ name, args });
+    return handlers[name] ? handlers[name](...args) : name === "joinRequestStatus" ? "none" : undefined;
+  };
+}
+
+test("approval join shows a waiting request in friends and catalog without resending or auto-entering", async () => {
+  approvalJoinFixture();
+  state.friends = [{ ...person, presence: null, session: page.items[0] }];
+  let status = "none";
+  handlers.joinRequestStatus = () => status;
+  await render();
+  assert.equal(buttons("Pedir para entrar").length, 2);
+  assert.equal(count("joinRequestStatus"), 0);
+  await click("Pedir para entrar");
+  assert.equal(count("requestJoin"), 1); assert.equal(count("prepareJoin"), 0);
+  assert.equal(buttons("Verificar pedido").length, 2);
+  assert.match(container.textContent, /Pedido enviado/);
+  assert.match(container.querySelector(".social-session-footer").textContent, /Aguardando aprovação/);
+  status = "pending";
+  await click("Verificar pedido");
+  assert.equal(count("requestJoin"), 1); assert.equal(count("prepareJoin"), 0);
+  assert.match(container.textContent, /Aguardando aprovação do anfitrião/);
+  assert.doesNotMatch(container.textContent, /Pedido enviado/);
+  status = "accepted";
+  assert.equal(count("prepareJoin"), 0, "a changed remote status does not auto-enter");
+  await click("Verificar pedido");
+  assert.equal(count("joinRequestStatus"), 3);
+  assert.deepEqual(calls.find(call => call.name === "prepareJoin").args, [baseSession.id]);
+  assert.equal(count("prepareJoin"), 1); assert.equal(count("requestJoin"), 1);
+  assert.equal(buttons("Verificar pedido").length, 0);
+});
+
+test("approval join checks never silently resend a request removed by the service", async () => {
+  approvalJoinFixture();
+  await render(); await click("Pedir para entrar");
+  assert.equal(count("requestJoin"), 1);
+  await click("Verificar pedido");
+  assert.equal(count("requestJoin"), 1); assert.equal(count("prepareJoin"), 0);
+  assert.match(container.textContent, /Este pedido não está mais disponível/);
+  assert.equal(buttons("Verificar pedido").length, 0);
+  await click("Pedir para entrar");
+  assert.equal(count("requestJoin"), 2, "resending needs a new explicit request action");
+});
+
+for (const transition of ["account", "service"]) for (const status of ["none", "pending", "accepted"]) {
+  test(`approval join discards delayed ${status} after ${transition} replacement`, async () => {
+    approvalJoinFixture();
+    const reply = deferred(); handlers.joinRequestStatus = () => reply.promise;
+    await render(); await click("Pedir para entrar");
+    await render(transition === "account" ? { accountId: "other-account" } : { service: makeService() });
+    await act(async () => reply.resolve(status));
+    assert.equal(count("requestJoin"), 0); assert.equal(count("prepareJoin"), 0);
+    assert.equal(buttons("Verificar pedido").length, 0);
+    assert.doesNotMatch(container.textContent, /Pedido enviado|Aguardando aprovação/);
+  });
+}
+
+test("approval join discards a late request acknowledgement after account replacement", async () => {
+  approvalJoinFixture();
+  const reply = deferred(); handlers.requestJoin = () => reply.promise;
+  await render(); await click("Pedir para entrar");
+  assert.equal(count("requestJoin"), 1);
+  await render({ accountId: "other-account" });
+  await act(async () => reply.resolve());
+  assert.equal(count("prepareJoin"), 0); assert.equal(buttons("Verificar pedido").length, 0);
+  assert.doesNotMatch(container.textContent, /Pedido enviado|Aguardando aprovação/);
+});
+
+for (const status of ["none", "accepted"]) test(`approval join rechecks service expiry after a delayed ${status}`, async () => {
+  approvalJoinFixture();
+  let now = fixedNow; service.now = () => now;
+  const reply = deferred(); handlers.joinRequestStatus = () => reply.promise;
+  await render(); await click("Pedir para entrar");
+  now = baseSession.expiresAtMs;
+  await act(async () => reply.resolve(status));
+  assert.equal(count("requestJoin"), 0); assert.equal(count("prepareJoin"), 0);
+  assert.equal(buttons("Verificar pedido").length, 0);
+});
+
 test("host preparation requires an eligible own advert and never auto-approves", async () => {
   state.ownSession = { ...baseSession, hostUid: "owner-uid" };
   await render({ connection: connection() }); assert.equal(count("connect:prepareHost"), 0);
