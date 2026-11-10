@@ -29,6 +29,8 @@ const PROFILE_FIELDS: [&str; 10] = [
 #[serde(rename_all = "camelCase")]
 struct ProfilePins {
     base_profile_sha256: String,
+    #[serde(default)]
+    additional_base_profile_asset_sha1: BTreeMap<String, String>,
     loader_profile_sha256: String,
     #[serde(default)]
     additional_libraries: BTreeMap<String, String>,
@@ -81,9 +83,19 @@ impl RuntimePins {
         let target = targets
             .remove(profile.version_id())
             .ok_or(Error::Internal)?;
-        if profile_sha256(base)? != target.base_profile_sha256
-            || profile_sha256(child)? != target.loader_profile_sha256
-        {
+        let base_sha256 = profile_sha256(base)?;
+        // Mojang can revise an asset index without changing the client version.
+        // Each additional revision pins the entire launch projection and its
+        // index together; it does not authorize arbitrary future metadata.
+        let known_base = base_sha256 == target.base_profile_sha256
+            || target
+                .additional_base_profile_asset_sha1
+                .get(&base_sha256)
+                .is_some_and(|expected| {
+                    base.pointer("/assetIndex/sha1").and_then(Value::as_str)
+                        == Some(expected.as_str())
+                });
+        if !known_base || profile_sha256(child)? != target.loader_profile_sha256 {
             return Err(Error::UnsupportedRuntime);
         }
         let mut library_sha1 = target.fabric_library_sha1;

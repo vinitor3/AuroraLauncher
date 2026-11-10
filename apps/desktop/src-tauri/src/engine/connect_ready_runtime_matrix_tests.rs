@@ -170,3 +170,74 @@ fn ready_matrix_official_profile_inputs_resolve_all_nine_client_commands() {
         }
     }
 }
+
+#[test]
+#[ignore = "explicit old/new official metadata and asset index; read-only, no game or Java execution"]
+fn ready_matrix_official_asset_revision_keeps_old_copies_and_rejects_mixed_inputs() {
+    let root = PathBuf::from(
+        std::env::var_os("AURORA_CONNECT_READY_PROFILE_FIXTURES")
+            .expect("explicit original official-profile fixtures required"),
+    );
+    let updated = PathBuf::from(
+        std::env::var_os("AURORA_CONNECT_READY_UPDATED_COPY")
+            .expect("explicit updated official copy required"),
+    );
+    let read_json = |path: PathBuf| {
+        serde_json::from_slice::<serde_json::Value>(&fs::read(path).unwrap()).unwrap()
+    };
+    let new_base = read_json(updated.join("versions/1.21.1/1.21.1.json"));
+    let new_index = fs::read(updated.join("assets/indexes/17.json")).unwrap();
+    for profile in [ReadyProfile::Fabric1211, ReadyProfile::Forge1211] {
+        let versions = root
+            .join("instances")
+            .join(profile.version_id())
+            .join("versions");
+        let old_base = read_json(versions.join("1.21.1/1.21.1.json"));
+        let child = read_json(versions.join(format!("{0}/{0}.json", profile.version_id())));
+        let old_pins = RuntimePins::from_exact_profiles(profile, &old_base, &child).unwrap();
+        let new_pins = RuntimePins::from_exact_profiles(profile, &new_base, &child).unwrap();
+        assert_eq!(
+            old_pins.asset_index_sha1,
+            "4ca8e1a1edd37a703c5d1594f71d409852cd9770"
+        );
+        assert_eq!(
+            new_pins.asset_index_sha1,
+            "fe8483e9e95c56b261ed6ab05aa57f83d669edf1"
+        );
+        assert_eq!(new_pins.client_sha1, old_pins.client_sha1);
+        assert_eq!(new_pins.library_sha1, old_pins.library_sha1);
+        assert_eq!(new_pins.additional_libraries, old_pins.additional_libraries);
+        assert_eq!(new_pins.extracted_natives, old_pins.extracted_natives);
+        assert_eq!(verify_sha1(&new_index, &new_pins.asset_index_sha1), Ok(()));
+        assert_eq!(
+            verify_sha1(&new_index, &old_pins.asset_index_sha1),
+            Err(Error::ArtifactMismatch)
+        );
+        for field in ["sha1", "url", "size", "totalSize"] {
+            let mut mixed = new_base.clone();
+            mixed["assetIndex"][field] = old_base["assetIndex"][field].clone();
+            assert!(matches!(
+                RuntimePins::from_exact_profiles(profile, &mixed, &child),
+                Err(Error::UnsupportedRuntime)
+            ));
+            let mut mixed = old_base.clone();
+            mixed["assetIndex"][field] = new_base["assetIndex"][field].clone();
+            assert!(matches!(
+                RuntimePins::from_exact_profiles(profile, &mixed, &child),
+                Err(Error::UnsupportedRuntime)
+            ));
+        }
+        let mut changed_base = new_base.clone();
+        changed_base["arguments"]["game"] = json!(["--unreviewed"]);
+        assert!(matches!(
+            RuntimePins::from_exact_profiles(profile, &changed_base, &child),
+            Err(Error::UnsupportedRuntime)
+        ));
+        let mut changed_child = child.clone();
+        changed_child["arguments"]["jvm"] = json!(["-javaagent:unreviewed.jar"]);
+        assert!(matches!(
+            RuntimePins::from_exact_profiles(profile, &new_base, &changed_child),
+            Err(Error::UnsupportedRuntime)
+        ));
+    }
+}

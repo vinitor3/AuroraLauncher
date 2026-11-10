@@ -92,6 +92,9 @@
     "loaderProfileSha256": "8272edd08c50fcd106227f36e1bc8f0e04212f915737dad09fa6ac88f79bd444"
   },
   "1.21.1-forge-52.1.12": {
+    "additionalBaseProfileAssetSha1": {
+      "b68aeeee54700d8e5b4747e1adeaba90e973853ea6af2a0b42d19e71f53080c8": "fe8483e9e95c56b261ed6ab05aa57f83d669edf1"
+    },
     "baseProfileSha256": "0cc04bf674bc99292c55d70f376066a9c4cfcc6dafa62eefed714dfd09fdef52",
     "loaderProfileSha256": "5c43876520304d26409c9519ec9526cd149923516fd709be01389c9fea4fee59"
   },
@@ -169,6 +172,9 @@
     "loaderProfileSha256": "503e144548d50fa99aa542638a6cd3f8807c9e6989257f7b9a7da3bb96c2fb79"
   },
   "fabric-loader-0.16.14-1.21.1": {
+    "additionalBaseProfileAssetSha1": {
+      "b68aeeee54700d8e5b4747e1adeaba90e973853ea6af2a0b42d19e71f53080c8": "fe8483e9e95c56b261ed6ab05aa57f83d669edf1"
+    },
     "baseProfileSha256": "0cc04bf674bc99292c55d70f376066a9c4cfcc6dafa62eefed714dfd09fdef52",
     "fabricLibrarySha1": {
       "libraries/net/fabricmc/fabric-loader/0.16.14/fabric-loader-0.16.14.jar": "05778d47f536bf2c63ed2abc1a56f5a1c129e34a",

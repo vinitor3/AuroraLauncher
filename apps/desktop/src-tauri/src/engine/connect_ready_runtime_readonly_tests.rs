@@ -5,6 +5,55 @@ use std::{cell::Cell, collections::BTreeMap};
 
 #[cfg(all(windows, feature = "connect-lab", debug_assertions))]
 #[test]
+#[ignore = "explicit read-only verification of an unpublished diagnostic copy; no Java, network or publication"]
+fn ready_runtime_verify_existing_unpublished_copy_without_launch() {
+    use std::time::{Duration, Instant};
+    let data = PathBuf::from(std::env::var_os("AURORA_CONNECT_READY_BENCH_DATA").unwrap());
+    let id = std::env::var("AURORA_CONNECT_READY_BENCH_COPY_ID").unwrap();
+    let java = PathBuf::from(std::env::var_os("AURORA_CONNECT_READY_VERIFY_JAVA").unwrap());
+    let profile = ReadyProfile::from_version_id(
+        &std::env::var("AURORA_CONNECT_READY_INSTALL_PROFILE").unwrap(),
+    )
+    .expect("explicit closed profile required");
+    let uuid = id
+        .strip_prefix("aurora-test-")
+        .expect("diagnostic copy required");
+    uuid::Uuid::parse_str(uuid).unwrap();
+    let journal = data.join(".aurora/diagnostic-lab").join(uuid);
+    let before = tree(&journal);
+    assert!(!journal.join("ready.json").exists());
+    assert!(!journal.join("runtime-java.json").exists());
+    let copy = InstanceLayout::new(&data).open(InstanceId::parse(id).unwrap());
+    let metadata = fs::read(copy.root().join("aurora-instance.json")).unwrap();
+    let _guard = acquire_instance_mutation_lock(&copy).unwrap();
+    let started = Instant::now();
+    let verified = verify_installed_copy_runtime(&copy, profile, &java, || {
+        started.elapsed() >= Duration::from_secs(180)
+    })
+    .expect("full unpublished runtime verification");
+    let pinned_files = verified._pins.len();
+    drop(verified);
+    assert_eq!(
+        tree(&journal),
+        before,
+        "verification must not publish or change provenance"
+    );
+    assert_eq!(
+        fs::read(copy.root().join("aurora-instance.json")).unwrap(),
+        metadata
+    );
+    println!(
+        "{}",
+        json!({
+            "event":"ready_unpublished_runtime_verified", "elapsedMs":started.elapsed().as_millis(),
+            "pinnedFiles":pinned_files, "profile":profile.version_id(), "published":false,
+            "javaSpawned":false, "networkAccessed":false,
+        })
+    );
+}
+
+#[cfg(all(windows, feature = "connect-lab", debug_assertions))]
+#[test]
 #[ignore = "explicit read-only measurement of an existing closed diagnostic copy; no Java or network"]
 fn ready_runtime_measure_existing_copy_without_launch() {
     use std::time::{Duration, Instant};
