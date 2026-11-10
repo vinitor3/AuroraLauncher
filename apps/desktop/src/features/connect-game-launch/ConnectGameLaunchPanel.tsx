@@ -242,7 +242,7 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
     <h3 ref={heading} tabIndex={-1}>Abrir o Minecraft nesta conexão</h3>
     <p>Revisa uma cópia de teste preparada com Core 1.1.5 e Skins 0.3.1 antes de tentar entrar pelo Connect. A revisão confere o Minecraft, o loader e o Java instalados.</p>
     {!capability && <p role="status">Novos lançamentos estão indisponíveis. O preparo existente ainda pode ser consultado ou cancelado.</p>}
-    {!connected(session) && <p>Conecte como convidado antes de preparar a entrada. Uma consulta ao servidor ou conexão TCP não confirma entrada no mundo.</p>}
+    {!connected(session) && <p>Conecte como convidado ou anfitrião jogador antes de preparar a entrada. Uma consulta ao servidor ou conexão TCP não confirma entrada no mundo.</p>}
     {sessionStale && <p role="status">Aguarde uma observação atual do Connect antes de autorizar a entrada.</p>}
     {!launchContext && <div>
       <p>Selecione uma instância em Instâncias e aguarde o perfil e a aparência. Ela pode estar vazia: você poderá preparar uma cópia separada com o perfil desta sessão.</p>

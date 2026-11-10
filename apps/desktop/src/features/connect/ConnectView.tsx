@@ -17,6 +17,7 @@ import { isControlledSourceRejection, provesNoSourceReservation, type HostSource
 import { pathObservationText } from "./path-observation-types";
 import { connectDeadlines, preparationExpired, remainingText, reviewExpired, sessionGuidance } from "./session-guidance";
 import { socialStageText } from "../social/connect-types";
+import { SocialConnectionFailure } from "../social/SocialConnectionFailure";
 
 type Action = "prepareHost" | "prepareGuest" | "reviewHost" | "reviewGuest" | "confirm" | "export" | "probe" | "retryUdp" | "stop" | "refresh" | GroupAction;
 const actionText: Record<Action, string> = {
@@ -464,6 +465,7 @@ export function ConnectView({ launchContext, onInitialReadReady, onChooseSource,
     <header className="connect-heading"><div><h2 id="connect-title">Aurora Connect</h2><p>{snapshot.phase === "closing" ? "Desconectando…" : socialStageText[snapshot.social.stage]}</p></div><span className="connect-badge">Experimental</span></header>
     <p>Esta sessão foi preparada em Amigos e comunidade. Volte àquela página para acompanhar a entrada ou revisar o compartilhamento.</p>
     <p>Jogo e voz ainda não verificados. A conexão social utiliza o mesmo controle de encerramento do launcher.</p>
+    <SocialConnectionFailure errorCode={snapshot.errorCode} social={snapshot.social} className="connect-error" />
     {error && <p className="connect-error" role="alert">{error}</p>}
     {warning && <p className="connect-warning" role="status">{warning}</p>}
     <div className="connect-actions"><button className="secondary" disabled={busy} onClick={() => void perform("refresh", refresh)}>Atualizar estado</button>

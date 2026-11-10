@@ -207,6 +207,16 @@ test("an authorized local host player can review voice files and confirm the sam
   assert.equal(count("connect_confirm_ready_game_launch"), 1);
 });
 
+test("a disconnected host player gets matching connection guidance without enabling a new game review", async () => {
+  fixtures();
+  await panel({ session: { ...connection, role: "host", phase: "failed", transportState: "closed", tcpAddress: null,
+    cleanupState: "complete", social: { role: "host", hostPlayer: true } } });
+  assert.match(container.textContent, /Conecte como convidado ou anfitrião jogador antes de preparar a entrada/);
+  assert.match(container.textContent, /Uma consulta ao servidor ou conexão TCP não confirma entrada no mundo/);
+  assert.equal(button("Revisar entrada no servidor").disabled, true);
+  assert.deepEqual(calls.map(call => call.command), ["connect_ready_game_launch_snapshot"]);
+});
+
 test("a reviewed official runtime copy supplies its own Java on a fresh launcher", async () => {
   fixtures();
   const ownJava = `C:/fixture/instances/${copyId}/installers/aurora-managed/runtimes/java-21/jre/bin/java.exe`;

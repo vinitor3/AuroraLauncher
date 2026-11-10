@@ -3203,6 +3203,44 @@ function socialReadyFixture(available = false) {
     phase: "idle", review: null, result: null, errorCode: null }));
   handlers.set("diagnostic_lab_list", () => []);
 }
+for (const role of ["host", "guest"]) test(`the Connect client page presents the existing ${role} Social failure without new queries`, async () => {
+  socialReadyFixture();
+  snapshot = { ...snapshot, role, phase: "failed", transportState: "closed", tcpAddress: null, cleanupState: "complete",
+    errorCode: "connect_social_continuity_lost", social: { ...snapshot.social, role, stage: "failed", failureStage: "sessionContinuity",
+      failureObservation: { gate: "hostPoll", bootstrapRoundtripMs: 2800, bootstrapUncertaintyMs: 1200,
+        hostPollElapsedMs: 1800, hostPollAgeMs: 3000, sessionRemainingMs: 14_000_000 } } };
+  await render();
+  const alert = container.querySelector('[role="alert"]');
+  assert.equal(alert.textContent, "Manutenção da sessão. Não foi possível confirmar a continuidade da sessão a tempo. A conexão foi encerrada; prepare uma nova sessão.");
+  const details = [...container.querySelectorAll("details")].find(item => item.querySelector("summary")?.textContent === "Detalhes da interrupção");
+  assert.ok(details); assert.equal(details.hasAttribute("open"), false);
+  assert.match(details.textContent, /Atualização da autorização do anfitrião/);
+  assert.deepEqual([...details.querySelectorAll("li")].map(item => item.textContent), [
+    "Abertura do serviço: 2800 ms.", "Incerteza do horário confirmado: 1200 ms.",
+    "Última consulta de autorização: 1800 ms.", "Idade da última autorização confirmada: 3000 ms.",
+    "Prazo de sessão ainda restante: 14000 s.",
+  ]);
+  await act(async () => { details.setAttribute("open", ""); details.dispatchEvent(new window.Event("toggle")); });
+  assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot"]);
+  assert.match(container.textContent, /Jogo e voz ainda não verificados/);
+  assert.doesNotMatch(container.textContent, /O prazo da sessão terminou|Mundo conectado|Áudio confirmado/);
+  assert.equal(container.querySelector("form"), null);
+});
+
+test("Social failure on the Connect page redacts unknown codes and omits unavailable timings", async () => {
+  socialReadyFixture();
+  snapshot = { ...snapshot, phase: "failed", transportState: "closed", tcpAddress: null, cleanupState: "complete",
+    errorCode: "private-provider-path-and-token", social: { ...snapshot.social, stage: "failed",
+      failureObservation: { gate: "other", bootstrapRoundtripMs: null, bootstrapUncertaintyMs: null,
+        hostPollElapsedMs: null, hostPollAgeMs: null, sessionRemainingMs: 1001 } } };
+  await render();
+  assert.equal(container.querySelector('[role="alert"]').textContent, "Não foi possível concluir a conexão. Atualize o estado antes de tentar novamente.");
+  assert.doesNotMatch(container.textContent, /private-provider-path-and-token|null ms/);
+  const details = container.querySelector("details");
+  assert.deepEqual([...details.querySelectorAll("li")].map(item => item.textContent), ["Prazo de sessão ainda restante: 2 s."]);
+  assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot"]);
+});
+
 test("social transport alone does not enable ready game preparation", async () => {
   socialReadyFixture(); await render();
   assert.doesNotMatch(container.textContent, /Abrir o Minecraft nesta conexão/);

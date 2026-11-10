@@ -411,6 +411,7 @@ test("lost host continuity reports its relative observation separately from the 
   snapshot.social.failureObservation = { gate: "hostPoll", bootstrapRoundtripMs: 2800, bootstrapUncertaintyMs: 1200,
     hostPollElapsedMs: 1800, hostPollAgeMs: 3000, sessionRemainingMs: 14_000_000 };
   await render({ connection: connection(snapshot) });
+  assert.match(container.querySelector(".social-connection [role=alert]").textContent, /^Manutenção da sessão\. /);
   assert.match(container.textContent, /Não foi possível confirmar a continuidade da sessão a tempo/);
   assert.doesNotMatch(container.textContent, /prazo da sessão terminou/);
   const details = [...container.querySelectorAll("details")].find(item => item.querySelector("summary")?.textContent === "Detalhes da interrupção");

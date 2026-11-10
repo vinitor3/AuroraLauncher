@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { SocialService, SocialSession } from "../../shared/social";
-import { socialConnectError, socialFailureGateText, socialFailureStageText, socialGameTarget, socialRuntimeLabels, socialStageText } from "./connect-types";
+import { socialGameTarget, socialRuntimeLabels, socialStageText } from "./connect-types";
+import { SocialConnectionFailure } from "./SocialConnectionFailure";
 import { DiscoveryPicker, type DiscoveredTarget } from "../connect/DiscoveryPicker";
 import type { SocialConnectController, SocialConnectState } from "./connect-controller";
 
@@ -77,21 +78,7 @@ export function SocialConnectionPanel({ connection, ownSession, now, catalogNow 
     <div className="social-community-heading"><div><h3>{snapshot?.phase === "closing" ? "Desconectando…" : social ? socialStageText[social.stage] : active ? "Há outra conexão em andamento" : "Sua conexão multiplayer"}</h3>
       <p>{state.maxSessionSeconds === 14400 ? "Compartilhamento por até 4 horas, limitado ao prazo da origem e à disponibilidade das cotas gratuitas." : "Uma pessoa convidada, somente jogo, por até 60 segundos. Voz desativada."}</p></div><span className="social-tag">Experimental</span></div>
     {state.error && <p className="social-notice" role="alert">{state.error}</p>}
-    {snapshot?.errorCode && <p className="social-notice" role="alert">
-      {social?.failureStage && <><strong>{socialFailureStageText[social.failureStage]}.</strong>{" "}</>}
-      {socialConnectError(snapshot.errorCode)}
-    </p>}
-    {snapshot?.errorCode && social?.failureObservation && <details className="social-notice">
-      <summary>Detalhes da interrupção</summary>
-      <p>Verificação interrompida: {socialFailureGateText[social.failureObservation.gate]}.</p>
-      <ul>
-        {social.failureObservation.bootstrapRoundtripMs !== null && <li>Abertura do serviço: {social.failureObservation.bootstrapRoundtripMs} ms.</li>}
-        {social.failureObservation.bootstrapUncertaintyMs !== null && <li>Incerteza do horário confirmado: {social.failureObservation.bootstrapUncertaintyMs} ms.</li>}
-        {social.failureObservation.hostPollElapsedMs !== null && <li>Última consulta de autorização: {social.failureObservation.hostPollElapsedMs} ms.</li>}
-        {social.failureObservation.hostPollAgeMs !== null && <li>Idade da última autorização confirmada: {social.failureObservation.hostPollAgeMs} ms.</li>}
-        <li>Prazo de sessão ainda restante: {Math.ceil(social.failureObservation.sessionRemainingMs / 1000)} s.</li>
-      </ul>
-    </details>}
+    <SocialConnectionFailure errorCode={snapshot?.errorCode} social={social} />
     {active && !social && <p>Encerre a conexão anterior para compartilhar ou entrar em uma sessão.</p>}
     {!active && !voiceReady && state.available && onPrepareDedicatedServer && <div className="social-notice">
       <p>Prepare um servidor dedicado ou revise novamente a origem em execução; depois escolha a origem pronta aqui.</p>
