@@ -35,4 +35,6 @@ Decisão experimental no caminho existente: [Aurora Connect V2](PROPOSAL-aurora-
 | [027](ADR-027-manual-instance-recovery.md) | Pontos manuais de instância em CAS, prévia confirmada e restauração reversível | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 | [028](ADR-028-doctor-recovery-lab.md) | Evidência verificável do Doctor e cópias de diagnóstico com aplicação seletiva transacional | IMPLEMENTADO MAS NÃO HOMOLOGADO |
 
+| [034](ADR-034-instance-java-engine-settings.md) | Configurar RAM e JVM por instância, com resolução nativa, persistência protegida e painel independente de temas | IMPLEMENTADO MAS NÃO HOMOLOGADO |
+
 Estados mudam somente por novo ADR que substitua o anterior ou por revisão explícita deste arquivo.

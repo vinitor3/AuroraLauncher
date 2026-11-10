@@ -310,6 +310,8 @@ fn main() {
             commands::load_local_appearance,
             commands::save_local_appearance,
             commands::verify_java,
+            commands::read_launch_settings,
+            commands::save_launch_settings,
             commands::discover_java,
             commands::required_java_for_instance,
             commands::available_java_versions,

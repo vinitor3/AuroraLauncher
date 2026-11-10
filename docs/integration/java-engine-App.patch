@@ -1,0 +1,26 @@
+diff --git a/apps/desktop/src/App.tsx b/apps/desktop/src/App.tsx
+index 880c3ae..4dcd8ee 100644
+--- a/apps/desktop/src/App.tsx
++++ b/apps/desktop/src/App.tsx
+@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
+ import { register } from "@tauri-apps/plugin-global-shortcut";
+ import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
+ import { ProjectDescription } from "./features/catalog/ProjectDescription";
++import { LaunchSettingsPanel } from "./features/java-engine/LaunchSettingsPanel";
+ import { drawSkinFace } from "./lib/skinFace";
+ import { SkinPreviewCanvas } from "./features/skins/SkinPreviewCanvas";
+ import { SkinThumbnail } from "./features/skins/SkinThumbnail";
+@@ -3985,6 +3986,13 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
+               })}
+             </div>
+             <details className="java-manual"><summary>Usar um executável manualmente</summary><form onSubmit={verifyJava} className="java-form"><input value={javaPath} onChange={(event) => { setJavaPath(event.target.value); window.localStorage.setItem("aurora.javaExecutable", event.target.value); }} placeholder="C:\\Java\\bin\\java.exe" /><button className="secondary" disabled={busy} type="submit">Validar Java</button></form></details>
++            <label htmlFor="java-engine-instance">Configurar inicialização da instância
++              <select id="java-engine-instance" value={targetInstance} disabled={busy} onChange={(event) => setTargetInstance(event.target.value)}>
++                <option value="">Selecione uma instância</option>
++                {instances.map((instance) => <option key={instance.id} value={instance.id}>{instance.id}</option>)}
++              </select>
++            </label>
++            <LaunchSettingsPanel key={targetInstance} instanceId={targetInstance} busy={busy} running={runningInstances.some((running) => running.instanceId === targetInstance)} />
+           </article>
+           <article className="panel section-appearance wardrobe-panel">
+             <div className="wardrobe-heading">

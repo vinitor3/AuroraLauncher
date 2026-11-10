@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use super::launch_settings::{EffectiveLaunchSettings, LaunchSettingsError};
 use super::process::background_command;
 use super::{Instance, InstanceError, JavaRuntime};
 
@@ -19,6 +20,8 @@ pub enum LaunchError {
     EmptyClasspath,
     #[error("a propriedade JVM não pode ser vazia")]
     InvalidJvmProperty,
+    #[error(transparent)]
+    InvalidSettings(#[from] LaunchSettingsError),
     #[error("erro de E/S ao iniciar a JVM: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -100,6 +103,11 @@ impl LaunchCommand {
                 args[index + 1] = "[redacted]".into();
             }
         }
+        for arg in &mut args {
+            if arg.starts_with("-Daurora.session.nonce=") {
+                *arg = "-Daurora.session.nonce=[redacted]".into();
+            }
+        }
         args
     }
 }
@@ -135,11 +143,29 @@ impl PreparedLaunch {
         let mut command = background_command(&self.command.executable);
         command
             .args(&self.command.args)
-            .current_dir(&self.command.working_dir)
-            .envs(&self.command.environment);
+            .current_dir(&self.command.working_dir);
+        configure_java_environment(&mut command, &self.command.environment);
         #[cfg(target_os = "windows")]
         configure_windows_game_output(&mut command, &self.command.working_dir)?;
         Ok(command.spawn()?)
+    }
+}
+
+fn configure_java_environment(
+    command: &mut std::process::Command,
+    environment: &BTreeMap<String, String>,
+) {
+    command.envs(environment);
+    // These variables can inject unvalidated JVM arguments or a classpath even
+    // when the launcher never invokes a shell. Keep this process isolated from
+    // system-wide Java overrides without changing the parent's environment.
+    for variable in [
+        "JAVA_TOOL_OPTIONS",
+        "JDK_JAVA_OPTIONS",
+        "_JAVA_OPTIONS",
+        "CLASSPATH",
+    ] {
+        command.env_remove(variable);
     }
 }
 
@@ -221,13 +247,54 @@ impl LauncherEngine {
         spec: &VersionLaunchSpec,
         max_memory_mb: u32,
     ) -> Result<PreparedLaunch, LaunchError> {
+        self.prepare_launch_with_settings(
+            instance,
+            java,
+            identity,
+            spec,
+            &EffectiveLaunchSettings {
+                min_memory_mb: None,
+                max_memory_mb,
+                jvm_args: Vec::new(),
+            },
+        )
+    }
+
+    pub fn prepare_launch_with_settings(
+        &self,
+        instance: &Instance,
+        java: &JavaRuntime,
+        identity: &LaunchIdentity,
+        spec: &VersionLaunchSpec,
+        settings: &EffectiveLaunchSettings,
+    ) -> Result<PreparedLaunch, LaunchError> {
+        settings.validate()?;
         instance.ensure_layout()?;
         require_file(&spec.client_jar)?;
         let classpath = build_classpath(&spec.libraries, &spec.client_jar)?;
         let natives = instance.natives_dir();
 
         let mut args = Vec::new();
-        args.push(format!("-Xmx{max_memory_mb}M"));
+        let custom_collector = settings
+            .jvm_args
+            .iter()
+            .any(|arg| arg.starts_with("-XX:+") && is_collector_argument(arg));
+        // A version/loader profile must not silently override the user's RAM
+        // selection. The engine owns both heap bounds and emits each once.
+        args.extend(
+            spec.jvm_args
+                .iter()
+                .filter(|arg| {
+                    !(is_managed_heap_argument(arg)
+                        || custom_collector && is_collector_argument(arg))
+                })
+                .cloned(),
+        );
+        args.extend(settings.jvm_args.iter().cloned());
+        if let Some(min_memory_mb) = settings.min_memory_mb {
+            args.push(format!("-Xms{min_memory_mb}M"));
+        }
+        args.push(format!("-Xmx{}M", settings.max_memory_mb));
         args.push(format!("-Djava.library.path={}", natives.display()));
         if let Some(port) = spec.aurora_ipc_port {
             args.push(format!("-Daurora.ipc.port={port}"));
@@ -236,7 +303,6 @@ impl LauncherEngine {
         if let Some(nonce) = &spec.aurora_session_nonce {
             args.push(format!("-Daurora.session.nonce={nonce}"));
         }
-        args.extend(spec.jvm_args.iter().cloned());
         args.push("-cp".into());
         args.push(classpath);
         args.push(spec.main_class.clone());
@@ -274,6 +340,51 @@ impl LauncherEngine {
             },
         })
     }
+}
+
+fn is_managed_heap_argument(argument: &str) -> bool {
+    argument.starts_with("-Xmx")
+        || argument.starts_with("-Xms")
+        || [
+            "MaxHeapSize",
+            "InitialHeapSize",
+            "MinHeapSize",
+            "MaxRAM",
+            "MaxRAMPercentage",
+            "MinRAMPercentage",
+            "InitialRAMPercentage",
+            "MaxRAMFraction",
+            "MinRAMFraction",
+            "InitialRAMFraction",
+            "ErgoHeapSizeLimit",
+            "SoftMaxHeapSize",
+        ]
+        .iter()
+        .any(|name| {
+            argument
+                .strip_prefix("-XX:")
+                .and_then(|value| value.strip_prefix(name))
+                .is_some_and(|suffix| suffix.starts_with('='))
+        })
+}
+
+fn is_collector_argument(argument: &str) -> bool {
+    matches!(
+        argument
+            .strip_prefix("-XX:+")
+            .or_else(|| argument.strip_prefix("-XX:-")),
+        Some(
+            "UseG1GC"
+                | "UseParallelGC"
+                | "UseParallelOldGC"
+                | "UseSerialGC"
+                | "UseZGC"
+                | "UseShenandoahGC"
+                | "UseConcMarkSweepGC"
+                | "UseParNewGC"
+                | "UseEpsilonGC"
+        )
+    )
 }
 
 fn require_file(path: &Path) -> Result<(), LaunchError> {
@@ -365,11 +476,177 @@ mod tests {
     fn redacts_access_token() {
         let command = LaunchCommand {
             executable: "java".into(),
-            args: vec!["--accessToken".into(), "secret".into()],
+            args: vec![
+                "-Daurora.session.nonce=ephemeral-secret".into(),
+                "--accessToken".into(),
+                "secret".into(),
+            ],
             working_dir: PathBuf::new(),
             environment: BTreeMap::new(),
         };
-        assert_eq!(command.redacted_args(), vec!["--accessToken", "[redacted]"]);
+        assert_eq!(
+            command.redacted_args(),
+            vec![
+                "-Daurora.session.nonce=[redacted]",
+                "--accessToken",
+                "[redacted]",
+            ]
+        );
+    }
+
+    fn launch_fixture() -> (PathBuf, Instance, JavaRuntime, VersionLaunchSpec) {
+        let root = std::env::temp_dir().join(format!("aurora launch settings {}", Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let instance = super::super::InstanceLayout::new(&root)
+            .open(super::super::InstanceId::parse("settings-test").unwrap());
+        let java = JavaRuntime::from_executable(std::env::current_exe().unwrap()).unwrap();
+        let mut spec = launch_spec();
+        spec.client_jar = root.join("client.jar");
+        spec.libraries = vec![root.join("library.jar")];
+        std::fs::write(&spec.client_jar, b"fixture").unwrap();
+        std::fs::write(&spec.libraries[0], b"fixture").unwrap();
+        (root, instance, java, spec)
+    }
+
+    #[test]
+    fn engine_owns_heap_bounds_and_preserves_loader_and_session_arguments() {
+        let (root, instance, java, mut spec) = launch_fixture();
+        spec.jvm_args = vec![
+            "-Xmx128M".into(),
+            "-Xms128M".into(),
+            "-XX:MaxHeapSize=256M".into(),
+            "-XX:InitialHeapSize=256M".into(),
+            "-XX:MinHeapSize=256M".into(),
+            "-XX:MaxRAMPercentage=90".into(),
+            "-XX:MaxRAMFraction=1".into(),
+            "-XX:+UseParallelGC".into(),
+            "-Dloader.fixture=true".into(),
+        ];
+        spec.aurora_ipc_port = Some(12345);
+        spec.aurora_session_nonce = Some("test-ephemeral".into());
+        let identity = LaunchIdentity::offline("FixturePlayer", Uuid::nil());
+        let settings = EffectiveLaunchSettings {
+            min_memory_mb: Some(1024),
+            max_memory_mb: 6144,
+            jvm_args: vec!["-XX:+UseG1GC".into(), "-Duser.language=pt".into()],
+        };
+        let command = LauncherEngine
+            .prepare_launch_with_settings(&instance, &java, &identity, &spec, &settings)
+            .unwrap()
+            .command;
+        let args = &command.args;
+        assert_eq!(args.iter().filter(|arg| arg.starts_with("-Xmx")).count(), 1);
+        assert_eq!(args.iter().filter(|arg| arg.starts_with("-Xms")).count(), 1);
+        assert!(args.contains(&"-Xmx6144M".to_owned()));
+        assert!(args.contains(&"-Xms1024M".to_owned()));
+        assert!(!args.iter().any(|arg| arg.starts_with("-XX:MaxHeapSize=")));
+        assert!(!args
+            .iter()
+            .any(|arg| arg.starts_with("-XX:InitialHeapSize=")));
+        assert!(!args.iter().any(|arg| arg.starts_with("-XX:MinHeapSize=")));
+        assert!(!args.iter().any(|arg| arg.starts_with("-XX:MaxRAM")));
+        assert!(!args.contains(&"-XX:+UseParallelGC".to_owned()));
+        for expected in [
+            "-Dloader.fixture=true",
+            "-XX:+UseG1GC",
+            "-Duser.language=pt",
+            "-Daurora.ipc.port=12345",
+            "-Daurora.session.nonce=test-ephemeral",
+        ] {
+            assert!(args.iter().any(|arg| arg == expected));
+        }
+        let classpath_index = args.iter().position(|arg| arg == "-cp").unwrap();
+        assert!(args[classpath_index + 1].contains("aurora launch settings "));
+        assert_eq!(args[classpath_index + 2], "example.Main");
+        assert_eq!(command.working_dir, instance.root());
+        assert_eq!(command.executable, java.executable());
+        assert_eq!(
+            args.iter()
+                .filter(|arg| arg.as_str() == "--gameDir")
+                .count(),
+            1
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--gameDir"
+                    && pair[1] == instance.root().display().to_string())
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_heap_bounds_fail_before_creating_instance_layout() {
+        let (root, instance, java, spec) = launch_fixture();
+        let result = LauncherEngine.prepare_launch_with_settings(
+            &instance,
+            &java,
+            &LaunchIdentity::offline("FixturePlayer", Uuid::nil()),
+            &spec,
+            &EffectiveLaunchSettings {
+                min_memory_mb: Some(8192),
+                max_memory_mb: 4096,
+                jvm_args: Vec::new(),
+            },
+        );
+        assert!(matches!(result, Err(LaunchError::InvalidSettings(_))));
+        assert!(!instance.root().exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_api_keeps_unspecified_initial_heap_and_requested_maximum() {
+        let (root, instance, java, mut spec) = launch_fixture();
+        spec.jvm_args.push("-XX:+UseSerialGC".into());
+        let command = LauncherEngine
+            .prepare_launch(
+                &instance,
+                &java,
+                &LaunchIdentity::offline("FixturePlayer", Uuid::nil()),
+                &spec,
+                4096,
+            )
+            .unwrap()
+            .command;
+        assert!(command.args.contains(&"-Xmx4096M".to_owned()));
+        assert!(!command.args.iter().any(|arg| arg.starts_with("-Xms")));
+        assert!(command.args.contains(&"-XX:+UseSerialGC".to_owned()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn isolates_java_environment_without_affecting_other_process_settings() {
+        let mut command = background_command("java");
+        for variable in [
+            "JAVA_TOOL_OPTIONS",
+            "JDK_JAVA_OPTIONS",
+            "_JAVA_OPTIONS",
+            "CLASSPATH",
+        ] {
+            command.env(variable, "unvalidated-override");
+        }
+        let environment = BTreeMap::from([
+            ("JAVA_HOME".into(), "fixture-java-home".into()),
+            ("JAVA_TOOL_OPTIONS".into(), "another-override".into()),
+            ("AURORA_TEST_VALUE".into(), "retained".into()),
+        ]);
+        configure_java_environment(&mut command, &environment);
+        let entries = command.get_envs().collect::<BTreeMap<_, _>>();
+        for variable in [
+            "JAVA_TOOL_OPTIONS",
+            "JDK_JAVA_OPTIONS",
+            "_JAVA_OPTIONS",
+            "CLASSPATH",
+        ] {
+            assert_eq!(entries.get(std::ffi::OsStr::new(variable)), Some(&None));
+        }
+        assert_eq!(
+            entries.get(std::ffi::OsStr::new("JAVA_HOME")),
+            Some(&Some(std::ffi::OsStr::new("fixture-java-home")))
+        );
+        assert_eq!(
+            entries.get(std::ffi::OsStr::new("AURORA_TEST_VALUE")),
+            Some(&Some(std::ffi::OsStr::new("retained")))
+        );
     }
 
     #[test]

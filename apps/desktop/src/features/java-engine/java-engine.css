@@ -1,0 +1,22 @@
+.java-engine-settings { margin-top: 1.25rem; min-width: 0; padding: calc(1.1rem * var(--theme-spacing, 1)); border: 1px solid var(--theme-border, #443557); border-radius: var(--theme-radius, 12px); color: var(--theme-text, #f2efff); background: var(--theme-panel, #110d20); font-family: var(--theme-font, Inter, ui-sans-serif, system-ui, sans-serif); }
+.java-engine-settings .java-engine-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: 1rem; }
+.java-engine-settings .java-engine-heading h3 { margin: .25rem 0 .6rem; font-size: calc(1.1rem * var(--theme-scale, 1)); }
+.java-engine-settings .java-engine-heading p { margin: .25rem 0; }
+.java-engine-settings .java-engine-eyebrow { color: var(--theme-muted, #aea7bd); font-size: .7rem; letter-spacing: .12em; }
+.java-engine-settings .java-engine-scope { flex: 0 0 auto; padding: .3rem .6rem; border: 1px solid var(--theme-border, #443557); border-radius: var(--theme-radius, 12px); color: var(--theme-muted, #aea7bd); font-size: .75rem; }
+.java-engine-settings fieldset { min-width: 0; margin: 1.1rem 0 0; padding: 1rem 0; border: 0; border-top: 1px solid var(--theme-border, #443557); }
+.java-engine-settings legend { padding: 0 .5rem 0 0; font-size: .9rem; font-weight: 650; }
+.java-engine-settings .java-engine-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: .85rem; }
+.java-engine-settings label { display: grid; gap: .45rem; min-width: 0; font-size: .85rem; }
+.java-engine-settings input, .java-engine-settings select, .java-engine-settings textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: .7rem; border: 1px solid var(--theme-border, #443557); border-radius: min(var(--theme-radius, 12px), 12px); color: var(--theme-text, #f2efff); background: var(--theme-panel, #110d20); font: inherit; }
+.java-engine-settings textarea { resize: vertical; font-family: ui-monospace, monospace; }
+.java-engine-settings .java-engine-hint, .java-engine-settings details { color: var(--theme-muted, #aea7bd); font-size: .8rem; line-height: 1.6; }
+.java-engine-settings .java-engine-note, .java-engine-settings .java-engine-message { padding: .75rem; border: 1px solid var(--theme-border, #443557); border-radius: min(var(--theme-radius, 12px), 12px); font-size: .85rem; line-height: 1.6; }
+.java-engine-settings details summary { width: fit-content; cursor: pointer; color: var(--theme-text, #f2efff); }
+.java-engine-settings code { overflow-wrap: anywhere; color: var(--theme-text, #f2efff); }
+.java-engine-settings .java-engine-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .75rem; }
+.java-engine-settings button { min-height: 40px; padding: .6rem .85rem; border: 1px solid var(--theme-accent, #c9a7ff); border-radius: min(var(--theme-radius, 12px), 12px); color: var(--theme-accent-text, #180b25); background: var(--theme-accent, #c9a7ff); font: inherit; font-size: .85rem; cursor: pointer; }
+.java-engine-settings button.secondary { border-color: var(--theme-border, #443557); color: var(--theme-text, #f2efff); background: var(--theme-panel, #110d20); }
+.java-engine-settings button:disabled, .java-engine-settings fieldset:disabled { opacity: .6; }
+.java-engine-settings button:disabled { cursor: not-allowed; }
+.java-engine-settings :is(button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--theme-accent, #c9a7ff); outline-offset: 3px; }

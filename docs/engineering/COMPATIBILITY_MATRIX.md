@@ -411,3 +411,9 @@ Skins **0.2.3** substitui 0.2.2 na próxima build do launcher: a prévia guarda 
 - 1.16.5 preserva bytecode Java 8 e identidade de launch `legacy`/offline.
 - 1.12.2 permanece em trilho Forge legado Java 8/LWJGL2.
 - NeoForge: fora do escopo por decisão atual.
+
+## Java e engine por instância — 28/10/2026
+
+**IMPLEMENTADO MAS NÃO HOMOLOGADO**: RAM manual/inicial opcional, RAM automática pela fórmula existente e argumentos JVM de desempenho com allowlist. GC opcional G1 no Java >=17, padrão abaixo de 17; nenhuma promessa de desempenho. O launch verifica Java também em vanilla e registra a memória efetiva no Doctor. Matriz Core 1.1.5/Skins 0.3.1 e os nove alvos por módulo preservados, sem novo JAR ou instalador.
+
+Inventário de RAM física: Windows. Outros sistemas continuam no modo manual; automático exige um inventário futuro. O painel independente usa tokens oficiais e aguarda o patch do dono de `App.tsx`. Testes unitários, smoke DOM e build não homologam Minecraft/loader/Java, Assistente ou temas no aplicativo nativo. Contrato, testes e roteiro restante em [Java/engine](../java-engine.md) e [tarefa](../task-java-engine.md).

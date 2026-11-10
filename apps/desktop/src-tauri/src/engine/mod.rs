@@ -41,6 +41,7 @@ mod instance;
 mod ipc;
 mod jre;
 mod launch;
+pub mod launch_settings;
 mod minecraft;
 mod modpacks;
 mod process;
