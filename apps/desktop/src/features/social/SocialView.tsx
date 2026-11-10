@@ -6,6 +6,7 @@ import { SocialConnectionPanel, type SocialConnectionControls } from "./SocialCo
 import { SocialOrganizationPanel } from "./SocialOrganizationPanel";
 import { SocialAvailabilityBadge, useSocialAvailability } from "./SocialAvailability";
 import "./social.css";
+import { SocialPrivateInvitationsPanel } from "./SocialPrivateInvitationsPanel";
 
 type FriendTab = "friends" | "incoming" | "outgoing" | "blocked";
 type Props = { service: SocialService | null; accountId: string; nickname: string; currentModpack?: string; connection?: SocialConnectionControls; onOpenConnectedGame?: () => void; onPrepareDedicatedServer?: () => void; onOpenManualConnect?: () => void };
@@ -144,6 +145,7 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
     const generation = epoch.current;
     const live = () => current(generation) && service?.capabilities.join && session.expiresAtMs > readNow();
     if (!service || !live()) return;
+    if (session.visibility === "private" && (!service.privateInvitations || connection?.state.privateInvitations !== true || session.joinPolicy !== "open")) return;
     if (session.joinPolicy === "approval") {
       if (!service.organization) throw new Error("Os pedidos de entrada não estão disponíveis neste serviço.");
       const checkingExisting = waitingForApproval(session);
@@ -297,14 +299,17 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
         {scope === "public" && nextCursor && <div className="social-pagination"><button className="secondary" disabled={disabled} onClick={() => void more()}>Carregar mais</button></div>}
         {sessions.length >= MAX_VISIBLE_SESSIONS && <small>Exibindo até 100 anúncios. Atualize para consultar a lista novamente.</small>}
         {available && service?.capabilities.publication && snapshot && <details className="social-publish"><summary>{snapshot.ownSession ? "Meu anúncio de sessão" : "Compartilhar uma sessão"}</summary>
-          <form onSubmit={event => { event.preventDefault(); if (publicationDisabled || (draft.visibility !== "private" && !publicationConsent)) return; void run(() => service.publishSession(validateSocialSession(draft)), draft.visibility === "private"
-            ? "Anúncio privado salvo. Ele não envia convites nem inicia o compartilhamento."
+          <form onSubmit={event => { event.preventDefault(); if (publicationDisabled || (draft.visibility !== "private" && !publicationConsent)
+            || (service.privateInvitations && draft.visibility === "private" && draft.joinPolicy !== "open")) return; void run(() => service.publishSession(validateSocialSession(draft)), draft.visibility === "private"
+            ? service.privateInvitations ? "Anúncio privado salvo. Use Convites privados para selecionar contas. O anúncio não inicia o compartilhamento." : "Anúncio privado salvo. Ele não envia convites nem inicia o compartilhamento."
             : connection?.state.available
             ? "Anúncio atualizado. Use Preparar meu servidor para ativar o compartilhamento."
             : "Anúncio atualizado. O compartilhamento do servidor ainda não foi ativado."); }}>
             <p>O anúncio não abre portas, inicia o jogo ou comprova que o servidor está acessível.</p>
             {draft.visibility === "private" && <div className="social-notice">
-              <p>Para convidar alguém diretamente, use os convites manuais do Connect e troque os códigos pelo canal combinado. O anúncio só muda quando você salva; ainda não há entrega de convite para uma conta Aurora.</p>
+              <p>{service.privateInvitations
+                ? "Use Convites privados para buscar uma conta pelo nick do Aurora. Salvar novamente este anúncio cria outra sessão e exige novos convites. Os códigos manuais continuam como alternativa."
+                : "Para convidar alguém diretamente, use os convites manuais do Connect e troque os códigos pelo canal combinado. O anúncio só muda quando você salva; ainda não há entrega de convite para uma conta Aurora."}</p>
               {onOpenManualConnect ? <><button type="button" className="secondary" disabled={disabled || !manualConnectReady} onClick={() => { if (!disabled && manualConnectReady) onOpenManualConnect(); }}>Abrir convites do Connect</button>
                 {!manualConnectReady && <small>{connectionBusy ? "Encerre a conexão atual e aguarde a liberação dos recursos antes de preparar outro convite." : "Atualize a conexão para conferir se os recursos estão liberados."}</small>}</>
                 : <small>Os convites manuais do Connect não estão disponíveis neste executável.</small>}
@@ -317,14 +322,18 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
               <label>Versão do Minecraft<input required maxLength={24} value={draft.minecraftVersion} disabled={publicationDisabled} onChange={event => editDraft({ minecraftVersion: event.target.value })} placeholder="Ex.: 1.21.1" /></label>
               <label>Loader<input required maxLength={24} value={draft.loader} disabled={publicationDisabled} onChange={event => editDraft({ loader: event.target.value })} placeholder="Ex.: Fabric" /></label>
               <label className="social-field-wide">Imagem do modpack<input type="url" maxLength={512} value={draft.imageUrl ?? ""} disabled={publicationDisabled} onChange={event => editDraft({ imageUrl: event.target.value || null })} placeholder="Imagem do catálogo Modrinth ou CurseForge (opcional)" /></label>
-              <label>Quem pode descobrir<select value={draft.visibility} disabled={publicationDisabled} onChange={event => { editDraft({ visibility: event.target.value as SocialSessionDraft["visibility"] }); setPublicationConsent(false); }}><option value="private">Privada</option><option value="friends">Meus amigos</option><option value="public">Toda a comunidade</option></select></label>
-              <label>Política de ingresso<select value={draft.joinPolicy} disabled={publicationDisabled} onChange={event => editDraft({ joinPolicy: event.target.value as SocialSessionDraft["joinPolicy"] })}><option value="open">Entrada aberta</option><option value="approval">Aprovar cada pedido</option></select></label>
+              <label>Quem pode descobrir<select value={draft.visibility} disabled={publicationDisabled} onChange={event => { editDraft({ visibility: event.target.value as SocialSessionDraft["visibility"], ...(service.privateInvitations && event.target.value === "private" ? { joinPolicy: "open" } : {}) }); setPublicationConsent(false); }}><option value="private">Privada</option><option value="friends">Meus amigos</option><option value="public">Toda a comunidade</option></select></label>
+              <label>Política de ingresso<select value={draft.joinPolicy} disabled={publicationDisabled} onChange={event => editDraft({ joinPolicy: event.target.value as SocialSessionDraft["joinPolicy"] })}><option value="open">Entrada aberta</option><option value="approval" disabled={!!service.privateInvitations && draft.visibility === "private"}>Aprovar cada pedido</option></select></label>
               <label>Limite total do anúncio<input type="number" min={1} max={100} value={draft.maxPlayers} disabled={publicationDisabled} onChange={event => editDraft({ maxPlayers: Number(event.target.value) })} /></label>
             </div>
+            {service.privateInvitations && draft.visibility === "private" && <small>A entrada é aberta somente às contas convidadas; não há um segundo pedido de aprovação.</small>}
             {draft.visibility !== "private" && <label className="social-consent"><input type="checkbox" checked={publicationConsent} disabled={publicationDisabled} onChange={event => setPublicationConsent(event.target.checked)} />Quero publicar estes dados {draft.visibility === "friends" ? "para meus amigos" : "para a comunidade do Aurora"}. Posso encerrar o anúncio.</label>}
-            <div className="social-actions"><button disabled={publicationDisabled || (draft.visibility !== "private" && !publicationConsent)}>Salvar anúncio</button></div>
+            <div className="social-actions"><button disabled={publicationDisabled || (draft.visibility !== "private" && !publicationConsent) || (!!service.privateInvitations && draft.visibility === "private" && draft.joinPolicy !== "open")}>Salvar anúncio</button></div>
           </form>
         </details>}
+        {service?.privateInvitations && <SocialPrivateInvitationsPanel service={service} ownSession={snapshot?.ownSession}
+          joinEnabled={service.capabilities.join && connection?.state.available === true && connection.state.privateInvitations === true && !connection.state.error}
+          connectionBusy={connectionBusy || disabled} onJoin={enterSession} />}
       </div>
     </div>
   </section>;

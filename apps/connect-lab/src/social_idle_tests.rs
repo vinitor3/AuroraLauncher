@@ -37,6 +37,77 @@ struct Authority {
     cap: Instant,
 }
 impl Authority {
+    fn private_recipient(&mut self) {
+        let review = self.policy.body.clone().with_private_recipients().unwrap();
+        self.policy = review
+            .approve(&self.host_key, &review.digest(), self.cap)
+            .unwrap();
+        let mut body = self.grant.body.clone();
+        body.schema_version = 7;
+        body.policy_digest = review.digest();
+        body.authorization_id = Some("ab".repeat(32));
+        body.authorization_revision = Some(1);
+        let encoded = serde_json::to_string(&GrantEnvelope {
+            signature: hex(&self.key.sign(&body.bytes()).to_bytes()),
+            body: body.clone(),
+        })
+        .unwrap();
+        self.grant = VerifiedSocialGrant::for_host(
+            &encoded,
+            self.key.public(),
+            &self.challenge,
+            &self.policy,
+            self.services[0].endpoint,
+            self.cap,
+        )
+        .unwrap();
+        let now = unix_millis();
+        let context = JoinContextBody {
+            schema_version: 2,
+            purpose: "socialJoinContext".into(),
+            issuer_instance: body.issuer_instance.clone(),
+            recipient_account_id: body.guest_account_id.clone(),
+            session_id: body.session_id.clone(),
+            session_digest: body.session_digest.clone(),
+            host_account_id: body.host_account_id.clone(),
+            host_public_key: body.host_public_key.clone(),
+            host_operation_id: body.host_operation_id.clone(),
+            host_generation: body.host_generation,
+            policy_id: body.policy_id.clone(),
+            policy_digest: body.policy_digest.clone(),
+            issued_at_unix_ms: now,
+            expires_at_unix_ms: now + 5_000,
+            authorization_id: body.authorization_id.clone(),
+            authorization_revision: body.authorization_revision,
+        };
+        let context = VerifiedSocialJoinContext::verify(
+            &serde_json::to_string(&JoinContextEnvelope {
+                signature: hex(&self.key.sign(&context.bytes()).to_bytes()),
+                body: context,
+            })
+            .unwrap(),
+            self.key.public(),
+            &body.guest_account_id,
+            SESSION,
+            self.cap,
+        )
+        .unwrap();
+        let challenge = SocialKeyChallenge::parse(&serde_json::json!({
+            "schemaVersion":1,"purpose":"accountKeyBinding","issuerInstance":body.issuer_instance,
+            "challengeId":"bb".repeat(32),"accountId":body.guest_account_id,"operationId":body.guest_operation_id,
+            "generation":body.guest_generation,"role":"guest","publicKey":body.guest_public_key,
+            "sessionId":body.session_id,"sessionDigest":body.session_digest,"issuedAtUnixMs":body.issued_at_unix_ms,
+            "expiresAtUnixMs":body.issued_at_unix_ms+60_000
+        }).to_string()).unwrap();
+        VerifiedSocialGrant::for_guest_online(
+            &encoded,
+            self.key.public(),
+            &challenge,
+            &context,
+            self.cap,
+        )
+        .unwrap();
+    }
     fn new(source: SocketAddr, udp: SocketAddr, session_ms: u64) -> Self {
         let key = generate_key();
         let host_key = generate_key();
@@ -95,6 +166,8 @@ impl Authority {
             host_player: Some(false),
             runtime_profile: Some("fabric-loader-0.16.14-1.21.1".into()),
             voice_transport_profile: Some("nativeVoice8V1".into()),
+            authorization_id: None,
+            authorization_revision: None,
         };
         let encoded = serde_json::to_string(&GrantEnvelope {
             signature: hex(&key.sign(&body.bytes()).to_bytes()),
@@ -277,14 +350,20 @@ struct Fixture {
 }
 impl Fixture {
     async fn start(session_ms: u64) -> Self {
+        Self::start_mode(session_ms, false).await
+    }
+    async fn start_mode(session_ms: u64, private: bool) -> Self {
         assert_eq!(Limits::default().idle_timeout, Duration::from_secs(120));
         let tcp = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let authority = Authority::new(
+        let mut authority = Authority::new(
             tcp.local_addr().unwrap(),
             udp.local_addr().unwrap(),
             session_ms,
         );
+        if private {
+            authority.private_recipient();
+        }
         let relay = LocalRelayFixture::start(
             [authority.host_key.public(), authority.guest_key.public()],
             LocalRelayProfile::Normal,
@@ -373,6 +452,91 @@ impl Fixture {
         drop(std::net::TcpListener::bind(tcp_address).unwrap());
         drop(std::net::UdpSocket::bind(udp_address).unwrap());
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn social_private_native_voice_two_real_agents_keep_bound_witness_and_revoke_tcp_udp() {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpStream,
+    };
+    let fixture = Fixture::start_mode(30_000, true).await;
+    assert_eq!(fixture.authority.grant.body.schema_version, 7);
+    fixture.refresh().unwrap();
+    fixture.no_application_traffic().await;
+    let tcp = fixture
+        .guest
+        .tcp_bridge("game", 1, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    bounded(async {
+        let mut client = TcpStream::connect(tcp.local_addr()).await.unwrap();
+        client.write_all(&[23; 1024]).await.unwrap();
+        let (mut server, _) = fixture.tcp.accept().await.unwrap();
+        let mut bytes = [0; 1024];
+        server.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(bytes, [23; 1024]);
+        server.write_all(&bytes).await.unwrap();
+        client.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(bytes, [23; 1024]);
+    })
+    .await;
+    let udp = fixture
+        .guest
+        .udp_bridge_fragmented("aux", 1, "127.0.0.1:0".parse().unwrap())
+        .await
+        .unwrap();
+    let app = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    bounded(async {
+        app.send_to(&[29; 64], udp.local_addr()).await.unwrap();
+        let mut bytes = [0; 128];
+        let (length, association) = fixture.udp.recv_from(&mut bytes).await.unwrap();
+        assert_eq!(&bytes[..length], &[29; 64]);
+        fixture
+            .udp
+            .send_to(&bytes[..length], association)
+            .await
+            .unwrap();
+        let (length, _) = app.recv_from(&mut bytes).await.unwrap();
+        assert_eq!(&bytes[..length], &[29; 64]);
+    })
+    .await;
+    let mut witness = fixture
+        .continuity
+        .host_idle_witness(
+            &fixture.authority.invitation,
+            &fixture.authority.ticket(
+                fixture.relay.ticket().url().as_str().trim_end_matches('/'),
+                false,
+            ),
+            fixture.authority.services[0].endpoint,
+        )
+        .unwrap();
+    let mut changed = fixture.authority.continuity();
+    changed.grant.body.authorization_revision = Some(3);
+    let next = changed
+        .host_idle_witness(
+            &fixture.authority.invitation,
+            &fixture.authority.ticket(
+                fixture.relay.ticket().url().as_str().trim_end_matches('/'),
+                false,
+            ),
+            fixture.authority.services[0].endpoint,
+        )
+        .unwrap();
+    assert!(witness.refresh(next).is_err());
+    assert!(
+        fixture
+            .host
+            .revoke(fixture.authority.invitation.invitation_id())
+    );
+    assert!(fixture.refresh().is_err());
+    bounded(fixture.guest.connection().closed()).await;
+    assert!(fixture.guest.open_tcp("game", 1).await.is_err());
+    tcp.shutdown().await;
+    udp.shutdown().await;
+    drop((tcp, udp, app));
+    fixture.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

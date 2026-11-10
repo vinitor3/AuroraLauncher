@@ -72,6 +72,7 @@ impl ConnectManager {
             pin: authority.public(),
             issuer: "33".repeat(32),
             online_origin: Some("https://native-fixture.invalid"),
+            private_invitations: false,
             join_policy: "open".into(),
             session_expiry: lab::unix_millis() + 60_000,
             max_players: 8,

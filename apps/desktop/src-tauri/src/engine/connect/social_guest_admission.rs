@@ -26,7 +26,13 @@ pub(super) fn verify_guest_admission(
     encoded: &str,
 ) -> Result<(lab::VerifiedSocialGrant, Option<NativeVoiceAdmission>), ConnectError> {
     run.current()?;
-    let verify = if run.authority.online_origin.is_some() {
+    let private = context.private_authorization().is_some();
+    if private && !run.authority.private_invitations_enabled() {
+        return Err(ConnectError::InvitationRejected);
+    }
+    let verify = if private {
+        lab::VerifiedSocialGrant::for_guest_private_loopback
+    } else if run.authority.online_origin.is_some() {
         lab::VerifiedSocialGrant::for_guest_online
     } else {
         lab::VerifiedSocialGrant::for_guest

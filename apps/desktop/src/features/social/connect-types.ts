@@ -32,7 +32,7 @@ export type SocialFailureObservation = {
 };
 export type SocialConnectProjection = {
   sessionId: string; role: "host" | "guest"; stage: SocialConnectStage;
-  digest: string | null; gameTarget: string | null; visibility: "public" | "friends" | null; expiresAtMs: number | null;
+  digest: string | null; gameTarget: string | null; visibility: "public" | "friends" | "private" | null; expiresAtMs: number | null;
   readyGameLaunchAvailable?: true;
   voiceProfile?: "svc" | "plasmo"; voiceState?: "notStarted" | "enabled" | "retiring" | "retired" | "failed" | "closed";
   hostPlayer?: boolean; maxGuests?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
@@ -43,7 +43,7 @@ export type SocialConnectProjection = {
   failureObservation?: SocialFailureObservation;
   participants?: { grantId: string; accountId: string; state: "waiting" | "connected" | "disconnected" | "removing" }[];
 };
-export type SocialConnectCapabilities = { available: boolean; experimental: true; accountEpoch: number; maxSessionSeconds: 60 | 14400; ownedGameTcpDiscovery?: boolean };
+export type SocialConnectCapabilities = { available: boolean; experimental: true; accountEpoch: number; maxSessionSeconds: 60 | 14400; ownedGameTcpDiscovery?: boolean; privateInvitations?: true };
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 export const socialSessionId = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 export const socialGameTarget = (value: unknown): value is string => typeof value === "string" && /^127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(value) && Number(value.split(":")[1]) <= 65535;
@@ -56,8 +56,10 @@ function failureObservation(value: unknown): value is SocialFailureObservation {
     && optional.every(key => Object.hasOwn(value, key) && (value[key] === null || bounded(value[key]))) && bounded(value.sessionRemainingMs);
 }
 export function socialConnectCapabilitiesFrom(value: unknown): SocialConnectCapabilities {
-  if (!record(value) || Object.keys(value).some(key => !["available", "experimental", "accountEpoch", "maxSessionSeconds", "ownedGameTcpDiscovery"].includes(key)) || typeof value.available !== "boolean" || value.experimental !== true
+  if (!record(value) || Object.keys(value).some(key => !["available", "experimental", "accountEpoch", "maxSessionSeconds", "ownedGameTcpDiscovery", "privateInvitations"].includes(key)) || typeof value.available !== "boolean" || value.experimental !== true
     || !(value.ownedGameTcpDiscovery === undefined || typeof value.ownedGameTcpDiscovery === "boolean") || (value.ownedGameTcpDiscovery === true && value.available !== true)
+    || (Object.hasOwn(value, "privateInvitations") && (value.privateInvitations !== true || value.available !== true))
+    || ("privateInvitations" in value && !Object.hasOwn(value, "privateInvitations"))
     || !integer(value.accountEpoch) || ![60, 14400].includes(value.maxSessionSeconds as number)) return invalid();
   return value as SocialConnectCapabilities;
 }
@@ -86,7 +88,7 @@ export function socialConnectProjectionFrom(value: unknown): SocialConnectProjec
     || !["reserved", "authenticating", "sourceChecking", "hostReview", "guestReview", "waitingGuest", "connecting", "connected", "closed", "failed"].includes(value.stage as string)
     || !(value.digest === null || typeof value.digest === "string" && /^[0-9a-f]{64}$/.test(value.digest))
     || !(value.gameTarget === null || socialGameTarget(value.gameTarget))
-    || ![null, "public", "friends"].includes(value.visibility as null | string)
+    || ![null, "public", "friends", "private"].includes(value.visibility as null | string)
     || !(value.expiresAtMs === null || integer(value.expiresAtMs))) return invalid();
   if (value.role === "guest" && (value.stage !== "guestReview" && value.digest !== null || value.gameTarget !== null || value.visibility !== null)) return invalid();
   if (value.stage === "sourceChecking" && (value.role !== "host" || value.gameTarget !== null || value.digest !== null)) return invalid();

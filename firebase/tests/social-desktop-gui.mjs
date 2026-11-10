@@ -9,6 +9,7 @@ import { startSocialBindingLab } from './social-binding-server.mjs';
 import { account, echo, manager, prepareHost, prepareGuest, rebind, socialFactory, tcpRoundtrip, waitSnapshot } from './social-desktop-fixtures.mjs';
 
 if (process.env.AURORA_SOCIAL_DESKTOP_GUI !== '1') throw new Error('SOCIAL_GUI_OPT_IN_REQUIRED');
+const privateInvitations = process.env.AURORA_SOCIAL_PRIVATE_LAB === '1';
 const binary = process.env.AURORA_SOCIAL_DESKTOP_TEST_BINARY, executable = process.env.AURORA_SOCIAL_DESKTOP_EXE;
 for (const path of [binary, executable]) assert.ok(path && isAbsolute(path) && (await stat(path)).isFile(), 'reviewed absolute binary paths required');
 const report = value => process.stdout.write(JSON.stringify(value) + '\n');
@@ -32,15 +33,16 @@ async function clean() {
   if (failed || gui && !normalExit) process.exitCode = 1;
 }
 try {
-  lab = await startSocialBindingLab({ enabled: true, port: 42888, admission: true });
+  lab = await startSocialBindingLab({ enabled: true, port: 42888, admission: true, privateInvitations });
   const factory = await socialFactory();
   guiAccount = await account(factory, 'gui89'); peerAccount = await account(factory, 'peer89'); source = await echo();
   await guiAccount.service.requestFriend(peerAccount.uid); await peerAccount.service.respondFriend(guiAccount.uid, 'accept');
   gui = spawn(executable, [], { windowsHide: true, stdio: 'ignore', env: { ...process.env,
-    AURORA_SOCIAL_AUTHORITY_PIN: lab.admissionPublicKey, AURORA_SOCIAL_AUTHORITY_ISSUER: lab.issuerInstance } });
+    AURORA_SOCIAL_AUTHORITY_PIN: lab.admissionPublicKey, AURORA_SOCIAL_AUTHORITY_ISSUER: lab.issuerInstance,
+    AURORA_SOCIAL_PRIVATE_LAB: lab.privateInvitations === true ? '1' : '0' } });
   gui.once('error', () => report({ event: 'gui_launch_failed' }));
   gui.once('exit', code => { guiExited = true; guiExitCode = code; report({ event: 'gui_application_exited', exitCode: code, terminationObservation: 'exit_code_only' }); });
-  report({ event: 'gui_fixture_ready', nickname: guiAccount.nickname, peerNickname: peerAccount.nickname, localEmulatorOnly: true });
+  report({ event: 'gui_fixture_ready', nickname: guiAccount.nickname, peerNickname: peerAccount.nickname, localEmulatorOnly: true, privateInvitations });
   for await (const raw of input) {
     if (raw.length > 128) throw new Error('GUI_FIXTURE_INPUT_TOO_LARGE');
     const [command, argument] = raw.trim().split(' ');

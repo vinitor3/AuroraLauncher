@@ -23,11 +23,16 @@ export type SocialBindingReceipt = {
   role: "host" | "guest"; expiresAtUnixMs: number; transportAuthorized: false;
 };
 export type SocialBindingPrincipal = { accountId: string; request: Request };
+export type SocialPrivateAuthorization = {
+  authorizationId: string; revision: number; sessionId: string; hostUid: string; recipientUid: string; expiresAtMs: number;
+};
 export type SocialBindingDependencies = {
   /** Production must verify a signed ID token. Emulator implementations belong in a separate local entrypoint. */
   trustedAuthenticate(request: Request, signal: AbortSignal): Promise<string>;
   /** Must freshly validate Aurora registration and authorize this exact session with the caller's token. */
   readSession(principal: SocialBindingPrincipal, sessionId: string, signal: AbortSignal): Promise<SocialBindingSession>;
+  /** Current active recipient authorization; never an inbox hint or a caller-supplied claim. */
+  readPrivateAuthorization?(principal: SocialBindingPrincipal, sessionId: string, recipientUid: string, signal: AbortSignal): Promise<SocialPrivateAuthorization>;
   clock?: { wall(): number; monotonic(): number };
 };
 export class SocialBindingError extends Error {

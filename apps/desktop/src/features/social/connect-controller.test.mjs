@@ -98,7 +98,7 @@ async function fixture(options = {}) {
   const controller = createSocialConnectController({ accountId: user.uid, user, currentUser: () => currentUser,
     publish: value => published.push(value), invoke: async (command, args) => {
       calls.push([command, args]); if (handlers[command]) return handlers[command](args);
-      if (command === "connect_social_capabilities") return { available: options.available ?? true, experimental: true, accountEpoch: 7, maxSessionSeconds: options.online ? 14400 : 60, ...(options.discovery ? { ownedGameTcpDiscovery: true } : {}) };
+      if (command === "connect_social_capabilities") return { available: options.available ?? true, experimental: true, accountEpoch: 7, maxSessionSeconds: options.online ? 14400 : 60, ...(options.discovery ? { ownedGameTcpDiscovery: true } : {}), ...(options.privateInvitations ? { privateInvitations: true } : {}) };
       if (command === "native_voice_snapshot") return options.voice ?? { ...readyVoice(), phase: "idle" };
       if (command === "native_voice_social_reserve") { snapshot = active("host"); return { operationId: operation, generation: 1 }; }
       if (command === "connect_snapshot") return structuredClone(snapshot);
@@ -119,6 +119,31 @@ test("join reserves native slot before SDK token and sends no authority URL/pin/
   assert.deepEqual(f.calls.find(([command]) => command === "connect_social_reserve")[1], { request: { accountEpoch: 7, accountId: "own-account", sessionId: session, role: "guest" } });
   assert.deepEqual(f.calls.find(([command]) => command === "connect_social_authenticate")[1], { operationId: operation, generation: 1, idToken: "LOCAL_TEST_TOKEN" });
   assert.ok(f.published.at(-1).snapshot.social); assert.doesNotMatch(JSON.stringify(f.published), /LOCAL_TEST_TOKEN/);
+});
+
+test("private host preparation requires explicit native capability and uses the original slot/authentication", async () => {
+  const disabled = await fixture(); await disabled.controller.prepareHost(session, "private");
+  assert.equal(disabled.calls.some(([name]) => name === "connect_social_reserve"), false);
+  assert.equal(disabled.tokenCalls(), 0);
+  const enabled = await fixture({ privateInvitations: true }); await enabled.controller.prepareHost(session, "private");
+  assert.equal(enabled.published.at(-1).privateInvitations, true);
+  assert.deepEqual(enabled.calls.find(([name]) => name === "connect_social_reserve")[1], {
+    request: { accountEpoch: 7, accountId: "own-account", sessionId: session, role: "host", gameTarget: "127.0.0.1:43001", visibility: "private" },
+  });
+  assert.equal(enabled.tokenCalls(), 1);
+  assert.equal(enabled.calls.some(([name]) => name === "connect_social_confirm_host"), false);
+  assert.doesNotMatch(JSON.stringify(enabled.published), /LOCAL_TEST_TOKEN|authorizationId|authorizationRevision/);
+});
+
+test("private capability is explicitly true or omitted and never accepted from a disabled or inherited projection", () => {
+  const value = { available: true, experimental: true, accountEpoch: 1, maxSessionSeconds: 60 };
+  assert.equal(socialConnectCapabilitiesFrom(value).privateInvitations, undefined);
+  assert.equal(socialConnectCapabilitiesFrom({ ...value, privateInvitations: true }).privateInvitations, true);
+  for (const privateInvitations of [false, undefined, null, 1, "true"]) assert.throws(() => socialConnectCapabilitiesFrom({ ...value, privateInvitations }));
+  assert.throws(() => socialConnectCapabilitiesFrom({ ...value, available: false, privateInvitations: true }));
+  assert.throws(() => socialConnectCapabilitiesFrom(Object.assign(Object.create({ privateInvitations: true }), value)));
+  const projection = active("host"); projection.social.visibility = "private";
+  assert.equal(snapshotFrom(projection).social.visibility, "private");
 });
 
 test("online native voice host uses the same reservation/authentication flow with explicit local-player choice", async () => {

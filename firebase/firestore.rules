@@ -219,10 +219,23 @@ service cloud.firestore {
         && d.expiresAt is timestamp && d.expiresAt > request.time && d.expiresAt <= request.time + duration.value(4, 'h');
     }
     function socialOwnerAfter(uid) { return getAfter(/databases/$(database)/documents/socialOwners/$(uid)).data; }
+    function privateSessionRevision(id) {
+      return !exists(/databases/$(database)/documents/socialPrivateAudiences/$(id))
+        || get(/databases/$(database)/documents/socialPrivateAudiences/$(id)).data.expiresAt <= request.time
+        || (exists(/databases/$(database)/documents/socialSessions/$(id)) && request.resource.data == resource.data);
+    }
+    function socialPrivateActive(id, d, guest) {
+      let invitation = get(/databases/$(database)/documents/socialPrivateInvitations/$(id)/guests/$(guest)).data;
+      return d.joinPolicy == 'open' && invitation.schema == 1 && invitation.status == 'active'
+        && invitation.sessionId == id && invitation.hostUid == d.hostUid && invitation.recipientUid == guest
+        && invitation.revision is int && invitation.revision > 0 && invitation.revision <= 4294967295
+        && invitation.expiresAt == d.expiresAt && invitation.expiresAt > request.time;
+    }
     function socialVisibleSession(id, d) {
       return get(/databases/$(database)/documents/socialOwners/$(d.hostUid)).data.sessionId == id
         && (request.auth.uid == d.hostUid || (d.expiresAt > request.time && !socialBlocked(request.auth.uid, d.hostUid)
-          && (d.visibility == 'public' || (d.visibility == 'friends' && socialFriends(request.auth.uid, d.hostUid)))));
+          && (d.visibility == 'public' || (d.visibility == 'friends' && socialFriends(request.auth.uid, d.hostUid))
+            || (d.visibility == 'private' && socialPrivateActive(id, d, request.auth.uid)))));
     }
     match /socialOwners/{uid} {
       allow get: if signedIn() && (request.auth.uid == uid || (resource.data.visibility != 'private' && socialFriends(request.auth.uid, uid)));
@@ -230,7 +243,10 @@ service cloud.firestore {
       allow create, update: if signedIn() && request.auth.uid == uid
         && request.resource.data.keys().hasOnly(['sessionId','visibility'])
         && socialSessionId(request.resource.data.sessionId)
-        && (!exists(/databases/$(database)/documents/socialOwners/$(uid)) || resource.data.sessionId == request.resource.data.sessionId)
+        && (!exists(/databases/$(database)/documents/socialOwners/$(uid)) || resource.data.sessionId == request.resource.data.sessionId
+          || (resource.data.visibility == 'private'
+            && !existsAfter(/databases/$(database)/documents/socialSessions/$(resource.data.sessionId))
+            && !existsAfter(/databases/$(database)/documents/socialCatalog/$(resource.data.sessionId))))
         && getAfter(/databases/$(database)/documents/socialSessions/$(request.resource.data.sessionId)).data.hostUid == uid
         && getAfter(/databases/$(database)/documents/socialSessions/$(request.resource.data.sessionId)).data.visibility == request.resource.data.visibility;
       allow delete: if signedIn() && request.auth.uid == uid
@@ -241,6 +257,7 @@ service cloud.firestore {
       allow list: if false;
       allow get: if signedIn() && socialAccount(request.auth.uid) && socialVisibleSession(id, resource.data);
       allow create, update: if signedIn() && socialSessionId(id) && socialSessionShape(request.resource.data)
+        && privateSessionRevision(id)
         && (!exists(/databases/$(database)/documents/socialSessions/$(id)) || resource.data.hostUid == request.auth.uid)
         && socialOwnerAfter(request.auth.uid).sessionId == id
         && socialOwnerAfter(request.auth.uid).visibility == request.resource.data.visibility
@@ -248,7 +265,101 @@ service cloud.firestore {
           || (request.resource.data.visibility != 'public' && !existsAfter(/databases/$(database)/documents/socialCatalog/$(id))));
       allow delete: if signedIn() && resource.data.hostUid == request.auth.uid
         && !existsAfter(/databases/$(database)/documents/socialCatalog/$(id))
-        && !existsAfter(/databases/$(database)/documents/socialOwners/$(request.auth.uid));
+        && (!existsAfter(/databases/$(database)/documents/socialOwners/$(request.auth.uid))
+          || (resource.data.visibility == 'private'
+            && socialOwnerAfter(request.auth.uid).sessionId != id));
+    }
+    // The immutable original deadline retains per-recipient tombstones until old grants expire.
+    // Reinviting increments the revision; deleting/recreating cannot reset it while it is live.
+    function privateAudienceAfter(id) { return getAfter(/databases/$(database)/documents/socialPrivateAudiences/$(id)).data; }
+    function privateInvitationAfter(id, guest) {
+      return getAfter(/databases/$(database)/documents/socialPrivateInvitations/$(id)/guests/$(guest)).data;
+    }
+    function privateSessionOwned(id, host, expires) {
+      let session = get(/databases/$(database)/documents/socialSessions/$(id)).data;
+      return session.hostUid == host && session.visibility == 'private' && session.joinPolicy == 'open'
+        && session.expiresAt == expires && expires > request.time
+        && get(/databases/$(database)/documents/socialOwners/$(host)).data.sessionId == id;
+    }
+    function privateInboxMatches(id, host, guest, expires) {
+      let pointer = getAfter(/databases/$(database)/documents/socialPrivateInbox/$(guest)/sessions/$(id)).data;
+      return pointer.schema == 1 && pointer.sessionId == id && pointer.hostUid == host && pointer.expiresAt == expires;
+    }
+    function privateInvitationShape(id, guest, d) {
+      return d.keys().hasAll(['schema','authorizationId','revision','sessionId','hostUid','recipientUid','status','createdAt','updatedAt','expiresAt'])
+        && d.keys().hasOnly(['schema','authorizationId','revision','sessionId','hostUid','recipientUid','status','createdAt','updatedAt','expiresAt'])
+        && d.schema == 1 && socialSessionId(id) && socialUid(guest) && socialUid(d.hostUid)
+        && d.authorizationId is string && d.authorizationId.matches('^[0-9a-f]{64}$')
+        && d.revision is int && d.revision >= 1 && d.revision <= 4294967295
+        && d.sessionId == id && d.recipientUid == guest && d.hostUid != guest
+        && d.status in ['active','revoked'] && d.createdAt is timestamp && d.updatedAt == request.time
+        && d.expiresAt is timestamp;
+    }
+    function privateActivation(id, guest, d) {
+      return request.auth.uid == d.hostUid && d.status == 'active'
+        && privateSessionOwned(id, d.hostUid, d.expiresAt) && socialAccount(guest) && !socialBlocked(d.hostUid, guest)
+        && guest in privateAudienceAfter(id).recipients && privateAudienceAfter(id).hostUid == d.hostUid
+        && privateAudienceAfter(id).expiresAt == d.expiresAt
+        && privateInboxMatches(id, d.hostUid, guest, d.expiresAt)
+        && getAfter(/databases/$(database)/documents/socialPrivateThrottle/$(d.hostUid)).data.at == request.time;
+    }
+    match /socialPrivateThrottle/{host} {
+      allow get: if signedIn() && request.auth.uid == host;
+      allow list, delete: if false;
+      allow create, update: if signedIn() && request.auth.uid == host
+        && request.resource.data.keys().hasOnly(['at']) && request.resource.data.at == request.time
+        && (!exists(/databases/$(database)/documents/socialPrivateThrottle/$(host)) || request.time >= resource.data.at + duration.value(2,'s'));
+    }
+    match /socialPrivateAudiences/{id} {
+      allow list: if false;
+      allow get: if signedIn() && (resource.data.hostUid == request.auth.uid
+        || get(/databases/$(database)/documents/socialSessions/$(id)).data.hostUid == request.auth.uid);
+      allow create, update: if signedIn() && socialSessionId(id)
+        && request.resource.data.keys().hasAll(['schema','hostUid','sessionId','expiresAt','recipients'])
+        && request.resource.data.keys().hasOnly(['schema','hostUid','sessionId','expiresAt','recipients'])
+        && request.resource.data.schema == 1 && request.resource.data.hostUid == request.auth.uid && request.resource.data.sessionId == id
+        && privateSessionOwned(id, request.auth.uid, request.resource.data.expiresAt)
+        && request.resource.data.recipients is list && request.resource.data.recipients.size() >= 1 && request.resource.data.recipients.size() <= 8
+        && request.resource.data.recipients.toSet().size() == request.resource.data.recipients.size()
+        && ((!exists(/databases/$(database)/documents/socialPrivateAudiences/$(id)) && request.resource.data.recipients.size() == 1)
+          || (exists(/databases/$(database)/documents/socialPrivateAudiences/$(id))
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['recipients'])
+            && request.resource.data.recipients == resource.data.recipients.concat([request.resource.data.recipients[request.resource.data.recipients.size()-1]])))
+        && privateInvitationAfter(id, request.resource.data.recipients[request.resource.data.recipients.size()-1]).status == 'active'
+        && privateInvitationAfter(id, request.resource.data.recipients[request.resource.data.recipients.size()-1]).createdAt == request.time;
+      allow delete: if signedIn() && request.auth.uid == resource.data.hostUid && resource.data.expiresAt <= request.time;
+    }
+    match /socialPrivateInvitations/{id}/guests/{guest} {
+      allow get: if signedIn() && (request.auth.uid == guest || resource.data.hostUid == request.auth.uid
+        || get(/databases/$(database)/documents/socialPrivateAudiences/$(id)).data.hostUid == request.auth.uid
+        || get(/databases/$(database)/documents/socialSessions/$(id)).data.hostUid == request.auth.uid);
+      allow list: if signedIn() && get(/databases/$(database)/documents/socialPrivateAudiences/$(id)).data.hostUid == request.auth.uid
+        && request.query.limit != null && request.query.limit <= 8;
+      allow create: if signedIn() && privateInvitationShape(id, guest, request.resource.data)
+        && request.resource.data.revision == 1 && request.resource.data.createdAt == request.time
+        && privateActivation(id, guest, request.resource.data);
+      allow update: if signedIn() && privateInvitationShape(id, guest, request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','revision','updatedAt'])
+        && request.resource.data.revision == resource.data.revision + 1 && request.resource.data.status != resource.data.status
+        && ((resource.data.status == 'revoked' && privateActivation(id, guest, request.resource.data))
+          || (request.auth.uid in [guest, resource.data.hostUid] && request.resource.data.status == 'revoked'
+            && !existsAfter(/databases/$(database)/documents/socialPrivateInbox/$(guest)/sessions/$(id))));
+      allow delete: if signedIn() && request.auth.uid in [guest, resource.data.hostUid]
+        && resource.data.expiresAt <= request.time
+        && !existsAfter(/databases/$(database)/documents/socialPrivateInbox/$(guest)/sessions/$(id));
+    }
+    match /socialPrivateInbox/{guest}/sessions/{id} {
+      allow get: if signedIn() && (request.auth.uid == guest || resource.data.hostUid == request.auth.uid
+        || get(/databases/$(database)/documents/socialPrivateAudiences/$(id)).data.hostUid == request.auth.uid);
+      allow list: if signedIn() && request.auth.uid == guest && request.query.limit != null && request.query.limit <= 20;
+      allow create, update: if signedIn() && request.resource.data.keys().hasAll(['schema','sessionId','hostUid','expiresAt'])
+        && request.resource.data.keys().hasOnly(['schema','sessionId','hostUid','expiresAt'])
+        && request.resource.data.schema == 1 && request.resource.data.sessionId == id && request.resource.data.hostUid == request.auth.uid
+        && privateInvitationAfter(id, guest).hostUid == request.auth.uid && privateInvitationAfter(id, guest).recipientUid == guest
+        && privateInvitationAfter(id, guest).status == 'active' && privateInvitationAfter(id, guest).updatedAt == request.time
+        && privateInvitationAfter(id, guest).expiresAt == request.resource.data.expiresAt;
+      allow delete: if signedIn() && request.auth.uid in [guest, resource.data.hostUid]
+        && (resource.data.expiresAt <= request.time || privateInvitationAfter(id, guest).status == 'revoked');
     }
     // Enumeration contains opaque opt-in ids and expiry only; each projection has its own server authorization.
     match /socialCatalog/{id} {

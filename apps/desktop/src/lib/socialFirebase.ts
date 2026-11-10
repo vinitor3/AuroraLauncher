@@ -3,6 +3,7 @@ import type { FirebaseServices } from "./firebase";
 import { socialLabBuild } from "./firebase";
 import { createSocialServerClock } from "./socialServerClock";
 import { createSocialOrganization } from "./socialOrganization";
+import { createSocialPrivateInvitations } from "./socialPrivateInvitations";
 import { normalizeSocialNickname, validateSocialSession, type SocialPerson, type SocialService, type SocialSession } from "../shared/social";
 
 type Kind = "request" | "accept" | "decline" | "cancel" | "remove" | "block";
@@ -68,6 +69,7 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
   const accountId = accountUser?.uid;
   if (!accountId || !uidValid(accountId)) throw new Error("Entre em sua conta Aurora.");
   const clock = createSocialServerClock(services, socialLabBuild);
+  const privateInvitationsAvailable = socialLabBuild && ["demo-aurora-social", "demo-aurora-social-rules-v2"].includes(services.config?.projectId);
   function account() {
     if (services.auth.currentUser !== accountUser || services.auth.currentUser?.uid !== accountId) throw new Error("A conta mudou. Abra Amigos novamente.");
     return accountId!;
@@ -117,6 +119,7 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
     capabilities: Object.freeze({ friends: true, catalog: true, publication: true, join: false }),
     now: clock.now,
     organization: createSocialOrganization(db, account, guarded, person, clock),
+    ...(privateInvitationsAvailable ? { privateInvitations: createSocialPrivateInvitations(db, account, guarded, person, clock, sessionValue) } : {}),
     profile: uid => guarded(async check => {
       if (!uidValid(uid)) throw new Error("Conta Aurora inválida.");
       const value = await person(uid, check);
@@ -191,19 +194,26 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
     publishSession: (input) => guarded(async (check) => {
       check();
       const value = validateSocialSession(input);
+      if (privateInvitationsAvailable && value.visibility === "private" && value.joinPolicy !== "open") throw new Error("O convite privado já autoriza o destinatário. Escolha entrada aberta para esta sessão.");
       const owner = account();
       await runTransaction(db, async (transaction) => {
         check();
         const ownerRef = doc(db, "socialOwners", owner);
         const current = (await transaction.get(ownerRef)).data();
         check();
-        const id = current?.sessionId ?? crypto.randomUUID();
+        const rotatePrivate = privateInvitationsAvailable && current?.visibility === "private";
+        const id = rotatePrivate ? crypto.randomUUID() : current?.sessionId ?? crypto.randomUUID();
         if (!sessionIdValid(id)) throw new Error("Sessão anterior inválida.");
-        const queue = current ? (await transaction.get(doc(db, "socialJoinQueues", id))).data() : undefined; check();
+        if (current && !sessionIdValid(current.sessionId)) throw new Error("Sessão anterior inválida.");
+        const previousId = current?.sessionId ?? id;
+        const queue = current ? (await transaction.get(doc(db, "socialJoinQueues", previousId))).data() : undefined; check();
         if (queue) {
-          for (const guest of queue.guests ?? []) transaction.delete(doc(db, "socialJoinRequests", id, "guests", guest));
-          transaction.delete(doc(db, "socialJoinQueues", id));
+          for (const guest of queue.guests ?? []) transaction.delete(doc(db, "socialJoinRequests", previousId, "guests", guest));
+          transaction.delete(doc(db, "socialJoinQueues", previousId));
         }
+        // Old private authorizations retain their immutable session/expiry and
+        // tombstones. A revised advert always receives a different identity.
+        if (rotatePrivate) transaction.delete(doc(db, "socialSessions", previousId));
         const expiresAt = Timestamp.fromMillis(clock.writeTime() + 14_395_000);
         transaction.set(ownerRef, { sessionId: id, visibility: value.visibility });
         transaction.set(doc(db, "socialSessions", id), { ...value, schema: 1, hostUid: owner, expiresAt });

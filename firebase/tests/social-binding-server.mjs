@@ -3,6 +3,7 @@ import http from "node:http";
 import { pathToFileURL } from "node:url";
 import { createSocialBindingAuthority, normalizeSocialBindingSession, SocialBindingError } from "../../apps/edge-proxy/src/connectSocialBinding.ts";
 import { createSocialAdmissionAuthority } from "../../apps/edge-proxy/src/connectSocialAdmission.ts";
+import { privateAuthorizationFields } from "../../apps/edge-proxy/src/connectSocialPrivate.ts";
 
 const PROJECT = "demo-aurora-social";
 const AUTH = "http://127.0.0.1:9187/identitytoolkit.googleapis.com/v1/accounts:lookup?key=demo-aurora-social";
@@ -45,6 +46,15 @@ function tokenClaims(token) {
 /** The emulator deliberately has no signature. Trust is limited to this explicitly opted-in local fixture. */
 export function createLocalEmulatorBindingDependencies() {
   return {
+    async readPrivateAuthorization(principal, sessionId, recipientUid, signal) {
+      if (!UID.test(principal.accountId) || !UID.test(recipientUid) || !UUID.test(sessionId)) fail("session_not_authorized");
+      const result = await boundedJson(await fetch(DOCUMENTS + `socialPrivateInvitations/${sessionId}/guests/${recipientUid}`, {
+        redirect: "error", signal, headers: { Authorization: `Bearer ${bearer(principal.request)}` },
+      }));
+      if (!result.fields || typeof result.fields !== "object" || Array.isArray(result.fields)) fail("backend_unavailable");
+      if (signal.aborted) fail("binding_cancelled");
+      return privateAuthorizationFields(result.fields, sessionId, recipientUid, principal.accountId, Date.now());
+    },
     async trustedAuthenticate(request, signal) {
       const token = bearer(request), claims = tokenClaims(token);
       const result = await boundedJson(await fetch(AUTH, { method: "POST", redirect: "error", signal,
@@ -89,12 +99,14 @@ async function requestBody(request, maximum) {
   try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks))); }
   catch { fail("invalid_request"); }
 }
-export async function startSocialBindingLab({ enabled = false, port = 42_888, admission = false } = {}) {
+export async function startSocialBindingLab({ enabled = false, port = 42_888, admission = false, privateInvitations = false } = {}) {
   if (enabled !== true || ![0, 42_888].includes(port)) throw new Error("SOCIAL_BINDING_LAB_OPT_IN_REQUIRED");
   if (typeof admission !== "boolean") throw new Error("SOCIAL_ADMISSION_LAB_OPT_IN_REQUIRED");
+  if (typeof privateInvitations !== "boolean" || privateInvitations && !admission) throw new Error("SOCIAL_PRIVATE_LAB_OPT_IN_REQUIRED");
   const dependencies = createLocalEmulatorBindingDependencies();
   const authority = createSocialBindingAuthority(dependencies);
-  const admissionAuthority = admission ? await createSocialAdmissionAuthority(authority, dependencies) : null;
+  const options = privateInvitations ? { keys: await crypto.subtle.generateKey("Ed25519", false, ["sign", "verify"]), privateInvitations: true } : undefined;
+  const admissionAuthority = admission ? await createSocialAdmissionAuthority(authority, dependencies, options) : null;
   const keyRoutes = ["/v1/social/key/challenge", "/v1/social/key/proof"];
   const admissionRoutes = ["/v1/social/identity", "/v1/social/context", "/v1/social/host/register", "/v1/social/join", "/v1/social/continuity",
     "/v1/social/host/poll", "/v1/social/host/publish", "/v1/social/guest/receive", "/v1/social/host/stop", "/v1/social/guest/stop"];
@@ -138,13 +150,13 @@ export async function startSocialBindingLab({ enabled = false, port = 42_888, ad
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolve); });
   origin = `http://127.0.0.1:${server.address().port}`;
   // These pins are provisioned directly to the runner that created this object, never through a renderer-selected URL.
-  return { origin, issuerInstance: authority.issuerInstance, admissionPublicKey: admissionAuthority?.admissionPublicKey,
+  return { origin, issuerInstance: authority.issuerInstance, admissionPublicKey: admissionAuthority?.admissionPublicKey, privateInvitations,
     inspect: () => authority.inspect(), inspectAdmission: () => admissionAuthority?.inspect(),
     async close() { server.closeIdleConnections(); const stopped = new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); server.closeAllConnections(); await stopped; } };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (process.argv.length !== 2 || process.env.AURORA_SOCIAL_BINDING_LAB !== "1") throw new Error("SOCIAL_BINDING_LAB_OPT_IN_REQUIRED");
-  const lab = await startSocialBindingLab({ enabled: true, admission: process.env.AURORA_SOCIAL_ADMISSION_LAB === "1" });
+  const lab = await startSocialBindingLab({ enabled: true, admission: process.env.AURORA_SOCIAL_ADMISSION_LAB === "1", privateInvitations: process.env.AURORA_SOCIAL_PRIVATE_LAB === "1" });
   console.log(JSON.stringify({ event: "social_binding_lab_ready", origin: lab.origin, localAuthEmulator: true, transportAuthorized: false }));
   let stopping = false;
   const stop = async () => { if (stopping) return; stopping = true; await lab.close(); console.log(JSON.stringify({ event: "social_binding_lab_stopped" })); };

@@ -76,6 +76,8 @@ pub struct SocialCapabilities {
     pub max_session_seconds: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owned_game_tcp_discovery: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub private_invitations: Option<bool>,
 }
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -202,12 +204,16 @@ pub struct SocialLabAuthority {
     pub(super) pin: aurora_connect_lab::EndpointId,
     pub(super) issuer: String,
     pub(super) online_origin: Option<&'static str>,
+    pub(super) private_invitations: bool,
     pub(super) join_policy: String,
     pub(super) session_expiry: u64,
     pub(super) max_players: u8,
 }
 #[cfg(feature = "connect-lab")]
 impl SocialLabAuthority {
+    pub(super) fn private_invitations_enabled(&self) -> bool {
+        cfg!(debug_assertions) && self.online_origin.is_none() && self.private_invitations
+    }
     pub fn from_local_process(pin: &str, issuer: &str) -> Result<Self, ConnectError> {
         let lower_hex = |text: &str| {
             text.len() == 64
@@ -222,6 +228,9 @@ impl SocialLabAuthority {
             pin: pin.parse().map_err(|_| ConnectError::InvalidRequest)?,
             issuer: issuer.into(),
             online_origin: None,
+            // Captured once from the trusted lab process, never from IPC or refresh.
+            private_invitations: cfg!(debug_assertions)
+                && std::env::var("AURORA_SOCIAL_PRIVATE_LAB").as_deref() == Ok("1"),
             join_policy: "open".into(),
             session_expiry: 0,
             max_players: 1,
@@ -249,6 +258,7 @@ impl SocialLabAuthority {
             pin: aurora_connect_lab::generate_key().public(),
             issuer: String::new(),
             online_origin: Some(origin),
+            private_invitations: false,
             join_policy: "open".into(),
             session_expiry: 0,
             max_players: 0,
@@ -294,6 +304,7 @@ impl ConnectManager {
                 account_epoch: 0,
                 max_session_seconds: 60,
                 owned_game_tcp_discovery: None,
+                private_invitations: None,
             }
         }
     }

@@ -17,6 +17,19 @@ export type SocialPage = { items: SocialSession[]; nextCursor: string | null };
 export type SocialGroup = { id: string; name: string; ownerUid: string; members: SocialPerson[]; invited: SocialPerson[]; expiresAtMs: number };
 export type SocialGroupInvite = { groupId: string; name: string; ownerUid: string; expiresAtMs: number };
 export type SocialJoinRequest = { sessionId: string; guest: SocialPerson; status: "pending" | "accepted"; expiresAtMs: number };
+export type SocialPrivateInvitation = { session: SocialSession; host: SocialPerson; expiresAtMs: number };
+export type SocialPrivateRecipient = { person: SocialPerson; status: "active" | "revoked" };
+export type SocialPrivateInvitationSnapshot = {
+  incoming: SocialPrivateInvitation[]; outgoing: SocialPrivateRecipient[];
+  sessionId: string | null; expiresAtMs: number | null; remainingRecipients: number;
+};
+/** Discovery permission only. Admission remains with the native Connect owner. */
+export type SocialPrivateInvitationService = {
+  snapshot(): Promise<SocialPrivateInvitationSnapshot>;
+  invite(sessionId: string, recipientUid: string): Promise<void>;
+  revoke(sessionId: string, recipientUid: string): Promise<void>;
+  decline(sessionId: string): Promise<void>;
+};
 export type SocialOrganizationService = {
   /** Server-time display projection; NaN means its bounded sample is unavailable. */
   now?(): number;
@@ -37,6 +50,8 @@ export type SocialService = {
   now?(): number;
   readonly capabilities: { friends: boolean; catalog: boolean; publication: boolean; join: boolean };
   readonly organization?: SocialOrganizationService;
+  /** Local emulator experiment only; absent in the online/normal SDK. */
+  readonly privateInvitations?: SocialPrivateInvitationService;
   /** Display-only, exact Aurora registry lookup in this authenticated service scope. */
   profile?(uid: string): Promise<SocialPerson | null>;
   searchByNickname(nickname: string): Promise<SocialPerson | null>;

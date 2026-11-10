@@ -6,6 +6,67 @@ import { startSocialBindingLab } from './social-binding-server.mjs';
 import { account, activeTcp, delay, echo, manager, prepareHost, prepareGuest, rebind, socialFactory, tcpRoundtrip, waitSnapshot } from './social-desktop-fixtures.mjs';
 
 const enabled = process.env.AURORA_SOCIAL_DESKTOP_INTEGRATION === '1';
+test('private directed invitation joins two native managers and revocation closes the active TCP flow', { skip: !enabled, timeout: 90_000 }, async t => {
+  const binary = process.env.AURORA_SOCIAL_DESKTOP_TEST_BINARY;
+  assert.ok(binary && isAbsolute(binary), 'absolute reviewed desktop test binary required');
+  assert.ok((await stat(binary)).isFile());
+  let lab, host, guest, third, source, hostClient, guestClient, active, bridge, primary, cleanupFailure;
+  const started = performance.now();
+  try {
+    const factory = await socialFactory();
+    lab = await startSocialBindingLab({ enabled: true, port: 42888, admission: true, privateInvitations: true });
+    host = await account(factory, 'pvhost'); guest = await account(factory, 'pvgest'); third = await account(factory, 'pvothr');
+    source = await echo();
+    await host.service.publishSession({ title: 'Private local invitation', modpackName: 'Native private fixture', minecraftVersion: '1.21.1', loader: 'Fabric',
+      imageUrl: null, players: 1, maxPlayers: 2, visibility: 'private', joinPolicy: 'open' });
+    const sessionId = await host.sessionId();
+    assert.ok(host.service.privateInvitations); assert.ok(guest.service.privateInvitations);
+    await host.service.privateInvitations.invite(sessionId, guest.uid);
+    const invitedAt = performance.now();
+    const inbox = await guest.service.privateInvitations.snapshot();
+    assert.equal(inbox.incoming.length, 1); assert.equal(inbox.incoming[0].session.id, sessionId);
+    assert.equal((await third.service.privateInvitations.snapshot()).incoming.length, 0);
+    hostClient = await manager(binary, lab); guestClient = await manager(binary, lab);
+    assert.equal(hostClient.ready.capabilities.privateInvitations, true);
+    await prepareHost(hostClient, host, sessionId, 'private');
+    const denied = await fetch(lab.origin + '/v1/social/context', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await third.token()}` }, body: JSON.stringify({ sessionId }) });
+    assert.equal(denied.status, 403); assert.equal((await denied.json()).code, 'context_unavailable'); assert.equal(source.connections, 0);
+    await prepareGuest(guestClient, guest, sessionId);
+    const connected = await waitSnapshot(guestClient, value => value.phase === 'guestConnected' && value.social?.stage === 'connected');
+    bridge = connected.tcpAddress; assert.match(bridge, /^127\.0\.0\.1:\d+$/);
+    await tcpRoundtrip(bridge); active = await activeTcp(bridge);
+    assert.equal(active.isOpen, true); assert.ok(connected.social.expiresAtMs - Date.now() > 10_000);
+    const closed = active.withdrawn(); closed.catch(() => {});
+    const revokeAt = performance.now(); await host.service.privateInvitations.revoke(sessionId, guest.uid); await closed;
+    const [hostClosed, guestClosed] = await Promise.all([
+      waitSnapshot(hostClient, value => ['closed', 'failed'].includes(value.phase) && value.cleanupState === 'complete'),
+      waitSnapshot(guestClient, value => ['closed', 'failed'].includes(value.phase) && value.cleanupState === 'complete'),
+    ]);
+    assert.equal(hostClosed.transportState, 'closed'); assert.equal(guestClosed.tcpAddress, null); await rebind(bridge);
+    const withdrawalMs = Math.round(performance.now() - revokeAt), connectionsAfterWithdrawal = source.connections;
+    assert.equal((await guest.service.privateInvitations.snapshot()).incoming.length, 0);
+    // Reissuing the account authorization must not restart a terminal native attempt.
+    await delay(Math.max(0, 2100 - (performance.now() - invitedAt)));
+    await host.service.privateInvitations.invite(sessionId, guest.uid);
+    assert.equal((await guest.service.privateInvitations.snapshot()).incoming.length, 1);
+    const unchanged = await guestClient.ok('snapshot'); assert.equal(unchanged.operationId, guestClosed.operationId);
+    assert.ok(['closed', 'failed'].includes(unchanged.phase)); assert.equal(unchanged.tcpAddress, null); assert.equal(source.connections, connectionsAfterWithdrawal);
+    t.diagnostic(JSON.stringify({ case: 'private-directed-nonfriend', tcpBytesEachDirection: 1_048_576, thirdAccountDenied: true,
+      activeTcpWithdrawn: true, automaticCleanup: true, tcpRebind: true, reinvitationDidNotRevive: true, withdrawalMs,
+      elapsedMs: Math.round(performance.now() - started), minecraft: 'not_tested', voice: 'not_tested', externalNetwork: 'not_tested' }));
+  } catch (error) { primary = error; }
+  finally {
+    active?.close();
+    for (const cleanup of [guestClient && (() => guestClient.close()), hostClient && (() => hostClient.close()), source && (() => source.close()),
+      third && (() => third.close()), guest && (() => guest.close()), host && (() => host.close()), lab && (() => lab.close())].filter(Boolean)) {
+      try { await cleanup(); } catch (error) { cleanupFailure ??= error; }
+    }
+    if (source) { try { await rebind('127.0.0.1:43001'); } catch (error) { cleanupFailure ??= error; } }
+  }
+  if (primary && cleanupFailure) throw new AggregateError([primary, cleanupFailure], 'PRIVATE_SCENARIO_AND_CLEANUP_FAILED');
+  if (cleanupFailure) throw cleanupFailure;
+  if (primary) throw primary;
+});
 test('launcher ConnectManager joins and launches through authenticated local social authority', { skip: !enabled, timeout: 240_000 }, async t => {
   const binary = process.env.AURORA_SOCIAL_DESKTOP_TEST_BINARY;
   assert.ok(binary && isAbsolute(binary), 'absolute reviewed desktop test binary required');

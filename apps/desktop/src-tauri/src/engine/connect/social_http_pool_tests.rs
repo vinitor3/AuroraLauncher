@@ -25,6 +25,7 @@ fn fixture_run(origin: &'static str, account: &str, epoch: u64) -> Run {
             pin: lab::generate_key().public(),
             issuer: String::new(),
             online_origin: Some(origin),
+            private_invitations: false,
             join_policy: "open".into(),
             session_expiry: 0,
             max_players: 0,

@@ -47,6 +47,7 @@ fn fixture(
             pin: authority.public(),
             issuer: "33".repeat(32),
             online_origin: Some(origin),
+            private_invitations: false,
             join_policy: "open".into(),
             session_expiry: now + 20_000,
             max_players: 8,

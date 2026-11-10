@@ -58,7 +58,8 @@ export function SocialConnectionPanel({ connection, ownSession, now, catalogNow 
   useEffect(() => { setConsent(false); setCopyMessage(""); }, [snapshot?.operationId, social?.digest]);
   useEffect(() => { setSelected(undefined); setSelectionEpoch(value => value + 1); }, [ownSession?.id, ownSession?.visibility, ownSession?.joinPolicy]);
   const hostEligible = !!ownSession && ownSession.expiresAtMs > catalogNow
-    && ["public", "friends"].includes(ownSession.visibility);
+    && (["public", "friends"].includes(ownSession.visibility)
+      || ownSession.visibility === "private" && ownSession.joinPolicy === "open" && !!service?.privateInvitations && state.privateInvitations === true);
   const retiredOwnSession = state.maxSessionSeconds === 14400 && snapshot?.cleanupState === "complete"
     && ["closed", "failed"].includes(snapshot.phase) && social?.role === "host" && social.sessionId === ownSession?.id;
   const expired = social?.expiresAtMs !== null && social?.expiresAtMs !== undefined && social.expiresAtMs <= now;
@@ -95,7 +96,7 @@ export function SocialConnectionPanel({ connection, ownSession, now, catalogNow 
     </>}
     {social?.stage === "hostReview" && <div className="social-notice">
       <strong>Compartilhar o servidor deste computador</strong>
-      <p>Servidor: {social.gameTarget}. Acesso {social.visibility === "friends" ? "somente para seus amigos" : "para a comunidade"}, com {maxGuests} {maxGuests === 1 ? "vaga" : "vagas para convidados"}{social.hostPlayer ? " e uma vaga local" : ""}.</p>
+      <p>Servidor: {social.gameTarget}. Acesso {social.visibility === "private" ? "somente para as contas convidadas" : social.visibility === "friends" ? "somente para seus amigos" : "para a comunidade"}, com {maxGuests} {maxGuests === 1 ? "vaga" : "vagas para convidados"}{social.hostPlayer ? " e uma vaga local" : ""}.</p>
       <p>O Aurora encaminhará a conexão de jogo{social.voiceProfile ? ` e ${social.voiceProfile === "svc" ? "Simple Voice Chat" : "Plasmo Voice"}` : ""}. Isso não inicia Minecraft.</p>
       {social.voiceTransportProfile === "nativeVoice8V1" && <NativeVoiceLimits />}
       <label className="social-consent"><input type="checkbox" checked={consent} disabled={!canReview} onChange={event => setConsent(event.target.checked)} />Autorizo compartilhar este servidor {social.voiceProfile ? `por até ${reviewMinutes} minutos, dentro do prazo da origem` : state.maxSessionSeconds === 14400 ? "por até 4 horas" : "por até 60 segundos"}.</label>
@@ -140,7 +141,7 @@ export function SocialConnectionPanel({ connection, ownSession, now, catalogNow 
         if (canOpenGame && social?.expiresAtMs && social.expiresAtMs > Date.now()) onOpenConnectedGame?.();
       }}>Abrir Minecraft</button>}
       {!active && <button disabled={!state.available || state.pending || !hostEligible || retiredOwnSession || ((discovery || useVoice || state.maxSessionSeconds === 14400) && !sourceReady)} onClick={() => {
-        if (!hostEligible || retiredOwnSession || !ownSession || ownSession.visibility === "private" || !(ownSession.expiresAtMs > (service?.now ? service.now() : Date.now()))) return;
+        if (!hostEligible || retiredOwnSession || !ownSession || !(ownSession.expiresAtMs > (service?.now ? service.now() : Date.now()))) return;
         if (useVoice) { if (voiceReady) void controller.prepareHostNativeVoice(ownSession.id, ownSession.visibility, hostPlayer); }
         else if (discovery) {
           if (!selected || selected.expiresAtMs <= Date.now() || !socialGameTarget(selected.target)) return;

@@ -1,5 +1,6 @@
 /** Production-only Firebase boundary. Tokens are never persisted by this adapter. */
 import { normalizeSocialBindingSession, SocialBindingError, type SocialBindingDependencies } from "./connectSocialBinding.ts";
+import { privateAuthorizationFields } from "./connectSocialPrivate.ts";
 
 const UID = /^[A-Za-z0-9_-]{1,128}$/;
 export const SOCIAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -63,6 +64,17 @@ export function createSocialFirebaseDependencies(project: string, authenticatedU
       if (!UID.test(uid)) return fail("unauthenticated"); return uid;
     },
     clock: { wall: Date.now, monotonic: () => performance.now() }, // DO supplies its persisted virtual epoch.
+    async readPrivateAuthorization(principal, sessionId, recipientUid, signal) {
+      const callerUid = authenticatedUid || principal.request.headers.get("x-aurora-verified-account") || "";
+      if (principal.accountId !== callerUid || !UID.test(callerUid) || !UID.test(recipientUid)
+        || sessionId !== routedSession || !SOCIAL_UUID.test(sessionId)) fail("session_not_authorized");
+      const result = await socialJson(await fetch(`https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents/socialPrivateInvitations/${sessionId}/guests/${recipientUid}`, {
+        headers: { Authorization: `Bearer ${socialBearer(principal.request)}` }, redirect: "manual", signal,
+      }));
+      if (!result.fields || typeof result.fields !== "object" || Array.isArray(result.fields)) return fail("backend_unavailable");
+      if (signal.aborted) fail("binding_cancelled");
+      return privateAuthorizationFields(result.fields as Record<string, Field>, sessionId, recipientUid, callerUid, Date.now());
+    },
     async readSession(principal, sessionId, signal) {
       const callerUid = authenticatedUid || principal.request.headers.get("x-aurora-verified-account") || "";
       if (principal.accountId !== callerUid || !UID.test(callerUid) || sessionId !== routedSession || !SOCIAL_UUID.test(sessionId)) fail("session_not_authorized");

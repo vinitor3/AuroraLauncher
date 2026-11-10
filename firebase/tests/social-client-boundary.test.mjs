@@ -23,12 +23,13 @@ before(async () => {
       increment=unused,limit=unused,orderBy=unused,query=unused,serverTimestamp=unused,startAfter=unused,deleteDoc=unused,where=unused;
   `);
   const organization=dataUrl(transpile(await readFile(new URL("../../apps/desktop/src/lib/socialOrganization.ts",import.meta.url),"utf8")).replace('"firebase/firestore"',JSON.stringify(fakeSdk)));
+  const privateInvitations=dataUrl(transpile(await readFile(new URL("../../apps/desktop/src/lib/socialPrivateInvitations.ts",import.meta.url),"utf8")).replace('"firebase/firestore"',JSON.stringify(fakeSdk)));
   // Clock bounds/authentication have their own real implementation fixtures; this
   // suite isolates the following SDK request/account lifecycle.
   const clock=dataUrl('export const createSocialServerClock=()=>({ensure:async check=>check(),now:Date.now,writeTime:Date.now});');
   const source=transpile(await readFile(new URL("../../apps/desktop/src/lib/socialFirebase.ts",import.meta.url),"utf8"))
     .replace('"./socialServerClock"',JSON.stringify(clock)).replace('"./firebase"',JSON.stringify('data:text/javascript,export const socialLabBuild=true'))
-    .replace('"./socialOrganization"',JSON.stringify(organization)).replace('"../shared/social"',JSON.stringify(sharedUrl)).replace('"firebase/firestore"',JSON.stringify(fakeSdk));
+    .replace('"./socialOrganization"',JSON.stringify(organization)).replace('"./socialPrivateInvitations"',JSON.stringify(privateInvitations)).replace('"../shared/social"',JSON.stringify(sharedUrl)).replace('"firebase/firestore"',JSON.stringify(fakeSdk));
   createService=(await import(dataUrl(source))).createSocialFirebaseService;
 });
 function pendingRead() {
@@ -36,6 +37,35 @@ function pendingRead() {
   globalThis[fixtureKey]={read(ref){calls.push(ref);return new Promise(resolve=>{finish=resolve;});}};
   return {calls,resolve(data){finish({data:()=>data});}};
 }
+
+test("private SDK is absent outside the two explicit local emulator projects",()=>{
+  for(const projectId of [undefined,"auroralauncher","demo-other","demo-aurora-social-evil"]){
+    const service=createService({db:{},config:{projectId},auth:{currentUser:{uid:"host"}}});
+    assert.equal(service.privateInvitations,undefined);
+  }
+  for(const projectId of ["demo-aurora-social","demo-aurora-social-rules-v2"]){
+    const service=createService({db:{},config:{projectId},auth:{currentUser:{uid:"host"}}});
+    assert.equal(typeof service.privateInvitations.invite,"function");
+  }
+});
+
+for(const action of ["invite","revoke","decline"])test(`private ${action} stops all transaction reads/writes after the account changes`,async()=>{
+  for(const nextUid of ["other","host"]){
+    const pending=pendingRead(),writes=[],auth={currentUser:{uid:"host"}};
+    const service=createService({db:{},config:{projectId:"demo-aurora-social"},auth});
+    globalThis[fixtureKey].transaction=async(work,options)=>{
+      assert.equal(options.maxAttempts,1);
+      await work({get:ref=>globalThis[fixtureKey].read(ref),set:ref=>writes.push(ref),update:ref=>writes.push(ref),delete:ref=>writes.push(ref)});
+    };
+    try{
+      const result=service.privateInvitations[action]("11111111-1111-4111-8111-111111111111","guest");
+      await new Promise(resolve=>setImmediate(resolve));assert.equal(pending.calls.length,1);
+      auth.currentUser={uid:nextUid};pending.resolve(undefined);
+      await assert.rejects(result,/conta mudou/);
+      assert.equal(pending.calls.length,1);assert.deepEqual(writes,[]);
+    }finally{delete globalThis[fixtureKey];}
+  }
+});
 test("account changes during a pending exact lookup cannot issue the second read or publish a person",async()=>{
   const pending=pendingRead(),auth={currentUser:{uid:"a"}},service=createService({db:{},auth});
   const result=service.searchByNickname("User_b");

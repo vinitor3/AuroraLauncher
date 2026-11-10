@@ -23,11 +23,13 @@ export async function socialFactory() {
   const shared = `data:text/javascript;base64,${Buffer.from(compile(await readFile(new URL('../../apps/desktop/src/shared/social.ts', import.meta.url), 'utf8'))).toString('base64')}`;
   const clock = `data:text/javascript;base64,${Buffer.from(compile(await readFile(new URL('../../apps/desktop/src/lib/socialServerClock.ts', import.meta.url), 'utf8'))).toString('base64')}`;
   const organization = `data:text/javascript;base64,${Buffer.from(compile(await readFile(new URL("../../apps/desktop/src/lib/socialOrganization.ts", import.meta.url),"utf8")).replace('"firebase/firestore"', JSON.stringify(import.meta.resolve("firebase/firestore")))).toString("base64")}`;
+  const privateInvitations = `data:text/javascript;base64,${Buffer.from(compile(await readFile(new URL("../../apps/desktop/src/lib/socialPrivateInvitations.ts", import.meta.url),"utf8")).replace('"firebase/firestore"', JSON.stringify(import.meta.resolve("firebase/firestore")))).toString("base64")}`;
   const source = compile(await readFile(new URL('../../apps/desktop/src/lib/socialFirebase.ts', import.meta.url), 'utf8'))
     .replace('"../shared/social"', JSON.stringify(shared))
     .replace('"./socialServerClock"', JSON.stringify(clock))
     .replace('"./firebase"', JSON.stringify('data:text/javascript,export const socialLabBuild=true'))
     .replace('"./socialOrganization"', JSON.stringify(organization))
+    .replace('"./socialPrivateInvitations"', JSON.stringify(privateInvitations))
     .replace('"firebase/firestore"', JSON.stringify(import.meta.resolve('firebase/firestore')));
   return (await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)).createSocialFirebaseService;
 }
@@ -115,7 +117,8 @@ export async function activeTcp(address) {
 export async function manager(binary, lab) {
   const child = spawn(binary, ['--ignored', '--exact', 'engine::connect::live::social::tests::social_desktop_process', '--nocapture'], {
     windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env,
-      AURORA_SOCIAL_DESKTOP_FIXTURE: '1', AURORA_SOCIAL_LAB_PIN: lab.admissionPublicKey, AURORA_SOCIAL_LAB_ISSUER: lab.issuerInstance },
+      AURORA_SOCIAL_DESKTOP_FIXTURE: '1', AURORA_SOCIAL_LAB_PIN: lab.admissionPublicKey, AURORA_SOCIAL_LAB_ISSUER: lab.issuerInstance,
+      AURORA_SOCIAL_PRIVATE_LAB: lab.privateInvitations === true ? '1' : '0' },
   });
   const decoder = new StringDecoder('utf8'), queue = [], waiters = [];
   let buffered = '', total = 0, stderrBytes = 0, ended = false, forced = false, failed;

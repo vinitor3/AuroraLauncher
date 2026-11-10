@@ -256,6 +256,11 @@ impl Manager {
                 60
             },
             owned_game_tcp_discovery: cfg!(windows).then_some(self.social_authority.is_some()),
+            private_invitations: self
+                .social_authority
+                .as_ref()
+                .is_some_and(SocialLabAuthority::private_invitations_enabled)
+                .then_some(true),
         }
     }
     pub(in crate::engine::connect) fn social_reserve(
@@ -317,7 +322,12 @@ impl Manager {
                             .is_some_and(|authority| authority.online_origin.is_none()))
                     && request.game_target.as_deref() == Some("127.0.0.1:43001"))
                     || (selection.is_some() && request.game_target.is_none()))
-                    && matches!(request.visibility.as_deref(), Some("public" | "friends")) =>
+                    && (matches!(request.visibility.as_deref(), Some("public" | "friends"))
+                        || (request.visibility.as_deref() == Some("private")
+                            && self.social_authority.as_ref().is_some_and(|authority| {
+                                authority.private_invitations_enabled()
+                                    && authority.join_policy == "open"
+                            }))) =>
             {
                 "host"
             }
@@ -1670,7 +1680,26 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
     };
     #[cfg(not(all(windows, feature = "connect-voice-lab")))]
     let voice_policy: Option<lab::SocialHostPolicy> = None;
-    let policy = if let Some(policy) = voice_policy {
+    let policy = if visibility == "private" {
+        if !run.authority.private_invitations_enabled()
+            || voice_policy.is_some()
+            || run.authority.join_policy != "open"
+        {
+            return Err(ConnectError::InvalidRequest);
+        }
+        // Local private lab preserves its original one-slot/60s loopback run.
+        // Only the completed private review can be approved or serialized.
+        lab::SocialHostPolicy::review_online_with_clock(
+            &challenge,
+            "friends",
+            source,
+            "open",
+            run.expiry,
+            run.clock.as_ref(),
+        )
+        .and_then(|policy| policy.with_guest_limit(1))
+        .and_then(lab::SocialHostPolicy::with_private_recipients)
+    } else if let Some(policy) = voice_policy {
         Ok(policy)
     } else if run.authority.online_origin.is_some() {
         lab::SocialHostPolicy::review_online_with_clock(
@@ -2027,6 +2056,9 @@ async fn guest(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
     if field(&context["body"], "issuerInstance")? != run.authority.issuer {
         return Err(ConnectError::InvitationRejected);
     }
+    if expected.private_authorization().is_some() && !run.authority.private_invitations_enabled() {
+        return Err(ConnectError::InvitationRejected);
+    }
     let policy_id = field(&context["body"], "policyId")?.to_owned();
     let (challenge, proof) = challenge(&run, &http, Some(&expected)).await?;
     expected
@@ -2035,12 +2067,12 @@ async fn guest(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
     expected
         .check_current()
         .map_err(|_| ConnectError::PlanExpired)?;
-    let joined = http
-        .post(
-            SocialRoute::Join,
-            json!({"proof":proof,"policyId":policy_id}),
-        )
-        .await?;
+    let mut join = json!({"proof":proof,"policyId":policy_id});
+    if let Some((id, revision)) = expected.private_authorization() {
+        join["authorizationId"] = json!(id);
+        join["authorizationRevision"] = json!(revision);
+    }
+    let joined = http.post(SocialRoute::Join, join).await?;
     let (grant, native_admission) =
         verify_guest_admission(&run, &expected, &challenge, &packet(&joined, "grant")?)?;
     let ingress = native_admission
@@ -2726,6 +2758,77 @@ mod tests {
             game_target: None,
             visibility: None,
         }
+    }
+    #[test]
+    fn social_private_capability_and_reservation_are_local_tcp_only() {
+        let mut closed = manager();
+        closed
+            .social_authority
+            .as_mut()
+            .unwrap()
+            .private_invitations = false;
+        assert!(closed.social_capabilities().private_invitations.is_none());
+        let mut local = manager();
+        local.social_authority.as_mut().unwrap().private_invitations = true;
+        assert_eq!(local.social_capabilities().private_invitations, Some(true));
+        assert_eq!(local.social_capabilities().max_session_seconds, 60);
+        let mut private = request(0);
+        private.role = "host".into();
+        private.visibility = Some("private".into());
+        private.game_target = Some("127.0.0.1:43001".into());
+        assert_eq!(
+            closed.social_reserve("main", private.clone()).unwrap_err(),
+            ConnectError::InvalidRequest
+        );
+        let prepared = local.social_reserve("main", private.clone()).unwrap();
+        let state = local.state.lock().unwrap();
+        let attempt = state.attempt.as_ref().unwrap();
+        assert_eq!(
+            attempt.snapshot.operation_id.as_deref(),
+            Some(prepared.operation_id.as_str())
+        );
+        assert_eq!(
+            attempt
+                .snapshot
+                .social
+                .as_ref()
+                .unwrap()
+                .visibility
+                .as_deref(),
+            Some("private")
+        );
+        assert!(attempt.worker.is_none()); // Preparing grants no network or service.
+        drop(state);
+        let mut online = manager();
+        online
+            .social_authority
+            .as_mut()
+            .unwrap()
+            .private_invitations = true;
+        online.social_authority.as_mut().unwrap().online_origin =
+            Some("https://compiled.test.invalid");
+        assert!(online.social_capabilities().private_invitations.is_none());
+        assert_eq!(
+            online
+                .social_reserve_inner("main", private.clone(), None, true)
+                .unwrap_err(),
+            ConnectError::InvalidRequest
+        );
+        let mut approval = manager();
+        approval
+            .social_authority
+            .as_mut()
+            .unwrap()
+            .private_invitations = true;
+        approval.social_authority.as_mut().unwrap().join_policy = "approval".into();
+        assert_eq!(
+            approval.social_reserve("main", private).unwrap_err(),
+            ConnectError::InvalidRequest
+        );
+        assert!(Manager::default()
+            .social_capabilities()
+            .private_invitations
+            .is_none());
     }
     fn cleanup_complete(snapshot: &ConnectSnapshot) -> bool {
         (snapshot.phase == "idle" && matches!(snapshot.cleanup_state, "notStarted" | "complete"))

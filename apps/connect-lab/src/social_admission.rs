@@ -49,7 +49,7 @@ fn voice_fields(
     digest: &Option<String>,
     host_player: Option<bool>,
 ) -> bool {
-    if matches!(schema, 3..=5) {
+    if matches!(transport_schema(schema), 3..=5) {
         matches!(profile.as_deref(), Some("svc" | "plasmo"))
             && digest.as_deref().is_some_and(is_hex)
             && host_player.is_some()
@@ -58,7 +58,7 @@ fn voice_fields(
     }
 }
 fn runtime_fields(schema: u8, profile: Option<&str>, voice: Option<&str>) -> bool {
-    if !matches!(schema, 4 | 5) {
+    if !matches!(transport_schema(schema), 4 | 5) {
         return profile.is_none();
     }
     matches!(
@@ -77,11 +77,33 @@ fn runtime_fields(schema: u8, profile: Option<&str>, voice: Option<&str>) -> boo
     ) && !(profile == Some("1.12.2-forge-14.23.5.2860") && voice == Some("plasmo"))
 }
 fn voice_transport_fields(schema: u8, profile: Option<&str>) -> bool {
-    if schema == 5 {
+    if transport_schema(schema) == 5 {
         profile == Some("nativeVoice8V1")
     } else {
         profile.is_none()
     }
+}
+fn transport_schema(schema: u8) -> u8 {
+    match schema {
+        6 => 2,
+        7 => 5,
+        value => value,
+    }
+}
+fn private_schema(schema: u8) -> bool {
+    matches!(schema, 6 | 7)
+}
+fn authorization_fields(private: bool, id: Option<&str>, revision: Option<u32>) -> bool {
+    if private {
+        id.is_some_and(is_hex) && revision.is_some_and(|value| value > 0)
+    } else {
+        id.is_none() && revision.is_none()
+    }
+}
+fn non_null_u32<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<u32>, D::Error> {
+    u32::deserialize(deserializer).map(Some)
 }
 fn non_null_bool<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -432,8 +454,20 @@ impl SocialHostPolicy {
     pub fn max_guests(&self) -> u8 {
         self.max_guests
     }
+    /// Explicitly review private recipients before approving a new digest.
+    /// Existing public/friends schema bytes and signed policies are unchanged.
+    pub fn with_private_recipients(mut self) -> Result<Self> {
+        self.schema_version = match self.schema_version {
+            2 => 6,
+            5 => 7,
+            _ => return Err(SocialAdmissionError::Context),
+        };
+        self.visibility = "private".into();
+        self.validate()?;
+        Ok(self)
+    }
     fn validate(&self) -> Result<()> {
-        if !matches!(self.schema_version, 1..=5)
+        if !matches!(self.schema_version, 1..=7)
             || !voice_transport_fields(self.schema_version, self.voice_transport_profile.as_deref())
             || !runtime_fields(
                 self.schema_version,
@@ -455,7 +489,11 @@ impl SocialHostPolicy {
             || !public(&self.public_key)
             || !uuid(&self.session_id)
             || !is_hex(&self.session_digest)
-            || !matches!(self.visibility.as_str(), "public" | "friends")
+            || if private_schema(self.schema_version) {
+                self.visibility != "private" || self.join_policy != "open"
+            } else {
+                !matches!(self.visibility.as_str(), "public" | "friends")
+            }
             || !matches!(self.join_policy.as_str(), "open" | "approval")
             || self.service_id != "game"
             || self.protocol != "tcp"
@@ -500,7 +538,7 @@ impl SocialHostPolicy {
             self.issued_at_unix_ms.to_string(),
             self.expires_at_unix_ms.to_string(),
         ];
-        if matches!(self.schema_version, 3..=5) {
+        if matches!(transport_schema(self.schema_version), 3..=5) {
             fields.push(self.voice_profile.clone().expect("validated voice profile"));
             fields.push(
                 self.voice_source_digest
@@ -509,14 +547,14 @@ impl SocialHostPolicy {
             );
             fields.push(self.host_player.expect("validated host player").to_string());
         }
-        if matches!(self.schema_version, 4 | 5) {
+        if matches!(transport_schema(self.schema_version), 4 | 5) {
             fields.push(
                 self.runtime_profile
                     .clone()
                     .expect("validated runtime profile"),
             );
         }
-        if self.schema_version == 5 {
+        if transport_schema(self.schema_version) == 5 {
             fields.push(
                 self.voice_transport_profile
                     .clone()
@@ -700,10 +738,27 @@ struct JoinContextBody {
     policy_digest: String,
     issued_at_unix_ms: u64,
     expires_at_unix_ms: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null_string"
+    )]
+    authorization_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null_u32"
+    )]
+    authorization_revision: Option<u32>,
 }
 impl JoinContextBody {
     fn validate(&self) -> Result<()> {
-        if self.schema_version != 1
+        if !matches!(self.schema_version, 1 | 2)
+            || !authorization_fields(
+                self.schema_version == 2,
+                self.authorization_id.as_deref(),
+                self.authorization_revision,
+            )
             || self.purpose != "socialJoinContext"
             || !is_hex(&self.issuer_instance)
             || !uid(&self.recipient_account_id)
@@ -726,25 +781,35 @@ impl JoinContextBody {
         Ok(())
     }
     fn bytes(&self) -> Vec<u8> {
-        preimage(
-            CONTEXT_DOMAIN,
-            &[
-                self.schema_version.to_string(),
-                self.purpose.clone(),
-                self.issuer_instance.clone(),
-                self.recipient_account_id.clone(),
-                self.session_id.clone(),
-                self.session_digest.clone(),
-                self.host_account_id.clone(),
-                self.host_public_key.clone(),
-                self.host_operation_id.clone(),
-                self.host_generation.to_string(),
-                self.policy_id.clone(),
-                self.policy_digest.clone(),
-                self.issued_at_unix_ms.to_string(),
-                self.expires_at_unix_ms.to_string(),
-            ],
-        )
+        let mut fields = vec![
+            self.schema_version.to_string(),
+            self.purpose.clone(),
+            self.issuer_instance.clone(),
+            self.recipient_account_id.clone(),
+            self.session_id.clone(),
+            self.session_digest.clone(),
+            self.host_account_id.clone(),
+            self.host_public_key.clone(),
+            self.host_operation_id.clone(),
+            self.host_generation.to_string(),
+            self.policy_id.clone(),
+            self.policy_digest.clone(),
+            self.issued_at_unix_ms.to_string(),
+            self.expires_at_unix_ms.to_string(),
+        ];
+        if self.schema_version == 2 {
+            fields.push(
+                self.authorization_id
+                    .clone()
+                    .expect("validated authorization id"),
+            );
+            fields.push(
+                self.authorization_revision
+                    .expect("validated authorization revision")
+                    .to_string(),
+            );
+        }
+        preimage(CONTEXT_DOMAIN, &fields)
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -844,6 +909,13 @@ impl VerifiedSocialJoinContext {
     pub fn session_digest(&self) -> &str {
         &self.body.session_digest
     }
+    /// Immutable recipient authorization selected by the signed context.
+    pub fn private_authorization(&self) -> Option<(&str, u32)> {
+        self.body
+            .authorization_id
+            .as_deref()
+            .zip(self.body.authorization_revision)
+    }
     /// Only preparation/ingress waits use this cap. It is never a replacement
     /// for the accepted grant's independent session deadline.
     pub fn ingress_deadline(&self) -> Instant {
@@ -903,10 +975,27 @@ struct GrantBody {
         deserialize_with = "non_null_string"
     )]
     voice_transport_profile: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null_string"
+    )]
+    authorization_id: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null_u32"
+    )]
+    authorization_revision: Option<u32>,
 }
 impl GrantBody {
     fn validate(&self) -> Result<()> {
-        if !matches!(self.schema_version, 1..=5)
+        if !matches!(self.schema_version, 1..=7)
+            || !authorization_fields(
+                private_schema(self.schema_version),
+                self.authorization_id.as_deref(),
+                self.authorization_revision,
+            )
             || !voice_transport_fields(self.schema_version, self.voice_transport_profile.as_deref())
             || !runtime_fields(
                 self.schema_version,
@@ -941,7 +1030,7 @@ impl GrantBody {
             || !integer(self.session_expires_at_unix_ms)
             || self.admission_expires_at_unix_ms <= self.issued_at_unix_ms
             || self.admission_expires_at_unix_ms - self.issued_at_unix_ms
-                > if self.schema_version == 5 {
+                > if transport_schema(self.schema_version) == 5 {
                     60_000
                 } else {
                     10_000
@@ -980,7 +1069,7 @@ impl GrantBody {
             self.admission_expires_at_unix_ms.to_string(),
             self.session_expires_at_unix_ms.to_string(),
         ];
-        if matches!(self.schema_version, 3..=5) {
+        if matches!(transport_schema(self.schema_version), 3..=5) {
             fields.push(self.voice_profile.clone().expect("validated voice profile"));
             fields.push(
                 self.voice_source_digest
@@ -989,18 +1078,30 @@ impl GrantBody {
             );
             fields.push(self.host_player.expect("validated host player").to_string());
         }
-        if matches!(self.schema_version, 4 | 5) {
+        if matches!(transport_schema(self.schema_version), 4 | 5) {
             fields.push(
                 self.runtime_profile
                     .clone()
                     .expect("validated runtime profile"),
             );
         }
-        if self.schema_version == 5 {
+        if transport_schema(self.schema_version) == 5 {
             fields.push(
                 self.voice_transport_profile
                     .clone()
                     .expect("validated voice transport"),
+            );
+        }
+        if private_schema(self.schema_version) {
+            fields.push(
+                self.authorization_id
+                    .clone()
+                    .expect("validated authorization id"),
+            );
+            fields.push(
+                self.authorization_revision
+                    .expect("validated authorization revision")
+                    .to_string(),
             );
         }
         preimage(GRANT_DOMAIN, &fields)
@@ -1183,6 +1284,26 @@ impl VerifiedSocialGrant {
     ) -> Result<Self> {
         Self::for_guest_mode(text, pin, challenge, context, prepared_deadline, true)
     }
+    /// Explicit local private TCP lab. Keep the original preparation cap and
+    /// sixty-second session bound while verifying the new signed schema.
+    pub fn for_guest_private_loopback(
+        text: &str,
+        pin: EndpointId,
+        challenge: &SocialKeyChallenge,
+        context: &VerifiedSocialJoinContext,
+        prepared_deadline: Instant,
+    ) -> Result<Self> {
+        let mut value =
+            Self::for_guest_mode(text, pin, challenge, context, prepared_deadline, true)?;
+        if value.body.schema_version != 6
+            || value.body.session_expires_at_unix_ms - value.body.issued_at_unix_ms > 60_000
+        {
+            return Err(SocialAdmissionError::Context);
+        }
+        value.session_deadline = value.session_deadline.min(prepared_deadline);
+        value.check_admission()?;
+        Ok(value)
+    }
     fn for_guest_mode(
         text: &str,
         pin: EndpointId,
@@ -1217,6 +1338,9 @@ impl VerifiedSocialGrant {
             || b.policy_id != expected.policy_id
             || b.policy_digest != expected.policy_digest
             || b.session_digest != expected.session_digest
+            || private_schema(b.schema_version) != (expected.schema_version == 2)
+            || b.authorization_id != expected.authorization_id
+            || b.authorization_revision != expected.authorization_revision
         {
             return Err(SocialAdmissionError::Context);
         }
@@ -1396,7 +1520,7 @@ impl SocialContinuity {
         use crate::session_invitation::SessionInvitationProfile;
         self.check()?;
         let b = &self.grant.body;
-        let profile = match b.schema_version {
+        let profile = match transport_schema(b.schema_version) {
             2 => SessionInvitationProfile::OnlineGameTcp,
             3 | 4 => SessionInvitationProfile::OnlineFragmentedGameUdp,
             5 => SessionInvitationProfile::OnlineNativeVoice8,
@@ -1507,6 +1631,9 @@ mod idle_tests;
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+    mod private_tests {
+        include!("social_private_tests.rs");
+    }
     struct Fixture {
         authority: SecretKey,
         host: SecretKey,
@@ -1572,6 +1699,8 @@ mod tests {
                 host_player: None,
                 runtime_profile: None,
                 voice_transport_profile: None,
+                authorization_id: None,
+                authorization_revision: None,
             };
             let expected = SocialGuestExpectation {
                 host_account_id: hc.account_id().into(),
@@ -1625,6 +1754,8 @@ mod tests {
                 policy_digest: expected.policy_digest.clone(),
                 issued_at_unix_ms: now,
                 expires_at_unix_ms: now + 9_000,
+                authorization_id: None,
+                authorization_revision: None,
             };
             VerifiedSocialJoinContext::verify(
                 &self.encoded_context(&body),

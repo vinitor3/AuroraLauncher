@@ -3,7 +3,7 @@ import { socialConnectCapabilitiesFrom, socialConnectError, socialReservationFro
 import { nativeVoiceSnapshotFrom, type VoiceProfile } from "../connect-native-voice/types";
 import { socialAvailabilitiesFrom } from "./availability";
 
-export type SocialConnectState = { available: boolean; maxSessionSeconds?: 60 | 14400; ownedGameTcpDiscovery?: boolean; nativeVoiceReady?: VoiceProfile; pending: boolean; error: string; snapshot?: ConnectSnapshot };
+export type SocialConnectState = { available: boolean; maxSessionSeconds?: 60 | 14400; ownedGameTcpDiscovery?: boolean; privateInvitations?: true; nativeVoiceReady?: VoiceProfile; pending: boolean; error: string; snapshot?: ConnectSnapshot };
 export const emptySocialConnectState = (): SocialConnectState => ({ available: false, pending: false, error: "" });
 type AuthUser = { uid: string; getIdToken(forceRefresh?: boolean): Promise<string> };
 type Options = {
@@ -78,7 +78,7 @@ export function createSocialConnectController(options: Options) {
       check(generation);
       const value = await options.invoke("connect_social_capabilities");
       check(generation); capabilities = socialConnectCapabilitiesFrom(value);
-      emit({ available: capabilities.available, maxSessionSeconds: capabilities.maxSessionSeconds, ownedGameTcpDiscovery: capabilities.ownedGameTcpDiscovery === true });
+      emit({ available: capabilities.available, maxSessionSeconds: capabilities.maxSessionSeconds, ownedGameTcpDiscovery: capabilities.ownedGameTcpDiscovery === true, privateInvitations: capabilities.privateInvitations });
       await poll();
     } catch (cause) { if (alive && generation === revision) emit({ error: socialConnectError(cause), available: false }); }
   }
@@ -90,8 +90,9 @@ export function createSocialConnectController(options: Options) {
     catch (cause) { if (alive && generation === revision) emit({ error: socialConnectError(cause) }); }
     finally { if (alive && generation === revision) { busy = false; emit({ pending: false }); await observe(); } }
   }
-  async function reserve(role: "host" | "guest", sessionId: string, visibility?: "public" | "friends", selectionId?: string, nativeVoice?: { hostPlayer: boolean }) {
+  async function reserve(role: "host" | "guest", sessionId: string, visibility?: "public" | "friends" | "private", selectionId?: string, nativeVoice?: { hostPlayer: boolean }) {
     if (!socialSessionId(sessionId)) { emit({ error: socialConnectError("connect_social_failed") }); return; }
+    if (visibility === "private" && capabilities?.privateInvitations !== true) { emit({ error: socialConnectError("connect_social_unavailable") }); return; }
     if (selectionId !== undefined && (!socialSessionId(selectionId) || capabilities?.ownedGameTcpDiscovery !== true)) {
       emit({ error: socialConnectError("connect_social_unavailable") }); return;
     }
@@ -157,9 +158,9 @@ export function createSocialConnectController(options: Options) {
       return socialAvailabilitiesFrom(value, sessionIds, started);
     },
     join: (sessionId: string) => reserve("guest", sessionId),
-    prepareHost: (sessionId: string, visibility: "public" | "friends") => reserve("host", sessionId, visibility),
-    prepareHostDiscovered: (sessionId: string, visibility: "public" | "friends", selectionId: string) => reserve("host", sessionId, visibility, selectionId),
-    prepareHostNativeVoice: (sessionId: string, visibility: "public" | "friends", hostPlayer: boolean) => reserve("host", sessionId, visibility, undefined, { hostPlayer }),
+    prepareHost: (sessionId: string, visibility: "public" | "friends" | "private") => reserve("host", sessionId, visibility),
+    prepareHostDiscovered: (sessionId: string, visibility: "public" | "friends" | "private", selectionId: string) => reserve("host", sessionId, visibility, selectionId),
+    prepareHostNativeVoice: (sessionId: string, visibility: "public" | "friends" | "private", hostPlayer: boolean) => reserve("host", sessionId, visibility, undefined, { hostPlayer }),
     revokeParticipant: (grantId: string) => perform(async generation => {
       const snapshot = state.snapshot;
       if (capabilities?.maxSessionSeconds !== 14400 || !snapshot?.operationId || snapshot.role !== "host" || snapshot.phase !== "hostListening"

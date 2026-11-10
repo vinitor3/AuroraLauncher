@@ -74,6 +74,7 @@ impl Fixture {
             pin: authority.public(),
             issuer: "33".repeat(32),
             online_origin: Some("https://guest-review-fixture.invalid"),
+            private_invitations: false,
             join_policy: "open".into(),
             session_expiry: now + 60_000,
             max_players: 8,
