@@ -353,3 +353,80 @@ test("join queue removals must delete the same request and republishing clears p
   await a.publishSession({ ...draft, joinPolicy: "approval", title: "New review" });
   assert.equal(await b.organization.joinRequestStatus(session), "none"); await b.organization.requestJoin(session);
 });
+
+test("pending join cancellation SDK deletes only its request and releases its queue slot", async () => {
+  const a = service("a"), b = service("b"), c = service("c");
+  await a.publishSession({ ...draft, joinPolicy: "approval" }); const session = await ownId("a");
+  await b.organization.requestJoin(session); await c.organization.requestJoin(session);
+  const queue = doc(dbFor("a"), "socialJoinQueues", session), before = (await getDoc(queue)).data();
+  await b.organization.cancelJoinRequest(session);
+  assert.equal(await b.organization.joinRequestStatus(session), "none");
+  assert.equal(await c.organization.joinRequestStatus(session), "pending");
+  assert.deepEqual((await getDoc(queue)).data(), { ...before, guests: ["c"] });
+  await assert.rejects(b.organization.cancelJoinRequest(session), /pedido mudou/);
+  await b.organization.requestJoin(session);
+  assert.deepEqual((await getDoc(queue)).data().guests, ["c", "b"]);
+});
+
+test("pending join cancellation rules deny unpaired removals, another guest, metadata changes and accepted grants", async () => {
+  const a = service("a"), b = service("b"), c = service("c");
+  await a.publishSession({ ...draft, joinPolicy: "approval" }); const session = await ownId("a");
+  await b.organization.requestJoin(session); await c.organization.requestJoin(session); await service("d").organization.requestJoin(session);
+  const db = dbFor("b"), request = doc(db, "socialJoinRequests", session, "guests", "b"), queue = doc(db, "socialJoinQueues", session);
+  const removal = (guests, deleted = ["b"], change = {}) => {
+    const batch = writeBatch(db);
+    for (const guest of deleted) batch.delete(doc(db, "socialJoinRequests", session, "guests", guest));
+    batch.update(queue, { guests, ...change }); return batch.commit();
+  };
+  await assertFails(deleteDoc(request));
+  await assertFails(updateDoc(queue, { guests: ["c"] }));
+  await assertFails(deleteDoc(queue));
+  await assertFails(removal([], ["b", "c"]));
+  await assertFails(removal(["b"], ["c"]));
+  await assertFails(removal(["c", "d", "e"]));
+  await assertFails(removal(["d", "c"]));
+  await assertFails(removal(["c", "d"], ["b"], { hostUid: "b" }));
+  await assertFails(removal(["c", "d"], ["b"], { expiresAt: Timestamp.fromMillis(1) }));
+  await assertFails(removal(["c", "d"], ["b"], { unexpected: true }));
+  assert.equal(await b.organization.joinRequestStatus(session), "pending");
+  await a.organization.respondJoin(session, "b", "accept");
+  await assert.rejects(b.organization.cancelJoinRequest(session), /pedido mudou/);
+  await assertFails(removal(["c", "d"])); await assertFails(deleteDoc(request));
+  assert.equal(await b.organization.joinRequestStatus(session), "accepted");
+  assert.deepEqual((await getDoc(queue)).data().guests, ["b", "c", "d"]);
+  await a.organization.respondJoin(session, "b", "decline");
+  assert.deepEqual((await getDoc(queue)).data().guests, ["c", "d"], "host revocation remains explicit and available");
+});
+
+test("pending join cancellation racing host acceptance has one atomic winner and never removes an accepted request", async () => {
+  const a = service("a"), b = service("b");
+  await a.publishSession({ ...draft, joinPolicy: "approval" }); const session = await ownId("a");
+  await b.organization.requestJoin(session);
+  const [cancel, accept] = await Promise.allSettled([
+    b.organization.cancelJoinRequest(session), a.organization.respondJoin(session, "b", "accept"),
+  ]);
+  assert.equal([cancel, accept].filter(result => result.status === "fulfilled").length, 1);
+  const status = await b.organization.joinRequestStatus(session);
+  assert.equal(status, cancel.status === "fulfilled" ? "none" : "accepted");
+  assert.deepEqual((await getDoc(doc(dbFor("a"), "socialJoinQueues", session))).data().guests, status === "none" ? [] : ["b"]);
+});
+
+test("pending join cancellation refuses expired or replaced scope without modifying the retained queue", async () => {
+  const a = service("a"), b = service("b");
+  await a.publishSession({ ...draft, joinPolicy: "approval" }); const session = await ownId("a");
+  await b.organization.requestJoin(session);
+  const queue = doc(dbFor("a"), "socialJoinQueues", session), before = (await getDoc(queue)).data();
+  const services = sdkServices("b"), oldService = createService(services);
+  services.auth.currentUser = { ...services.auth.currentUser };
+  await assert.rejects(oldService.organization.cancelJoinRequest(session), /conta mudou/);
+  await assert.rejects(b.organization.cancelJoinRequest("11111111-1111-4111-8111-111111111111"));
+  await env.withSecurityRulesDisabled(async context => {
+    await updateDoc(doc(context.firestore(), "socialJoinRequests", session, "guests", "b"), { expiresAt: Timestamp.fromMillis(1) });
+  });
+  await assert.rejects(b.organization.cancelJoinRequest(session), /pedido mudou/);
+  const rawDb = dbFor("b"), raw = writeBatch(rawDb);
+  raw.delete(doc(rawDb, "socialJoinRequests", session, "guests", "b"));
+  raw.update(doc(rawDb, "socialJoinQueues", session), { guests: [] });
+  await assertFails(raw.commit());
+  assert.deepEqual((await getDoc(queue)).data(), before);
+});

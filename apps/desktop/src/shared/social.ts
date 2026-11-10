@@ -28,6 +28,7 @@ export type SocialOrganizationService = {
   leaveGroup(): Promise<void>;
   removeGroupMember(uid: string): Promise<void>;
   requestJoin(sessionId: string): Promise<void>;
+  cancelJoinRequest(sessionId: string): Promise<void>;
   joinRequestStatus(sessionId: string): Promise<"none" | "pending" | "accepted">;
   respondJoin(sessionId: string, guestUid: string, decision: "accept" | "decline"): Promise<void>;
 };

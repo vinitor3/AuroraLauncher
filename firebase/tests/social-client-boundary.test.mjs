@@ -16,10 +16,11 @@ before(async () => {
     const fixture=()=>globalThis[${JSON.stringify(fixtureKey)}];
     export function doc(...args){return args.slice(1);}
     export async function getDocFromServer(ref){return fixture().read(ref);}
+    export async function runTransaction(db, work, options){return fixture().transaction(work, options);}
     export class Timestamp { static fromMillis(ms){ return {toMillis:()=>ms}; } }
     const unused=()=>{throw Error("Unexpected SDK operation");};
     export const arrayRemove=unused,arrayUnion=unused,collection=unused,documentId=unused,getDocsFromServer=unused,
-      increment=unused,limit=unused,orderBy=unused,query=unused,runTransaction=unused,serverTimestamp=unused,startAfter=unused,deleteDoc=unused,where=unused;
+      increment=unused,limit=unused,orderBy=unused,query=unused,serverTimestamp=unused,startAfter=unused,deleteDoc=unused,where=unused;
   `);
   const organization=dataUrl(transpile(await readFile(new URL("../../apps/desktop/src/lib/socialOrganization.ts",import.meta.url),"utf8")).replace('"firebase/firestore"',JSON.stringify(fakeSdk)));
   // Clock bounds/authentication have their own real implementation fixtures; this
@@ -94,4 +95,23 @@ test("a new login of the same UID cannot publish a pending old roster profile",a
   await assert.rejects(result,/conta mudou/);
   assert.equal(pending.calls.length,1);
   delete globalThis[fixtureKey];
+});
+
+test("pending join cancellation stops before another read or write when the original account changes",async()=>{
+  for (const nextUid of ["c", "b"]) {
+    const pending=pendingRead(),writes=[],auth={currentUser:{uid:"b"}},service=createService({db:{},auth});
+    globalThis[fixtureKey].transaction=async(work,options)=>{
+      assert.equal(options.maxAttempts,1);
+      await work({get:ref=>globalThis[fixtureKey].read(ref),delete:ref=>writes.push(ref),update:ref=>writes.push(ref)});
+    };
+    try {
+      const result=service.organization.cancelJoinRequest("11111111-1111-4111-8111-111111111111");
+      await new Promise(resolve=>setImmediate(resolve));
+      assert.deepEqual(pending.calls,[["socialJoinRequests","11111111-1111-4111-8111-111111111111","guests","b"]]);
+      auth.currentUser={uid:nextUid};
+      pending.resolve({status:"pending",guestUid:"b"});
+      await assert.rejects(result,/conta mudou/);
+      assert.equal(pending.calls.length,1);assert.deepEqual(writes,[]);
+    } finally {delete globalThis[fixtureKey];}
+  }
 });

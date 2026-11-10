@@ -343,6 +343,20 @@ service cloud.firestore {
         && removedJoinGone(id, old, retained, 4) && removedJoinGone(id, old, retained, 5)
         && removedJoinGone(id, old, retained, 6) && removedJoinGone(id, old, retained, 7);
     }
+    function ownPendingJoinCancellation(id) {
+      let guest = request.auth.uid;
+      let pending = get(/databases/$(database)/documents/socialJoinRequests/$(id)/guests/$(guest)).data;
+      let old = get(/databases/$(database)/documents/socialJoinQueues/$(id)).data;
+      let next = getAfter(/databases/$(database)/documents/socialJoinQueues/$(id)).data;
+      return pending.status == 'pending' && pending.guestUid == guest && pending.sessionId == id
+        && pending.hostUid != guest && pending.hostUid == old.hostUid
+        && pending.expiresAt == old.expiresAt && pending.expiresAt > request.time
+        && guest in old.guests && old.guests.size() <= 8
+        && next.diff(old).affectedKeys().hasOnly(['guests'])
+        && next.guests is list && next.guests.toSet().size() == next.guests.size()
+        && next.guests == old.guests.removeAll([guest])
+        && !existsAfter(/databases/$(database)/documents/socialJoinRequests/$(id)/guests/$(guest));
+    }
     match /socialJoinQueues/{sessionId} {
       allow list: if false;
       allow get: if signedIn() && socialVisibleSession(sessionId, get(/databases/$(database)/documents/socialSessions/$(sessionId)).data);
@@ -354,6 +368,9 @@ service cloud.firestore {
         && ((request.auth.uid == request.resource.data.hostUid
             && request.resource.data.guests.toSet().difference(resource.data.guests.toSet()).size() == 0
             && joinRemovalsPaired(sessionId, resource.data.guests, request.resource.data.guests))
+          || (exists(/databases/$(database)/documents/socialJoinQueues/$(sessionId))
+            && exists(/databases/$(database)/documents/socialJoinRequests/$(sessionId)/guests/$(request.auth.uid))
+            && ownPendingJoinCancellation(sessionId))
           || (getAfter(/databases/$(database)/documents/socialJoinRequests/$(sessionId)/guests/$(request.auth.uid)).data.status == 'pending'
         && ((!exists(/databases/$(database)/documents/socialJoinQueues/$(sessionId)) && request.resource.data.guests == [request.auth.uid])
           || (exists(/databases/$(database)/documents/socialJoinQueues/$(sessionId))
@@ -380,7 +397,8 @@ service cloud.firestore {
         && request.resource.data.expiresAt > request.time && request.resource.data.updatedAt == request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt'])
         && !socialBlocked(resource.data.hostUid, guest);
-      allow delete: if signedIn() && request.auth.uid in [guest, resource.data.hostUid];
+      allow delete: if signedIn() && (request.auth.uid == resource.data.hostUid
+        || (request.auth.uid == guest && ownPendingJoinCancellation(sessionId)));
     }
     match /socialPresence/{uid} {
       allow list: if false;

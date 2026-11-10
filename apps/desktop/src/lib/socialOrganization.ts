@@ -135,6 +135,21 @@ export function createSocialOrganization(db: Firestore, account: () => string, g
       }, { maxAttempts: 1 });
     }),
     joinRequestStatus: sessionId => guarded(async check => { const value = (await getDocFromServer(requestRef(sessionId))).data(); check(); return value && live(value) && ["pending", "accepted"].includes(value.status) ? value.status : "none"; }),
+    cancelJoinRequest: sessionId => guarded(async check => {
+      const guest = account(), session = sid(sessionId);
+      const ref = requestRef(session, guest), queueRef = doc(db, "socialJoinQueues", session);
+      await runTransaction(db, async tx => {
+        const value = (await tx.get(ref)).data(); check();
+        const queue = (await tx.get(queueRef)).data(); check();
+        if (account() !== guest || !value || value.status !== "pending" || !live(value)
+          || value.guestUid !== guest || value.sessionId !== session || value.hostUid === guest
+          || !queue || queue.hostUid !== value.hostUid || !live(queue)
+          || !queue.expiresAt.isEqual(value.expiresAt) || !Array.isArray(queue.guests)
+          || queue.guests.length > 8 || new Set(queue.guests).size !== queue.guests.length || !queue.guests.includes(guest)) throw unavailable();
+        tx.delete(ref);
+        tx.update(queueRef, { guests: queue.guests.filter((id: string) => id !== guest) });
+      }, { maxAttempts: 1 });
+    }),
     respondJoin: (sessionId, guest, decision) => guarded(async check => {
       await runTransaction(db, async tx => {
         const ref = requestRef(sessionId, guest), value = (await tx.get(ref)).data();
