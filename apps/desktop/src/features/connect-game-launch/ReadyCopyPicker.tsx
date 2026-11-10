@@ -105,7 +105,7 @@ export function ReadyCopyPicker({ sourceInstanceId, contextKey, connectOperation
     try { await invoke("connect_cancel_ready_copy_install", { operationId: install }); }
     catch (cause) { if (mounted.current) { setError(readyGameError(cause)); setCancelRequested(false); } }
   }
-  return <section className="connect-fields" aria-label="Selecionar cópia pronta">
+  return <section className="connect-fields connect-ready-copy" aria-label="Selecionar cópia pronta">
     <button className="secondary" type="button" disabled={disabled || busy || !!install || !sourceInstanceId} onClick={() => { void load(); }}>Listar cópias prontas</button>
     {busy && <p role="status">Conferindo as cópias disponíveis…</p>}
     {error && <p role="alert">{error}</p>}
@@ -130,7 +130,7 @@ export function ReadyCopyPicker({ sourceInstanceId, contextKey, connectOperation
         {targetRuntime && <>
           <p>A cópia será criada com Java {targetRuntime.javaMajor}, Core {targetRuntime.coreVersion}, Skins {targetRuntime.skinsVersion} e os arquivos oficiais do perfil selecionado. Mundos, mods e configurações do modpack ficam na origem.</p>
           {targetRuntime.loader === "forge" && <p>O preparo executa o instalador oficial do Forge com o Java da cópia.</p>}
-          <label><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)} />Autorizo baixar e instalar o perfil acima em uma nova cópia de teste.</label>
+          <label className="connect-consent"><input type="checkbox" checked={approved} onChange={event => setApproved(event.target.checked)} /><span>Autorizo baixar e instalar o perfil acima em uma nova cópia de teste.</span></label>
           <button type="button" disabled={!approved || !connectOperationId} onClick={() => { void prepareRuntime(); }}>Criar cópia com este runtime</button>
         </>}
       </fieldset>

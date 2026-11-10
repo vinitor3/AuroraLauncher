@@ -23,6 +23,13 @@
 .connect-view dd { margin: 0; overflow-wrap: anywhere; }
 .connect-view .connect-consent { display: flex; gap: .6rem; align-items: flex-start; }
 .connect-view .connect-consent input { width: 16px; height: 16px; flex: 0 0 16px; margin-top: .3rem; }
+.connect-ready-copy > details { grid-column: 1 / -1; min-width: 0; }
+.connect-ready-copy summary { cursor: pointer; color: #dec6fa; font-size: .85rem; }
+.connect-ready-copy fieldset { display: grid; gap: .8rem; min-width: 0; margin: .8rem 0 0; padding: 1rem; border: 1px solid #c7aaff30; border-radius: 10px; }
+.connect-ready-copy fieldset > label:not(.connect-consent) { display: grid; gap: .3rem; min-width: 0; }
+.connect-ready-copy .connect-consent { cursor: pointer; }
+.connect-ready-copy .connect-consent input[type="checkbox"] { width: 16px; height: 16px; min-height: 0; padding: 0; flex: 0 0 16px; margin: .3rem 0 0; accent-color: #ae84ff; color-scheme: dark; }
+.connect-ready-copy :focus-visible { outline: 2px solid #c8a2fb; outline-offset: 3px; }
 .connect-error, .connect-warning, .connect-message { padding: .75rem .9rem; border-radius: 8px; border: 1px solid #dfb9a145; }
 .connect-view .connect-error { color: #f0c4cc; border-color: #ec8c9d50; background: #af41551a; }
 .connect-view .connect-warning { color: #e2cfad; background: #a5894312; }
