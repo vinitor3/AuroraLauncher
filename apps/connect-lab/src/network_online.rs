@@ -35,6 +35,7 @@ struct Envelope {
 }
 struct Inner {
     body: Body,
+    pin: EndpointId,
     bearer: String,
     url: RelayUrl,
     peer: EndpointId,
@@ -217,6 +218,7 @@ impl OnlineNetworkTicket {
         };
         let ticket = Self(Arc::new(Inner {
             body,
+            pin,
             bearer: encoded.to_owned(),
             url,
             peer,
@@ -243,6 +245,19 @@ impl OnlineNetworkTicket {
     }
     pub(crate) fn clock(&self) -> Option<&OnlineClock> {
         self.0.clock.as_ref()
+    }
+    pub(crate) fn matches_social_host(
+        &self,
+        pin: EndpointId,
+        issuer: &str,
+        account: &str,
+        generation: u64,
+    ) -> bool {
+        self.0.pin == pin
+            && self.0.body.issuer_instance == issuer
+            && self.0.body.account_id == account
+            && self.0.body.generation == generation
+            && self.0.peer == self.0.host
     }
     pub fn local_peer(&self) -> EndpointId {
         self.0.peer

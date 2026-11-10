@@ -1021,6 +1021,7 @@ pub struct VerifiedSocialGrant {
     admission_deadline: Instant,
     session_deadline: Instant,
     clock: Option<OnlineClock>,
+    host_source: Option<SocketAddr>,
 }
 impl VerifiedSocialGrant {
     fn verified(
@@ -1090,6 +1091,7 @@ impl VerifiedSocialGrant {
             body: b,
             pin,
             clock: clock.cloned(),
+            host_source: None,
         };
         value.check_admission()?;
         Ok(value)
@@ -1122,7 +1124,7 @@ impl VerifiedSocialGrant {
         clock: Option<&OnlineClock>,
     ) -> Result<Self> {
         policy.verify()?;
-        let value = Self::verified(
+        let mut value = Self::verified(
             text,
             pin,
             challenge,
@@ -1160,6 +1162,7 @@ impl VerifiedSocialGrant {
         {
             return Err(SocialAdmissionError::Context);
         }
+        value.host_source = Some(source);
         Ok(value)
     }
     pub fn for_guest(
@@ -1339,7 +1342,93 @@ pub struct SocialContinuity {
     deadline: Instant,
     terminal: bool,
 }
+
+/// An admitted Host lease may use only this verified, original continuity cap.
+/// It is not an admission, a keepalive packet, or a renewable local timeout.
+pub(crate) struct SocialIdleWitness {
+    grant: VerifiedSocialGrant,
+    invitation_digest: String,
+    lease: LeaseBody,
+    deadline: Instant,
+}
+impl SocialIdleWitness {
+    pub(crate) fn check(&self) -> Result<()> {
+        self.grant.check_session()?;
+        current(
+            self.lease.issued_at_unix_ms,
+            self.lease.expires_at_unix_ms,
+            self.deadline,
+            self.grant.clock.as_ref(),
+        )
+    }
+    pub(crate) fn refresh(&mut self, next: Self) -> Result<()> {
+        // A lost witness is terminal, even if a caller reparses newer authority.
+        self.check()?;
+        next.check()?;
+        if self.invitation_digest != next.invitation_digest
+            || self.grant.body.bytes() != next.grant.body.bytes()
+            || self.grant.pin != next.grant.pin
+            || self.grant.host_source != next.grant.host_source
+            || self.grant.admission_deadline != next.grant.admission_deadline
+            || self.grant.session_deadline != next.grant.session_deadline
+            || !OnlineClock::same_scope(self.grant.clock.as_ref(), next.grant.clock.as_ref())
+        {
+            return Err(SocialAdmissionError::Context);
+        }
+        if next.lease.sequence < self.lease.sequence
+            || (next.lease.sequence == self.lease.sequence
+                && (next.lease.bytes() != self.lease.bytes() || next.deadline != self.deadline))
+        {
+            return Err(SocialAdmissionError::Sequence);
+        }
+        self.lease = next.lease;
+        self.deadline = next.deadline;
+        Ok(())
+    }
+}
 impl SocialContinuity {
+    pub(crate) fn host_idle_witness(
+        &self,
+        invitation: &crate::SessionInvitation,
+        ticket: &crate::OnlineNetworkTicket,
+        source: SocketAddr,
+    ) -> Result<SocialIdleWitness> {
+        use crate::session_invitation::SessionInvitationProfile;
+        self.check()?;
+        let b = &self.grant.body;
+        let profile = match b.schema_version {
+            2 => SessionInvitationProfile::OnlineGameTcp,
+            3 | 4 => SessionInvitationProfile::OnlineFragmentedGameUdp,
+            5 => SessionInvitationProfile::OnlineNativeVoice8,
+            _ => return Err(SocialAdmissionError::Context),
+        };
+        if self.grant.host_source != Some(source)
+            || invitation.check_profile(profile).is_err()
+            || invitation.host_key() != self.grant.host_key()
+            || invitation.guest_key() != self.grant.guest_key()
+            || invitation.session_id() != b.session_id
+            || invitation.admission_expires_at_unix_ms() != b.admission_expires_at_unix_ms
+            || invitation.session_expires_at_unix_ms() != b.session_expires_at_unix_ms
+            || !ticket.matches_social_host(
+                self.grant.pin,
+                &b.issuer_instance,
+                &b.host_account_id,
+                b.host_generation,
+            )
+            || ticket.host_peer() != self.grant.host_key()
+            || ticket.session_id() != b.session_id
+            || !OnlineClock::same_scope(self.grant.clock.as_ref(), ticket.clock())
+            || !OnlineClock::same_scope(self.grant.clock.as_ref(), invitation.online_clock())
+        {
+            return Err(SocialAdmissionError::Context);
+        }
+        Ok(SocialIdleWitness {
+            grant: self.grant.clone(),
+            invitation_digest: invitation.digest(),
+            lease: self.lease.clone(),
+            deadline: self.deadline,
+        })
+    }
     fn verify(text: &str, grant: &VerifiedSocialGrant) -> Result<(LeaseBody, Instant)> {
         let clock = grant.clock.as_ref();
         let (at, now) = OnlineClock::observe(clock);
@@ -1409,6 +1498,10 @@ impl SocialContinuity {
         self.lease.sequence
     }
 }
+
+#[cfg(all(test, feature = "local-relay-lab"))]
+#[path = "social_idle_tests.rs"]
+mod idle_tests;
 
 #[cfg(test)]
 mod tests {

@@ -109,6 +109,50 @@ impl OnlineAuthority {
 }
 
 impl Host {
+    /// Maintain only an already admitted Social peer under its signed continuity.
+    /// No application I/O or deadline extension is performed by this operation.
+    pub fn refresh_social_idle(
+        &self,
+        invitation: &SessionInvitation,
+        continuity: &crate::SocialContinuity,
+    ) -> Result<()> {
+        let online = self.state.online.as_ref().ok_or(Error::Configuration)?;
+        online.check_current()?;
+        let active = self.state.active_leases.lock().map_err(|_| Error::Closed)?;
+        if !active_invitation(&self.state, &active, invitation.invitation_id()) {
+            return Err(Error::Closed);
+        }
+        let lease = self
+            .state
+            .lease(invitation.invitation_id())
+            .ok_or(Error::Unauthorized)?;
+        if lease
+            .invitation
+            .as_ref()
+            .is_none_or(|original| original.proof() != invitation.proof())
+        {
+            return Err(Error::Unauthorized);
+        }
+        let source = self
+            .state
+            .services
+            .get("game")
+            .ok_or(Error::Configuration)?
+            .1
+            .endpoint;
+        let witness = continuity
+            .host_idle_witness(invitation, &online.ticket, source)
+            .map_err(|_| Error::Unauthorized)?;
+        let mut original = lease.social_idle.lock().map_err(|_| Error::Closed)?;
+        match original.as_mut() {
+            Some(original) => original.refresh(witness).map_err(|_| Error::Expired),
+            None => {
+                *original = Some(witness);
+                Ok(())
+            }
+        }
+    }
+
     pub async fn start_invited_online(
         config: HostConfig,
         invitation: &SessionInvitation,

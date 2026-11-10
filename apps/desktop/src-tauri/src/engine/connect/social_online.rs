@@ -233,8 +233,16 @@ impl Group {
             {
                 active.revoke(id);
                 participant.terminal = true;
-            } else {
-                connected |= participant.admitted && active.invitation_active(id);
+            } else if participant.admitted && active.invitation_active(id) {
+                if active
+                    .refresh_social_idle(&participant.invitation, &participant.continuity)
+                    .is_err()
+                {
+                    active.revoke(id);
+                    participant.terminal = true;
+                } else {
+                    connected = true;
+                }
             }
         }
         let mut roster: Vec<SocialParticipant> = self

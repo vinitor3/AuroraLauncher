@@ -227,6 +227,7 @@ struct LeaseState {
     consumed: AtomicBool,
     cancel: CancellationToken,
     local_player_activity: Mutex<Option<Instant>>,
+    social_idle: Mutex<Option<crate::social_admission::SocialIdleWitness>>,
     udp_limiters: Mutex<HashMap<u32, Arc<Mutex<UdpLimiter>>>>,
     downstream_limiters: Mutex<HashMap<u32, Arc<Mutex<UdpLimiter>>>>,
     fragment_ingress: Arc<Mutex<UdpLimiter>>,
@@ -258,6 +259,7 @@ impl LeaseState {
             consumed: AtomicBool::new(false),
             cancel: CancellationToken::new(),
             local_player_activity: Mutex::new(None),
+            social_idle: Mutex::new(None),
             udp_limiters: Mutex::new(HashMap::new()),
             downstream_limiters: Mutex::new(HashMap::new()),
         }
@@ -1042,6 +1044,7 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
     let watcher_cancel = cancel.clone();
     let watcher_connection = connection.clone();
     let session_authority = lease.invitation.clone();
+    let social_authority = lease.clone();
     tasks.spawn(async move {
         // A separate future rechecks civil time even when a control read is
         // stalled. The original monotonic deadline never moves forward.
@@ -1052,11 +1055,26 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
                 std::future::pending::<()>().await;
             }
         };
+        let social_expired = async {
+            loop {
+                if social_authority
+                    .social_idle
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .is_some_and(|w| w.check().is_err())
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        };
         tokio::select! {
             _ = watcher_cancel.cancelled() => (),
             _ = lease_cancel.cancelled() => (),
             _ = tokio::time::sleep(remaining) => (),
             _ = authority_expired => (),
+            _ = social_expired => (),
         }
         watcher_cancel.cancel();
         watcher_connection.close(0u32.into(), b"lease closed");
@@ -1084,6 +1102,7 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
             _ = tokio::time::sleep(Duration::from_millis(100)) => {
                 if tcp.available_permits() == state.limits.max_tcp_per_peer && associations.lock().unwrap().is_empty()
                     && last_activity.elapsed() >= state.limits.idle_timeout
+                    && !lease.social_idle.lock().unwrap().as_ref().is_some_and(|w| w.check().is_ok())
                     && lease.local_player_activity.lock().unwrap().is_none_or(|activity| activity.elapsed() >= state.limits.idle_timeout) { break; }
             }
             stream = connection.accept_bi() => {
