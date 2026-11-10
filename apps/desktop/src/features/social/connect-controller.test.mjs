@@ -363,3 +363,31 @@ test("guest confirmation cannot use an expired, replaced-account or host review"
     assert.equal(f.calls.filter(([name]) => name === "connect_social_confirm_guest").length, 0, mode);
   }
 });
+
+test("volatile transport RTT updates at the same generation without changing authority or causing another operation", async () => {
+  for (const role of ["host", "guest"]) {
+    const f = await fixture({ online: true });
+    const baseline = { ...active(role, "connected"), generation: 5,
+      phase: role === "host" ? "hostListening" : "guestConnected", transportState: "admitted", tcpAddress: "127.0.0.1:51401" };
+    const callsBefore = f.calls.length;
+    for (const pathObservation of [
+      { schemaVersion: 2, state: "direct", rttEstimateMicros: 100_000 },
+      { schemaVersion: 2, state: "direct", rttEstimateMicros: 150_000 },
+      { schemaVersion: 2, state: "direct" },
+      { schemaVersion: 1, state: "direct" },
+    ]) {
+      f.setSnapshot({ ...baseline, pathObservation });
+      await f.controller.refresh();
+      const published = f.published.at(-1);
+      assert.equal(published.error, "");
+      const { pathObservation: observed, ...authority } = published.snapshot;
+      assert.deepEqual(observed, pathObservation);
+      assert.deepEqual(authority, baseline, "RTT never changes generation, deadline, source or authorization fields");
+    }
+    f.setSnapshot({ ...baseline, generation: 4, pathObservation: { schemaVersion: 2, state: "direct", rttEstimateMicros: 1 } });
+    await f.controller.refresh();
+    assert.deepEqual(f.published.at(-1).snapshot.pathObservation, { schemaVersion: 1, state: "direct" }, "a lower generation is still ignored");
+    assert.ok(f.calls.slice(callsBefore).every(([name]) => name === "connect_snapshot"));
+    assert.equal(f.tokenCalls(), 0);
+  }
+});

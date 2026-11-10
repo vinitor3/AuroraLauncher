@@ -37,6 +37,22 @@ async fn observe_until(mut sample: impl FnMut() -> Option<PathObservation>, stat
     })
     .await;
 }
+fn assert_estimate(observation: PathObservation, state: PathState) {
+    assert_eq!(observation.schema_version, 2);
+    assert_eq!(observation.state, state);
+    let value = serde_json::to_value(observation).unwrap();
+    if matches!(state, PathState::Direct | PathState::Relay) {
+        assert!(
+            observation
+                .rtt_estimate_micros
+                .is_some_and(|micros| micros > 0)
+        );
+        assert_eq!(value.as_object().unwrap().len(), 3);
+    } else {
+        assert!(observation.rtt_estimate_micros.is_none());
+        assert_eq!(value.as_object().unwrap().len(), 2);
+    }
+}
 #[derive(Clone, Copy)]
 enum Profile {
     Legacy,
@@ -342,23 +358,28 @@ async fn direct_case(profile: Profile, own_ipv4: Option<std::net::Ipv4Addr>) {
     )
     .await;
     for _ in 0..8 {
-        assert_eq!(guest.path_observation().state, PathState::Direct);
-        assert_eq!(
-            fixture
-                .host
-                .invitation_path_observation(&lease)
-                .unwrap()
-                .state,
-            PathState::Direct
+        assert_estimate(guest.path_observation(), PathState::Direct);
+        assert_estimate(
+            fixture.host.invitation_path_observation(&lease).unwrap(),
+            PathState::Direct,
         );
     }
     assert_eq!(fixture.host.metrics().destination_tcp_connects, 0);
     assert_eq!(guest.metrics().destination_tcp_connects, 0);
+    let mut untouched = [0; 1];
+    assert_eq!(
+        fixture
+            .aux
+            .try_recv_from(&mut untouched)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::WouldBlock
+    );
     exchange(&fixture.listener, &guest, 37).await;
     assert_eq!(fixture.host.metrics().destination_tcp_connects, 1);
     let retained = guest.clone();
     bounded(guest.shutdown()).await;
-    assert_eq!(retained.path_observation().state, PathState::Closed);
+    assert_estimate(retained.path_observation(), PathState::Closed);
     observe_until(
         || fixture.host.invitation_path_observation(&lease),
         PathState::Closed,
@@ -372,13 +393,9 @@ async fn direct_case(profile: Profile, own_ipv4: Option<std::net::Ipv4Addr>) {
             .await
             .is_err()
     );
-    assert_eq!(
-        fixture
-            .host
-            .invitation_path_observation(&lease)
-            .unwrap()
-            .state,
-        PathState::Closed
+    assert_estimate(
+        fixture.host.invitation_path_observation(&lease).unwrap(),
+        PathState::Closed,
     );
     drop(retained);
     finish_guest(guest).await;
@@ -422,8 +439,8 @@ async fn path_observation_original_expiry_and_consumed_ingress_are_independent()
         after(fixture.approved.expiry()).await;
         // This real-expiry case checks final behavior. A separate current-thread
         // unit test isolates the synchronous clock gate from the close watcher.
-        assert_eq!(guest.path_observation().state, PathState::Closed);
-        assert_eq!(retained.path_observation().state, PathState::Closed);
+        assert_estimate(guest.path_observation(), PathState::Closed);
+        assert_estimate(retained.path_observation(), PathState::Closed);
         assert!(fixture.host.invitation_path_observation(&lease).is_none());
         assert!(fixture.host.invitation_consumed(&lease));
         assert!(
@@ -561,6 +578,7 @@ async fn path_observation_group_revocation_is_individual_and_cannot_reveal_other
             .is_none()
     );
     observe_until(|| Some(a.path_observation()), PathState::Closed).await;
+    assert_estimate(a.path_observation(), PathState::Closed);
     assert_eq!(
         host.invitation_path_observation(invitations[1].invitation_id())
             .unwrap()
@@ -644,11 +662,12 @@ async fn path_observation_real_owned_local_relay_has_no_direct_fallback() {
     assert!(host.bound_sockets().is_empty());
     assert!(guest.bound_sockets().is_empty());
     observe_until(|| Some(guest.path_observation()), PathState::Relay).await;
+    assert_estimate(guest.path_observation(), PathState::Relay);
     assert!(host.invitation_path_observation("manual-relay").is_none());
     assert_eq!(host.metrics().destination_tcp_connects, 0);
     exchange(&listener, &guest, 53).await;
     bounded(guest.shutdown()).await;
-    assert_eq!(guest.path_observation().state, PathState::Closed);
+    assert_estimate(guest.path_observation(), PathState::Closed);
     drop(guest);
     bounded(host.shutdown()).await;
     drop(host);

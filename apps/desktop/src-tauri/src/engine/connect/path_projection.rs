@@ -22,10 +22,11 @@ pub(super) fn snapshot(a: &mut Attempt) -> ConnectSnapshot {
     } else {
         None
     };
-    if a.snapshot.path_observation != observation {
-        a.snapshot.path_observation = observation;
+    if path_state_changed(a.snapshot.path_observation, observation) {
         a.snapshot.generation = a.snapshot.generation.saturating_add(1);
     }
+    // A varying transport estimate is presentation, not a new review/CAS epoch.
+    a.snapshot.path_observation = observation;
     if !matches!(a.snapshot.phase, "hostListening" | "guestConnected") || a.cancel.is_cancelled() {
         let mut changed = false;
         if let Some(group) = &mut a.snapshot.host_group {
@@ -38,6 +39,32 @@ pub(super) fn snapshot(a: &mut Attempt) -> ConnectSnapshot {
         }
     }
     a.snapshot.clone()
+}
+
+fn path_state_changed(
+    previous: Option<ConnectPathObservation>,
+    next: Option<ConnectPathObservation>,
+) -> bool {
+    previous.map(|value| (value.schema_version, value.state))
+        != next.map(|value| (value.schema_version, value.state))
+}
+
+pub(super) fn group_state_changed(
+    previous: &[GroupParticipant],
+    next: &[GroupParticipant],
+) -> bool {
+    previous.len() != next.len()
+        || previous.iter().zip(next).any(|(previous, next)| {
+            let mut previous = previous.clone();
+            let mut next = next.clone();
+            for value in [&mut previous.path_observation, &mut next.path_observation]
+                .into_iter()
+                .flatten()
+            {
+                value.rtt_estimate_micros = None;
+            }
+            previous != next
+        })
 }
 
 /// Called by state transitions which already advance the output generation.

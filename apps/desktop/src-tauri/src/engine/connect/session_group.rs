@@ -144,10 +144,10 @@ pub(super) fn refresh(a: &mut Attempt) -> bool {
         member.revoked || !member.session_valid || (!member.consumed && !member.admission_valid)
     });
     if let Some(snapshot) = a.snapshot.host_group.as_mut() {
-        if snapshot.participants != participants {
-            snapshot.participants = participants;
+        if path_projection::group_state_changed(&snapshot.participants, &participants) {
             a.snapshot.generation = a.snapshot.generation.saturating_add(1);
         }
+        snapshot.participants = participants;
     }
     finished
 }

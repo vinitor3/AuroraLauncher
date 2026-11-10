@@ -26,10 +26,11 @@ async fn until(
     })
     .await
 }
-fn direct() -> Option<ConnectPathObservation> {
-    Some(ConnectPathObservation {
-        schema_version: 1,
-        state: ConnectPathState::Direct,
+fn direct(value: Option<ConnectPathObservation>) -> bool {
+    value.is_some_and(|value| {
+        value.schema_version == 2
+            && value.state == ConnectPathState::Direct
+            && value.rtt_estimate_micros.is_some_and(|micros| micros > 0)
     })
 }
 fn absent(snapshot: &ConnectSnapshot) {
@@ -140,9 +141,9 @@ async fn desktop_path_projection_individual_replies_sample_original_transport_an
     // The command reply itself must sample; a cached snapshot would omit it.
     let checked = guest.probe_status("main", &gp.operation_id).await.unwrap();
     assert_eq!(checked.status_state, "responded");
-    assert_eq!(checked.path_observation, direct());
+    assert!(direct(checked.path_observation));
     let host_observed = until(&host, |s| {
-        s.transport_state == "admitted" && s.path_observation == direct()
+        s.transport_state == "admitted" && direct(s.path_observation)
     })
     .await;
     let same_host = host.snapshot("main").unwrap();
@@ -150,7 +151,27 @@ async fn desktop_path_projection_individual_replies_sample_original_transport_an
     let first = guest.snapshot("main").unwrap();
     let same = guest.snapshot("main").unwrap();
     assert_eq!(first.generation, same.generation);
-    assert_eq!(first.path_observation, same.path_observation);
+    assert!(direct(first.path_observation) && direct(same.path_observation));
+    // A new RTT estimate is not a new authorization/review generation.
+    {
+        let mut state = guest.live.state.lock().unwrap();
+        let a = state.attempt.as_mut().unwrap();
+        a.snapshot
+            .path_observation
+            .as_mut()
+            .unwrap()
+            .rtt_estimate_micros = Some(u32::MAX);
+    }
+    let estimate_updated = guest.snapshot("main").unwrap();
+    assert!(direct(estimate_updated.path_observation));
+    assert_ne!(
+        estimate_updated
+            .path_observation
+            .unwrap()
+            .rtt_estimate_micros,
+        Some(u32::MAX)
+    );
+    assert_eq!(estimate_updated.generation, same.generation);
     // Closing the application bridge does not revoke the authenticated path.
     // In particular, observation must not call the QuickPlay address() gate.
     let bridge = {
@@ -169,7 +190,7 @@ async fn desktop_path_projection_individual_replies_sample_original_transport_an
     let tcp = bridge.local_addr();
     bridge.shutdown().await;
     drop(bridge);
-    assert_eq!(guest.snapshot("main").unwrap().path_observation, direct());
+    assert!(direct(guest.snapshot("main").unwrap().path_observation));
     let stopped = bounded(guest.stop("main", &gp.operation_id)).await.unwrap();
     absent(&stopped);
     // Repeated sampling must not retain the original Guest/Endpoint in State.
@@ -289,12 +310,33 @@ async fn desktop_path_projection_group_observes_each_original_lease_and_preserve
             .unwrap()
             .participants
             .iter()
-            .all(|p| p.path_observation == direct() && p.consumed)
+            .all(|p| direct(p.path_observation) && p.consumed)
     })
     .await;
     assert!(current.path_observation.is_none());
     let stable = host.snapshot("main").unwrap();
     assert_eq!(stable.generation, current.generation);
+    {
+        let mut state = host.live.state.lock().unwrap();
+        let a = state.attempt.as_mut().unwrap();
+        for participant in &mut a.snapshot.host_group.as_mut().unwrap().participants {
+            participant
+                .path_observation
+                .as_mut()
+                .unwrap()
+                .rtt_estimate_micros = Some(u32::MAX);
+        }
+    }
+    let estimates_updated = host.snapshot("main").unwrap();
+    assert_eq!(estimates_updated.generation, stable.generation);
+    assert!(estimates_updated
+        .host_group
+        .as_ref()
+        .unwrap()
+        .participants
+        .iter()
+        .all(|p| direct(p.path_observation)
+            && p.path_observation.unwrap().rtt_estimate_micros != Some(u32::MAX)));
     let expired_ingress = until(&host, |s| {
         s.host_group
             .as_ref()
@@ -311,7 +353,7 @@ async fn desktop_path_projection_group_observes_each_original_lease_and_preserve
         .unwrap()
         .participants
         .iter()
-        .all(|p| p.consumed && p.session_valid && p.path_observation == direct()));
+        .all(|p| p.consumed && p.session_valid && direct(p.path_observation)));
     let revoked = host
         .revoke_session_group_participant(
             "main",
@@ -323,7 +365,7 @@ async fn desktop_path_projection_group_observes_each_original_lease_and_preserve
     assert!(revoked.path_observation.is_none());
     let rows = revoked.host_group.as_ref().unwrap().participants.clone();
     assert!(rows[0].revoked && rows[0].path_observation.is_none());
-    assert_eq!(rows[1].path_observation, direct());
+    assert!(direct(rows[1].path_observation));
     assert_eq!(
         rows[1].session_timing,
         review.participants[1].session_timing
@@ -340,10 +382,9 @@ async fn desktop_path_projection_group_observes_each_original_lease_and_preserve
             0,
         )
         .unwrap();
-    assert_eq!(
-        duplicate.host_group.as_ref().unwrap().participants[1].path_observation,
-        direct()
-    );
+    assert!(direct(
+        duplicate.host_group.as_ref().unwrap().participants[1].path_observation
+    ));
     let response = bounded(lab::probe_minecraft_status(lab::MinecraftStatusRequest {
         endpoint: bridges[1].local_addr(),
         handshake_host: "localhost".into(),
@@ -362,6 +403,11 @@ async fn desktop_path_projection_group_observes_each_original_lease_and_preserve
     })
     .await;
     assert!(!peer_closed.host_group.as_ref().unwrap().participants[1].transport_active);
+    assert!(peer_closed.host_group.as_ref().unwrap().participants[1]
+        .path_observation
+        .unwrap()
+        .rtt_estimate_micros
+        .is_none());
     let stopped = bounded(host.stop("main", &prepared.operation_id))
         .await
         .unwrap();
@@ -388,7 +434,7 @@ async fn desktop_path_projection_udp_reply_samples_after_generation_gate_and_kee
     let endpoint = UdpSocket::bind(local()).await.unwrap();
     let pair = Pair::new(echo.address, endpoint.local_addr().unwrap(), 30, 60).await;
     let failed = pair.udp(UdpState::Failed).await;
-    assert_eq!(failed.path_observation, direct());
+    assert!(direct(failed.path_observation));
     let mut tcp = TcpStream::connect(pair.tcp).await.unwrap();
     transfer(&mut tcp).await;
     drop(occupied);
@@ -405,18 +451,18 @@ async fn desktop_path_projection_udp_reply_samples_after_generation_gate_and_kee
         .guest
         .retry_session_udp("main", &pair.guest_id, failed.generation)
         .unwrap();
-    assert_eq!(starting.path_observation, direct());
+    assert!(direct(starting.path_observation));
     bounded(gate.entered.notified()).await;
     let duplicate = pair
         .guest
         .retry_session_udp("main", &pair.guest_id, failed.generation)
         .unwrap();
     assert_eq!(duplicate.generation, starting.generation);
-    assert_eq!(duplicate.path_observation, direct());
+    assert!(direct(duplicate.path_observation));
     assert_eq!(duplicate.udp_recovery.as_ref().unwrap().attempts_used, 1);
     gate.release.notify_one();
     let ready = pair.udp(UdpState::Available).await;
-    assert_eq!(ready.path_observation, direct());
+    assert!(direct(ready.path_observation));
     assert_eq!(ready.session_timing.as_ref(), Some(&pair.timing));
     transfer(&mut tcp).await;
     pair.stop().await;
@@ -496,7 +542,7 @@ async fn desktop_path_projection_cancelled_group_removes_observation_once_before
             .unwrap()
             .participants
             .iter()
-            .all(|p| p.consumed && p.transport_active && p.path_observation == direct())
+            .all(|p| p.consumed && p.transport_active && direct(p.path_observation))
     })
     .await;
     {

@@ -2759,7 +2759,7 @@ test("path observations are absent from preparation, review, capability and invi
 });
 
 test("path guards reject malformed, wrong-role and non-live snapshots before specialized returns", () => {
-  for (const value of [undefined, null, {}, [], { schemaVersion: 2, state: "direct" }, { schemaVersion: 1, state: "mixed" },
+  for (const value of [undefined, null, {}, [], { schemaVersion: 3, state: "direct" }, { schemaVersion: 1, state: "mixed" },
     { ...pathObservation("direct"), ip: "untrusted" }]) {
     assert.throws(() => types.snapshotFrom({ ...activeSession(), pathObservation: value }));
   }
@@ -2837,6 +2837,26 @@ test("old backends and initial addresses alone keep the path unconfirmed", async
   assert.match(container.textContent, /Não confirmado · relay desligado/);
   assert.doesNotMatch(container.textContent, /Caminho direto observado|Relay observado|O caminho pode mudar/);
   assert.equal(count("connect_confirm"), 0); assert.equal(count("connect_probe_status"), 0);
+});
+
+test("transport RTT refreshes and disappears within the same generation without new authority", async () => {
+  sessionFixtures(); snapshot = { ...activeSession("guest"), pathObservation: { schemaVersion: 2, state: "direct", rttEstimateMicros: 100_000 } };
+  const generation = snapshot.generation;
+  await render();
+  assert.match(container.textContent, /RTT estimado do transporte: 100 ms/);
+  snapshot = { ...snapshot, pathObservation: { schemaVersion: 2, state: "direct", rttEstimateMicros: 150_000 } };
+  await click("Atualizar estado");
+  assert.match(container.textContent, /RTT estimado do transporte: 150 ms/);
+  assert.doesNotMatch(container.textContent, /RTT estimado do transporte: 100 ms/);
+  snapshot = { ...snapshot, pathObservation: { schemaVersion: 2, state: "direct" } };
+  await click("Atualizar estado");
+  assert.match(container.textContent, /Caminho direto observado/);
+  assert.doesNotMatch(container.textContent, /RTT estimado/);
+  assert.equal(snapshot.generation, generation);
+  assert.equal(container.querySelector('[role="alert"]'), null);
+  assert.equal(count("connect_confirm"), 0); assert.equal(count("connect_probe_status"), 0);
+  assert.deepEqual(copied, []);
+  assert.match(container.textContent, /Entrada no mundoNão verificada/);
 });
 
 test("group shows paths per participant and revoking one preserves the other's observation", async () => {
