@@ -9,9 +9,11 @@ mod ready_game_caller;
 mod ready_game_profile;
 mod social_presence_profile;
 mod social_profile;
+mod terminal_diagnostic;
 pub use ready_game_profile::*;
 pub use social_presence_profile::*;
 pub use social_profile::*;
+pub use terminal_diagnostic::ConnectTerminalDiagnostic;
 #[cfg(feature = "connect-lab")]
 mod ready_game_backend;
 #[cfg(feature = "connect-lab")]

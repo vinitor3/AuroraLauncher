@@ -176,6 +176,9 @@ struct State {
     attempt: Option<Attempt>,
     generation: u64,
     shutting_down: bool,
+    terminal_recorder: Option<super::terminal_diagnostic::TerminalRecorder>,
+    terminal_recorded_id: Option<String>,
+    terminal_sequence: u64,
 }
 #[derive(Default)]
 pub(super) struct Manager {
@@ -189,6 +192,19 @@ impl Drop for Manager {
                 attempt.cancel.cancel();
             }
         }
+    }
+}
+impl Manager {
+    pub(super) fn with_terminal_recorder(
+        self,
+        recorder: super::terminal_diagnostic::TerminalRecorder,
+    ) -> Self {
+        if let Ok(mut state) = self.state.lock() {
+            if state.attempt.is_none() && state.terminal_recorder.is_none() {
+                state.terminal_recorder = Some(recorder);
+            }
+        }
+        self
     }
 }
 fn lock(state: &Mutex<State>) -> Result<std::sync::MutexGuard<'_, State>, ConnectError> {
@@ -380,7 +396,20 @@ fn update(state: &Mutex<State>, id: &str, change: impl FnOnce(&mut Attempt)) {
     }
 }
 fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
-    update(state, id, |a| {
+    let publish = {
+        let Ok(mut state) = state.lock() else {
+            return;
+        };
+        let recorder = state.terminal_recorder.clone();
+        let record = state.terminal_recorded_id.as_deref() != Some(id);
+        let next_sequence = state.terminal_sequence.checked_add(1);
+        let Some(a) = state
+            .attempt
+            .as_mut()
+            .filter(|a| a.snapshot.operation_id.as_deref() == Some(id))
+        else {
+            return;
+        };
         #[cfg(all(windows, feature = "connect-voice-lab"))]
         native_voice::closing(a);
         session_group::finished(a);
@@ -423,7 +452,37 @@ fn finish(state: &Mutex<State>, id: &str, error: Option<ConnectError>) {
         a.snapshot.review = None;
         a.snapshot.pending_group_source = None;
         host_source::closing(a);
-    });
+        path_projection::clear(a);
+        a.snapshot.generation = a.snapshot.generation.saturating_add(1);
+        let diagnostic = if record {
+            next_sequence.map(|sequence| {
+                ConnectTerminalDiagnostic::capture(
+                    sequence,
+                    a.snapshot.role,
+                    error,
+                    a.snapshot
+                        .social
+                        .as_ref()
+                        .and_then(|social| social.failure_observation.clone()),
+                )
+            })
+        } else {
+            None
+        };
+        if record {
+            state.terminal_recorded_id = Some(id.into());
+            if let Some(sequence) = next_sequence {
+                state.terminal_sequence = sequence;
+            }
+        }
+        recorder.zip(diagnostic)
+    };
+    // No filesystem work or user callback while the actor mutex is held.
+    // The native recorder owns best-effort persistence; failure cannot change
+    // transport authority, the terminal error or resource collection.
+    if let Some((record, diagnostic)) = publish {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| record(diagnostic)));
+    }
 }
 struct ProbeGuard {
     state: Arc<Mutex<State>>,

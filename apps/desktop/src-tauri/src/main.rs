@@ -126,6 +126,14 @@ fn main() {
                     aurora_launcher_core::engine::connect::ConnectManager::default()
                 }
             };
+            #[cfg(feature = "connect-lab")]
+            let connect = match app.path().app_data_dir() {
+                Ok(data) => {
+                    let recorder = doctor_runs::ConnectTerminalRecorder::new(data.join("doctor-runs").join("connect"));
+                    connect.with_terminal_recorder(move |diagnostic| recorder.submit(diagnostic))
+                }
+                Err(_) => connect,
+            };
             app.manage(connect);
             app.manage(aurora_launcher_core::engine::connect_native_voice::NativeVoiceSessionManager::default());
             #[cfg(any(feature = "connect-lab", feature = "connect-voice-lab"))]

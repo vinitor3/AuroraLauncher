@@ -20,6 +20,9 @@ pub(super) mod ready_source;
 #[cfg(all(windows, feature = "connect-voice-lab"))]
 #[path = "social_source_reclaim.rs"]
 mod source_reclaim;
+#[cfg(test)]
+#[path = "terminal_diagnostic_tests.rs"]
+mod terminal_diagnostic_tests;
 
 #[derive(Clone)]
 struct DiscoverySelection {

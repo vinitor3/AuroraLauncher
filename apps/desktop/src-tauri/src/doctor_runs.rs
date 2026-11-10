@@ -1,4 +1,9 @@
 //! Launcher-owned execution records. Analysis never writes into an instance.
+#[cfg(feature = "connect-lab")]
+#[path = "doctor_connect_terminal.rs"]
+mod connect_terminal;
+#[cfg(feature = "connect-lab")]
+pub use connect_terminal::ConnectTerminalRecorder;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
