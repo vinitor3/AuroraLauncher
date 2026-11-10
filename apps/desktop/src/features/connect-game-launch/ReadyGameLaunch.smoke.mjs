@@ -161,6 +161,19 @@ test("disabled or absent capability starts no listing, snapshot or launch on the
   await panel({ session: { ...connection, role: "host", phase: "hostListening" } }); assert.equal(calls.length, 0);
 });
 
+test("an empty selected source can prepare its separate runtime without a global Java selection", async () => {
+  fixtures();
+  await panel({ launchContext: { ...context, javaExecutable: "" } });
+  assert.match(container.textContent, /Instância de origem selecionada: test-source/);
+  assert.match(container.textContent, /cópia de runtime com Java próprio/);
+  assert.equal(button("Listar cópias prontas").disabled, false);
+  assert.match(container.textContent, /Preparar uma nova cópia de runtime/);
+  assert.equal(button("Revisar entrada no servidor").disabled, true);
+  assert.equal(count("connect_install_ready_copy"), 0);
+  assert.equal(count("connect_prepare_ready_game_launch"), 0);
+  assert.equal(count("connect_confirm_ready_game_launch"), 0);
+});
+
 test("ready launch performs explicit copy selection, matching review and fresh consent before one launch", async () => {
   fixtures(); await panel(); assert.deepEqual(calls.map(c => c.command), ["connect_ready_game_launch_snapshot"]);
   await chooseCopy(); await click("Revisar entrada no servidor");

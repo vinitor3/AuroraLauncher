@@ -8,7 +8,7 @@ import {
   type ReadyGameLaunchReview, type ReadyGameLaunchSnapshot,
 } from "./types";
 
-type Props = { capability?: ReadyGameLaunchCapability; session?: ConnectSnapshot; launchContext?: ReadyGameLaunchContext; observeExisting?: boolean; sessionStale?: boolean };
+type Props = { capability?: ReadyGameLaunchCapability; session?: ConnectSnapshot; launchContext?: ReadyGameLaunchContext; observeExisting?: boolean; sessionStale?: boolean; onChooseSource?: () => void };
 type Action = "prepare" | "confirm" | "cancel";
 const active = (snapshot?: ReadyGameLaunchSnapshot) => !!snapshot && ["preparing", "reviewed", "starting"].includes(snapshot.phase);
 const hostPlayer = (session?: ConnectSnapshot) => session?.role === "host" && session.social?.role === "host"
@@ -22,7 +22,7 @@ const connected = (session?: ConnectSnapshot) => !!session?.tcpAddress
 const date = (value: number) => new Date(value).toLocaleTimeString("pt-BR");
 const readClocks = () => ({ wall: Date.now(), monotonic: performance.now() });
 
-export function ConnectGameLaunchPanel({ capability, session, launchContext: sourceLaunchContext, observeExisting = false, sessionStale = false }: Props) {
+export function ConnectGameLaunchPanel({ capability, session, launchContext: sourceLaunchContext, observeExisting = false, sessionStale = false, onChooseSource }: Props) {
   const operationId = session?.operationId ?? undefined;
   const [snapshot, setSnapshot] = useState<ReadyGameLaunchSnapshot>();
   const [selectedId, setSelectedId] = useState("");
@@ -225,7 +225,12 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
     {!capability && <p role="status">Novos lançamentos estão indisponíveis. O preparo existente ainda pode ser consultado ou cancelado.</p>}
     {!connected(session) && <p>Conecte como convidado antes de preparar a entrada. Uma consulta ao servidor ou conexão TCP não confirma entrada no mundo.</p>}
     {sessionStale && <p role="status">Aguarde uma observação atual do Connect antes de autorizar a entrada.</p>}
-    {!validReadyGameContext(launchContext) && <p>Selecione uma instância e aguarde o perfil e a aparência. Escolha um Java disponível ou prepare uma cópia de runtime com Java próprio.</p>}
+    {!launchContext && <div>
+      <p>Selecione uma instância em Instâncias e aguarde o perfil e a aparência. Ela pode estar vazia: você poderá preparar uma cópia separada com o perfil desta sessão.</p>
+      {onChooseSource && <button className="secondary" type="button" onClick={onChooseSource}>Selecionar ou criar instância</button>}
+    </div>}
+    {launchContext && <p>Instância de origem selecionada: <strong>{launchContext.sourceInstanceId}</strong>. O jogo será preparado e aberto em uma cópia separada.</p>}
+    {launchContext && !validReadyGameContext(launchContext) && <p>Confira o perfil e a aparência. Escolha um Java disponível ou prepare uma cópia de runtime com Java próprio.</p>}
     {contextChanged && <p role="status">O perfil ou a seleção mudou. O preparo anterior foi invalidado; aguarde a confirmação de cancelamento antes de revisar novamente.</p>}
     {error && <p role="alert">{error}</p>}
     {warning && <p role="alert">{warning}</p>}

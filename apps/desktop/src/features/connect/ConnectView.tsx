@@ -31,7 +31,7 @@ type SourcePreparationAwaiting = {
   profile?: HostSourceProfile; baseline?: ConnectSnapshot; controlledRejectionSettled?: symbol;
 };
 
-export function ConnectView({ launchContext, onInitialReadReady }: { launchContext?: ReadyGameLaunchContext; onInitialReadReady?: (ready: boolean) => void }) {
+export function ConnectView({ launchContext, onInitialReadReady, onChooseSource }: { launchContext?: ReadyGameLaunchContext; onInitialReadReady?: (ready: boolean) => void; onChooseSource?: () => void }) {
   const [capabilities, setCapabilities] = useState<ConnectCapabilities>();
   const [snapshot, setSnapshot] = useState<ConnectSnapshot>();
   const [loading, setLoading] = useState(true);
@@ -470,7 +470,7 @@ export function ConnectView({ launchContext, onInitialReadReady }: { launchConte
       {activeOperation && <button className="danger" disabled={pending === "stop" || snapshot.phase === "closing"} onClick={stop}>Encerrar Connect</button>}</div>
     {snapshot.cleanupState === "complete" && <p role="status">Recursos da conexão liberados.</p>}
     <ConnectGameLaunchPanel capability={snapshot.social.readyGameLaunchAvailable ? capabilities?.readyGameLaunch : undefined}
-      session={snapshot} launchContext={launchContext} observeExisting={!capabilities && !loading}
+      session={snapshot} launchContext={launchContext} onChooseSource={onChooseSource} observeExisting={!capabilities && !loading}
       sessionStale={!snapshot.social.readyGameLaunchAvailable || Boolean(warning) || loading || pending === "stop"} />
   </section>;
 
@@ -545,7 +545,7 @@ export function ConnectView({ launchContext, onInitialReadReady }: { launchConte
           {capabilities?.available && canProbe && <div><button type="button" disabled={busy || snapshot.statusState === "checking"} onClick={() => { void perform("probe", async current => { const value = await invoke<unknown>("connect_probe_status", { operationId }); if (current()) acceptSnapshot(value); }); }}>Consultar servidor</button><p className="connect-hint">Consulta de Minecraft 1.21.1 (protocolo {capabilities.statusProtocol}), com endereço lógico {capabilities.statusHandshakeHost}:{capabilities.statusHandshakePort}. Não comprova compatibilidade com outras versões.</p></div>}
         </>}
       </section>
-      <ConnectGameLaunchPanel capability={capabilities?.readyGameLaunch} session={snapshot} launchContext={launchContext}
+      <ConnectGameLaunchPanel capability={capabilities?.readyGameLaunch} session={snapshot} launchContext={launchContext} onChooseSource={onChooseSource}
         observeExisting={!capabilities && !loading} sessionStale={Boolean(warning) || loading || pending === "stop"} />
       {capabilities?.available && !active && snapshot && <section className="connect-card">
         <div className="connect-tabs" aria-label="Papel nesta tentativa"><button type="button" aria-pressed={selectedRole === "host"} disabled={busy} onClick={() => { setSelectedRole("host"); setDiscoveredTarget(undefined); }}>Anfitrião</button><button type="button" aria-pressed={selectedRole === "guest"} disabled={busy} onClick={() => { setSelectedRole("guest"); if (invitationProfile === "sessionGroup") setInvitationProfile("legacy"); setDiscoveredTarget(undefined); }}>Convidado</button></div>

@@ -2255,12 +2255,18 @@ test("ConnectView forwards ready launch context and exposes missing context inst
   handlers.set("connect_ready_game_launch_snapshot", () => ({ operationId: snapshot.operationId, generation: 0, planId: null,
     phase: "idle", review: null, result: null, errorCode: null }));
   handlers.set("diagnostic_lab_list", () => []);
-  await render(); assert.match(container.textContent, /Selecione uma instância e aguarde o perfil e a aparência/);
-  assert.match(container.textContent, /cópia de runtime com Java próprio/);
+  let sourceRoutes = 0;
+  await render({ onChooseSource: () => { sourceRoutes++; } }); assert.match(container.textContent, /Selecione uma instância em Instâncias e aguarde o perfil e a aparência/);
+  assert.match(container.textContent, /Ela pode estar vazia/);
   assert.equal(button("Revisar entrada no servidor").disabled, true); assert.equal(count("connect_prepare_ready_game_launch"), 0);
+  const readsBeforeNavigation = calls.length;
+  await click("Selecionar ou criar instância");
+  assert.equal(sourceRoutes, 1); assert.equal(calls.length, readsBeforeNavigation);
   const launchContext = { sourceInstanceId: "test-source", contextKey: "fixture-context", javaExecutable: "C:\\fixture\\java.exe",
     nickname: "FixturePlayer", appearance: { skinUrl: null, skinFile: null, capeUrl: null, skinModel: "classic" } };
   await act(async () => root.render(createElement(ConnectView, { launchContext })));
+  assert.match(container.textContent, /Instância de origem selecionada: test-source/);
+  assert.equal([...container.querySelectorAll("button")].some(node => node.textContent === "Selecionar ou criar instância"), false);
   await click("Listar cópias prontas"); assert.deepEqual(calls.find(call => call.command === "diagnostic_lab_list").args, { id: "test-source" });
   assert.equal(count("connect_prepare_ready_game_launch"), 0); assert.equal(count("connect_confirm_ready_game_launch"), 0);
   await click("Encerrar Connect"); assert.equal(count("connect_stop"), 1); assert.equal(count("launch_instance"), 0);
@@ -3202,6 +3208,18 @@ test("social transport alone does not enable ready game preparation", async () =
   assert.doesNotMatch(container.textContent, /Abrir o Minecraft nesta conexão/);
   assert.equal(count("connect_ready_game_launch_snapshot"), 0);
   assert.equal(count("connect_prepare_ready_game_launch"), 0);
+});
+test("published social source routes missing client selection without authorizing installation or launch", async () => {
+  socialReadyFixture(true);
+  let routed = 0;
+  await render({ onChooseSource: () => { routed++; } });
+  assert.match(container.textContent, /Ela pode estar vazia/);
+  assert.equal(button("Revisar entrada no servidor").disabled, true);
+  assert.equal(routed, 0);
+  const before = calls.length;
+  await click("Selecionar ou criar instância");
+  assert.equal(routed, 1); assert.equal(calls.length, before);
+  for (const command of ["connect_install_ready_copy", "connect_prepare_ready_game_launch", "connect_confirm_ready_game_launch", "launch_instance", "create_instance"]) assert.equal(count(command), 0);
 });
 test("published social source exposes the existing explicit review and forwards native launch context", async () => {
   socialReadyFixture(true);
