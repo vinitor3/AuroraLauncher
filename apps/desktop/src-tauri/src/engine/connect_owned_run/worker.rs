@@ -86,6 +86,16 @@ fn start_validated(
     let deadline = Instant::now() + limits.lifetime;
     let run_id = uuid::Uuid::new_v4().to_string();
     let (sender, receiver) = watch::channel(None);
+    #[cfg(feature = "connect-voice-lab")]
+    let dedicated_root = refusal
+        .is_some()
+        .then(|| {
+            command
+                .get_current_dir()
+                .and_then(unrelated_probe::RootScope::capture)
+                .map(Arc::new)
+        })
+        .flatten();
     let shared = Arc::new(Shared {
         state: Mutex::new(State {
             reason: None,
@@ -100,6 +110,8 @@ fn start_validated(
         deadline,
         limits,
         cancel,
+        #[cfg(feature = "connect-voice-lab")]
+        dedicated_root,
         #[cfg(test)]
         hooks: hooks.clone(),
     });
@@ -240,6 +252,8 @@ fn start_validated(
         }
         return Err(error);
     }
+    #[cfg(feature = "connect-voice-lab")]
+    unrelated_probe::register(&shared);
     Ok(OwnedRun {
         shared,
         completion: OwnedRunCompletion { receiver },

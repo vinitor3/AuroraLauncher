@@ -110,6 +110,11 @@ impl OwnedChildProof {
     pub(super) fn fingerprint(&self) -> (u32, u64) {
         (self.pid, self.birth)
     }
+    #[cfg(feature = "connect-voice-lab")]
+    pub(crate) fn live_process_identity(&self) -> Result<(u32, u64), DiscoveryError> {
+        self.recheck()?;
+        Ok(self.fingerprint())
+    }
 }
 fn creation(handle: &OwnedHandle, pid: u32) -> Result<u64, DiscoveryError> {
     let raw = handle.as_raw_handle();

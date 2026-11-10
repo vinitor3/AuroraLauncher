@@ -8,6 +8,8 @@ mod tcp_queries;
 mod udp_loopback_fixture;
 #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
 mod udp_loopback_queries;
+#[cfg(feature = "connect-voice-lab")]
+mod unrelated_probe;
 use fixture::{Action, Harness, WAIT};
 
 #[cfg(feature = "connect-voice-lab")]

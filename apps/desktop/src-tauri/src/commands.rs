@@ -2300,8 +2300,18 @@ const INSTANCE_GAME_UNAVAILABLE: &str = "Não foi possível confirmar que esta i
 #[cfg(windows)]
 const INSTANCE_GAME_PROBE: &str = r#"$ErrorActionPreference = 'Stop'
 $instancePath = [IO.Path]::GetFullPath($env:AURORA_MIGRATION_INSTANCE).TrimEnd([char[]]'\/')
+$owned = @(ConvertFrom-Json $env:AURORA_OWNED_DEDICATED_PROBE)
 $games = Get-CimInstance Win32_Process -Filter "Name='java.exe' OR Name='javaw.exe'"
 foreach ($game in $games) {
+  $candidate = @($owned | Where-Object { $_.pid -eq $game.ProcessId })
+  if ($candidate.Count -eq 1) {
+    # Match the exact OS creation time, not CIM's rounded CreationDate. The
+    # native caller retains the original live handle and both directory pins.
+    $process = [Diagnostics.Process]::GetProcessById([int]$game.ProcessId)
+    try {
+      if ([uint64]$process.StartTime.ToUniversalTime().ToFileTimeUtc() -eq [uint64]$candidate[0].birth) { continue }
+    } finally { $process.Dispose() }
+  }
   if ([string]::IsNullOrEmpty($game.CommandLine)) { Write-Output 'UNKNOWN'; exit 0 }
   $match = [regex]::Match($game.CommandLine, '(?i)(?:^|\s)--gameDir(?:\s+|=)(?:"([^"]*)"|(\S+))')
   if (!$match.Success) {
@@ -2321,11 +2331,20 @@ Write-Output 'STOPPED'
 #[cfg(windows)]
 fn run_instance_game_probe(script: &str, root: &Path, fixture: Option<&str>) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
+    #[cfg(all(feature = "connect-lab", feature = "connect-voice-lab"))]
+    let owned = aurora_launcher_core::engine::owned_dedicated_probe_scope(root);
+    #[cfg(all(feature = "connect-lab", feature = "connect-voice-lab"))]
+    let exclusions = owned
+        .child_environment()
+        .map_err(|_| INSTANCE_GAME_UNAVAILABLE.to_owned())?;
+    #[cfg(not(all(feature = "connect-lab", feature = "connect-voice-lab")))]
+    let exclusions = "[]";
     let mut command = Command::new("powershell.exe");
     command.creation_flags(0x08000000);
     command
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .env("AURORA_MIGRATION_INSTANCE", root)
+        .env("AURORA_OWNED_DEDICATED_PROBE", exclusions)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
     if let Some(fixture) = fixture {
@@ -2355,6 +2374,10 @@ fn run_instance_game_probe(script: &str, root: &Path, fixture: Option<&str>) -> 
     let output = child
         .wait_with_output()
         .map_err(|_| "falha ao verificar processos Minecraft".to_owned())?;
+    #[cfg(all(feature = "connect-lab", feature = "connect-voice-lab"))]
+    owned
+        .recheck()
+        .map_err(|_| INSTANCE_GAME_UNAVAILABLE.to_owned())?;
     if output.status.success() {
         match String::from_utf8_lossy(&output.stdout).trim() {
             "STOPPED" => return Ok(()),

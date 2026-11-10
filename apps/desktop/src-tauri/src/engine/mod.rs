@@ -13,6 +13,8 @@ pub mod connect_native_voice;
 pub(crate) mod connect_owned_process;
 #[cfg(all(windows, feature = "connect-lab"))]
 pub(crate) mod connect_owned_run;
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+pub use connect_owned_run::{owned_dedicated_probe_scope, OwnedDedicatedProbeScope};
 #[cfg(feature = "connect-lab")]
 pub mod connect_quick_play;
 #[cfg(feature = "connect-lab")]

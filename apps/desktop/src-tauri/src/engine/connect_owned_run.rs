@@ -29,9 +29,13 @@ pub(crate) use dedicated_test::{
 mod spawn_refusal;
 #[cfg(test)]
 mod tests;
+#[cfg(feature = "connect-voice-lab")]
+mod unrelated_probe;
 mod worker;
 #[cfg(feature = "connect-voice-lab")]
 pub(crate) use spawn_refusal::{OwnedStartFailure, SpawnRefusal};
+#[cfg(feature = "connect-voice-lab")]
+pub use unrelated_probe::{owned_dedicated_probe_scope, OwnedDedicatedProbeScope};
 
 #[cfg(feature = "connect-voice-lab")]
 pub(crate) fn start_owned_voice_bridge_receipted(
@@ -334,6 +338,8 @@ struct Shared {
     deadline: Instant,
     limits: OwnedRunLimits,
     cancel: CancellationToken,
+    #[cfg(feature = "connect-voice-lab")]
+    dedicated_root: Option<Arc<unrelated_probe::RootScope>>,
     #[cfg(test)]
     hooks: Hooks,
 }
