@@ -54,10 +54,21 @@
 .window-titlebar .window-control:focus-visible { outline: 2px solid #d8b5ff; outline-offset: 2px; }
 .window-titlebar .window-control-close:hover { border-color: #ff82996b; color: #fff1f3; background: #ce466652; }
 .window-titlebar .window-control-close:active { background: #ce466678; }
+.desktop-window-themed { --window-titlebar-height: var(--theme-titlebar-height); background: var(--theme-frame-color); }
+.desktop-window-themed .window-titlebar { border-bottom-color: var(--theme-border); background: var(--theme-titlebar-color); }
+.desktop-window-themed .window-titlebar-name,
+.desktop-window-themed .window-titlebar-name span,
+.desktop-window-themed .window-titlebar-emblem { color: var(--theme-titlebar-text); text-shadow: none; }
+/* Buttons keep their hit targets and recognizable shapes in every theme. */
+.desktop-window-themed .window-titlebar .window-control { color: var(--theme-titlebar-text); border-color: var(--theme-titlebar-text); background: transparent; }
+.desktop-window-themed .window-titlebar .window-control:hover { background: color-mix(in srgb, var(--theme-titlebar-text) 12%, var(--theme-titlebar-color)); }
+.desktop-window-themed .window-titlebar .window-control:focus-visible { outline-color: var(--theme-titlebar-text); }
+.desktop-window-themed .window-titlebar .window-control-close:hover { color: #fff1f3; border-color: #ff8299; background: #7f2136; }
 .window-control-error { position: fixed; z-index: 101; top: 51px; right: 10px; max-width: calc(100vw - 20px); border: 1px solid #ff82996b; border-radius: 9px; padding: .7rem 1rem; color: #ffe3e8; background: #321528; font-size: .8rem; }
 
 /* Keep the reserved titlebar outside each screen's viewport and modal bounds. */
 .desktop-window .app-shell { min-height: calc(100vh - var(--window-titlebar-height) - 2rem); }
+.desktop-window .aurora-themed .app-shell { min-height: calc(100dvh - var(--window-titlebar-height) - 2 * var(--theme-content-inset)); }
 .desktop-window .auth-shell,
 .desktop-window .startup-shell { min-height: calc(100dvh - var(--window-titlebar-height)); }
 .desktop-window .assistant-panel { top: calc(var(--window-titlebar-height) + 1rem); }

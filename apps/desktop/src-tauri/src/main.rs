@@ -12,11 +12,12 @@ mod launcher_sessions;
 mod manual_downloads;
 mod player_profiles;
 mod voice_announcement_commands;
+mod themes;
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WindowEvent,
+    Manager, RunEvent, WindowEvent,
 };
 
 const MAIN_TRAY_ID: &str = "aurora-main-tray";
@@ -50,6 +51,13 @@ fn launcher_request_exit(window: tauri::WebviewWindow) -> Result<(), &'static st
 fn create_launcher_tray(app: &tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open-launcher", "Abrir Aurora", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
+    let reset_theme = MenuItem::with_id(
+        app,
+        "reset-theme",
+        "Restaurar aparência padrão",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(
         app,
         "quit-launcher",
@@ -57,7 +65,7 @@ fn create_launcher_tray(app: &tauri::App) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
-    let menu = Menu::with_items(app, &[&open, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &reset_theme, &separator, &quit])?;
 
     TrayIconBuilder::with_id(MAIN_TRAY_ID)
         .icon(tauri::include_image!("icons/32x32.png"))
@@ -66,6 +74,7 @@ fn create_launcher_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open-launcher" => show_launcher(app),
+            "reset-theme" => themes::restore_from_tray(app),
             // Exit the launcher explicitly. Minecraft processes are independent
             // and retain their existing lifecycle; no game is terminated here.
             "quit-launcher" => app.exit(0),
@@ -138,6 +147,7 @@ fn main() {
             app.manage(aurora_launcher_core::engine::connect_native_voice::NativeVoiceSessionManager::default());
             #[cfg(any(feature = "connect-lab", feature = "connect-voice-lab"))]
             app.manage(ExperimentalExitState::default());
+            themes::start_watchdog(app.handle().clone());
             if create_launcher_tray(app).is_err() {
                 // On systems without a tray, retain normal closing behavior
                 // instead of hiding the only way to reach the launcher.
@@ -163,6 +173,7 @@ fn main() {
         .manage(launcher_sessions::LauncherSessionState::default())
         .manage(doctor_runs::DoctorRuns::default())
         .manage(manual_downloads::ManualDownloads::default())
+        .manage(themes::ThemeState::default())
         .manage(aurora_launcher_core::engine::ai_tools::AiToolBroker::default())
         .manage(aurora_launcher_core::engine::connect_discovery::DiscoveryManager::default())
         .manage(
@@ -238,6 +249,15 @@ fn main() {
             connect_commands::connect_stop,
             launcher_sessions::launcher_auth_scope,
             launcher_request_exit,
+            themes::themes_load,
+            themes::themes_save,
+            themes::themes_delete,
+            themes::themes_preview,
+            themes::themes_confirm,
+            themes::themes_reset,
+            themes::themes_heartbeat,
+            themes::themes_set_automatic,
+            themes::themes_unbind,
             player_profiles::lookup_player_skin,
             commands::engine_status,
             commands::list_instances,
@@ -324,6 +344,9 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("erro ao preparar o Aurora Smart Launcher")
         .run(|app, event| {
+            if matches!(event, RunEvent::Exit) {
+                themes::shutdown(app);
+            }
             #[cfg(any(feature = "connect-lab", feature = "connect-voice-lab"))]
             if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
                 use std::sync::atomic::Ordering;

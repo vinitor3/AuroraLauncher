@@ -280,6 +280,14 @@ Build de JAR não é homologação. Mudanças em Core/Skins devem registrar Mine
 
 Mudanças materiais atualizam o documento de domínio, `docs/engineering/COMPATIBILITY_MATRIX.md` quando afetarem runtime, e o task file correspondente. Decisões arquiteturais novas ou revertidas exigem ADR.
 
+## Integração obrigatória com a personalização visual
+
+- Antes de adicionar, remover ou reorganizar telas, navegação, cards, diálogos ou controles, leia `docs/theme-integration.md` e `docs/launcher-themes.md`. A feature deve entregar sua integração visual junto com a função; não deixar esse trabalho para o chat de temas depois.
+- Novas superfícies usam `ThemeSurface`/tokens semânticos `--theme-*` com fallback oficial e IDs estáveis definidos pelo código. Java/engine, Connect e Social preservam seus callbacks, validações e permissões; RAM, JVM, caminhos, credenciais, convites e ações nunca pertencem ao documento visual.
+- Acrescentar/remover IDs ou campos exige atualizar os contratos TypeScript/Rust, defaults/migração de temas existentes, editor visual, código comentado, instruções para IA e testes de compatibilidade no mesmo incremento. Temas antigos devem continuar abrindo; não descarte a biblioteca para resolver incompatibilidade.
+- Temas são dados locais JSONC fechados. Não permitir scripts executáveis, HTML/CSS livre, extensões de terceiros, callbacks vindos de JSON ou temas importados automaticamente de servidores/modpacks. Confirmação, recuperação, autenticação e ações da janela continuam controladas pelo Aurora.
+- Durante trabalho paralelo, registre no task file o commit do contrato visual utilizado e os pontos de integração. Preserve a propriedade exclusiva dos monolíticos; combine a integração de mudanças cumulativas, sem copiar uma versão antiga de App.tsx por cima de funcionalidades novas. Verificação mínima e exemplo para features estão em `docs/theme-integration.md`.
+
 ## Coordenação entre chats e economia de contexto
 
 - Cada tarefa entrega branch, commit, arquivos relevantes, testes executados e

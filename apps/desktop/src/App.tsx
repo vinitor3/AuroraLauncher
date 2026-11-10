@@ -7,6 +7,13 @@ import { drawSkinFace } from "./lib/skinFace";
 import { SkinPreviewCanvas } from "./features/skins/SkinPreviewCanvas";
 import { SkinThumbnail } from "./features/skins/SkinThumbnail";
 import { StartupScreen } from "./features/auth/StartupScreen";
+import { useThemes } from "./features/themes/ThemeProvider";
+import { ThemeManager } from "./features/themes/ThemeManager";
+import { ThemeScene, ThemeDecorations } from "./features/themes/ThemeScene";
+import { ThemeWorkspace } from "./features/themes/ThemeWorkspace";
+import { ThemeCursor, themeCursorValue } from "./features/themes/ThemeCursor";
+import { ThemeLogo, ThemeNavIcon } from "./features/themes/ThemeIcon";
+import { DEFAULT_THEME, themeVariables } from "./features/themes/model";
 import { guardSessionProfile, startSessionStartup, type SessionStartupState } from "./lib/sessionStartup";
 import { browserLauncherAuthScope, prepareLauncherServices } from "./lib/launcherAuthScope";
 import {
@@ -956,6 +963,8 @@ function LauncherStartup() {
 }
 
 function LauncherApp({ services }: { services: FirebaseServices }) {
+  const themes = useThemes();
+  const [themesOpen, setThemesOpen] = useState(false);
   const [profile, setProfileState] = useState<AuroraUserProfile>();
   const explainDoctorReport = useCallback((report: DoctorReport, signal: AbortSignal) =>
     requestDoctorAdvice(services, report, signal), [services, profile?.uid]);
@@ -983,6 +992,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [instanceName, setInstanceName] = useState("");
   const [targetInstance, setTargetInstance] = useState("");
+  useEffect(() => { themes.setInstance(targetInstance); }, [targetInstance, themes.setInstance]);
   const [minecraftVersion, setMinecraftVersion] = useState("1.20.1");
   const [loaderChoice, setLoaderChoice] = useState<LoaderChoice>("fabric");
   const [installedVersionId, setInstalledVersionId] = useState("");
@@ -3564,6 +3574,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     connect: "Aurora Connect · experimental",
     social: "Amigos e comunidade",
   };
+  const sectionIcons: Record<LauncherSection, string> = { instances: "◈", discover: "⌕", appearance: "✦", java: "▣" };
   const selectedContentFiles = contentType === "mod"
     ? instanceContent.mods
     : contentType === "shader"
@@ -3601,10 +3612,16 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const contentCategoryGroups = groupedCatalogCategories(catalogCategories[contentCategoryKey] ?? []);
   return (
     <>
+    <div className={themes.theme.id === DEFAULT_THEME.id ? "launcher-theme-root" : "launcher-theme-root aurora-themed"}
+      data-sidebar={themes.theme.layout.sidebar} data-status-side={themes.theme.layout.statusSide}
+      data-custom-cursor={themes.theme.cursor.style !== "system" ? "true" : "false"}
+      style={{ ...themeVariables(themes.theme), cursor: themeCursorValue(themes.theme.cursor) }}>
+    {themes.theme.id !== DEFAULT_THEME.id && <ThemeScene theme={themes.theme} onError={themes.mediaFailed} />}
+    {themes.theme.id !== DEFAULT_THEME.id && <ThemeCursor theme={themes.theme} />}
     <main className="shell app-shell">
       <aside className="app-sidebar">
         <div className="brand-lockup">
-          <div className="aurora-mark">✦</div>
+          <div className="aurora-mark"><ThemeLogo theme={themes.theme} onError={themes.mediaFailed} /></div>
           <div>
             <strong>Aurora</strong>
             <span>Smart Launcher</span>
@@ -3615,23 +3632,19 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           <span><strong>{profile.username}</strong><small>{services.authScope.persistent ? "Conta Aurora" : "Sessão independente"}</small></span>
         </div>
         <nav aria-label="Seções do launcher" className="app-nav">
-          {([
-            ["instances", "◈", "Instâncias"],
-            ["discover", "⌕", "Descobrir"],
-            ["appearance", "✦", "Guarda-roupa"],
-            ["java", "▣", "Java & engine"],
-          ] as const).map(([section, icon, label]) => (
+          {themes.theme.layout.navOrder.map((section) => (
             <button
               aria-current={activeSection === section ? "page" : undefined}
               className={activeSection === section ? "nav-item active" : "nav-item"}
               key={section}
               onClick={() => {
+                setThemesOpen(false);
                 setActiveSection(section);
                 if (section === "discover" && modrinthPacks.length === 0) void loadModrinthPage(0);
               }}
               type="button"
             >
-              <span aria-hidden="true">{icon}</span>{label}
+              <span aria-hidden="true"><ThemeNavIcon theme={themes.theme} section={section} fallback={sectionIcons[section]} onError={themes.mediaFailed} /></span>{sectionTitles[section]}
             </button>
           ))}
           {connectAvailable && <button
@@ -3652,19 +3665,28 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           <ExitLauncherButton disabled={signingOut || updatesApplying || recoveryBusy} />
         </div>
       </aside>
-      <section className={`workspace active-${activeSection}`}>
-        <header className="workspace-header">
+      <ThemeWorkspace theme={themes.theme} editing={themesOpen} className={`workspace active-${activeSection}`}
+        header={<header className="workspace-header">
           <div>
             <p className="eyebrow">AURORA SMART LAUNCHER · {profile.username}</p>
-            <h1>{sectionTitles[activeSection]}</h1>
+            <h1>{themesOpen ? "Personalização" : sectionTitles[activeSection]}</h1>
           </div>
-        </header>
+          <button className="secondary compact" aria-pressed={themesOpen} type="button" onClick={() => setThemesOpen((open) => !open)}>{themesOpen ? "Voltar ao launcher" : "Personalização"}</button>
+        </header>}
+        decorations={<ThemeDecorations theme={themes.theme} onError={themes.mediaFailed} />}
+        footer={<footer>
+          <span>{status?.ready ? "Engine pronta" : "Carregando engine"}</span>
+          <code>{status?.dataDirectory ?? "Localizando dados…"}</code>
+        </footer>}>
+        {themesOpen && <ThemeManager library={themes.library} instances={instances.map((item) => ({ id: item.id, name: item.displayName || item.id }))}
+          selectedInstanceId={targetInstance} busy={themes.busy} error={themes.error} onSave={themes.save} onPreview={themes.preview}
+          onDelete={themes.remove} onReset={themes.reset} onAutomatic={themes.automatic} onUnbind={themes.unbind} />}
         {doctorFailure && <aside className="doctor-failure-banner" aria-label="Diagnóstico de inicialização" role="status">
           <span>Houve uma falha ao iniciar ou executar “{doctorFailure.instanceId}”. O Aurora Doctor pode analisar os dados disponíveis.</span>
           <button className="secondary compact" disabled={busy || updatesApplying} onClick={() => void openEditor(doctorFailure.instanceId, "doctor", doctorFailure.runId)} type="button">{doctorFailure.runId ? "Analisar esta execução" : "Analisar instância"}</button>
           <button className="secondary compact" aria-label="Dispensar aviso de diagnóstico" onClick={() => setDoctorFailure(undefined)} type="button">×</button>
         </aside>}
-        <section className="workspace-grid">
+        <section className="workspace-grid" style={themesOpen ? { display: "none" } : undefined}>
           <div className="workspace-main">
         {socialService && activeSection === "social" && !signingOut && <div className="section-social"><SocialBuildBanner /><SocialView key={profile.uid} service={socialService} accountId={profile.uid} nickname={profile.username}
           connection={socialConnection}
@@ -4165,11 +4187,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           )}
         </aside>
         </section>
-        <footer>
-          <span>{status?.ready ? "Engine pronta" : "Carregando engine"}</span>
-          <code>{status?.dataDirectory ?? "Localizando dados…"}</code>
-        </footer>
-      </section>
+      </ThemeWorkspace>
       {downloadProgress && (
         <aside className="download-toast" aria-live="polite">
           <header className="download-toast-header">
@@ -4227,6 +4245,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         </aside>
       )}
     </main>
+    </div>
     {assistantOpen && <AssistantPanel key={profile.uid} services={services} username={profile.username} accountId={profile.uid} instance={targetInstance ? { id: targetInstance, name: instances.find((item) => item.id === targetInstance)?.displayName || targetInstance } : undefined} requestToolAdvice={requestInstanceAdvice} onClose={() => setAssistantOpen(false)} />}
     </>
   );
