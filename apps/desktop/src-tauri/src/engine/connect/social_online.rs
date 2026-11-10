@@ -6,6 +6,45 @@ use std::future::Future;
 #[path = "social_online_voice.rs"]
 pub(super) mod voice;
 
+fn maintenance_interval() -> tokio::time::Interval {
+    let mut tick = interval(Duration::from_millis(20));
+    // A stalled executor owes one current validation, not every historical
+    // tick. Replaying that backlog can starve an already available reply.
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    tick
+}
+
+async fn wait_host_poll(
+    run: &Run,
+    group: &mut Group,
+    host: &Option<Arc<lab::Host>>,
+    #[cfg(all(windows, feature = "connect-voice-lab"))] local: &mut voice::LocalPlayer,
+    tick: &mut tokio::time::Interval,
+    querying: impl Future<Output = Result<Value, ConnectError>>,
+    querying_started: Instant,
+) -> Result<Option<Value>, ConnectError> {
+    tokio::pin!(querying);
+    let response = loop {
+        tokio::select! { biased;
+            _ = run.cancel.cancelled() => return Ok(None),
+            result = &mut querying => {
+                run.observe_host_poll(querying_started.elapsed(), None);
+                break result?;
+            },
+            _ = tick.tick() => {
+                run.observe_host_poll(querying_started.elapsed(), None);
+                group.monitor(run, host).await?;
+                #[cfg(all(windows, feature = "connect-voice-lab"))]
+                local.tick(run).await?;
+            },
+        }
+    };
+    // Reply priority never authorizes stale work: all original current/lease
+    // checks still run before the caller observes or applies this response.
+    group.monitor(run, host).await?;
+    Ok(Some(response))
+}
+
 struct Participant {
     grant: lab::VerifiedSocialGrant,
     continuity: lab::SocialContinuity,
@@ -354,7 +393,7 @@ async fn check_source_online(
     }
     let source = source.clone();
     let mut query = tokio::task::spawn_blocking(move || source.recheck().map(|_| ()));
-    let mut tick = interval(Duration::from_millis(20));
+    let mut tick = maintenance_interval();
     let failure = loop {
         tokio::select! { biased;
             _ = run.cancel.cancelled() => break ConnectError::Cancelled,
@@ -548,7 +587,7 @@ pub(super) async fn host_registered(
         }).await?;
         let mut poll = interval(Duration::from_millis(500));
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut tick = interval(Duration::from_millis(20));
+        let mut tick = maintenance_interval();
         let mut checked_source = Instant::now();
         loop {
             if revoke_job.as_ref().is_some_and(|(_, job)| job.is_finished()) {
@@ -559,7 +598,6 @@ pub(super) async fn host_registered(
             local.tick(run).await?;
             tokio::select! { biased;
                 _ = run.cancel.cancelled() => return Ok(()),
-                _ = tick.tick() => { group.monitor(run, &host).await?; },
                 _ = poll.tick() => {
                     group.monitor(run, &host).await?;
                     // Local revoke already happened. Keep one retained backend
@@ -586,13 +624,10 @@ pub(super) async fn host_registered(
                     run.observe_host_poll(Duration::ZERO, None);
                     let querying = http.post(SocialRoute::HostPoll, json!({"policyId":policy_id, "transport": {
                         "observedAtUnixMs":run.server_issue_time(), "connectedGrantIds":connected, "hostPlayerConnected":host_player_connected
-                    }})); tokio::pin!(querying);
-                    let response = loop { tokio::select! { biased;
-                        _ = run.cancel.cancelled() => return Ok(()),
-                        _ = tick.tick() => { run.observe_host_poll(querying_started.elapsed(), None); group.monitor(run, &host).await?; #[cfg(all(windows, feature = "connect-voice-lab"))] local.tick(run).await?; },
-                        result = &mut querying => { run.observe_host_poll(querying_started.elapsed(), None); break result?; },
-                    }};
-                    group.monitor(run, &host).await?;
+                    }}));
+                    let Some(response) = wait_host_poll(run, &mut group, &host,
+                        #[cfg(all(windows, feature = "connect-voice-lab"))] &mut local,
+                        &mut tick, querying, querying_started).await? else { return Ok(()); };
                     inbox.observe(&response)?;
                     #[cfg(all(windows, feature = "connect-voice-lab"))]
                     local.refresh_poll(run, &response)?;
@@ -675,6 +710,7 @@ pub(super) async fn host_registered(
                         }
                     }
                 },
+                _ = tick.tick() => { group.monitor(run, &host).await?; },
             }
         }
     }.await;

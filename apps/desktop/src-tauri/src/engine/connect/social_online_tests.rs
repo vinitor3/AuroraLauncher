@@ -1,4 +1,6 @@
 use super::*;
+#[path = "social_poll_schedule_tests.rs"]
+mod poll_schedule_tests;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
