@@ -3221,6 +3221,60 @@ test("published social source routes missing client selection without authorizin
   assert.equal(routed, 1); assert.equal(calls.length, before);
   for (const command of ["connect_install_ready_copy", "connect_prepare_ready_game_launch", "connect_confirm_ready_game_launch", "launch_instance", "create_instance"]) assert.equal(count(command), 0);
 });
+test("Open Minecraft navigation waits for the client observation and focuses once without authorizing game work", async () => {
+  socialReadyFixture(true);
+  let clientReply;
+  handlers.set("connect_ready_game_launch_snapshot", () => new Promise(resolve => { clientReply = resolve; }));
+  const originalFrame = window.requestAnimationFrame, originalCancel = window.cancelAnimationFrame;
+  const originalFocus = window.HTMLElement.prototype.focus, originalScroll = window.HTMLElement.prototype.scrollIntoView;
+  const frames = new Map(), focused = [], scrolled = [];
+  let nextFrame = 0;
+  window.requestAnimationFrame = callback => { frames.set(++nextFrame, callback); return nextFrame; };
+  window.cancelAnimationFrame = id => frames.delete(id);
+  window.HTMLElement.prototype.focus = function (options) { focused.push({ target: this, options }); };
+  window.HTMLElement.prototype.scrollIntoView = function (options) { scrolled.push({ target: this, options }); };
+  const paint = async () => { const pending = [...frames.values()]; frames.clear(); await act(async () => { for (const frame of pending) frame(); }); };
+  try {
+    await render({ gameRevealRequest: 1 });
+    await paint();
+    assert.equal(focused.length, 0, "the client must finish its initial native observation");
+    await act(async () => clientReply({ operationId: snapshot.operationId, generation: 0, planId: null,
+      phase: "idle", review: null, result: null, errorCode: null }));
+    assert.equal(focused.length, 0, "focus waits for the committed frame");
+    await paint();
+    assert.equal(focused.length, 1);
+    const heading = focused[0].target;
+    assert.equal(heading.textContent, "Abrir o Minecraft nesta conexão");
+    assert.equal(heading.getAttribute("tabindex"), "-1");
+    assert.deepEqual(focused[0].options, { preventScroll: true });
+    assert.deepEqual(scrolled, [{ target: heading, options: { block: "start", behavior: "auto" } }]);
+    assert.equal(button("Revisar entrada no servidor").disabled, true, "navigation does not select a copy or approve it");
+    await render({ gameRevealRequest: 1 }); await paint();
+    assert.equal(focused.length, 1, "an ordinary rerender never steals focus");
+    await render({ gameRevealRequest: 2 });
+    await render({ gameRevealRequest: 2, gameRevealReady: false }); await paint();
+    assert.equal(focused.length, 1, "navigation away or account transition cancels queued focus");
+    await render({ gameRevealRequest: 3 });
+    container.setAttribute("inert", ""); await paint();
+    assert.equal(focused.length, 1, "hidden account scope is never focused");
+    container.removeAttribute("inert");
+    await render({ gameRevealRequest: 3, gameRevealReady: false });
+    await render({ gameRevealRequest: 3 }); await paint();
+    assert.equal(focused.length, 2);
+    await render({ gameRevealRequest: 4 });
+    const { readyGameLaunchAvailable: _ready, ...social } = snapshot.social;
+    snapshot = { ...snapshot, generation: 3, social };
+    await click("Atualizar estado"); await paint();
+    assert.equal(focused.length, 2, "withdrawn source cancels navigation to a stale client operation");
+    assert.equal(calls.every(call => ["connect_capabilities", "connect_snapshot", "connect_ready_game_launch_snapshot"].includes(call.command)), true);
+  } finally {
+    container.removeAttribute("inert");
+    await act(async () => root.render(null));
+    window.requestAnimationFrame = originalFrame; window.cancelAnimationFrame = originalCancel;
+    window.HTMLElement.prototype.focus = originalFocus; window.HTMLElement.prototype.scrollIntoView = originalScroll;
+  }
+});
+
 test("published social source exposes the existing explicit review and forwards native launch context", async () => {
   socialReadyFixture(true);
   const launchContext = { sourceInstanceId: "social-source", contextKey: "social-context", javaExecutable: "C:\\fixture\\java.exe",

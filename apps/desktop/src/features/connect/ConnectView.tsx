@@ -31,7 +31,7 @@ type SourcePreparationAwaiting = {
   profile?: HostSourceProfile; baseline?: ConnectSnapshot; controlledRejectionSettled?: symbol;
 };
 
-export function ConnectView({ launchContext, onInitialReadReady, onChooseSource }: { launchContext?: ReadyGameLaunchContext; onInitialReadReady?: (ready: boolean) => void; onChooseSource?: () => void }) {
+export function ConnectView({ launchContext, onInitialReadReady, onChooseSource, gameRevealRequest = 0, gameRevealReady = true }: { launchContext?: ReadyGameLaunchContext; onInitialReadReady?: (ready: boolean) => void; onChooseSource?: () => void; gameRevealRequest?: number; gameRevealReady?: boolean }) {
   const [capabilities, setCapabilities] = useState<ConnectCapabilities>();
   const [snapshot, setSnapshot] = useState<ConnectSnapshot>();
   const [loading, setLoading] = useState(true);
@@ -471,6 +471,7 @@ export function ConnectView({ launchContext, onInitialReadReady, onChooseSource 
     {snapshot.cleanupState === "complete" && <p role="status">Recursos da conexão liberados.</p>}
     <ConnectGameLaunchPanel capability={snapshot.social.readyGameLaunchAvailable ? capabilities?.readyGameLaunch : undefined}
       session={snapshot} launchContext={launchContext} onChooseSource={onChooseSource} observeExisting={!capabilities && !loading}
+      revealRequest={gameRevealRequest} revealReady={gameRevealReady && !loading}
       sessionStale={!snapshot.social.readyGameLaunchAvailable || Boolean(warning) || loading || pending === "stop"} />
   </section>;
 
@@ -546,6 +547,7 @@ export function ConnectView({ launchContext, onInitialReadReady, onChooseSource 
         </>}
       </section>
       <ConnectGameLaunchPanel capability={capabilities?.readyGameLaunch} session={snapshot} launchContext={launchContext} onChooseSource={onChooseSource}
+        revealRequest={gameRevealRequest} revealReady={gameRevealReady && !loading}
         observeExisting={!capabilities && !loading} sessionStale={Boolean(warning) || loading || pending === "stop"} />
       {capabilities?.available && !active && snapshot && <section className="connect-card">
         <div className="connect-tabs" aria-label="Papel nesta tentativa"><button type="button" aria-pressed={selectedRole === "host"} disabled={busy} onClick={() => { setSelectedRole("host"); setDiscoveredTarget(undefined); }}>Anfitrião</button><button type="button" aria-pressed={selectedRole === "guest"} disabled={busy} onClick={() => { setSelectedRole("guest"); if (invitationProfile === "sessionGroup") setInvitationProfile("legacy"); setDiscoveredTarget(undefined); }}>Convidado</button></div>

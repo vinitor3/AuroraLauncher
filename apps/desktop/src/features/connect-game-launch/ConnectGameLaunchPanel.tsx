@@ -8,7 +8,7 @@ import {
   type ReadyGameLaunchReview, type ReadyGameLaunchSnapshot,
 } from "./types";
 
-type Props = { capability?: ReadyGameLaunchCapability; session?: ConnectSnapshot; launchContext?: ReadyGameLaunchContext; observeExisting?: boolean; sessionStale?: boolean; onChooseSource?: () => void };
+type Props = { capability?: ReadyGameLaunchCapability; session?: ConnectSnapshot; launchContext?: ReadyGameLaunchContext; observeExisting?: boolean; sessionStale?: boolean; onChooseSource?: () => void; revealRequest?: number; revealReady?: boolean };
 type Action = "prepare" | "confirm" | "cancel";
 const active = (snapshot?: ReadyGameLaunchSnapshot) => !!snapshot && ["preparing", "reviewed", "starting"].includes(snapshot.phase);
 const hostPlayer = (session?: ConnectSnapshot) => session?.role === "host" && session.social?.role === "host"
@@ -22,8 +22,12 @@ const connected = (session?: ConnectSnapshot) => !!session?.tcpAddress
 const date = (value: number) => new Date(value).toLocaleTimeString("pt-BR");
 const readClocks = () => ({ wall: Date.now(), monotonic: performance.now() });
 
-export function ConnectGameLaunchPanel({ capability, session, launchContext: sourceLaunchContext, observeExisting = false, sessionStale = false, onChooseSource }: Props) {
+export function ConnectGameLaunchPanel({ capability, session, launchContext: sourceLaunchContext, observeExisting = false, sessionStale = false, onChooseSource, revealRequest = 0, revealReady = true }: Props) {
   const operationId = session?.operationId ?? undefined;
+  const heading = useRef<HTMLHeadingElement>(null);
+  const revealed = useRef(0);
+  const revealAllowed = useRef(false);
+  revealAllowed.current = revealReady && !sessionStale;
   const [snapshot, setSnapshot] = useState<ReadyGameLaunchSnapshot>();
   const [selectedId, setSelectedId] = useState("");
   const [copyJava, setCopyJava] = useState<{ id: string; source: string; path: string }>();
@@ -55,6 +59,21 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
   const cancelling = useRef<string | undefined>(undefined);
   const automaticCancellation = useRef(new Set<string>());
   const requestedInstance = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (!revealReady || sessionStale || revealRequest <= revealed.current || !snapshot
+      || snapshot.operationId !== operationId || !heading.current) return;
+    const target = heading.current;
+    // Navigation only: wait for the current native observation and committed
+    // layout. It never selects a copy or carries consent into a new review.
+    const frame = window.requestAnimationFrame(() => {
+      if (!revealAllowed.current || !target.isConnected || target.closest("[hidden], [inert]")) return;
+      target.focus({ preventScroll: true });
+      target.scrollIntoView?.({ block: "start", behavior: "auto" });
+      revealed.current = revealRequest;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [revealRequest, revealReady, sessionStale, operationId, snapshot?.operationId]);
 
   function anchoredDeadline(review: ReadyGameLaunchReview) {
     const anchor = reviewClock.current;
@@ -220,7 +239,7 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
   if (!capability && !snapshot && !pending && !warning) return null;
   if (!launchParticipant(session) && !snapshot && !pending && !warning) return null;
   return <section className="connect-card" aria-label="Abrir cópia pelo Connect">
-    <h3>Abrir o Minecraft nesta conexão</h3>
+    <h3 ref={heading} tabIndex={-1}>Abrir o Minecraft nesta conexão</h3>
     <p>Revisa uma cópia de teste preparada com Core 1.1.5 e Skins 0.3.1 antes de tentar entrar pelo Connect. A revisão confere o Minecraft, o loader e o Java instalados.</p>
     {!capability && <p role="status">Novos lançamentos estão indisponíveis. O preparo existente ainda pode ser consultado ou cancelado.</p>}
     {!connected(session) && <p>Conecte como convidado antes de preparar a entrada. Uma consulta ao servidor ou conexão TCP não confirma entrada no mundo.</p>}

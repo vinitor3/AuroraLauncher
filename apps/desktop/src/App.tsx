@@ -1106,6 +1106,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   }, [baseSocialService, services, profile?.uid, socialConnectState.accountId, socialConnectState.value.available]);
   const [connectVisited, setConnectVisited] = useState(false);
   const [dedicatedRevealRequest, setDedicatedRevealRequest] = useState(0);
+  const [gameRevealRequest, setGameRevealRequest] = useState(0);
   const [connectViewReady, setConnectViewReady] = useState(false);
   useEffect(() => { if (activeSection === "connect") setConnectVisited(true); }, [activeSection]);
   const [connectAvailable, setConnectAvailable] = useState(false);
@@ -3692,10 +3693,10 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           <div className="workspace-main">
         {socialService && activeSection === "social" && !signingOut && <div className="section-social"><SocialBuildBanner /><SocialView key={profile.uid} service={socialService} accountId={profile.uid} nickname={profile.username}
           connection={socialConnection}
-          onOpenConnectedGame={connectAvailable ? () => setActiveSection("connect") : undefined}
+          onOpenConnectedGame={connectAvailable ? () => { setGameRevealRequest(value => value + 1); setActiveSection("connect"); } : undefined}
           onPrepareDedicatedServer={connectAvailable && socialConnection?.state.maxSessionSeconds === 14400 ? () => { setDedicatedRevealRequest(value => value + 1); setActiveSection("connect"); } : undefined}
           currentModpack={runningInstances.length === 1 ? instances.find(item => item.id === runningInstances[0].instanceId)?.displayName || runningInstances[0].instanceId : undefined} /></div>}
-        {connectAvailable && (connectVisited || activeSection === "connect") && <div className="section-connect" hidden={activeSection !== "connect"} inert={signingOut || activeSection !== "connect"}><ConnectView launchContext={connectLaunchContext} onInitialReadReady={setConnectViewReady} onChooseSource={() => setActiveSection("instances")} /><NativeVoicePanel disabled={signingOut} revealRequest={dedicatedRevealRequest} revealReady={connectViewReady && activeSection === "connect"} /></div>}
+        {connectAvailable && (connectVisited || activeSection === "connect") && <div className="section-connect" hidden={activeSection !== "connect"} inert={signingOut || activeSection !== "connect"}><ConnectView launchContext={connectLaunchContext} onInitialReadReady={setConnectViewReady} onChooseSource={() => setActiveSection("instances")} gameRevealRequest={gameRevealRequest} gameRevealReady={!signingOut && activeSection === "connect"} /><NativeVoicePanel disabled={signingOut} revealRequest={dedicatedRevealRequest} revealReady={connectViewReady && activeSection === "connect"} /></div>}
         <article className="panel instances section-instances">
           <div className="panel-heading">
             <div>
