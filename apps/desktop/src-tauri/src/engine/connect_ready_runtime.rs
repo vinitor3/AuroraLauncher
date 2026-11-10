@@ -19,6 +19,8 @@ use std::{
 #[path = "connect_ready_runtime_pins.rs"]
 mod runtime_pins;
 use runtime_pins::{verify_sha1, RuntimePins};
+#[path = "connect_ready_runtime_jna.rs"]
+mod jna;
 
 pub struct ReadyVoiceInstall {
     review: ReadyVoiceReview,
@@ -602,6 +604,7 @@ pub fn inspect_ready_runtime_for_voice(
     }
     let mut paths = BTreeSet::new();
     let mut classpath_native_hashes = BTreeMap::new();
+    let mut jna_temporaries = jna::JnaTemporaryFiles::default();
     let observed_natives = &directory_observations[1].1;
     for path in spec
         .libraries
@@ -627,6 +630,7 @@ pub fn inspect_ready_runtime_for_voice(
                     .ok_or(Error::UnsupportedRuntime)?
             };
             verify_sha1(&bytes, expected)?;
+            jna_temporaries.observe_classpath(&relative, &bytes, expected)?;
             if !observed_natives.is_empty()
                 && pins.extracted_natives.is_empty()
                 && relative.ends_with("-natives-windows.jar")
@@ -681,27 +685,14 @@ pub fn inspect_ready_runtime_for_voice(
             }
         }
     }
-    if let Some(pins) = &pins {
-        if pins
-            .extracted_natives
-            .keys()
-            .any(|name| !observed_natives.contains(name))
-        {
-            return Err(Error::MissingArtifact);
-        }
-    }
-    for name in observed_natives {
-        let bytes = reader.instance(instance, &format!("natives/{name}"), 64 * 1024 * 1024)?;
-        if let Some(pins) = &pins {
-            let expected = if pins.extracted_natives.is_empty() {
-                classpath_native_hashes.get(name)
-            } else {
-                pins.extracted_natives.get(name)
-            }
-            .ok_or(Error::ArtifactMismatch)?;
-            verify_sha1(&bytes, expected)?;
-        }
-    }
+    jna::pin_natives(
+        &mut reader,
+        instance,
+        observed_natives,
+        pins.as_ref(),
+        &classpath_native_hashes,
+        &jna_temporaries,
+    )?;
     if let Some((expected_path, expected_sha256)) = managed_java {
         if expected_path != java
             || pin_and_measure_java(&mut reader, java, observed_java)? != expected_sha256

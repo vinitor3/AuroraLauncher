@@ -6,6 +6,8 @@ use crate::engine::{
 use serde_json::json;
 #[path = "connect_ready_runtime_fabric1201_tests.rs"]
 mod fabric1201;
+#[path = "connect_ready_runtime_jna_tests.rs"]
+mod jna_tests;
 #[path = "connect_ready_runtime_matrix_tests.rs"]
 mod matrix;
 #[path = "connect_ready_runtime_readonly_tests.rs"]
