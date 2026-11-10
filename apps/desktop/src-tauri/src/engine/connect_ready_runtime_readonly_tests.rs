@@ -3,6 +3,88 @@
 use super::*;
 use std::{cell::Cell, collections::BTreeMap};
 
+#[cfg(all(windows, feature = "connect-lab", debug_assertions))]
+#[test]
+#[ignore = "explicit read-only measurement of an existing closed diagnostic copy; no Java or network"]
+fn ready_runtime_measure_existing_copy_without_launch() {
+    use std::time::{Duration, Instant};
+    let data = PathBuf::from(std::env::var_os("AURORA_CONNECT_READY_BENCH_DATA").unwrap());
+    let id = std::env::var("AURORA_CONNECT_READY_BENCH_COPY_ID").unwrap();
+    assert!(id.starts_with("aurora-test-"));
+    let copy = InstanceLayout::new(&data).open(InstanceId::parse(id).unwrap());
+    let origin = diagnostic_lab::origin_instance(&data, &copy).unwrap();
+    let (java, _) = diagnostic_lab::installed_runtime_java(&copy)
+        .unwrap()
+        .unwrap();
+    let profile = connect_ready_profile::select_ready_profile(&copy).unwrap();
+    let guard = acquire_instance_mutation_lock(&copy).unwrap();
+    let started = Instant::now();
+    let proof = inspect_ready_runtime_for_voice(
+        &copy,
+        &guard,
+        origin.id().as_str(),
+        &java,
+        None,
+        "127.0.0.1:1".parse().unwrap(),
+        profile.descriptor().java_major,
+        Some(NativeVoiceProfile::SimpleVoiceChat),
+        || false,
+    )
+    .unwrap();
+    let inspection = started.elapsed();
+    let pins = proof._pins.len();
+    let fingerprint = proof.fingerprint.clone();
+    let index: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            copy.root()
+                .join(format!("assets/indexes/{}.json", proof.spec.asset_index)),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let hashes: BTreeSet<_> = index["objects"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|value| value["hash"].as_str().unwrap().to_owned())
+        .collect();
+    drop(proof);
+    let mut path_time = Duration::ZERO;
+    let mut open_time = Duration::ZERO;
+    let mut read_hash_time = Duration::ZERO;
+    let mut total_bytes = 0_u64;
+    for hash in &hashes {
+        let started = Instant::now();
+        let path = recovery::path(
+            copy.root(),
+            &format!("assets/objects/{}/{hash}", &hash[..2]),
+        )
+        .unwrap();
+        path_time += started.elapsed();
+        let started = Instant::now();
+        let mut file = recovery::secure_open(&path).unwrap();
+        open_time += started.elapsed();
+        let started = Instant::now();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        total_bytes += bytes.len() as u64;
+        std::hint::black_box(Sha256::digest(&bytes));
+        assert_eq!(format!("{:x}", sha1::Sha1::digest(&bytes)), *hash);
+        read_hash_time += started.elapsed();
+    }
+    println!(
+        "{}",
+        serde_json::json!({
+            "event":"ready_runtime_measurement", "fullInspectionMs":inspection.as_millis(),
+            "pinnedFiles":pins, "assets":hashes.len(), "assetBytes":total_bytes,
+            "assetPathMs":path_time.as_millis(), "assetSecureOpenMs":open_time.as_millis(),
+            "assetReadAndHashMs":read_hash_time.as_millis(),
+            "runtimeFingerprint":fingerprint, "debugAssertions":cfg!(debug_assertions),
+            "javaSpawned":false, "networkAccessed":false,
+        })
+    );
+}
+
 fn tree(root: &Path) -> BTreeMap<String, (bool, u64, String)> {
     fn visit(base: &Path, current: &Path, files: &mut BTreeMap<String, (bool, u64, String)>) {
         for entry in fs::read_dir(current).unwrap() {
