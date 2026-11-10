@@ -99,6 +99,7 @@ export function socialReservationFrom(value: unknown): { operationId: string; ge
   return value as { operationId: string; generation: number };
 }
 export function socialConnectError(cause: unknown): string {
+  if (cause === "native_voice_new_advertisement_required") return "Encerre o anúncio anterior e publique um novo para iniciar outra sessão com este servidor.";
   const code = typeof cause === "string" ? cause : record(cause) && typeof cause.code === "string" ? cause.code : "";
   const messages: Record<string, string> = {
     connect_busy: "Já existe uma conexão em andamento. Encerre-a antes de entrar em outra sessão.",

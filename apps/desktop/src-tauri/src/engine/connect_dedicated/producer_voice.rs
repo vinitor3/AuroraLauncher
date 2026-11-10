@@ -109,11 +109,27 @@ impl DedicatedVoiceSource {
 pub(super) fn reserve_voice(
     shared: &Arc<Shared>,
 ) -> std::result::Result<ReservedVoiceQuery, VoiceRuntimeError> {
+    reserve_voice_checked(shared, None)
+}
+
+pub(super) fn reserve_voice_for_claim(
+    shared: &Arc<Shared>,
+    claim: binding::NativeVoiceClaim,
+) -> std::result::Result<ReservedVoiceQuery, VoiceRuntimeError> {
+    reserve_voice_checked(shared, Some(claim))
+}
+
+fn reserve_voice_checked(
+    shared: &Arc<Shared>,
+    claim: Option<binding::NativeVoiceClaim>,
+) -> std::result::Result<ReservedVoiceQuery, VoiceRuntimeError> {
     shared.hooks.at(ProducerPoint::VoiceBeforeReserve);
     // QueryKind::Voice still uses the existing reserve body and QueryJob84.
-    let job = shared
-        .reserve(QueryKind::Voice)
-        .map_err(VoiceRuntimeError::from)?;
+    let job = match claim {
+        Some(claim) => shared.reserve_for_claim(QueryKind::Voice, claim),
+        None => shared.reserve(QueryKind::Voice),
+    }
+    .map_err(VoiceRuntimeError::from)?;
     let expected = shared
         .voice_context
         .as_ref()

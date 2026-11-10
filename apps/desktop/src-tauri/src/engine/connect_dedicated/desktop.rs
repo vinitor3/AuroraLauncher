@@ -3,7 +3,7 @@
 use super::super::{DurableRestorationController, RestorationState};
 use super::*;
 use crate::engine::{
-    connect::{ConnectManager, GroupParticipantRequest},
+    connect::{ConnectError, ConnectManager, GroupParticipantRequest, SocialNativeSourceReceipt},
     connect_native_voice::*,
     connect_owned_run::OwnedRunFailure,
 };
@@ -23,9 +23,18 @@ use tokio_util::sync::CancellationToken;
 
 type Outcome = std::result::Result<NativeVoiceSnapshot, &'static str>;
 type Message = (NativeVoiceRequest, oneshot::Sender<Outcome>);
+struct ReservationBusy<'a>(&'a AtomicBool);
+impl Drop for ReservationBusy<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
 const TRANSPORT_CLEANUP_FAILED: &str = "native_voice_transport_cleanup_failed";
 const FORCED_STOP: &str = "native_voice_stop_forced";
 const FORCED_STOP_CLEANUP_FAILED: &str = "native_voice_stop_forced_cleanup_failed";
+#[path = "desktop_source_revalidation.rs"]
+mod source_revalidation;
+use source_revalidation::SourceRevalidation;
 struct Client {
     sender: mpsc::Sender<Message>,
     snapshot: Arc<Mutex<NativeVoiceSnapshot>>,
@@ -36,6 +45,7 @@ struct Client {
     completion: Arc<Mutex<Option<producer::DedicatedCompletion>>>,
     source: Arc<Mutex<Option<NativeVoiceHostBinding>>>,
     claimed: Arc<AtomicBool>,
+    source_receipt: Arc<Mutex<Option<SocialNativeSourceReceipt>>>,
     epoch: u64,
 }
 impl Drop for Client {
@@ -101,6 +111,7 @@ impl DesktopVoiceManager {
                 let completion = Arc::new(Mutex::new(None));
                 let source = Arc::new(Mutex::new(None));
                 let claimed = Arc::new(AtomicBool::new(false));
+                let source_receipt = Arc::new(Mutex::new(None));
                 let epoch = connect.social_capabilities().account_epoch;
                 let actor = Actor::new(
                     connect.native_voice_shared_manager(),
@@ -110,6 +121,7 @@ impl DesktopVoiceManager {
                     completion.clone(),
                     source.clone(),
                     claimed.clone(),
+                    source_receipt.clone(),
                 );
                 let worker = tokio::spawn(actor.run(receiver, busy.clone(), cancel.clone()));
                 *current = Some(Arc::new(Client {
@@ -122,6 +134,7 @@ impl DesktopVoiceManager {
                     completion,
                     source,
                     claimed,
+                    source_receipt,
                     epoch,
                 }));
             }
@@ -153,15 +166,31 @@ impl DesktopVoiceManager {
         }
         receive.await.map_err(|_| "native_voice_internal")?
     }
-    pub(crate) fn take_social_source(
+    pub(crate) fn reserve_social(
         &self,
         connect: &ConnectManager,
-    ) -> std::result::Result<NativeVoiceHostBinding, &'static str> {
+        owner: &str,
+        request: crate::engine::connect::SocialDiscoveredReserveRequest,
+        host_player: bool,
+    ) -> std::result::Result<crate::engine::connect::SocialReservation, &'static str> {
         let current = self.client.lock().map_err(|_| "native_voice_internal")?;
         let client = current.as_ref().ok_or("native_voice_no_session")?;
+        client
+            .busy
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| "native_voice_busy")?;
+        let _busy = ReservationBusy(&client.busy);
+        if client
+            .source_receipt
+            .lock()
+            .map_err(|_| "native_voice_internal")?
+            .as_ref()
+            .is_some_and(|receipt| receipt.session_id() == request.session_id)
+        {
+            return Err("native_voice_new_advertisement_required");
+        }
         if client.cancel.is_cancelled()
             || client.stop.load(Ordering::Acquire)
-            || client.busy.load(Ordering::Acquire)
             || client.epoch != connect.social_capabilities().account_epoch
             || client
                 .snapshot
@@ -181,11 +210,20 @@ impl DesktopVoiceManager {
         binding
             .online_voice_policy()
             .map_err(|_| "native_voice_source_not_ready")?;
-        client
-            .claimed
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| "native_voice_source_already_claimed")?;
-        Ok(binding)
+        if client.claimed.load(Ordering::Acquire) {
+            return Err("native_voice_source_already_claimed");
+        }
+        match connect.social_reserve_native_voice_recorded(owner, request, binding, host_player) {
+            Ok((reservation, receipt)) => {
+                *client
+                    .source_receipt
+                    .lock()
+                    .map_err(|_| "native_voice_internal")? = Some(receipt);
+                client.claimed.store(true, Ordering::Release);
+                Ok(reservation)
+            }
+            Err(error) => Err(error.code()),
+        }
     }
 
     pub(crate) fn cancel(&self) {
@@ -229,6 +267,8 @@ impl DesktopVoiceManager {
 struct Actor {
     shared_source: Arc<Mutex<Option<NativeVoiceHostBinding>>>,
     claimed: Arc<AtomicBool>,
+    source_receipt: Arc<Mutex<Option<SocialNativeSourceReceipt>>>,
+    source_revalidation: Option<SourceRevalidation>,
     completion: Arc<Mutex<Option<producer::DedicatedCompletion>>>,
     connect: ConnectManager,
     lab: PathBuf,
@@ -250,6 +290,7 @@ struct Actor {
     local_udp: Option<lab::UdpBridge>,
 }
 impl Actor {
+    #[allow(clippy::too_many_arguments)] // Explicit shared owners; no reconstructed source or receipt.
     fn new(
         connect: ConnectManager,
         lab: PathBuf,
@@ -258,11 +299,14 @@ impl Actor {
         completion: Arc<Mutex<Option<producer::DedicatedCompletion>>>,
         shared_source: Arc<Mutex<Option<NativeVoiceHostBinding>>>,
         claimed: Arc<AtomicBool>,
+        source_receipt: Arc<Mutex<Option<SocialNativeSourceReceipt>>>,
     ) -> Self {
         let view = shared.lock().unwrap().clone();
         Self {
             shared_source,
             claimed,
+            source_receipt,
+            source_revalidation: None,
             completion,
             connect,
             lab,
@@ -353,6 +397,15 @@ impl Actor {
         self.publish();
     }
     async fn maintain(&mut self) {
+        self.view.social_revalidation_available = self.source.is_some()
+            && self.view.phase == "socialSource"
+            && !self.stop.load(Ordering::Acquire)
+            && self
+                .source_receipt
+                .lock()
+                .ok()
+                .and_then(|receipt| receipt.clone())
+                .is_some_and(|receipt| self.connect.can_reclaim_native_source(&receipt));
         if self.source.is_some()
             && self.claimed.load(Ordering::Acquire)
             && self.view.operation_id.is_none()
@@ -376,6 +429,9 @@ impl Actor {
             .native_review_deadline
             .is_some_and(|deadline| Instant::now() >= deadline)
         {
+            if self.source_revalidation.take().is_some() {
+                self.view.phase = "socialSource";
+            }
             self.server_preparation.take();
             self.factory.take();
             self.execution.take();
@@ -470,6 +526,12 @@ impl Actor {
     async fn settle_failure(&mut self) {
         if matches!(
             self.view.phase,
+            "socialSourceReviewing" | "socialSourceReviewed" | "socialSourceApplying"
+        ) {
+            self.clear_source_revalidation();
+        }
+        if matches!(
+            self.view.phase,
             "preparing" | "preparingServer" | "creating" | "starting" | "restoringEula"
         ) {
             // handle() awaits the original blocking task before reaching here.
@@ -504,6 +566,16 @@ impl Actor {
             self.view.error_code = None;
         }
         match request {
+            NativeVoiceRequest::ReviewSocialSource {} => self.review_social_source(cancel).await?,
+            NativeVoiceRequest::ApproveSocialSource { digest } => {
+                self.approve_social_source(&digest, cancel).await?
+            }
+            NativeVoiceRequest::CancelSocialSourceReview {} => {
+                if self.view.phase != "socialSourceReviewed" {
+                    return Err("native_voice_stale_review");
+                }
+                self.clear_source_revalidation();
+            }
             NativeVoiceRequest::PrepareRuntime {
                 profile,
                 runtime_profile,
@@ -1165,6 +1237,8 @@ impl Actor {
         self.factory.take();
         self.execution.take();
         self.eula_recovery.take();
+        self.source_revalidation.take();
+        self.view.social_revalidation_available = false;
         if let Some((_, receipt)) = &mut self.recovery {
             receipt.cancel_review();
         }

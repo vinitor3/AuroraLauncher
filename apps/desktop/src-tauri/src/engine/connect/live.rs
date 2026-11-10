@@ -253,6 +253,31 @@ fn terminal(a: &Attempt) -> bool {
         && a.snapshot.cleanup_state == "complete"
         && a.worker.as_ref().is_none_or(|worker| worker.is_finished())
 }
+fn reap_finished_worker(a: &mut Attempt) -> Option<Result<(), tokio::task::JoinError>> {
+    let worker = a.worker.as_mut()?;
+    if !worker.is_finished() {
+        return None;
+    }
+    // Even a finished JoinHandle can yield to Tokio's cooperative budget. Poll
+    // only its completed result without an await, keeping ownership in State.
+    let joined = {
+        let mut future = std::pin::pin!(tokio::task::unconstrained(worker));
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match std::future::Future::poll(future.as_mut(), &mut context) {
+            std::task::Poll::Ready(joined) => joined,
+            std::task::Poll::Pending => return None,
+        }
+    };
+    a.worker.take();
+    if joined.is_err() {
+        session_group::closing(a);
+        a.snapshot.phase = "failed";
+        a.snapshot.cleanup_state = "failed";
+        a.snapshot.error_code = Some(ConnectError::Internal.code());
+        a.snapshot.generation = a.snapshot.generation.saturating_add(1);
+    }
+    Some(joined)
+}
 fn admission_state(
     current: impl FnOnce() -> bool,
     consumed: impl FnOnce() -> bool,
@@ -1244,7 +1269,7 @@ impl Manager {
                 // stop, shutdown or preparation must still see its ownership if
                 // that waiter is dropped before the actor finishes.
                 if a.worker.as_ref().is_some_and(|worker| worker.is_finished()) {
-                    a.worker.take()
+                    reap_finished_worker(a)
                 } else {
                     if a.worker.is_none()
                         && ready_game::finished(a)
@@ -1260,15 +1285,7 @@ impl Manager {
                     None
                 }
             };
-            if let Some(worker) = finished_worker {
-                if worker.await.is_err() {
-                    update(&self.state, id, |a| {
-                        session_group::closing(a);
-                        a.snapshot.phase = "failed";
-                        a.snapshot.cleanup_state = "failed";
-                        a.snapshot.error_code = Some(ConnectError::Internal.code());
-                    });
-                }
+            if finished_worker.is_some() {
                 continue;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

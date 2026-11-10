@@ -495,15 +495,15 @@ test("dedicated server shortcut routes once without preparing, reserving or appr
   state.ownSession = { ...baseSession, hostUid: "owner-uid" };
   await render({ connection: control, onPrepareDedicatedServer: () => { routed++; } });
   assert.equal(routed, 0); assert.equal(button("Preparar meu servidor").disabled, true);
-  await click("Preparar servidor dedicado");
+  await click("Abrir painel do servidor dedicado");
   assert.equal(routed, 1);
   assert.equal(calls.some(call => call.name.startsWith("connect:") || call.name === "native_voice_execute"), false);
   await render({ connection: { ...control, state: { ...control.state, pending: true } }, onPrepareDedicatedServer: () => { routed++; } });
-  assert.equal(button("Preparar servidor dedicado").disabled, true);
-  await act(async () => button("Preparar servidor dedicado").dispatchEvent(new window.Event("click", { bubbles: true })));
+  assert.equal(button("Abrir painel do servidor dedicado").disabled, true);
+  await act(async () => button("Abrir painel do servidor dedicado").dispatchEvent(new window.Event("click", { bubbles: true })));
   assert.equal(routed, 1);
   await render({ connection: control });
-  assert.equal(buttons("Preparar servidor dedicado").length, 0);
+  assert.equal(buttons("Abrir painel do servidor dedicado").length, 0);
 });
 test("host review shows fixed source scope deadline and starts with consent unchecked", async () => {
   await render({ connection: connection(connectionSnapshot()) });

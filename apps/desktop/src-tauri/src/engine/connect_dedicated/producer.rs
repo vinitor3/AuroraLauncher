@@ -593,6 +593,9 @@ impl DedicatedPlan {
         let started = Instant::now();
         let (sender, receiver) = watch::channel(None);
         let child_cancel = cancel.child_token();
+        let voice_claim = voice_context
+            .as_ref()
+            .map(|_| binding::NativeVoiceClaim::initial());
         let shared = Arc::new(Shared {
             native_nonce,
             voice_context,
@@ -604,6 +607,7 @@ impl DedicatedPlan {
                 observer: None,
                 query: false,
                 reached_ready: false,
+                voice_claim,
             }),
             changed: Condvar::new(),
             cancel,
@@ -752,6 +756,7 @@ pub(super) struct State {
     pub observer: Option<OwnedRunObserver>,
     pub query: bool,
     pub reached_ready: bool,
+    voice_claim: Option<binding::NativeVoiceClaim>,
 }
 impl State {
     pub fn seal(&mut self, reason: DedicatedReason, failure: Option<DedicatedFailure>) {
@@ -851,9 +856,25 @@ impl Shared {
         state.reason.is_none()
     }
     pub fn reserve(self: &Arc<Self>, kind: QueryKind) -> RunResult<QueryJob> {
+        self.reserve_checked(kind, None)
+    }
+    fn reserve_for_claim(
+        self: &Arc<Self>,
+        kind: QueryKind,
+        claim: binding::NativeVoiceClaim,
+    ) -> RunResult<QueryJob> {
+        self.reserve_checked(kind, Some(claim))
+    }
+    fn reserve_checked(
+        self: &Arc<Self>,
+        kind: QueryKind,
+        expected_claim: Option<binding::NativeVoiceClaim>,
+    ) -> RunResult<QueryJob> {
         let mut state = self.lock();
         self.refresh(&mut state);
-        if state.reason.is_some() {
+        if state.reason.is_some()
+            || expected_claim.is_some_and(|claim| state.voice_claim != Some(claim))
+        {
             return Err(DedicatedError::Closed);
         }
         if kind != QueryKind::Readiness && state.phase != DedicatedPhase::Ready {

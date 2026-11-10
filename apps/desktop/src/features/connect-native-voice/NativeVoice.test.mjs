@@ -21,6 +21,15 @@ test("errors never echo a raw backend path or credential", () => {
   assert.ok(!nativeVoiceError(raw).includes(raw));
   assert.match(nativeVoiceError("native_voice_local_udp_in_use"), /35554/);
 });
+
+test("source revalidation has its own bounded review and typed states", () => {
+  const review = { kind: "socialSource", digest: "b".repeat(64), remainingMs: 60_000, before: "Source active", after: "New claim", details: [] };
+  for (const phase of ["socialSourceReviewing", "socialSourceReviewed", "socialSourceApplying"]) assert.equal(nativeVoiceSnapshotFrom({ ...idle, phase, review, socialRevalidationAvailable: false }).phase, phase);
+  assert.throws(() => nativeVoiceSnapshotFrom({ ...idle, review: { ...review, remainingMs: 60_001 } }));
+  assert.throws(() => nativeVoiceSnapshotFrom({ ...idle, socialRevalidationAvailable: "true" }));
+  assert.match(nativeVoiceError("native_voice_new_advertisement_required"), /novo no Social/);
+  assert.match(nativeVoiceError("native_voice_social_still_active"), /liberação dos recursos/);
+});
 test("UDP and EULA labels use only known product text with a safe fallback", () => {
   assert.equal(nativeVoiceUdpLabel("notStarted"), "Não iniciado");
   assert.equal(nativeVoiceUdpLabel("retired"), "Encerrado nesta sessão");

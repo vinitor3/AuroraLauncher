@@ -56,6 +56,19 @@ async fn social_host_poll_real_http_diagnostic() {
         guard_probe: None,
     };
     let mut http = Http::new(token, &run).expect("diagnostic client construction failed");
+    let pooled = match take_env("AURORA_NATIVE_HOST_POLL_POOL").as_str() {
+        "0" => false,
+        "1" => true,
+        _ => panic!("invalid diagnostic connection pool selector"),
+    };
+    if !pooled {
+        http.client =
+            Http::build_client(0).expect("diagnostic unpooled client construction failed");
+    }
+    report(
+        "settings",
+        json!({"poolMaxIdlePerHost":u8::from(pooled),"poolIdleMs":if pooled { 10000 } else { 0 }}),
+    );
     let mut policy_id = None;
     let mut stage = "bootstrap";
     let result = async {

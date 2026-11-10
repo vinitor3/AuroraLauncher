@@ -93,6 +93,11 @@ pub enum NativeVoiceRequest {
     ApproveExecution {
         digest: String,
     },
+    ReviewSocialSource {},
+    ApproveSocialSource {
+        digest: String,
+    },
+    CancelSocialSourceReview {},
     ReviewHost {
         guests: Vec<String>,
         local_player: bool,
@@ -162,6 +167,7 @@ pub struct NativeVoiceSnapshot {
     pub recoverable_copies: Vec<NativeVoiceRecoveryCandidate>,
     pub eula_state: &'static str,
     pub eula_recovery_available: bool,
+    pub social_revalidation_available: bool,
     #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
     #[serde(skip)]
     pub(crate) native_review_deadline: Option<std::time::Instant>,
@@ -198,6 +204,7 @@ impl Default for NativeVoiceSnapshot {
             recoverable_copies: Vec::new(),
             eula_state: "unchanged",
             eula_recovery_available: false,
+            social_revalidation_available: false,
             #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
             native_review_deadline: None,
             error_code: None,
@@ -286,10 +293,8 @@ impl NativeVoiceSessionManager {
         }
         #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
         {
-            let binding = self.live.take_social_source(connect)?;
-            connect
-                .social_reserve_native_voice(owner, request, binding, host_player)
-                .map_err(|error| error.code())
+            self.live
+                .reserve_social(connect, owner, request, host_player)
         }
         #[cfg(not(all(windows, feature = "connect-lab", feature = "connect-voice-lab")))]
         {

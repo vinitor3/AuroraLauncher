@@ -87,6 +87,43 @@ test("base and restored snapshots render translated UDP and EULA states", async 
   assert.doesNotMatch(container.querySelector("dl").textContent, /notStarted|unchanged|restored|closed/);
 });
 
+test("revalidating the existing source requires native eligibility and a separate approval, without preparing or stopping Java", async () => {
+  snapshot = { ...idle(), phase: "socialSource", socialRevalidationAvailable: false, eulaState: "ownedBySource" };
+  await render();
+  const label = "Revisar servidor atual para nova sessão";
+  assert.equal(button(label).disabled, true);
+  snapshot = { ...snapshot, revision: 2, socialRevalidationAvailable: true };
+  await poll();
+  handle = async request => {
+    if (request.action === "reviewSocialSource") snapshot = { ...snapshot, revision: 3, phase: "socialSourceReviewed", socialRevalidationAvailable: false, review: { ...review("socialSource"), before: "Mesmo servidor ativo", after: "Nova geração; prazo original" } };
+    else if (request.action === "cancelSocialSourceReview") snapshot = { ...snapshot, revision: 4, phase: "socialSource", socialRevalidationAvailable: true, review: null };
+    else if (request.action === "approveSocialSource") snapshot = { ...snapshot, revision: 6, phase: "ready", review: null };
+    return snapshot;
+  };
+  await click(label);
+  assert.equal(button("Confirmar etapa revisada").disabled, true);
+  await click("Cancelar revalidação");
+  assert.equal(snapshot.eulaState, "ownedBySource");
+  await click(label);
+  // The next explicit review carries its own revision; no prior approval persists.
+  snapshot = { ...snapshot, revision: 5 }; await poll();
+  await approve(); await click("Confirmar etapa revisada");
+  assert.match(container.textContent, /encerre o anúncio anterior e publique um novo/);
+  assert.deepEqual(calls.filter(call => call.command === "native_voice_execute").map(call => call.args.request.action), ["reviewSocialSource", "cancelSocialSourceReview", "reviewSocialSource", "approveSocialSource"]);
+  assert.equal(snapshot.eulaState, "ownedBySource");
+});
+
+test("source approval and cancellation stay disabled after applying or stopping snapshots, including remount", async () => {
+  snapshot = { ...idle(), phase: "socialSourceApplying", review: review("socialSource") };
+  await render();
+  assert.equal(button("Confirmar etapa revisada").disabled, true);
+  assert.equal(button("Cancelar revalidação").disabled, true);
+  snapshot = { ...snapshot, revision: 2, phase: "stopping" }; await poll();
+  assert.equal(button("Confirmar etapa revisada").disabled, true);
+  assert.equal(button("Cancelar revalidação").disabled, true);
+  assert.equal(calls.some(call => call.command === "native_voice_execute"), false);
+});
+
 test("all nine runtime selections use the reviewed V3 preparation action", async () => {
   await render();
   for (const runtimeProfile of Object.keys(voiceRuntimes)) {

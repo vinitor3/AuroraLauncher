@@ -13,7 +13,94 @@ fn actor(lab: PathBuf) -> Actor {
         Arc::new(Mutex::new(None)),
         Arc::new(Mutex::new(None)),
         Arc::new(AtomicBool::new(false)),
+        Arc::new(Mutex::new(None)),
     )
+}
+
+pub(in crate::engine::connect_voice::dedicated) async fn exercise_source_revalidation(
+    run: DedicatedRun,
+    lab: PathBuf,
+) -> DedicatedRun {
+    let binding = run.native_voice_host_binding().unwrap();
+    let old = binding.clone();
+    let (connect, receipt) = ConnectManager::test_completed_native_source(binding.clone()).await;
+    let mut actor = actor(lab);
+    actor.connect = connect;
+    actor.source = Some(run);
+    *actor.shared_source.lock().unwrap() = Some(binding);
+    *actor.source_receipt.lock().unwrap() = Some(receipt);
+    actor.claimed.store(true, Ordering::Release);
+    actor.view.phase = "socialSource";
+    actor.view.eula_state = "ownedBySource";
+    let cancel = CancellationToken::new();
+    actor.maintain().await;
+    assert!(actor.view.social_revalidation_available);
+    actor
+        .handle(NativeVoiceRequest::ReviewSocialSource {}, &cancel)
+        .await
+        .unwrap();
+    assert_eq!(actor.view.review.as_ref().unwrap().kind, "socialSource");
+    assert!(
+        old.check_current().is_ok(),
+        "review does not rotate a claim"
+    );
+    actor
+        .handle(NativeVoiceRequest::CancelSocialSourceReview {}, &cancel)
+        .await
+        .unwrap();
+    assert!(
+        old.check_current().is_ok(),
+        "cancel preserves the same source"
+    );
+    actor
+        .handle(NativeVoiceRequest::ReviewSocialSource {}, &cancel)
+        .await
+        .unwrap();
+    actor.view.native_review_deadline = Some(Instant::now());
+    let stale = actor.view.review.as_ref().unwrap().digest.clone();
+    assert!(actor
+        .handle(
+            NativeVoiceRequest::ApproveSocialSource { digest: stale },
+            &cancel
+        )
+        .await
+        .is_err());
+    actor.settle_failure().await;
+    assert_eq!(actor.view.phase, "socialSource");
+    assert!(old.check_current().is_ok());
+    actor
+        .handle(NativeVoiceRequest::ReviewSocialSource {}, &cancel)
+        .await
+        .unwrap();
+    let digest = actor.view.review.as_ref().unwrap().digest.clone();
+    actor
+        .handle(
+            NativeVoiceRequest::ApproveSocialSource {
+                digest: digest.clone(),
+            },
+            &cancel,
+        )
+        .await
+        .unwrap();
+    assert_eq!(actor.view.phase, "ready");
+    assert_eq!(actor.view.eula_state, "ownedBySource");
+    assert!(!actor.claimed.load(Ordering::Acquire));
+    let renewed = actor.shared_source.lock().unwrap().clone().unwrap();
+    assert!(old.check_current().is_err());
+    assert!(old.with_current(|| ()).is_err());
+    assert!(!old.same_claim(&renewed));
+    assert_eq!(old.deadline(), renewed.deadline());
+    assert_eq!(old.identity_preimage(), renewed.identity_preimage());
+    assert!(renewed.check_current().is_ok());
+    assert!(actor
+        .handle(NativeVoiceRequest::ApproveSocialSource { digest }, &cancel)
+        .await
+        .is_err());
+    assert!(
+        renewed.check_current().is_ok(),
+        "replay cannot rotate the new claim"
+    );
+    actor.source.take().unwrap()
 }
 
 pub(in crate::engine::connect_voice::dedicated) async fn assert_actor_collects_forced_stop(

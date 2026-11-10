@@ -98,10 +98,10 @@ export function NativeVoicePanel({ disabled = false, revealRequest = 0, revealRe
   const terminal = ["idle", "stopped", "restored", "reviewExpired", "failed", "needsRecovery", "restoreReviewed", "eulaRestoreReviewed"].includes(snapshot.phase);
   const recoveryPending = snapshot.recoveryPending || snapshot.eulaRecoveryAvailable || snapshot.eulaState === "needsRecovery";
   const canPrepare = ["idle", "stopped", "restored", "reviewExpired", "failed"].includes(snapshot.phase) && !recoveryPending;
-  const approveAction = review && { preparation: "approvePreparation", files: "approveFiles", execution: "approveExecution", host: "approveHost", restore: "approveRestore", eulaRestore: "approveEulaRestore" }[review.kind];
+  const approveAction = review && { preparation: "approvePreparation", files: "approveFiles", execution: "approveExecution", host: "approveHost", restore: "approveRestore", eulaRestore: "approveEulaRestore", socialSource: "approveSocialSource" }[review.kind];
   const anchored = !!review && deadline.current?.digest === review.digest && deadline.current.kind === review.kind;
   const reviewRemaining = anchored ? Math.max(0, deadline.current!.at - now) : 0;
-  const canApprove = !!review && anchored && reviewRemaining > 0 && !disabled && !pending;
+  const canApprove = !!review && anchored && reviewRemaining > 0 && !disabled && !pending && (review.kind !== "socialSource" || snapshot.phase === "socialSourceReviewed");
   const details = review ? voiceReviewDetails(review.details) : undefined;
   const guestIds = guests.split(/\s+/).filter(Boolean);
   const count = guestIds.length + Number(localPlayer);
@@ -120,7 +120,13 @@ export function NativeVoicePanel({ disabled = false, revealRequest = 0, revealRe
       <p>O preparo baixa apenas os arquivos oficiais fixados deste runtime. Forge exige uma etapa própria para autorizar seu instalador; EULA e execução do servidor são revisadas depois.</p>
       <button type="button" onClick={() => void execute({ action: "prepareRuntime", profile, runtimeProfile: runtime })}>{snapshot.phase === "failed" ? "Tentar novo preparo" : "Revisar preparo e anúncio"}</button>
     </fieldset>}
-    {snapshot.phase === "ready" && <p>Para jogar com amigos ou abrir uma sessão pública, selecione esta fonte nativa no painel Social. A revisão Social inclui a vaga do Host jogador e entrega os convites automaticamente.</p>}
+    {snapshot.phase === "socialSource" && <section>
+      <p>Após encerrar a tentativa Social e recolher seus recursos, é possível revisar o mesmo servidor sem reiniciar Java. O prazo original continua valendo.</p>
+      <button type="button" disabled={disabled || pending || !snapshot.socialRevalidationAvailable} onClick={() => void execute({ action: "reviewSocialSource" })}>Revisar servidor atual para nova sessão</button>
+      {!snapshot.socialRevalidationAvailable && <p>Aguarde o encerramento completo da tentativa Social antes de revalidar a origem.</p>}
+    </section>}
+    {review?.kind === "socialSource" && <button type="button" disabled={disabled || pending || snapshot.phase !== "socialSourceReviewed"} onClick={() => void execute({ action: "cancelSocialSourceReview" })}>Cancelar revalidação</button>}
+    {snapshot.phase === "ready" && <p>Para jogar com amigos ou abrir uma sessão pública, selecione esta fonte nativa no painel Social. A revisão Social inclui a vaga do Host jogador e entrega os convites automaticamente. Se esta origem foi revalidada, encerre o anúncio anterior e publique um novo antes de prepará-la no Social.</p>}
     {snapshot.manualLabAvailable && snapshot.phase === "ready" && <details><summary>Laboratório local com convites manuais</summary><fieldset disabled={disabled || pending}><legend>Participantes do Host local</legend>
       <label>Identidades públicas dos convidados, uma por linha<textarea value={guests} onChange={event => setGuests(event.target.value)} maxLength={1024} /></label>
       <label><input type="checkbox" checked={localPlayer} onChange={event => setLocalPlayer(event.target.checked)} />Incluir o Host jogador como participante e abrir sua ponte local</label>

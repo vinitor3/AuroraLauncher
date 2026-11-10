@@ -94,8 +94,8 @@ export function SocialConnectionPanel({ connection, ownSession, now, catalogNow 
     </details>}
     {active && !social && <p>Encerre a conexão anterior para compartilhar ou entrar em uma sessão.</p>}
     {!active && !voiceReady && state.available && onPrepareDedicatedServer && <div className="social-notice">
-      <p>Para hospedar uma cópia dedicada, revise o preparo do servidor e depois escolha a origem pronta aqui.</p>
-      <button type="button" className="secondary" disabled={state.pending} onClick={() => { if (!state.pending) onPrepareDedicatedServer(); }}>Preparar servidor dedicado</button>
+      <p>Prepare um servidor dedicado ou revise novamente a origem em execução; depois escolha a origem pronta aqui.</p>
+      <button type="button" className="secondary" disabled={state.pending} onClick={() => { if (!state.pending) onPrepareDedicatedServer(); }}>Abrir painel do servidor dedicado</button>
     </div>}
     {!active && hostEligible && voiceReady && <div className="social-notice">
       <label className="social-consent"><input type="checkbox" checked={useVoice} disabled={state.pending} onChange={event => setUseVoice(event.target.checked)} />Compartilhar a origem de voz pronta ({state.nativeVoiceReady === "simpleVoiceChat" ? "Simple Voice Chat" : "Plasmo Voice"})</label>

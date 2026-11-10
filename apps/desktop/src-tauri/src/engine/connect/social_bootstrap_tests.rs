@@ -8,6 +8,8 @@ use tokio::{
 
 #[path = "social_host_poll_probe.rs"]
 mod host_poll_probe;
+#[path = "social_http_pool_tests.rs"]
+mod http_pool_tests;
 
 thread_local! {
     // Only the explicit current-thread ignored probe enables these traces.
@@ -98,20 +100,13 @@ async fn social_bootstrap_real_http_diagnostic() {
         source_gate: None,
         guard_probe: None,
     };
-    let http = Http::new(token, &run).expect("diagnostic client construction failed");
+    let mut http = Http::new(token, &run).expect("diagnostic client construction failed");
     let compare_pool = std::env::var("AURORA_BOOTSTRAP_COMPARE_POOL").as_deref() == Ok("1");
     std::env::remove_var("AURORA_BOOTSTRAP_COMPARE_POOL");
-    let mut pooled = http.clone();
+    let pooled = http.clone();
     if compare_pool {
-        // Diagnostic-only alternative; the production client remains unchanged.
-        pooled.client = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .pool_max_idle_per_host(1)
-            .pool_idle_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(2))
-            .build()
-            .expect("pooled diagnostic client construction failed");
+        http.client =
+            Http::build_client(0).expect("diagnostic unpooled client construction failed");
     }
     let mut original = None;
     struct ResetTrace;
@@ -125,12 +120,8 @@ async fn social_bootstrap_real_http_diagnostic() {
         run.current().expect("original diagnostic attempt expired");
         let nonce = uuid::Uuid::new_v4().simple().to_string();
         HTTP_DIAGNOSTIC_SAMPLE.with(|value| value.set(index));
-        let reuse = compare_pool && index % 2 == 0;
-        let mode = if reuse {
-            "keepAlive1Idle10s"
-        } else {
-            "productionPool0"
-        };
+        let reuse = !compare_pool || index % 2 == 0;
+        let mode = if reuse { "keepAlive1Idle10s" } else { "pool0" };
         let sent = Instant::now();
         let result = (if reuse { &pooled } else { &http })
             .post(

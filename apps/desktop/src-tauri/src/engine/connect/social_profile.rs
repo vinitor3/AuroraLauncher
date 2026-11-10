@@ -25,6 +25,48 @@ pub struct SocialReservation {
     pub operation_id: String,
     pub generation: u64,
 }
+
+/// Native receipt of one source claim. Never accepted from IPC or serialized.
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+#[derive(Clone)]
+pub(crate) struct SocialNativeSourceReceipt {
+    pub(super) owner: String,
+    pub(super) operation: String,
+    pub(super) generation: u64,
+    pub(super) epoch: u64,
+    pub(super) account: String,
+    pub(super) session: String,
+    pub(super) claim: String,
+}
+#[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+impl SocialNativeSourceReceipt {
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session
+    }
+    pub(crate) fn matches_binding(
+        &self,
+        binding: &crate::engine::connect_voice::dedicated::NativeVoiceHostBinding,
+    ) -> bool {
+        binding
+            .claim_digest()
+            .is_ok_and(|claim| claim == self.claim)
+    }
+    pub(crate) fn review_scope(&self) -> Result<String, ConnectError> {
+        use sha2::{Digest, Sha256};
+        let bytes = serde_json::to_vec(&(
+            "aurora.connect.native-source-reclaim-receipt/v1",
+            &self.owner,
+            &self.operation,
+            self.generation,
+            self.epoch,
+            &self.account,
+            &self.session,
+            &self.claim,
+        ))
+        .map_err(|_| ConnectError::Internal)?;
+        Ok(format!("{:x}", Sha256::digest(bytes)))
+    }
+}
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SocialCapabilities {
@@ -298,6 +340,51 @@ impl ConnectManager {
     ) -> Result<SocialReservation, ConnectError> {
         self.live
             .social_reserve_native_voice(owner, request, binding, host_player)
+    }
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    pub(crate) fn social_reserve_native_voice_recorded(
+        &self,
+        owner: &str,
+        request: SocialDiscoveredReserveRequest,
+        binding: crate::engine::connect_voice::dedicated::NativeVoiceHostBinding,
+        host_player: bool,
+    ) -> Result<(SocialReservation, SocialNativeSourceReceipt), ConnectError> {
+        let claim = binding
+            .claim_digest()
+            .map_err(|_| ConnectError::SourceChanged)?;
+        let epoch = request.account_epoch;
+        let account = request.account_id.clone();
+        let session = request.session_id.clone();
+        let reservation = self.social_reserve_native_voice(owner, request, binding, host_player)?;
+        let receipt = SocialNativeSourceReceipt {
+            owner: owner.into(),
+            operation: reservation.operation_id.clone(),
+            generation: reservation.generation,
+            epoch,
+            account,
+            session,
+            claim,
+        };
+        Ok((reservation, receipt))
+    }
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    pub(crate) fn can_reclaim_native_source(&self, receipt: &SocialNativeSourceReceipt) -> bool {
+        self.live.can_reclaim_native_source(receipt)
+    }
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    pub(crate) async fn join_reclaim_native_source(
+        &self,
+        receipt: &SocialNativeSourceReceipt,
+    ) -> Result<(), ConnectError> {
+        self.live.join_reclaim_native_source(receipt).await
+    }
+    #[cfg(all(windows, feature = "connect-lab", feature = "connect-voice-lab"))]
+    pub(crate) fn with_reclaim_native_source<T>(
+        &self,
+        receipt: &SocialNativeSourceReceipt,
+        work: impl FnOnce() -> Result<T, ConnectError>,
+    ) -> Result<T, ConnectError> {
+        self.live.with_reclaim_native_source(receipt, work)
     }
     pub fn social_refresh_authentication(
         &self,

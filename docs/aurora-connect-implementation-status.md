@@ -1,6 +1,6 @@
 # Aurora Connect — implementação
 
-Estado em 09/11/2026: em andamento, experimental. Base local `2349320`; matriz original de nove pares preservada.
+Estado em 10/11/2026: em andamento, experimental. Base local `2349320`; matriz original de nove pares preservada.
 
 | Área | Estado observado |
 |---|---|
@@ -11,9 +11,9 @@ Estado em 09/11/2026: em andamento, experimental. Base local `2349320`; matriz o
 | Jogo | Instalação real dos nove perfis e inspeção das cópias passaram, sem abrir Minecraft. Entrada no mundo continua com evidência própria. |
 | Simple Voice Chat | Nove servidores oficiais passaram em preparo/STATUS/UDP/encerramento; áudio permanece não homologado. |
 | Plasmo Voice | Oito servidores oficiais passaram em preparo/STATUS/UDP/encerramento após corrigir o prazo de salvamento V3 para 30s. Áudio não homologado; não há versão oficial Forge 1.12.2. |
-| Interface | Busca, grupo, dedicado, anúncio para amigos e recuperação observados. HostPlayer chegou a transporte disponível, mas encerrou antes do prazo; causa ainda em investigação. Revisão simplificada e seleção de origem corrigidas. |
+| Interface | Busca, grupo, dedicado, anúncio para amigos e recuperação observados. Nova revisão reaproveita o dedicado após encerrar Social, sem reiniciar Java ou renovar seu prazo; testes nativos passaram. Teste gráfico completo pendente. |
 
-Verificações: 134 transporte, 78 backend, 103 frontend, 32 nativas, 11 de horário, sete de bootstrap e dois gates passaram; Clippy passou. A sonda real confirmou 19 polls e perdeu a janela de continuidade no 20º, apesar de a sessão ainda ter prazo; encerramento e restauração confirmados. Falhas preservadas. Controle/handshake não homologam TCP/UDP entre redes, mundo ou áudio. Voz sob carga limita TCP a 192 kB/s até 200 ms sem UDP.
+Verificações anteriores: 134 transporte, 78 backend, 103 frontend e 32 nativas passaram. Nesta revisão: 93 frontend, 17 nativas, TypeScript, fmt e Clippy nas três configurações passaram. Recuperação cobre cancelamento, falha de encerramento e vínculos antigos. Na comparação online, HTTP reutilizado passou 48/48 polls em 30s; sem reutilização houve perda no 43º. Limpeza/restauração confirmadas; isso não homologa estabilidade nem explica definitivamente a falha gráfica anterior. Voz sob carga limita TCP a 192 kB/s até 200 ms sem UDP.
 
 Comandos executados: `cargo test/check/clippy --offline --locked`, `npm run connect:online:frontend`, testes Node e emuladores Firebase; instalação oficial em diretório descartável. Não houve push, release ou instalador.
 

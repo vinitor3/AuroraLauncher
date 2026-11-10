@@ -109,6 +109,15 @@ impl Running {
     pub(super) fn control(&self) -> &DedicatedRun {
         self.run.as_ref().unwrap()
     }
+    pub(super) fn take_control(&mut self) -> DedicatedRun {
+        self.run
+            .take()
+            .expect("original dedicated control already handed off")
+    }
+    pub(super) fn restore_control(&mut self, run: DedicatedRun) {
+        assert!(self.run.is_none(), "original dedicated control still owned");
+        self.run = Some(run);
+    }
     pub(super) fn drop_control(&mut self) {
         drop(self.run.take());
     }

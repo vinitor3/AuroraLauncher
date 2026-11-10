@@ -3,6 +3,27 @@
 use super::*;
 use crate::engine::connect_voice::dedicated::manifest::StoredVoiceProfileV2;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct NativeVoiceClaim {
+    nonce: Uuid,
+    generation: u64,
+}
+impl NativeVoiceClaim {
+    pub(super) fn initial() -> Self {
+        Self {
+            nonce: Uuid::new_v4(),
+            generation: 1,
+        }
+    }
+    fn next(self) -> Option<Self> {
+        let generation = self.generation.checked_add(1)?;
+        Some(Self {
+            nonce: Uuid::new_v4(),
+            generation,
+        })
+    }
+}
+
 /// A clone still refers weakly to the same run. These fields cannot be supplied
 /// by a caller, reconstructed from a sample or serialized into a new authority.
 #[derive(Clone)]
@@ -13,6 +34,7 @@ pub(crate) struct NativeVoiceHostBinding {
     policy: super::super::manifest::ObservationPolicyV2,
     deadline: Instant,
     runtime: crate::engine::connect_ready_profile::ReadyProfile,
+    claim: NativeVoiceClaim,
 }
 
 #[allow(dead_code)] //86A0 has no Host/Attempt/review/IPC caller.
@@ -39,12 +61,65 @@ impl DedicatedRun {
             policy: context.policy(),
             deadline: self.shared.deadline,
             runtime: context.runtime()?,
+            claim: state.voice_claim.ok_or(DedicatedError::Closed)?,
+        })
+    }
+
+    /// Commit only after the caller's original Connect completion/epoch review.
+    /// The physical run, context, process and deadline are never replaced.
+    pub(crate) fn renew_native_voice_host_binding(
+        &self,
+        previous: &NativeVoiceHostBinding,
+    ) -> RunResult<NativeVoiceHostBinding> {
+        let shared = previous.shared.upgrade().ok_or(DedicatedError::Closed)?;
+        if !Arc::ptr_eq(&shared, &self.shared)
+            || previous.policy
+                != super::super::manifest::ObservationPolicyV2::LiteralLoopback35554Durable
+        {
+            return Err(DedicatedError::Preparation(Error::Identity));
+        }
+        let mut state = shared.lock();
+        previous.validate_locked(&shared, &mut state)?;
+        if state.query {
+            return Err(DedicatedError::Busy);
+        }
+        let next = previous.claim.next();
+        // Exhaustion retires this claim only; it cannot wrap or restart Java.
+        state.voice_claim = next;
+        let claim = next.ok_or(DedicatedError::Closed)?;
+        Ok(NativeVoiceHostBinding {
+            claim,
+            ..previous.clone()
         })
     }
 }
 
 #[allow(dead_code)] // Observation only; service admission remains a later gate.
 impl NativeVoiceHostBinding {
+    /// Identity comparison only, including for retained terminal receipts.
+    /// Call check_current separately before treating either binding as live.
+    pub(crate) fn same_claim(&self, other: &Self) -> bool {
+        self.shared.ptr_eq(&other.shared)
+            && self.native_nonce == other.native_nonce
+            && self.deadline == other.deadline
+            && self.claim == other.claim
+    }
+
+    pub(crate) fn claim_digest(&self) -> std::result::Result<String, VoiceRuntimeError> {
+        self.check_current()?;
+        let bytes = serde_json::to_vec(&(
+            "aurora.connect.native-voice-claim/v1",
+            self.native_nonce,
+            self.claim.nonce,
+            self.claim.generation,
+            self.profile,
+            self.policy,
+            self.runtime.version_id(),
+        ))
+        .map_err(|_| VoiceRuntimeError::Context(Error::Identity))?;
+        Ok(super::super::digest(&bytes))
+    }
+
     pub(crate) fn check_current(&self) -> std::result::Result<(), VoiceRuntimeError> {
         self.current().map(|_| ()).map_err(VoiceRuntimeError::from)
     }
@@ -179,28 +254,33 @@ impl NativeVoiceHostBinding {
         let shared = self.shared.upgrade().ok_or(DedicatedError::Closed)?;
         {
             let mut state = shared.lock();
-            shared.refresh(&mut state);
-            if state.reason.is_some() {
-                return Err(DedicatedError::Closed);
-            }
-            if state.phase != DedicatedPhase::Ready {
-                return Err(DedicatedError::NotReady);
-            }
-            if shared.native_nonce != self.native_nonce
-                || shared.deadline != self.deadline
-                || !shared.voice_context.as_ref().is_some_and(|context| {
-                    context.native_nonce() == self.native_nonce
-                        && context.profile() == self.profile
-                        && context.policy() == self.policy
-                        && context
-                            .runtime()
-                            .is_ok_and(|runtime| runtime == self.runtime)
-                })
-            {
-                return Err(DedicatedError::Preparation(Error::Identity));
-            }
+            self.validate_locked(&shared, &mut state)?;
         }
         Ok(shared)
+    }
+
+    fn validate_locked(&self, shared: &Shared, state: &mut State) -> RunResult<()> {
+        shared.refresh(state);
+        if state.reason.is_some() || state.voice_claim != Some(self.claim) {
+            return Err(DedicatedError::Closed);
+        }
+        if state.phase != DedicatedPhase::Ready {
+            return Err(DedicatedError::NotReady);
+        }
+        if shared.native_nonce != self.native_nonce
+            || shared.deadline != self.deadline
+            || !shared.voice_context.as_ref().is_some_and(|context| {
+                context.native_nonce() == self.native_nonce
+                    && context.profile() == self.profile
+                    && context.policy() == self.policy
+                    && context
+                        .runtime()
+                        .is_ok_and(|runtime| runtime == self.runtime)
+            })
+        {
+            return Err(DedicatedError::Preparation(Error::Identity));
+        }
+        Ok(())
     }
 
     pub(crate) fn reserve_tcp(&self) -> RunResult<ReservedTcpQuery> {
@@ -208,7 +288,7 @@ impl NativeVoiceHostBinding {
         // The same Shared, same observer and same common reservation gate84.
         // Stop/cancel/deadline racing current() are rechecked by reserve().
         Ok(ReservedTcpQuery {
-            job: shared.reserve(QueryKind::Tcp)?,
+            job: shared.reserve_for_claim(QueryKind::Tcp, self.claim)?,
         })
     }
 
@@ -218,12 +298,10 @@ impl NativeVoiceHostBinding {
         &self,
         work: impl FnOnce() -> T,
     ) -> std::result::Result<T, VoiceRuntimeError> {
-        let shared = self.current().map_err(VoiceRuntimeError::from)?;
+        let shared = self.shared.upgrade().ok_or(VoiceRuntimeError::Closed)?;
         let mut state = shared.lock();
-        shared.refresh(&mut state);
-        if state.reason.is_some() || state.phase != DedicatedPhase::Ready {
-            return Err(VoiceRuntimeError::from(DedicatedError::Closed));
-        }
+        self.validate_locked(&shared, &mut state)
+            .map_err(VoiceRuntimeError::from)?;
         Ok(work())
     }
 
@@ -231,6 +309,21 @@ impl NativeVoiceHostBinding {
         &self,
     ) -> std::result::Result<ReservedVoiceQuery, VoiceRuntimeError> {
         let shared = self.current().map_err(VoiceRuntimeError::from)?;
-        voice::reserve_voice(&shared)
+        voice::reserve_voice_for_claim(&shared, self.claim)
     }
+}
+
+#[cfg(test)]
+#[test]
+fn native_voice_claim_generation_never_wraps() {
+    let initial = NativeVoiceClaim::initial();
+    let next = initial.next().unwrap();
+    assert_eq!(next.generation, initial.generation + 1);
+    assert!(initial.nonce != next.nonce);
+    assert!(NativeVoiceClaim {
+        generation: u64::MAX,
+        ..initial
+    }
+    .next()
+    .is_none());
 }

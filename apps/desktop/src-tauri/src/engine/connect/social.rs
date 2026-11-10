@@ -17,6 +17,9 @@ use guest_admission::{verify_guest_admission, GuestIngress};
 mod ready_fixture;
 #[path = "social_ready_game.rs"]
 pub(super) mod ready_source;
+#[cfg(all(windows, feature = "connect-voice-lab"))]
+#[path = "social_source_reclaim.rs"]
+mod source_reclaim;
 
 #[derive(Clone)]
 struct DiscoverySelection {
@@ -40,6 +43,8 @@ pub(super) struct Control {
     native_voice_source: Option<crate::engine::connect_voice::dedicated::NativeVoiceHostBinding>,
     #[cfg(all(windows, feature = "connect-voice-lab"))]
     native_voice_local_key: Option<lab::SecretKey>,
+    #[cfg(all(windows, feature = "connect-voice-lab"))]
+    native_voice_claim: Option<String>,
 
     #[cfg(test)]
     guard_probe: Option<Arc<ready_source::fixture::Pause>>,
@@ -391,6 +396,8 @@ impl Manager {
                 native_voice_source: None,
                 #[cfg(all(windows, feature = "connect-voice-lab"))]
                 native_voice_local_key: None,
+                #[cfg(all(windows, feature = "connect-voice-lab"))]
+                native_voice_claim: None,
                 #[cfg(test)]
                 guard_probe: None,
             }),
@@ -440,6 +447,9 @@ impl Manager {
         binding
             .online_voice_policy()
             .map_err(|_| ConnectError::SourceChanged)?;
+        let claim = binding
+            .claim_digest()
+            .map_err(|_| ConnectError::SourceChanged)?;
         let reservation = self.social_reserve_inner(
             owner,
             SocialReserveRequest {
@@ -460,6 +470,7 @@ impl Manager {
             .as_mut()
             .ok_or(ConnectError::InvalidRequest)?;
         control.native_voice_source = Some(binding);
+        control.native_voice_claim = Some(claim);
         control.native_voice_local_key = host_player.then(lab::generate_key);
         Ok(reservation)
     }
@@ -926,13 +937,8 @@ impl Http {
                 ConnectError::InvitationRejected
             });
         }
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .pool_max_idle_per_host(0)
-            .timeout(Duration::from_secs(2))
-            .build()
-            .map_err(|_| ConnectError::Internal)?;
+        // Only clones owned by this Attempt share its transport pool.
+        let client = Self::build_client(1)?;
         let token = Arc::new(Mutex::new(token));
         update(&run.state, &run.id, |a| {
             if let Some(control) = &mut a.social {
@@ -948,6 +954,16 @@ impl Http {
             session_id: run.request.session_id.clone(),
             online,
         })
+    }
+    fn build_client(max_idle_per_host: usize) -> Result<reqwest::Client, ConnectError> {
+        reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .pool_max_idle_per_host(max_idle_per_host)
+            .pool_idle_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(2))
+            .build()
+            .map_err(|_| ConnectError::Internal)
     }
     fn failure(
         &self,
