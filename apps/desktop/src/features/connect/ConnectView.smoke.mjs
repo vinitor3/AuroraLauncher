@@ -3244,7 +3244,7 @@ for (const role of ["host", "guest"]) test(`the Connect client page presents the
   assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot"]);
   assert.match(container.textContent, /Jogo e voz ainda não verificados/);
   assert.doesNotMatch(container.textContent, /O prazo da sessão terminou|Mundo conectado|Áudio confirmado/);
-  assert.equal(container.querySelector("form"), null);
+  assert.ok(container.querySelector("form.connect-form"), "completed cleanup permits a separate explicit manual preparation");
 });
 
 test("Social failure on the Connect page redacts unknown codes and omits unavailable timings", async () => {
@@ -3259,6 +3259,65 @@ test("Social failure on the Connect page redacts unknown codes and omits unavail
   const details = container.querySelector("details");
   assert.deepEqual([...details.querySelectorAll("li")].map(item => item.textContent), ["Prazo de sessão ainda restante: 2 s."]);
   assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot"]);
+});
+
+for (const phase of ["closed", "failed"]) test(`completed ${phase} Social resources preserve the summary and expose a fresh manual form without mutation`, async () => {
+  socialReadyFixture();
+  snapshot = { ...snapshot, phase, transportState: "closed", tcpAddress: null, cleanupState: "complete",
+    social: { ...snapshot.social, stage: phase } };
+  await render();
+  assert.ok(container.querySelector("form.connect-form"));
+  assert.match(container.textContent, /Esta sessão foi preparada em Amigos e comunidade/);
+  assert.match(container.textContent, /Recursos da conexão liberados/);
+  assert.equal(container.querySelectorAll("h2").length, 1);
+  assert.match(container.textContent, /Sessão Social anterior/);
+  assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot"]);
+  assert.deepEqual(copied, []);
+  await submit();
+  assert.equal(count("connect_prepare_host"), 1, "only the explicit form submission starts preparation");
+  assert.equal(count("connect_confirm"), 0); assert.equal(count("connect_export_invitation"), 0);
+});
+
+for (const [phase, cleanupState] of [["guestConnected", "pending"], ["closing", "pending"], ["failed", "pending"], ["failed", "failed"], ["closed", "pending"]]) {
+  test(`Social ${phase} with ${cleanupState} cleanup cannot expose manual preparation`, async () => {
+    socialReadyFixture();
+    snapshot = { ...snapshot, phase, cleanupState, ...(phase !== "guestConnected" ? { transportState: "closed", tcpAddress: null } : {}),
+      social: { ...snapshot.social, stage: phase === "failed" ? "failed" : phase === "closed" ? "closed" : "connected" } };
+    await render();
+    assert.equal(container.querySelector("form.connect-form"), null);
+    assert.match(container.textContent, /Esta sessão foi preparada em Amigos e comunidade/);
+    assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot"]);
+  });
+}
+
+test("manual preparation after Social requires a fresh snapshot and hides on a failed refresh", async () => {
+  socialReadyFixture();
+  snapshot = { ...snapshot, phase: "closed", transportState: "closed", tcpAddress: null, cleanupState: "complete",
+    social: { ...snapshot.social, stage: "closed" } };
+  let reply;
+  handlers.set("connect_snapshot", () => new Promise(resolve => { reply = resolve; }));
+  await render();
+  assert.equal(container.querySelector("form.connect-form"), null);
+  await act(async () => reply(structuredClone(snapshot)));
+  assert.ok(container.querySelector("form.connect-form"));
+  handlers.set("connect_snapshot", () => { throw new Error("private-provider-path"); });
+  await click("Atualizar estado");
+  assert.equal(container.querySelector("form.connect-form"), null);
+  assert.match(container.textContent, /última observação pode estar desatualizada/);
+  assert.match(container.textContent, /Esta sessão foi preparada em Amigos e comunidade/);
+  assert.doesNotMatch(container.textContent, /private-provider-path/);
+  assert.equal(count("connect_prepare_host"), 0);
+});
+
+test("recovered terminal Social state never enables manual preparation without capability", async () => {
+  socialReadyFixture();
+  snapshot = { ...snapshot, phase: "closed", transportState: "closed", tcpAddress: null, cleanupState: "complete",
+    social: { ...snapshot.social, stage: "closed" } };
+  handlers.set("connect_capabilities", () => { throw new Error("unavailable"); });
+  await render();
+  assert.match(container.textContent, /Esta sessão foi preparada em Amigos e comunidade/);
+  assert.equal(container.querySelector("form.connect-form"), null);
+  assert.equal(count("connect_prepare_host"), 0);
 });
 
 test("social transport alone does not enable ready game preparation", async () => {

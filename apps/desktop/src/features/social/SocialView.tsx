@@ -8,7 +8,7 @@ import { SocialAvailabilityBadge, useSocialAvailability } from "./SocialAvailabi
 import "./social.css";
 
 type FriendTab = "friends" | "incoming" | "outgoing" | "blocked";
-type Props = { service: SocialService | null; accountId: string; nickname: string; currentModpack?: string; connection?: SocialConnectionControls; onOpenConnectedGame?: () => void; onPrepareDedicatedServer?: () => void };
+type Props = { service: SocialService | null; accountId: string; nickname: string; currentModpack?: string; connection?: SocialConnectionControls; onOpenConnectedGame?: () => void; onPrepareDedicatedServer?: () => void; onOpenManualConnect?: () => void };
 const friendTabs: [FriendTab, string][] = [["friends", "Amigos"], ["incoming", "Recebidos"], ["outgoing", "Enviados"], ["blocked", "Bloqueados"]];
 const MAX_VISIBLE_SESSIONS = 100;
 const emptyDraft = (): SocialSessionDraft => ({ title: "", modpackName: "", minecraftVersion: "", loader: "Vanilla", imageUrl: null, players: 0, maxPlayers: 8, visibility: "private", joinPolicy: "open" });
@@ -58,7 +58,7 @@ export function SocialView(props: Props) {
   return <SocialAccountView key={`${props.accountId}:${props.service ? clientKeys.get(props.service) : "none"}`} {...props} />;
 }
 
-function SocialAccountView({ service, accountId, nickname, currentModpack, connection, onOpenConnectedGame, onPrepareDedicatedServer }: Props) {
+function SocialAccountView({ service, accountId, nickname, currentModpack, connection, onOpenConnectedGame, onPrepareDedicatedServer, onOpenManualConnect }: Props) {
   const [snapshot, setSnapshot] = useState<SocialSnapshot>();
   const [sessions, setSessions] = useState<SocialSession[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -239,6 +239,8 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
   const connectSnapshot = connection?.state.snapshot;
   const connectionBusy = !!connection?.state.pending || !!connectSnapshot?.operationId
     && !(["closed", "failed"].includes(connectSnapshot.phase) && connectSnapshot.cleanupState === "complete");
+  const manualConnectReady = !!onOpenManualConnect && connection?.state.available === true && !!connectSnapshot
+    && !connectionBusy && !connection.state.error;
   const hostPublicationLocked = !!snapshot?.ownSession && !!connectSnapshot?.operationId
     && connectSnapshot.role === "host" && connectSnapshot.social?.role === "host"
     && connectSnapshot.social.sessionId === snapshot.ownSession.id
@@ -295,10 +297,18 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
         {scope === "public" && nextCursor && <div className="social-pagination"><button className="secondary" disabled={disabled} onClick={() => void more()}>Carregar mais</button></div>}
         {sessions.length >= MAX_VISIBLE_SESSIONS && <small>Exibindo até 100 anúncios. Atualize para consultar a lista novamente.</small>}
         {available && service?.capabilities.publication && snapshot && <details className="social-publish"><summary>{snapshot.ownSession ? "Meu anúncio de sessão" : "Compartilhar uma sessão"}</summary>
-          <form onSubmit={event => { event.preventDefault(); if (publicationDisabled || (draft.visibility !== "private" && !publicationConsent)) return; void run(() => service.publishSession(validateSocialSession(draft)), connection?.state.available
+          <form onSubmit={event => { event.preventDefault(); if (publicationDisabled || (draft.visibility !== "private" && !publicationConsent)) return; void run(() => service.publishSession(validateSocialSession(draft)), draft.visibility === "private"
+            ? "Anúncio privado salvo. Ele não envia convites nem inicia o compartilhamento."
+            : connection?.state.available
             ? "Anúncio atualizado. Use Preparar meu servidor para ativar o compartilhamento."
             : "Anúncio atualizado. O compartilhamento do servidor ainda não foi ativado."); }}>
             <p>O anúncio não abre portas, inicia o jogo ou comprova que o servidor está acessível.</p>
+            {draft.visibility === "private" && <div className="social-notice">
+              <p>Para convidar alguém diretamente, use os convites manuais do Connect e troque os códigos pelo canal combinado. O anúncio só muda quando você salva; ainda não há entrega de convite para uma conta Aurora.</p>
+              {onOpenManualConnect ? <><button type="button" className="secondary" disabled={disabled || !manualConnectReady} onClick={() => { if (!disabled && manualConnectReady) onOpenManualConnect(); }}>Abrir convites do Connect</button>
+                {!manualConnectReady && <small>{connectionBusy ? "Encerre a conexão atual e aguarde a liberação dos recursos antes de preparar outro convite." : "Atualize a conexão para conferir se os recursos estão liberados."}</small>}</>
+                : <small>Os convites manuais do Connect não estão disponíveis neste executável.</small>}
+            </div>}
             {hostPublicationLocked && <p className="social-notice" role="status">Este anúncio está vinculado à hospedagem em andamento. Use Desconectar e aguarde a liberação dos recursos antes de editar ou salvar.</p>}
             {snapshot.ownSession && <div className="social-notice"><strong>{snapshot.ownSession.title}</strong><small>{snapshot.ownSession.expiresAtMs <= now ? "Anúncio expirado" : "Anúncio registrado"}</small><p>Encerrar o anúncio revoga a autorização desta sessão e encerra a entrada e as conexões dos participantes.</p><div className="social-actions"><button type="button" className="secondary" disabled={disabled} onClick={() => void run(() => service.closeSession(), "Anúncio encerrado.")}>Encerrar anúncio</button></div></div>}
             <div className="social-fields">

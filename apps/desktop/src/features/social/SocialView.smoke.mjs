@@ -653,18 +653,66 @@ test("social game navigation refuses expiry at click before the timer renders", 
   try { await click("Abrir Minecraft"); assert.equal(opened, 0); } finally { Date.now = savedNow; }
 });
 for (const enabled of [false, true]) {
-  test(`publication result explains separate host activation with social connection ${enabled ? "available" : "unavailable"}`, async () => {
+  test(`private publication does not suggest unavailable host activation with social connection ${enabled ? "available" : "unavailable"}`, async () => {
     await render({ connection: enabled ? connection() : undefined });
     const fields = container.querySelectorAll(".social-publish .social-fields input");
     await edit(fields[0], "Meu mundo"); await edit(fields[1], "Meu modpack"); await edit(fields[2], "1.21.1");
     await submit(".social-publish form");
     assert.equal(count("publishSession"), 1);
     assert.equal(count("connect:prepareHost"), 0); assert.equal(count("connect:confirmHost"), 0);
-    if (enabled) assert.match(container.textContent, /Anúncio atualizado\. Use Preparar meu servidor para ativar o compartilhamento\./);
-    else assert.match(container.textContent, /Anúncio atualizado\. O compartilhamento do servidor ainda não foi ativado\./);
+    assert.match(container.textContent, /Anúncio privado salvo\. Ele não envia convites nem inicia o compartilhamento\./);
+    assert.doesNotMatch(container.textContent, /Use Preparar meu servidor para ativar/);
     assert.doesNotMatch(container.textContent, /A conexão automática continua separada/);
   });
 }
+
+test("private advertisement offers only explicit manual navigation after completed cleanup", async () => {
+  state.ownSession = { ...baseSession, hostUid: "owner-uid", visibility: "private" };
+  let opened = 0;
+  for (const phase of ["idle", "closed", "failed"]) {
+    const value = phase === "idle" ? { operationId: null, phase, cleanupState: "notStarted" }
+      : { ...connectionSnapshot(phase), phase, cleanupState: "complete" };
+    await render({ connection: connection(value), onOpenManualConnect: () => { opened++; } });
+    assert.match(container.textContent, /troque os códigos pelo canal combinado/);
+    assert.match(container.textContent, /ainda não há entrega de convite para uma conta Aurora/);
+    assert.match(container.querySelector(".social-connection").textContent, /Este anúncio é privado/);
+    const before = calls.length;
+    await click("Abrir convites do Connect");
+    assert.equal(calls.length, before, "navigation does not prepare, publish, query, approve or export");
+  }
+  assert.equal(opened, 3);
+  assert.equal(count("publishSession"), 0);
+});
+
+test("private manual navigation remains blocked by busy, unavailable, missing or stale connection state", async () => {
+  state.ownSession = { ...baseSession, hostUid: "owner-uid", visibility: "private" };
+  const terminal = { ...connectionSnapshot("closed"), phase: "closed", cleanupState: "complete" };
+  const cases = [connection(connectionSnapshot("connected", "guest")),
+    connection({ ...terminal, phase: "closing", cleanupState: "pending" }),
+    connection({ ...terminal, phase: "failed", cleanupState: "pending" }),
+    connection({ ...terminal, phase: "failed", cleanupState: "failed" }), connection(),
+    { ...connection(terminal), state: { ...connection(terminal).state, pending: true } },
+    { ...connection(terminal), state: { ...connection(terminal).state, error: "Estado desatualizado" } },
+    { ...connection(terminal), state: { ...connection(terminal).state, available: false } }];
+  let opened = 0;
+  for (const control of cases) {
+    await render({ connection: control, onOpenManualConnect: () => { opened++; } });
+    assert.equal(button("Abrir convites do Connect").disabled, true);
+    await act(async () => button("Abrir convites do Connect").dispatchEvent(new window.Event("click", { bubbles: true })));
+  }
+  assert.equal(opened, 0);
+  assert.equal(calls.some(call => call.name.startsWith("connect:")), false);
+});
+
+test("private manual guidance requires an available navigation route and does not appear for friends", async () => {
+  state.ownSession = { ...baseSession, hostUid: "owner-uid", visibility: "private" };
+  await render({ connection: connection({ operationId: null, phase: "idle", cleanupState: "notStarted" }) });
+  assert.equal(buttons("Abrir convites do Connect").length, 0);
+  assert.match(container.textContent, /convites manuais do Connect não estão disponíveis neste executável/);
+  state.ownSession = { ...state.ownSession, id: "friends-session", visibility: "friends" };
+  await click("Atualizar");
+  assert.doesNotMatch(container.textContent, /troque os códigos pelo canal combinado|Abrir convites do Connect/);
+});
 
 function discoveryFixture(target = "127.0.0.1:51029") {
   const common = { instanceId: "owned-game", runId: "owned-run", expiresAtMs: fixedNow + 30_000,

@@ -461,8 +461,10 @@ export function ConnectView({ launchContext, onInitialReadReady, onChooseSource,
     uncertain: sourcePreparationUncertain || hostReviewUncertain, stale: Boolean(warning) || loading, nowMs });
   const deadlines = connectDeadlines(snapshot);
 
-  if (snapshot?.social) return <section className="connect-view" aria-labelledby="connect-title">
-    <header className="connect-heading"><div><h2 id="connect-title">Aurora Connect</h2><p>{snapshot.phase === "closing" ? "Desconectando…" : socialStageText[snapshot.social.stage]}</p></div><span className="connect-badge">Experimental</span></header>
+  const manualAfterSocial = !!snapshot?.social && ["closed", "failed"].includes(snapshot.phase) && snapshot.cleanupState === "complete"
+    && capabilities?.available === true && !loading && !warning && !busy && !active;
+  const socialPanel = snapshot?.social ? <section className={manualAfterSocial ? "connect-card" : "connect-view"} aria-labelledby="connect-social-title">
+    <header className="connect-heading"><div>{manualAfterSocial ? <h3 id="connect-social-title">Sessão Social anterior</h3> : <h2 id="connect-social-title">Aurora Connect</h2>}<p>{snapshot.phase === "closing" ? "Desconectando…" : socialStageText[snapshot.social.stage]}</p></div>{!manualAfterSocial && <span className="connect-badge">Experimental</span>}</header>
     <p>Esta sessão foi preparada em Amigos e comunidade. Volte àquela página para acompanhar a entrada ou revisar o compartilhamento.</p>
     <p>Jogo e voz ainda não verificados. A conexão social utiliza o mesmo controle de encerramento do launcher.</p>
     <SocialConnectionFailure errorCode={snapshot.errorCode} social={snapshot.social} className="connect-error" />
@@ -475,7 +477,8 @@ export function ConnectView({ launchContext, onInitialReadReady, onChooseSource,
       session={snapshot} launchContext={launchContext} onChooseSource={onChooseSource} observeExisting={!capabilities && !loading}
       revealRequest={gameRevealRequest} revealReady={gameRevealReady && !loading}
       sessionStale={!snapshot.social.readyGameLaunchAvailable || Boolean(warning) || loading || pending === "stop"} />
-  </section>;
+  </section> : undefined;
+  if (socialPanel && !manualAfterSocial) return socialPanel;
 
   return <section className="connect-view" aria-labelledby="connect-title">
     <header className="connect-heading"><div><h2 id="connect-title">Aurora Connect</h2><p>Compartilhe um servidor autorizado ou use um convite recebido.</p></div><span className="connect-badge">Experimental</span></header>
@@ -485,6 +488,8 @@ export function ConnectView({ launchContext, onInitialReadReady, onChooseSource,
     {message && <p className="connect-message" role="status">{message}</p>}
     {!loading && capabilities && !capabilities.available && <p className="connect-warning">Este recurso está desligado nesta versão do launcher.</p>}
     {(capabilities?.available || snapshot) && <>
+      {socialPanel}
+      {!socialPanel && <>
       <section className="connect-guidance connect-card" aria-labelledby="connect-next-step-title">
         <h3 id="connect-next-step-title">Próximo passo</h3>
         <p className="connect-next-action">{guidance.action}</p><p>{guidance.detail}</p>
@@ -551,6 +556,7 @@ export function ConnectView({ launchContext, onInitialReadReady, onChooseSource,
       <ConnectGameLaunchPanel capability={capabilities?.readyGameLaunch} session={snapshot} launchContext={launchContext} onChooseSource={onChooseSource}
         revealRequest={gameRevealRequest} revealReady={gameRevealReady && !loading}
         observeExisting={!capabilities && !loading} sessionStale={Boolean(warning) || loading || pending === "stop"} />
+      </>}
       {capabilities?.available && !active && snapshot && <section className="connect-card">
         <div className="connect-tabs" aria-label="Papel nesta tentativa"><button type="button" aria-pressed={selectedRole === "host"} disabled={busy} onClick={() => { setSelectedRole("host"); setDiscoveredTarget(undefined); }}>Anfitrião</button><button type="button" aria-pressed={selectedRole === "guest"} disabled={busy} onClick={() => { setSelectedRole("guest"); if (invitationProfile === "sessionGroup") setInvitationProfile("legacy"); setDiscoveredTarget(undefined); }}>Convidado</button></div>
         <form className="connect-form" onSubmit={prepare}>

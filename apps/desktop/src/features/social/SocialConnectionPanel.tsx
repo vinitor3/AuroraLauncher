@@ -152,7 +152,9 @@ export function SocialConnectionPanel({ connection, ownSession, now, catalogNow 
       {active && <button className="danger" disabled={snapshot?.phase === "closing"} onClick={() => void controller.stop()}>Desconectar</button>}
       <button className="secondary" disabled={state.pending} onClick={() => void controller.refresh()}>Atualizar conexão</button>
     </div>
-    {!active && !hostEligible && <small>Para hospedar, publique um anúncio para amigos ou para a comunidade e escolha entrada aberta ou aprovação de pedidos.</small>}
+    {!active && !hostEligible && <small>{ownSession?.visibility === "private"
+      ? "Este anúncio é privado. Para o fluxo manual, use Abrir convites do Connect em Meu anúncio de sessão."
+      : "Para hospedar, publique um anúncio para amigos ou para a comunidade e escolha entrada aberta ou aprovação de pedidos."}</small>}
     {!active && retiredOwnSession && <small>Esta sessão foi encerrada. Em Meu anúncio de sessão, encerre o anúncio e publique outro para autorizar uma nova sessão.</small>}
     {!active && !discovery && hostEligible && state.maxSessionSeconds !== 14400 && <small>Este executável usa a fonte de teste fixa em 127.0.0.1:43001.</small>}
   </section>;
