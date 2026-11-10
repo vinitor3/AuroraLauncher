@@ -42,7 +42,7 @@ export async function socialAuthenticate(request: Request, project: string, sign
       // every 3xx response, so neither credentials nor JWKS follow redirects.
       redirect: "manual", signal, cf: { cacheTtl: 3600, cacheEverything: true },
     }));
-    if (!Array.isArray(jwks.keys) || jwks.keys.length > 10) fail("backend_unavailable");
+    if (!Array.isArray(jwks.keys) || jwks.keys.length > 10) return fail("backend_unavailable");
     const key = jwks.keys.find((key: JsonWebKey & { kid?: string }) => key.kid === header.kid && key.kty === "RSA" && key.alg === "RS256");
     if (!key) fail("unauthenticated");
     const publicKey = await crypto.subtle.importKey("jwk", key, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
@@ -52,6 +52,10 @@ export async function socialAuthenticate(request: Request, project: string, sign
 }
 type Field = { stringValue?: string; integerValue?: string; timestampValue?: string; nullValue?: null };
 export function createSocialFirebaseDependencies(project: string, authenticatedUid: string, routedSession: string, advertisementOnly = false): SocialBindingDependencies {
+  // A bounded routing hint only: every observation still reads and validates
+  // the profile, session and username registry with this request's token.
+  // Keep this per dependency/authority, never global or in durable storage.
+  const registrationLocators = new Map<string, string>();
   return {
     // The Worker verifies the signature before invoking the non-public DO RPC.
     trustedAuthenticate: async request => {
@@ -69,9 +73,13 @@ export function createSocialFirebaseDependencies(project: string, authenticatedU
         if (!result.fields || typeof result.fields !== "object" || Array.isArray(result.fields)) return fail("backend_unavailable");
         return result.fields as Record<string, Field>;
       };
-      const [profile, fields] = await Promise.all([get(`users/${callerUid}`), get(`socialSessions/${sessionId}`)]);
+      const priorNick = registrationLocators.get(callerUid);
+      // Settle an obsolete locator independently: a renamed/deleted old name
+      // is not the current registry, and must not create a floating rejection.
+      const registryRead = priorNick ? get(`usernames/${priorNick}`).then(value => ({ value }), (error: unknown) => ({ error })) : undefined;
+      const [profile, fields, prefetchedRegistry] = await Promise.all([get(`users/${callerUid}`), get(`socialSessions/${sessionId}`), registryRead]);
       const nick = profile.usernameLower?.stringValue;
-      if (profile.uid?.stringValue !== callerUid || !nick || !/^[a-z0-9_]{3,16}$/.test(nick)) fail("account_not_registered");
+      if (profile.uid?.stringValue !== callerUid || !nick || !/^[a-z0-9_]{3,16}$/.test(nick)) return fail("account_not_registered");
       const keys = ["schema", "hostUid", "title", "modpackName", "minecraftVersion", "loader", "imageUrl", "players", "maxPlayers", "visibility", "joinPolicy", "expiresAt"];
       if (Object.keys(fields).length !== keys.length || keys.some(key => !Object.hasOwn(fields, key)) || fields.schema?.integerValue !== "1") fail("invalid_session");
       const session = normalizeSocialBindingSession({ id: sessionId, hostUid: fields.hostUid?.stringValue, title: fields.title?.stringValue,
@@ -79,14 +87,20 @@ export function createSocialFirebaseDependencies(project: string, authenticatedU
         imageUrl: fields.imageUrl?.nullValue === null ? null : fields.imageUrl?.stringValue,
         players: Number(fields.players?.integerValue), maxPlayers: Number(fields.maxPlayers?.integerValue), visibility: fields.visibility?.stringValue,
         joinPolicy: fields.joinPolicy?.stringValue, expiresAtMs: Date.parse(fields.expiresAt?.timestampValue ?? "") });
-      const [registry, approval] = await Promise.all([get(`usernames/${nick}`), !advertisementOnly && session.hostUid !== callerUid && session.joinPolicy === "approval"
+      const currentRegistry = prefetchedRegistry && priorNick === nick
+        ? "error" in prefetchedRegistry ? Promise.reject(prefetchedRegistry.error) : Promise.resolve(prefetchedRegistry.value)
+        : get(`usernames/${nick}`);
+      const [registry, approval] = await Promise.all([currentRegistry, !advertisementOnly && session.hostUid !== callerUid && session.joinPolicy === "approval"
         ? get(`socialJoinRequests/${sessionId}/guests/${callerUid}`) : Promise.resolve(undefined)]);
       if (registry.uid?.stringValue !== callerUid) fail("account_not_registered");
       if (approval) {
+        const expiresAt = Date.parse(approval.expiresAt?.timestampValue ?? "");
         if (approval.status?.stringValue !== "accepted" || approval.hostUid?.stringValue !== session.hostUid
           || approval.guestUid?.stringValue !== callerUid || approval.sessionId?.stringValue !== sessionId
-          || Date.parse(approval.expiresAt?.timestampValue ?? "") <= Date.now()) fail("session_not_authorized");
+          || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) fail("session_not_authorized");
       }
+      if (signal.aborted) fail("binding_cancelled");
+      if (registrationLocators.has(callerUid) || registrationLocators.size < 128) registrationLocators.set(callerUid, nick);
       return session;
     },
   };

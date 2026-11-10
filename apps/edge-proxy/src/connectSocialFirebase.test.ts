@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { before, test } from "node:test";
+import { before, test, type TestContext } from "node:test";
 import { createSocialFirebaseDependencies, socialAuthenticate, socialJson } from "./connectSocialFirebase.ts";
-import { SocialBindingError } from "./connectSocialBinding.ts";
+import { createSocialBindingAuthority, socialKeyProofPreimage, SocialBindingError } from "./connectSocialBinding.ts";
+import { createSocialAdmissionAuthority, hostSocialPolicyPreimage } from "./connectSocialAdmission.ts";
 
 let pair: CryptoKeyPair, publicJwk: JsonWebKey;
 before(async () => {
@@ -17,6 +18,34 @@ async function token(overrides: Record<string, unknown> = {}) {
   return `${header}.${claims}.${Buffer.from(signature).toString("base64url")}`;
 }
 const request = (value: string) => new Request("https://social.invalid/v1/social/bootstrap", { headers: { Authorization: `Bearer ${value}` } });
+const firestoreFields = (value: Record<string, unknown>) => Object.fromEntries(Object.entries(value).map(([key, item]) => [key,
+  item === null ? { nullValue: null } : typeof item === "number" ? { integerValue: String(item) } : key === "expiresAt" ? { timestampValue: item } : { stringValue: item }]));
+
+function locatorFixture(t: TestContext, authenticatedUid = "host") {
+  const sessionId = crypto.randomUUID(), calls: Array<{ path: string; token: string | null; signal: AbortSignal | null | undefined }> = [];
+  const documents = new Map<string, Record<string, unknown> | number | null>([
+    ["users/host", { uid: "host", usernameLower: "hostnick" }], ["usernames/hostnick", { uid: "host" }],
+    [`socialSessions/${sessionId}`, { schema: 1, hostUid: "host", title: "World", modpackName: "Pack", minecraftVersion: "1.21.1", loader: "Fabric",
+      imageUrl: null, players: 1, maxPlayers: 8, visibility: "public", joinPolicy: "open", expiresAt: new Date(Date.now() + 60_000).toISOString() }],
+  ]);
+  let hook: ((path: string, signal: AbortSignal | null | undefined) => Promise<void>) | undefined;
+  t.mock.method(globalThis, "fetch", async (url: string | URL | Request, init: RequestInit) => {
+    const prefix = "https://firestore.googleapis.com/v1/projects/auroralauncher/databases/(default)/documents/";
+    assert.ok(String(url).startsWith(prefix)); assert.equal(init.redirect, "manual");
+    const path = String(url).slice(prefix.length);
+    calls.push({ path, token: new Headers(init.headers).get("authorization"), signal: init.signal });
+    await hook?.(path, init.signal);
+    const document = documents.get(path);
+    if (document === undefined || typeof document === "number") return new Response(null, { status: document ?? 404 });
+    return Response.json({ fields: document === null ? null : firestoreFields(document) });
+  });
+  const dependencies = createSocialFirebaseDependencies("auroralauncher", authenticatedUid, sessionId);
+  const principal = (uid = "host", bearer = "fresh.token.signature") => ({ accountId: uid,
+    request: new Request("https://social.invalid/v1/social/host/poll", { headers: { Authorization: `Bearer ${bearer}`, "x-aurora-verified-account": uid } }) });
+  return { dependencies, documents, calls, sessionId, principal,
+    read: (uid = "host", bearer = "fresh.token.signature", signal = new AbortController().signal) => dependencies.readSession(principal(uid, bearer), sessionId, signal),
+    hold: (next?: typeof hook) => { hook = next; } };
+}
 
 test("online Firebase boundary verifies an actual RSA signature and rejects issuer/account/time/signature changes", async t => {
   t.mock.method(globalThis, "fetch", async (url: string | URL | Request) => {
@@ -69,4 +98,147 @@ test("upstream redirects and quotas fail closed without following a credential-b
   await assert.rejects(socialAuthenticate(request(await token()), "auroralauncher", AbortSignal.timeout(1000)), denied("backend_unavailable"));
   assert.equal(calls, 1);
   await assert.rejects(socialJson(new Response(null, { status: 429 })), denied("rate_limited"));
+});
+
+test("registration locator overlaps three fresh reads and retains no credential or authorization", async t => {
+  const f = locatorFixture(t);
+  await f.read("host", "initial.token.signature");
+  f.calls.length = 0;
+  const releases: Array<() => void> = [];
+  f.hold(async () => new Promise<void>(resolve => releases.push(resolve)));
+  const signal = new AbortController().signal;
+  const pending = f.read("host", "renewed.token.signature", signal);
+  assert.equal(releases.length, 3, "all documents start before any previous document completes");
+  assert.deepEqual(f.calls.map(call => call.path).sort(), ["users/host", "usernames/hostnick", `socialSessions/${f.sessionId}`].sort());
+  assert.ok(f.calls.every(call => call.token === "Bearer renewed.token.signature" && call.signal === signal));
+  for (const release of releases) release();
+  assert.equal((await pending).hostUid, "host");
+  f.hold();
+  f.documents.set(`socialSessions/${f.sessionId}`, 403);
+  await assert.rejects(f.read(), denied("session_not_authorized"));
+});
+
+test("warm registration locator rejects changed UID, deleted or null current documents", async t => {
+  const f = locatorFixture(t);
+  await f.read();
+  for (const [path, value, code] of [
+    ["users/host", { uid: "different", usernameLower: "hostnick" }, "account_not_registered"],
+    ["users/host", { uid: "host", usernameLower: null }, "account_not_registered"],
+    ["usernames/hostnick", { uid: "different" }, "account_not_registered"],
+    ["users/host", 404, "session_not_authorized"],
+    ["usernames/hostnick", 404, "session_not_authorized"],
+    ["usernames/hostnick", null, "backend_unavailable"],
+    [`socialSessions/${f.sessionId}`, null, "backend_unavailable"],
+  ] as const) {
+    const prior = f.documents.get(path)!;
+    f.documents.set(path, value);
+    await assert.rejects(f.read(), denied(code));
+    f.documents.set(path, prior);
+  }
+});
+
+test("changed nickname requires its new registry and ignores no current registry failure", async t => {
+  const f = locatorFixture(t);
+  await f.read();
+  f.documents.set("users/host", { uid: "host", usernameLower: "renamed" });
+  f.documents.set("usernames/hostnick", 404);
+  f.documents.set("usernames/renamed", { uid: "different" });
+  await assert.rejects(f.read(), denied("account_not_registered"));
+  f.documents.set("usernames/renamed", { uid: "host" });
+  f.calls.length = 0;
+  await f.read();
+  assert.ok(f.calls.some(call => call.path === "usernames/renamed"));
+  assert.ok(f.calls.some(call => call.path === "usernames/hostnick"), "old hint may be fetched but cannot authorize the new name");
+  f.calls.length = 0;
+  await f.read();
+  assert.equal(f.calls.length, 3);
+  assert.ok(!f.calls.some(call => call.path === "usernames/hostnick"));
+  f.documents.set("usernames/renamed", 404);
+  await assert.rejects(f.read(), denied("session_not_authorized"));
+});
+
+test("registration locator remains bounded and scoped to account and dependency lifetime", async t => {
+  const f = locatorFixture(t, "");
+  for (let index = 0; index < 129; index++) {
+    f.documents.set(`users/account${index}`, { uid: `account${index}`, usernameLower: `nick${index}` });
+    f.documents.set(`usernames/nick${index}`, { uid: `account${index}` });
+    await f.read(`account${index}`);
+  }
+  for (const [uid, expected] of [["account0", 3], ["account128", 2]] as const) {
+    const releases: Array<() => void> = [];
+    f.hold(async () => new Promise<void>(resolve => releases.push(resolve)));
+    const pending = f.read(uid);
+    assert.equal(releases.length, expected, "only the first 128 successful account locators are retained");
+    f.hold();
+    for (const release of releases) release();
+    await pending;
+  }
+  const fresh = createSocialFirebaseDependencies("auroralauncher", "account0", f.sessionId);
+  const releases: Array<() => void> = [];
+  f.hold(async () => new Promise<void>(resolve => releases.push(resolve)));
+  const pending = fresh.readSession(f.principal("account0"), f.sessionId, new AbortController().signal);
+  assert.equal(releases.length, 2, "a new dependency has no locator from the prior authority");
+  f.hold(); for (const release of releases) release(); await pending;
+});
+
+test("cancelled parallel observation cannot publish a locator or authorize a session", async t => {
+  const f = locatorFixture(t);
+  await f.read();
+  const abort = new AbortController();
+  f.hold(async () => { abort.abort(); });
+  await assert.rejects(f.read("host", "fresh.token.signature", abort.signal), denied("binding_cancelled"));
+});
+
+test("warm locators never replace fresh approval or accept missing and malformed approval expiry", async t => {
+  const f = locatorFixture(t, "");
+  const session = f.documents.get(`socialSessions/${f.sessionId}`) as Record<string, unknown>;
+  session.joinPolicy = "approval";
+  f.documents.set("users/guest", { uid: "guest", usernameLower: "guestnick" });
+  f.documents.set("usernames/guestnick", { uid: "guest" });
+  const path = `socialJoinRequests/${f.sessionId}/guests/guest`;
+  const approved = { status: "accepted", hostUid: "host", guestUid: "guest", sessionId: f.sessionId, expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  f.documents.set(path, approved);
+  await f.read("guest");
+  for (const expiry of [null, "", "invalid", "1970-01-01T00:00:00Z"]) {
+    f.documents.set(path, { ...approved, expiresAt: expiry });
+    await assert.rejects(f.read("guest"), denied("session_not_authorized"));
+  }
+  const { expiresAt: _expiry, ...missing } = approved;
+  f.documents.set(path, missing);
+  await assert.rejects(f.read("guest"), denied("session_not_authorized"));
+  f.documents.set(path, { ...approved, status: "rejected" });
+  await assert.rejects(f.read("guest"), denied("session_not_authorized"));
+  f.documents.set(path, 404);
+  await assert.rejects(f.read("guest"), denied("session_not_authorized"));
+});
+
+test("parallel Firestore completion cannot renew or revive the original three-second Host deadline", async t => {
+  const f = locatorFixture(t);
+  let wall = Date.now(), mono = 1000;
+  f.dependencies.clock = { wall: () => wall, monotonic: () => mono };
+  const binding = createSocialBindingAuthority(f.dependencies);
+  const admissionKeys = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+  const authority = await createSocialAdmissionAuthority(binding, f.dependencies, { keys: admissionKeys, online: true });
+  const keys = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+  const hex = (value: ArrayBuffer) => Buffer.from(value).toString("hex");
+  const challenge = await binding.challenge(f.principal().request, { schemaVersion: 1, operationId: crypto.randomUUID(), generation: 1,
+    role: "host", publicKey: hex(await crypto.subtle.exportKey("raw", keys.publicKey)), sessionId: f.sessionId, preparedExpiresAtUnixMs: wall + 55_000 });
+  const proof = { schemaVersion: 1, challenge, signature: hex(await crypto.subtle.sign("Ed25519", keys.privateKey, socialKeyProofPreimage(challenge))) };
+  const body = { schemaVersion: 2, purpose: "hostSocialSession", issuerInstance: challenge.issuerInstance, policyId: challenge.challengeId,
+    accountId: "host", operationId: challenge.operationId, generation: challenge.generation, publicKey: challenge.publicKey, sessionId: f.sessionId,
+    sessionDigest: challenge.sessionDigest, visibility: "public", joinPolicy: "open", serviceId: "game", protocol: "tcp", sourceDigest: "a".repeat(64), maxGuests: 7,
+    issuedAtUnixMs: challenge.issuedAtUnixMs, expiresAtUnixMs: wall + 50_000 };
+  const policy = await authority.registerHost(f.principal().request, { proof, policySigned: { body,
+    signature: hex(await crypto.subtle.sign("Ed25519", keys.privateKey, hostSocialPolicyPreimage(body))) } });
+  const first = await authority.hostPoll(f.principal().request, { policyId: policy.policyId });
+  assert.equal(first.state, "group"); if (first.state !== "group") assert.fail();
+  assert.equal(first.checkedAtUnixMs, wall);
+  wall += 1000; mono += 1000;
+  f.calls.length = 0;
+  f.hold(async path => { if (path === "users/host") { wall += 3000; mono += 3000; } });
+  await assert.rejects(authority.hostPoll(f.principal().request, { policyId: policy.policyId }), denied("policy_expired"));
+  assert.equal(f.calls.length, 3, "fresh parallel reads all completed; none can reanchor after the original deadline");
+  f.hold(); f.calls.length = 0;
+  await assert.rejects(authority.hostPoll(f.principal().request, { policyId: policy.policyId }), denied("policy_expired"));
+  assert.equal(f.calls.length, 0, "terminal Host policy cannot be revived by another read");
 });
