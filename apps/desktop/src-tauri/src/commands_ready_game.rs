@@ -18,6 +18,8 @@ use std::sync::{
     Arc,
 };
 use tokio_util::sync::CancellationToken;
+#[path = "commands_ready_game_progress.rs"]
+mod copy_progress;
 
 struct CopyInstall {
     id: uuid::Uuid,
@@ -133,6 +135,11 @@ pub(crate) async fn install_ready_copy(
         id: operation,
         watchdog,
     };
+    let mut install_progress = copy_progress::CopyInstallProgress::new(
+        operation,
+        cancel.clone(),
+        copy_progress::emitter(app.clone()),
+    );
     tauri::async_runtime::spawn_blocking(move || {
         let _owner = owner;
         let cancelled = || cancel.load(Ordering::Acquire);
@@ -170,7 +177,7 @@ pub(crate) async fn install_ready_copy(
         let pending =
             diagnostic_lab::begin_runtime_copy(&source, &guard).map_err(|_| install_error())?;
         drop(guard);
-        let progress = |transfer: TransferProgress| emit_transfer_progress(&app, transfer);
+        let progress = |transfer: TransferProgress| install_progress.transfer(transfer);
         let java =
             MinecraftInstaller::prepare_ready_copy_java(&pending, profile, cancelled, |item| {
                 progress(item.map_total(0.0, 15.0))
@@ -208,7 +215,7 @@ pub(crate) async fn install_ready_copy(
         let copy = pending
             .publish(verified, cancelled)
             .map_err(|_| install_error())?;
-        emit_download_progress(&app, "Cópia de runtime preparada", 100.0);
+        install_progress.complete();
         Ok(copy)
     })
     .await

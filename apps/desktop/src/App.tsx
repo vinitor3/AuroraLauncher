@@ -43,6 +43,7 @@ import {
 import { cacheLocalSkinImage, deleteLocalSkin, listLocalSkins, saveLocalSkin, updateLocalSkinSource, type LocalSkin } from "./lib/localSkins";
 import { findMatchingLocalSkin, parseEquippedSkinSelection, type EquippedSkinSelection } from "./lib/equippedSkin";
 import { ExternalDownloadQueue, type ExternalDownloadEvent } from "./lib/externalDownloadQueue";
+import { observeDownloadProgress, type DownloadProgress } from "./lib/downloadProgress";
 import { OnlineSkinSearch } from "./features/skins/OnlineSkinSearch";
 import { ContentUpdatesView } from "./features/content-updates/ContentUpdatesView";
 import { UpdateReviewDialog } from "./features/content-updates/UpdateReviewDialog";
@@ -224,20 +225,6 @@ type LaunchSummary = {
   versionId: string;
   coreInstalled: boolean;
   skinsInstalled: boolean;
-};
-type DownloadProgress = {
-  label: string;
-  percent: number;
-  totalPercent: number;
-  itemPercent: number;
-  itemDownloadedBytes: number;
-  itemTotalBytes?: number;
-  downloadedBytes: number;
-  totalBytes?: number;
-  completedFiles: number;
-  totalFiles: number;
-  activeDownloads: number;
-  bytesPerSecond: number;
 };
 type SpeechBoundary = { offsetMs: number; durationMs: number; text: string };
 type SpeechResult = { audioBase64: string; mimeType: string; boundaries: SpeechBoundary[] };
@@ -1369,21 +1356,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     }).then((stop) => { if (disposed) stop(); else stopListening = stop; }).catch(() => undefined);
     return () => { disposed = true; stopListening?.(); };
   }, [profile?.uid]);
-  useEffect(() => {
-    let disposed = false;
-    let stopListening: (() => void) | undefined;
-    void listen<DownloadProgress>("aurora-download-progress", (event) => {
-      if (disposed) return;
-      setDownloadProgress(event.payload);
-      if ((event.payload.totalPercent ?? event.payload.percent) >= 100) {
-        window.setTimeout(() => setDownloadProgress(undefined), 1800);
-      }
-    }).then((unlisten) => {
-      if (disposed) unlisten();
-      else stopListening = unlisten;
-    });
-    return () => { disposed = true; stopListening?.(); };
-  }, []);
+  useEffect(() => observeDownloadProgress(listen, setDownloadProgress), []);
   useEffect(() => {
     let disposed = false;
     let stopListening: (() => void) | undefined;
@@ -4217,7 +4190,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           </div>
           <section className="download-progress-group" aria-label="Progresso total">
             <div className="download-progress-label">
-              <span>Instalação completa</span>
+              <span>{downloadProgress.operationId ? "Progresso da cópia" : "Instalação completa"}</span>
               <b>{Math.round(downloadProgress.totalPercent ?? downloadProgress.percent)}%</b>
             </div>
             <progress className="total-progress" max={100} value={downloadProgress.totalPercent ?? downloadProgress.percent} />

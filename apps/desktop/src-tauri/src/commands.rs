@@ -179,9 +179,12 @@ fn emit_download_progress(app: &AppHandle, label: impl Into<String>, percent: f6
 }
 
 pub(crate) fn emit_transfer_progress(app: &AppHandle, progress: TransferProgress) {
-    emit_download_event(
-        app,
-        DownloadProgressEvent {
+    emit_download_event(app, progress.into());
+}
+
+impl From<TransferProgress> for DownloadProgressEvent {
+    fn from(progress: TransferProgress) -> Self {
+        Self {
             label: progress.label,
             percent: progress.total_percent,
             total_percent: progress.total_percent,
@@ -194,8 +197,8 @@ pub(crate) fn emit_transfer_progress(app: &AppHandle, progress: TransferProgress
             total_files: progress.total_files,
             active_downloads: progress.active_downloads,
             bytes_per_second: progress.bytes_per_second,
-        },
-    );
+        }
+    }
 }
 
 fn emit_modpack_progress(app: &AppHandle, progress: ModpackProgress) {
