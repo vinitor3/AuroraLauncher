@@ -143,6 +143,24 @@ test("private hosting requires the SDK feature plus native capability and remain
   assert.deepEqual(f.calls.find(call => call.name === "prepareHost").args, [session.id, "private"]);
   delete f.connection.state.privateInvitations; await render(f); assert.equal(button("Preparar meu servidor").disabled, true);
 });
+test("hosting guidance includes available private invitations and never adds redundant approval", async () => {
+  const f = fixture(); await render(f);
+  const panel = () => container.querySelector(".social-connection").textContent;
+  assert.match(panel(), /publique um anúncio privado, para amigos ou para a comunidade/);
+  assert.match(panel(), /Nos privados, use entrada aberta e convide cada conta/);
+  delete f.connection.state.privateInvitations; await render(f);
+  assert.match(panel(), /publique um anúncio para amigos ou para a comunidade e escolha entrada aberta ou aprovação de pedidos/);
+  assert.doesNotMatch(panel(), /publique um anúncio privado/);
+  const approval = fixture(true); approval.snapshot.ownSession = { ...session, joinPolicy: "approval" }; await render(approval);
+  assert.match(panel(), /escolha entrada aberta em Meu anúncio de sessão/);
+  assert.match(panel(), /não é necessário pedir aprovação novamente/);
+  assert.equal(button("Preparar meu servidor").disabled, true); assert.equal(count(approval, "prepareHost"), 0);
+  const open = fixture(true); await render(open);
+  assert.equal(button("Preparar meu servidor").disabled, false); assert.doesNotMatch(panel(), /escolha entrada aberta|aprovação novamente/);
+  assert.equal(count(open, "prepareHost"), 0);
+  const expired = fixture(true); expired.now = session.expiresAtMs; await render(expired);
+  assert.match(panel(), /mantenha um anúncio válido com entrada aberta/); assert.equal(button("Preparar meu servidor").disabled, true);
+});
 test("lifetime audience limit blocks a new recipient but preserves explicit reissue", async () => {
   const f = fixture(true); f.privateSnapshot.remainingRecipients = 0; await render(f); await search();
   assert.equal(button(`Convidar ${peer.nickname}`).disabled, true);

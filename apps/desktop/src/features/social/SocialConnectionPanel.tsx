@@ -154,8 +154,14 @@ export function SocialConnectionPanel({ connection, ownSession, now, catalogNow 
       <button className="secondary" disabled={state.pending} onClick={() => void controller.refresh()}>Atualizar conexão</button>
     </div>
     {!active && !hostEligible && <small>{ownSession?.visibility === "private"
-      ? "Este anúncio é privado. Para o fluxo manual, use Abrir convites do Connect em Meu anúncio de sessão."
-      : "Para hospedar, publique um anúncio para amigos ou para a comunidade e escolha entrada aberta ou aprovação de pedidos."}</small>}
+      ? state.privateInvitations === true && service?.privateInvitations
+        ? ownSession.joinPolicy === "open"
+          ? "Para hospedar em privado, mantenha um anúncio válido com entrada aberta e selecione as contas em Convites privados. Cada conta precisa do seu convite."
+          : "Para este anúncio privado, escolha entrada aberta em Meu anúncio de sessão. Cada conta precisa do seu convite; não é necessário pedir aprovação novamente."
+        : "Este anúncio é privado. Para o fluxo manual, use Abrir convites do Connect em Meu anúncio de sessão."
+      : state.privateInvitations === true && service?.privateInvitations
+        ? "Para hospedar, publique um anúncio privado, para amigos ou para a comunidade. Nos privados, use entrada aberta e convide cada conta; em amigos ou comunidade, escolha entrada aberta ou aprovação de pedidos."
+        : "Para hospedar, publique um anúncio para amigos ou para a comunidade e escolha entrada aberta ou aprovação de pedidos."}</small>}
     {!active && retiredOwnSession && <small>Esta sessão foi encerrada. Em Meu anúncio de sessão, encerre o anúncio e publique outro para autorizar uma nova sessão.</small>}
     {!active && !discovery && hostEligible && state.maxSessionSeconds !== 14400 && <small>Este executável usa a fonte de teste fixa em 127.0.0.1:43001.</small>}
   </section>;
