@@ -1,6 +1,6 @@
 # Aurora Connect — implementação
 
-Estado em 10/11/2026: em andamento, experimental. Base local `2349320`; matriz original de nove pares preservada.
+Estado em 10/11/2026: em andamento, experimental. Código local `b6c9acb`; matriz original de nove pares preservada.
 
 | Área | Estado observado |
 |---|---|
@@ -11,9 +11,9 @@ Estado em 10/11/2026: em andamento, experimental. Base local `2349320`; matriz o
 | Jogo | Instalação real dos nove perfis e inspeção das cópias passaram, sem abrir Minecraft. Entrada no mundo continua com evidência própria. |
 | Simple Voice Chat | Nove servidores oficiais passaram em preparo/STATUS/UDP/encerramento; áudio permanece não homologado. |
 | Plasmo Voice | Oito servidores oficiais passaram em preparo/STATUS/UDP/encerramento após corrigir o prazo de salvamento V3 para 30s. Áudio não homologado; não há versão oficial Forge 1.12.2. |
-| Interface | Revalidação gráfica preservou Java e prazo original; encerramento, restauração e retirada do anúncio passaram. Corrigidos inventário de recuperação e orientação para selecionar instância vazia. Entrada gráfica completa pendente. |
+| Interface | Revalidação preservou Java/prazo; encerramento, recuperação e retirada do anúncio passaram. Host jogador permaneceu disponível por mais de 3min sem cliente. Corrigidas detecção do dedicado como cliente em uso, espera por autorização e apresentação do preparo; entrada gráfica completa ainda pendente. |
 
-Verificações: 142 transporte passaram/uma fixture ignorada; 252 DOM, TypeScript, build, fmt e Clippy passaram. Recuperação física passou nas duas ordens EULA/anúncio; revalidação preserva 17 testes anteriores. A GUI revelou fechamento antes do jogo, com autorização válida; idle foi reproduzido e corrigido para o Host jogador, preservando revogação e prazos. O convidado durante downloads longos ainda requer ajuste; entrada gráfica completa segue pendente. HTTP reutilizado passou 48/48 polls em 30s, sem homologar estabilidade. Voz sob carga limita TCP a 192 kB/s até 200 ms sem UDP.
+Verificações: 28 testes lab/4 nativos de continuidade, 2 de processo próprio, 3 de agendamento e 2 de prazo passaram; revisão independente, fmt, Clippy e build frontend passaram. TTL/cadência/custos preservados. GUI revelou consulta ao serviço além da janela de 3s; estabilidade ainda não homologada. Diagnóstico/consentimento: 26 testes Node e TypeScript passaram. Recuperação física passou nas duas ordens EULA/anúncio. Voz sob carga limita TCP a 192 kB/s até 200 ms sem UDP.
 
 Comandos executados: `cargo test/check/clippy --offline --locked`, `npm run connect:online:frontend`, testes Node e emuladores Firebase; instalação oficial em diretório descartável. Não houve push, release ou instalador.
 
