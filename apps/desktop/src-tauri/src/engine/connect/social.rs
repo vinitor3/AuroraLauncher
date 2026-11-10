@@ -3453,19 +3453,94 @@ mod tests {
     }
 
     /// Isolated libtest-only process endpoint; never part of the executable API.
+    fn desktop_fixture_authority(
+        online: Option<&str>,
+        pin: Option<&str>,
+        issuer: Option<&str>,
+        private_lab: Option<&str>,
+        compiled: impl FnOnce() -> Result<SocialLabAuthority, ConnectError>,
+    ) -> Result<(bool, SocialLabAuthority), ConnectError> {
+        match online {
+            Some("1") => {
+                if !cfg!(all(windows, debug_assertions))
+                    || pin.is_some()
+                    || issuer.is_some()
+                    || private_lab.is_some()
+                {
+                    return Err(ConnectError::InvalidRequest);
+                }
+                let authority = compiled()?;
+                if authority.online_origin
+                    != Some("https://aurora-connect-social.aurora-edge-proxy.workers.dev")
+                    || !authority.private_invitations_enabled()
+                {
+                    return Err(ConnectError::Disabled);
+                }
+                Ok((true, authority))
+            }
+            None | Some("0") => Ok((
+                false,
+                SocialLabAuthority::from_local_process(
+                    pin.ok_or(ConnectError::InvalidRequest)?,
+                    issuer.ok_or(ConnectError::InvalidRequest)?,
+                )?,
+            )),
+            _ => Err(ConnectError::InvalidRequest),
+        }
+    }
+
+    fn desktop_fixture_command_allowed(online: bool, command: &str) -> bool {
+        !online
+            || matches!(
+                command,
+                "discoverFixture"
+                    | "reserveDiscovered"
+                    | "reserve"
+                    | "authenticate"
+                    | "confirm"
+                    | "snapshot"
+                    | "probeStatus"
+                    | "stop"
+                    | "stopFixture"
+                    | "accountTransition"
+                    | "quit"
+            )
+    }
+
+    mod online_process_tests {
+        include!("social_online_process_tests.rs");
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "opt-in real local Auth/Firestore integration process"]
+    #[ignore = "opt-in native integration process; local by default, compiled online requires a separate explicit gate"]
     async fn social_desktop_process() {
         use std::io::{BufRead, Read, Write};
-        assert_eq!(
-            std::env::var("AURORA_SOCIAL_DESKTOP_FIXTURE").as_deref(),
-            Ok("1")
+        assert!(
+            std::env::var("AURORA_SOCIAL_DESKTOP_FIXTURE").as_deref() == Ok("1"),
+            "explicit native validation gate required"
         );
-        let pin = std::env::var("AURORA_SOCIAL_LAB_PIN").unwrap();
-        let issuer = std::env::var("AURORA_SOCIAL_LAB_ISSUER").unwrap();
-        let manager = ConnectManager::with_social_lab(
-            SocialLabAuthority::from_local_process(&pin, &issuer).unwrap(),
-        );
+        fn option(name: &str) -> Option<String> {
+            match std::env::var(name) {
+                Ok(value) => Some(value),
+                Err(std::env::VarError::NotPresent) => None,
+                Err(std::env::VarError::NotUnicode(_)) => {
+                    panic!("invalid native validation environment")
+                }
+            }
+        }
+        let online = option("AURORA_SOCIAL_DESKTOP_ONLINE_FIXTURE");
+        let pin = option("AURORA_SOCIAL_LAB_PIN");
+        let issuer = option("AURORA_SOCIAL_LAB_ISSUER");
+        let private_lab = option("AURORA_SOCIAL_PRIVATE_LAB");
+        let (online, authority) = desktop_fixture_authority(
+            online.as_deref(),
+            pin.as_deref(),
+            issuer.as_deref(),
+            private_lab.as_deref(),
+            SocialLabAuthority::from_compiled_online,
+        )
+        .expect("invalid native validation authority mode");
+        let manager = ConnectManager::with_social_lab(authority);
         fn emit(value: Value) {
             let mut out = std::io::stdout().lock();
             writeln!(out, "SOCIAL89_JSON:{value}").unwrap();
@@ -3494,7 +3569,9 @@ mod tests {
                 }
             }
         });
-        emit(json!({"event":"ready","capabilities":manager.social_capabilities()}));
+        emit(
+            json!({"event":"ready","mode":if online { "compiledOnline" } else { "local" },"capabilities":manager.social_capabilities()}),
+        );
         let fixture_deadline = tokio::time::Instant::now() + Duration::from_secs(180);
         let mut ready_fixture: Option<Arc<ready_fixture::Fixture>> = None;
         let mut guard_probe: Option<Arc<ready_source::fixture::Pause>> = None;
@@ -3514,6 +3591,9 @@ mod tests {
                 .unwrap_or("");
             let generation = value.get("generation").and_then(Value::as_u64).unwrap_or(0);
             let result: Result<Value, ConnectError> = match command {
+                _ if !desktop_fixture_command_allowed(online, command) => {
+                    Err(ConnectError::InvalidRequest)
+                }
                 "guardProbeArm" => {
                     let mut state = manager.live.state.lock().unwrap();
                     match selected(&mut state, "main", id) {
@@ -3616,7 +3696,11 @@ mod tests {
                     if owned_fixture.is_some() {
                         Err(ConnectError::Busy)
                     } else {
-                        let mut fixture = crate::engine::connect_discovery::tests::Fixture::new();
+                        let mut fixture = if online {
+                            crate::engine::connect_discovery::tests::Fixture::with_bounded_echo()
+                        } else {
+                            crate::engine::connect_discovery::tests::Fixture::new()
+                        };
                         let selected = crate::engine::connect_discovery::tests::selection(
                             &discovery,
                             &mut fixture,

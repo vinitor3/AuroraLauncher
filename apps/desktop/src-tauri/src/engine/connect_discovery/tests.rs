@@ -12,6 +12,8 @@ use std::{
 };
 
 const MARKER: &str = "AURORA_OWNED_DISCOVERY_FIXTURE_CHILD";
+const ECHO_BYTES: usize = 1_048_576;
+const ECHO_PATTERN: u8 = 0xa5;
 struct CancelStream {
     socket: TcpStream,
     stop: Arc<AtomicBool>,
@@ -116,6 +118,33 @@ fn fixture_status(
     socket.read_exact(&mut ping)?;
     socket.write_all(&ping)
 }
+
+fn fixture_connection(
+    socket: &mut CancelStream,
+    expected: i32,
+    reported: i32,
+    bounded_echo: bool,
+) -> std::io::Result<()> {
+    if bounded_echo {
+        let mut first = [0u8];
+        if socket.poll(|stream| stream.peek(&mut first))? == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        if first[0] == ECHO_PATTERN {
+            // Test service only: fixed content and exact maximum, not a generic proxy.
+            let mut chunk = [0u8; 16_384];
+            for _ in 0..ECHO_BYTES / chunk.len() {
+                socket.read_exact(&mut chunk)?;
+                if chunk.iter().any(|byte| *byte != ECHO_PATTERN) {
+                    return Err(std::io::ErrorKind::InvalidData.into());
+                }
+                socket.write_all(&chunk)?;
+            }
+            return Ok(());
+        }
+    }
+    fixture_status(socket, expected, reported)
+}
 #[test]
 #[ignore = "internal child fixture, invoked by the parent test only"]
 fn owned_listener_fixture() {
@@ -131,11 +160,16 @@ fn owned_listener_fixture() {
         .unwrap_or_else(|_| expected_protocol.to_string())
         .parse()
         .unwrap();
-    let listeners = [
-        TcpListener::bind("127.0.0.1:0").unwrap(),
-        TcpListener::bind("0.0.0.0:0").unwrap(),
-        TcpListener::bind("[::1]:0").unwrap(),
-    ];
+    let bounded_echo = std::env::var("AURORA_DISCOVERY_BOUNDED_ECHO").as_deref() == Ok("1");
+    let listeners = if bounded_echo {
+        vec![TcpListener::bind("127.0.0.1:0").unwrap()]
+    } else {
+        vec![
+            TcpListener::bind("127.0.0.1:0").unwrap(),
+            TcpListener::bind("0.0.0.0:0").unwrap(),
+            TcpListener::bind("[::1]:0").unwrap(),
+        ]
+    };
     let ports: Vec<_> = listeners
         .iter()
         .map(|listener| listener.local_addr().unwrap().port())
@@ -159,7 +193,12 @@ fn owned_listener_fixture() {
                         // exercise stop with this exact accepted socket.
                         println!("DISCOVERY_ACCEPTED {index}");
                         std::io::stdout().flush().unwrap();
-                        let _ = fixture_status(&mut socket, expected_protocol, reported_protocol);
+                        let _ = fixture_connection(
+                            &mut socket,
+                            expected_protocol,
+                            reported_protocol,
+                            bounded_echo && index == 0,
+                        );
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
@@ -196,7 +235,17 @@ impl Fixture {
     pub(crate) fn new() -> Self {
         Self::with_protocol(767, 767)
     }
+    pub(crate) fn with_bounded_echo() -> Self {
+        Self::with_protocol_mode(767, 767, true)
+    }
     fn with_protocol(expected_protocol: i32, reported_protocol: i32) -> Self {
+        Self::with_protocol_mode(expected_protocol, reported_protocol, false)
+    }
+    fn with_protocol_mode(
+        expected_protocol: i32,
+        reported_protocol: i32,
+        bounded_echo: bool,
+    ) -> Self {
         let mut command = Command::new(std::env::current_exe().unwrap());
         #[cfg(windows)]
         {
@@ -211,6 +260,10 @@ impl Fixture {
                 "--nocapture",
             ])
             .env(MARKER, "1")
+            .env(
+                "AURORA_DISCOVERY_BOUNDED_ECHO",
+                if bounded_echo { "1" } else { "0" },
+            )
             .env("AURORA_DISCOVERY_PROTOCOL", expected_protocol.to_string())
             .env(
                 "AURORA_DISCOVERY_REPORTED_PROTOCOL",
@@ -279,6 +332,64 @@ impl Drop for Fixture {
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
+    }
+}
+
+#[tokio::test]
+async fn owned_bounded_echo_preserves_status_proof_exact_megabyte_and_cleanup() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut fixture = Fixture::with_bounded_echo();
+    let discovery = DiscoveryManager::default();
+    let selected = selection(&discovery, &mut fixture).await;
+    let proof = fixture.proof();
+    proof.recheck().unwrap();
+    assert_eq!(fixture.ports.len(), 1);
+    let mut stream = tokio::net::TcpStream::connect(&selected.target)
+        .await
+        .unwrap();
+    let data = vec![ECHO_PATTERN; ECHO_BYTES];
+    let (mut read, mut write) = stream.split();
+    let (sent, returned) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(
+            async {
+                write.write_all(&data).await?;
+                write.shutdown().await
+            },
+            async {
+                let mut received = Vec::new();
+                read.read_to_end(&mut received).await?;
+                Ok::<_, std::io::Error>(received)
+            }
+        )
+    })
+    .await
+    .unwrap();
+    sent.unwrap();
+    assert_eq!(returned.unwrap(), data);
+    drop(stream);
+    let mut invalid = tokio::net::TcpStream::connect(&selected.target)
+        .await
+        .unwrap();
+    let mut bad = [ECHO_PATTERN; 16_384];
+    bad[1] = 0;
+    invalid.write_all(&bad).await.unwrap();
+    let mut returned = [0; 1];
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), invalid.read(&mut returned))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
+    );
+    drop(invalid);
+    fixture.stop();
+    assert!(fixture.child.try_wait().unwrap().unwrap().success());
+    assert!(proof.recheck().is_err());
+    for (address, port) in ["127.0.0.1", "0.0.0.0", "::1"]
+        .into_iter()
+        .zip(&fixture.ports)
+    {
+        assert!(TcpListener::bind((address, *port)).is_ok());
     }
 }
 #[test]
