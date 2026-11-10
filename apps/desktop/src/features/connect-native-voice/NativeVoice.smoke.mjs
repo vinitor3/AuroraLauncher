@@ -87,6 +87,21 @@ test("base and restored snapshots render translated UDP and EULA states", async 
   assert.doesNotMatch(container.querySelector("dl").textContent, /notStarted|unchanged|restored|closed/);
 });
 
+test("a Social-reserved source points to its transport owner without inferring UDP or audio availability", async () => {
+  snapshot = { ...idle(), phase: "socialSource", socialRevalidationAvailable: false, eulaState: "ownedBySource" };
+  await render();
+  assert.match(container.querySelector("dl").textContent, /Origem reservada pela sessão SocialUDPAcompanhe em Amigos e comunidade/);
+  assert.match(container.querySelector("dl").textContent, /ÁudioNão verificado/);
+  assert.doesNotMatch(container.querySelector("dl").textContent, /Não iniciado|Transporte disponível/);
+  assert.equal(button("Revisar servidor atual para nova sessão").disabled, true);
+  assert.deepEqual(calls.map(call => call.command), ["native_voice_snapshot"]);
+  snapshot = { ...snapshot, revision: 2, udpState: "retired" }; await poll();
+  assert.match(container.querySelector("dl").textContent, /UDPEncerrado nesta sessão/);
+  snapshot = { ...idle(), revision: 3, phase: "ready" }; await poll();
+  assert.match(container.querySelector("dl").textContent, /UDPNão iniciado/);
+  assert.equal(calls.some(call => call.command === "native_voice_execute"), false);
+});
+
 test("revalidating the existing source requires native eligibility and a separate approval, without preparing or stopping Java", async () => {
   snapshot = { ...idle(), phase: "socialSource", socialRevalidationAvailable: false, eulaState: "ownedBySource" };
   await render();

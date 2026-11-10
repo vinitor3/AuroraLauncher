@@ -108,7 +108,7 @@ export function NativeVoicePanel({ disabled = false, revealRequest = 0, revealRe
   return <details className="connect-native-voice" ref={panel}>
     <summary ref={heading} tabIndex={0}>Voz dos mods · sessão dedicada experimental</summary>
     <p>Simple Voice Chat e Plasmo Voice usam seus próprios mods. Este fluxo cria uma cópia dedicada local, anuncia a ponte 127.0.0.1:35554 e mantém a recuperação do anúncio. Áudio e entrada no mundo precisam de validação manual.</p>
-    <dl><dt>Sessão</dt><dd>{voicePhase[snapshot.phase]}</dd><dt>UDP</dt><dd>{nativeVoiceUdpLabel(snapshot.udpState)}</dd><dt>EULA</dt><dd>{nativeVoiceEulaLabel(snapshot.eulaState)}</dd><dt>Áudio</dt><dd>Não verificado</dd></dl>
+    <dl><dt>Sessão</dt><dd>{voicePhase[snapshot.phase]}</dd><dt>UDP</dt><dd>{snapshot.phase === "socialSource" && snapshot.udpState === "notStarted" ? "Acompanhe em Amigos e comunidade" : nativeVoiceUdpLabel(snapshot.udpState)}</dd><dt>EULA</dt><dd>{nativeVoiceEulaLabel(snapshot.eulaState)}</dd><dt>Áudio</dt><dd>Não verificado</dd></dl>
     {snapshot.tcpAddress && <p>Endereço de jogo do Host jogador: <code>{snapshot.tcpAddress}</code></p>}
     {snapshot.negotiatedDatagramBytes && <p>Capacidade negociada por datagrama original: {snapshot.negotiatedDatagramBytes} bytes. Datagramas originais aprovados: até 4096 bytes.</p>}
     {snapshot.runtimeProfile && <p>Runtime original: {voiceRuntimes[snapshot.runtimeProfile]}</p>}
