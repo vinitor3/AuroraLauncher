@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { before, beforeEach, after, test } from "node:test";
 import { assertFails, assertSucceeds, initializeTestEnvironment } from "@firebase/rules-unit-testing";
-import { collection, doc, getDoc, getDocs, limit, query, setDoc, Timestamp, serverTimestamp, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
+import { collection, doc, documentId, getDoc, getDocs, limit, orderBy, query, setDoc, Timestamp, serverTimestamp, updateDoc, deleteDoc, where, writeBatch } from "firebase/firestore";
 
 let env, createService;
 const projectId = "demo-aurora-social-rules-v2";
@@ -19,7 +19,7 @@ before(async () => {
   }
   let sdk = compile(await readFile(new URL("../../apps/desktop/src/lib/socialFirebase.ts", import.meta.url), "utf8"))
     .replace('"firebase/firestore"', JSON.stringify(import.meta.resolve("firebase/firestore")))
-    .replace('"./firebase"', JSON.stringify("data:text/javascript,export const socialLabBuild=true"));
+    .replace('"./firebase"', JSON.stringify("data:text/javascript,export const socialLabBuild=true;export const privateSocialOnlineConfiguration=()=>false"));
   for (const [specifier, module] of Object.entries(dependencies)) sdk = sdk.replace(JSON.stringify(specifier), JSON.stringify(module));
   createService = (await import(encoded(sdk))).createSocialFirebaseService;
   env = await initializeTestEnvironment({ projectId, firestore: { host: "127.0.0.1", port: 8187,
@@ -264,4 +264,67 @@ test("private expired tombstones can be removed only after the original deadline
   cleanup.delete(inbox(db, scope.id)); cleanup.delete(invitation(db, scope.id)); cleanup.delete(audience(db, scope.id));
   await assertSucceeds(cleanup.commit());
   assert.equal((await getDoc(invitation(dbFor("guest"), scope.id))).exists(), false);
+});
+
+test("private maintenance lists only the caller's bounded audience without disclosing another host", async () => {
+  const scope = await publish(); await send(scope);
+  const host = dbFor("host"), guest = dbFor("guest"), root = collection(host, "socialPrivateAudiences");
+  assert.equal((await getDocs(query(root, where("hostUid", "==", "host"), orderBy(documentId()), limit(4)))).size, 1);
+  await assertFails(getDocs(query(root, limit(4))));
+  await assertFails(getDocs(query(root, where("hostUid", "==", "host"), limit(5))));
+  await assertFails(getDocs(query(root, where("hostUid", "==", "host"))));
+  await assertFails(getDocs(query(collection(guest, "socialPrivateAudiences"), where("hostUid", "==", "host"), limit(4))));
+  assert.equal((await getDocs(query(collection(guest, "socialPrivateAudiences"), where("hostUid", "==", "guest"), limit(4)))).size, 0);
+});
+
+test("private SDK maintenance preserves live authority and cleans eight expired recipients after independent recipient cleanup", async () => {
+  const scope = await publish(), peers = ["guest", "guest2", "guest3", "guest4", "guest5", "guest6", "guest7", "guest8"];
+  for (const uid of peers) { await cooldown(); await send(scope, uid); }
+  const host = createService(services("host")), guest = createService(services("guest"));
+  assert.equal((await host.privateInvitations.cleanupExpired()).removedRecords, 0);
+  assert.equal((await guest.privateInvitations.cleanupExpired()).removedRecords, 0);
+  assert.equal((await getDoc(invitation(dbFor("guest"), scope.id))).data().status, "active");
+  await env.withSecurityRulesDisabled(async context => {
+    const db = context.firestore(), batch = writeBatch(db), expiresAt = Timestamp.fromMillis(Date.now() - 10_000);
+    for (const ref of [doc(db, "socialSessions", scope.id), audience(db, scope.id),
+      ...peers.flatMap(uid => [invitation(db, scope.id, uid), inbox(db, scope.id, uid)])]) batch.update(ref, { expiresAt });
+    await batch.commit();
+  });
+  assert.equal((await guest.privateInvitations.cleanupExpired()).removedRecords, 2);
+  assert.equal((await createService(services("other")).privateInvitations.cleanupExpired()).removedRecords, 0);
+  assert.equal((await host.privateInvitations.cleanupExpired()).removedRecords, 15);
+  await env.withSecurityRulesDisabled(async context => {
+    const db = context.firestore();
+    for (const ref of [audience(db, scope.id), ...peers.flatMap(uid => [invitation(db, scope.id, uid), inbox(db, scope.id, uid)])])
+      assert.equal((await getDoc(ref)).exists(), false);
+  });
+  assert.equal((await host.privateInvitations.cleanupExpired()).removedRecords, 0);
+});
+
+test("private SDK maintenance resumes bounded own pages past live audiences and rejects a changed account", async () => {
+  const ids = Array.from({ length: 9 }, (_, i) => `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`);
+  await env.withSecurityRulesDisabled(async context => {
+    const db = context.firestore(), batch = writeBatch(db);
+    for (const [index, id] of ids.entries()) {
+      const expiresAt = Timestamp.fromMillis(Date.now() + (index < 4 ? 90_000 : -10_000));
+      batch.set(audience(db, id), { schema: 1, hostUid: "host", sessionId: id, expiresAt, recipients: ["guest"] });
+      batch.set(invitation(db, id), { schema: 1, authorizationId: "a".repeat(64), revision: 1, sessionId: id, hostUid: "host", recipientUid: "guest",
+        status: "active", createdAt: Timestamp.fromMillis(1), updatedAt: Timestamp.fromMillis(2), expiresAt });
+      batch.set(inbox(db, id), { schema: 1, sessionId: id, hostUid: "host", expiresAt });
+    }
+    await batch.commit();
+  });
+  const config = services("host"), service = createService(config);
+  const first = await service.privateInvitations.cleanupExpired();
+  assert.equal(first.removedRecords, 0); assert.equal(first.moreAvailable, true);
+  const second = await service.privateInvitations.cleanupExpired();
+  assert.equal(second.removedRecords, 12); assert.equal(second.moreAvailable, true);
+  const third = await service.privateInvitations.cleanupExpired();
+  assert.equal(third.removedRecords, 3); assert.equal(third.moreAvailable, false);
+  assert.equal((await service.privateInvitations.cleanupExpired()).removedRecords, 0);
+  await env.withSecurityRulesDisabled(async context => {
+    for (const id of ids.slice(0, 4)) assert.equal((await getDoc(audience(context.firestore(), id))).exists(), true);
+  });
+  config.auth.currentUser = { ...config.auth.currentUser };
+  await assert.rejects(service.privateInvitations.cleanupExpired(), /conta mudou/);
 });

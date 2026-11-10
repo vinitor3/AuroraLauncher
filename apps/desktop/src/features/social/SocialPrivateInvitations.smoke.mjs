@@ -41,10 +41,12 @@ function fixture(own = false) {
     searchByNickname: async nick => { record("search", nick); return f.search ? f.search() : peer; },
     prepareJoin: async id => { record("join", id); if (f.join) await f.join(); },
     privateInvitations: {
+      environment: "local",
       snapshot: async () => { record("privateSnapshot"); return f.read ? f.read() : structuredClone(f.privateSnapshot); },
       invite: async (...args) => { record("invite", ...args); if (f.invite) await f.invite(); else f.privateSnapshot.outgoing = [{ person: peer, status: "active" }]; },
       revoke: async (...args) => { record("revoke", ...args); f.privateSnapshot.outgoing = [{ person: peer, status: "revoked" }]; },
       decline: async (...args) => { record("decline", ...args); f.privateSnapshot.incoming = []; },
+      cleanupExpired: async () => { record("cleanup"); return f.cleanup ? f.cleanup() : { removedRecords: 3, moreAvailable: false }; },
     } };
   f.connection = { state: { available: true, pending: false, error: "", privateInvitations: true, snapshot: { operationId: null, phase: "idle", cleanupState: "notStarted" } },
     controller: { prepareHost: async (...args) => record("prepareHost", ...args), refresh: async () => {} } };
@@ -64,6 +66,39 @@ const search = async (nick = peer.nickname) => {
 };
 beforeEach(() => { root = createRoot(container); });
 afterEach(async () => act(async () => root.unmount()));
+
+test("online inbox explains Aurora service without changing Minecraft authentication or auto-cleaning", async () => {
+  const f = fixture(); f.service.privateInvitations.environment = "online"; await render(f);
+  assert.match(container.textContent, /Serviço online do Aurora/);
+  assert.match(container.textContent, /não altera a autenticação do servidor Minecraft/);
+  assert.doesNotMatch(container.querySelector(".social-private").textContent, /Teste local/);
+  assert.equal(count(f, "cleanup"), 0); assert.equal(count(f, "join"), 0);
+  await click("Limpar convites expirados");
+  assert.match(container.textContent, /3 registros expirados removidos/); assert.equal(count(f, "cleanup"), 1);
+  assert.equal(count(f, "privateSnapshot"), 1, "cleanup performs no automatic refresh or page loop");
+});
+test("cleanup is a bounded explicit action that blocks duplicate clicks and leaves next page explicit", async () => {
+  const f = fixture(), reply = deferred(); f.cleanup = () => reply.promise; await render(f);
+  await click("Limpar convites expirados"); assert.equal(button("Limpar convites expirados").disabled, true);
+  await act(async () => button("Limpar convites expirados").dispatchEvent(new window.Event("click", { bubbles: true })));
+  assert.equal(count(f, "cleanup"), 1);
+  await act(async () => reply.resolve({ removedRecords: 17, moreAvailable: true }));
+  assert.match(container.textContent, /17 registros expirados removidos/);
+  assert.match(container.textContent, /use Limpar convites expirados novamente/); assert.equal(count(f, "cleanup"), 1);
+  assert.equal(button("Limpar convites expirados").disabled, false);
+});
+for (const change of ["service", "account"]) test(`late cleanup result does not appear after ${change} changes`, async () => {
+  const f = fixture(), reply = deferred(); f.cleanup = () => reply.promise; await render(f); await click("Limpar convites expirados");
+  if (change === "service") await render(fixture()); else await render(f, { accountId: "different" });
+  await act(async () => reply.resolve({ removedRecords: 17, moreAvailable: false }));
+  assert.doesNotMatch(container.textContent, /17 registros expirados|limpeza terminou/);
+});
+test("failed cleanup redacts provider text and never claims completion", async () => {
+  const f = fixture(); f.cleanup = async () => { throw Object.assign(new Error("provider-secret-path"), { code: "social_uncertain" }); };
+  await render(f); await click("Limpar convites expirados");
+  assert.doesNotMatch(container.textContent, /provider-secret-path|registros expirados removidos|limpeza terminou/);
+  assert.ok(container.querySelector("[role=alert]")); assert.equal(button("Limpar convites expirados").disabled, false);
+});
 
 test("inbox discovery performs no admission and explicit Enter reuses the original session join", async () => {
   const f = fixture(); await render(f);

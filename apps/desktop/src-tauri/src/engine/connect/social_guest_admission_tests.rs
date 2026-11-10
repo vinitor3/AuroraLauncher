@@ -55,6 +55,27 @@ fn sign(key: &lab::SecretKey, domain: &[u8], body: Value, names: &[&str]) -> Str
     json!({"body":body,"signature":hex_signature(key,&bytes)}).to_string()
 }
 
+fn sign_mode(
+    key: &lab::SecretKey,
+    domain: &[u8],
+    mut body: Value,
+    names: &[&str],
+    private: bool,
+) -> String {
+    let mut fields = names.to_vec();
+    if private {
+        body["schemaVersion"] = json!(if body["purpose"] == "socialJoinContext" {
+            2
+        } else {
+            7
+        });
+        body["authorizationId"] = json!("cd".repeat(32));
+        body["authorizationRevision"] = json!(3);
+        fields.extend(["authorizationId", "authorizationRevision"]);
+    }
+    sign(key, domain, body, &fields)
+}
+
 struct Fixture {
     manager: Manager,
     run: Run,
@@ -67,6 +88,9 @@ struct Fixture {
 }
 impl Fixture {
     fn new(context_ms: u64, attempt_ms: u64) -> Self {
+        Self::new_mode(context_ms, attempt_ms, false)
+    }
+    fn new_mode(context_ms: u64, attempt_ms: u64, private: bool) -> Self {
         let authority = lab::generate_key();
         let host = lab::generate_key();
         let now = lab::unix_millis();
@@ -74,7 +98,7 @@ impl Fixture {
             pin: authority.public(),
             issuer: "33".repeat(32),
             online_origin: Some("https://guest-review-fixture.invalid"),
-            private_invitations: false,
+            private_invitations: private,
             join_policy: "open".into(),
             session_expiry: now + 60_000,
             max_players: 8,
@@ -160,7 +184,7 @@ impl Fixture {
             "issuedAtUnixMs":now,"expiresAtUnixMs":now+9_000,
         }).to_string(), &clock).unwrap();
         let host_operation = uuid::Uuid::new_v4().to_string();
-        let context = sign(
+        let context = sign_mode(
             &authority,
             b"aurora/connect/social-join-context/v1\0",
             json!({
@@ -186,6 +210,7 @@ impl Fixture {
                 "issuedAtUnixMs",
                 "expiresAtUnixMs",
             ],
+            private,
         );
         let context = lab::VerifiedSocialJoinContext::verify_with_clock(
             &context,
@@ -196,7 +221,7 @@ impl Fixture {
             Some(&clock),
         )
         .unwrap();
-        let encoded = sign(
+        let encoded = sign_mode(
             &authority,
             b"aurora/connect/social-admission/v1\0",
             json!({
@@ -235,6 +260,7 @@ impl Fixture {
                 "runtimeProfile",
                 "voiceTransportProfile",
             ],
+            private,
         );
         run.clock = Some(clock);
         Self {
@@ -376,7 +402,10 @@ async fn requests(listener: tokio::net::TcpListener, delivery: Value, count: Arc
 }
 
 async fn exercise_review(outcome: Outcome) {
-    let mut fixture = Fixture::new(
+    exercise_review_mode(outcome, false).await;
+}
+async fn exercise_review_mode(outcome: Outcome, private: bool) {
+    let mut fixture = Fixture::new_mode(
         if outcome == Outcome::ApproveAfterContext {
             250
         } else {
@@ -387,6 +416,7 @@ async fn exercise_review(outcome: Outcome) {
         } else {
             60_000
         },
+        private,
     );
     let (grant, native) = fixture.mint();
     fixture.run.deadline = grant.session_deadline();
@@ -593,6 +623,38 @@ async fn native_voice_guest_review_requires_original_consent_before_any_transpor
         Outcome::Downgrade,
     ] {
         exercise_review(outcome).await;
+    }
+}
+
+#[tokio::test]
+async fn social_private_online_voice_guest_keeps_consent_epoch_expiry_continuity_and_downgrade_gates(
+) {
+    let mut fixture = Fixture::new_mode(5_000, 60_000, true);
+    fixture.run.authority.private_invitations = false;
+    assert!(verify_guest_admission(
+        &fixture.run,
+        &fixture.context,
+        &fixture.challenge,
+        &fixture.encoded
+    )
+    .is_err());
+    fixture.run.authority.private_invitations = true;
+    let (grant, native) = fixture.mint();
+    assert_eq!(grant.voice_transport_profile(), Some("nativeVoice8V1"));
+    assert!(native.deadline <= fixture.run.deadline);
+    fixture.run.cancel.cancel();
+    assert!(native.check().is_err());
+    for outcome in [
+        Outcome::ApproveAfterContext,
+        Outcome::WrongDigest,
+        Outcome::Cancel,
+        Outcome::Epoch,
+        Outcome::Timeout,
+        Outcome::Continuity,
+        Outcome::Heartbeat,
+        Outcome::Downgrade,
+    ] {
+        exercise_review_mode(outcome, true).await;
     }
 }
 

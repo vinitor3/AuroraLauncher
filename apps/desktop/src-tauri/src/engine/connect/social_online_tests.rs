@@ -20,6 +20,19 @@ fn fixture(
     lab::SocialKeyChallenge,
     lab::SignedSocialHostPolicy,
 ) {
+    fixture_mode(listener, false)
+}
+
+fn fixture_mode(
+    listener: &TcpListener,
+    private: bool,
+) -> (
+    Run,
+    Http,
+    lab::SecretKey,
+    lab::SocialKeyChallenge,
+    lab::SignedSocialHostPolicy,
+) {
     let source = "127.0.0.1:43001".parse().unwrap();
     let authority = lab::generate_key();
     let key = lab::generate_key();
@@ -35,7 +48,7 @@ fn fixture(
             session_id: uuid::Uuid::new_v4().to_string(),
             role: "host".into(),
             game_target: None,
-            visibility: Some("friends".into()),
+            visibility: Some(if private { "private" } else { "friends" }.into()),
         },
         selection: None,
         #[cfg(all(windows, feature = "connect-voice-lab"))]
@@ -47,7 +60,7 @@ fn fixture(
             pin: authority.public(),
             issuer: "33".repeat(32),
             online_origin: Some(origin),
-            private_invitations: false,
+            private_invitations: private,
             join_policy: "open".into(),
             session_expiry: now + 20_000,
             max_players: 8,
@@ -84,9 +97,7 @@ fn fixture(
         .to_string(),
     )
     .unwrap();
-    let review =
-        lab::SocialHostPolicy::review_online(&challenge, "friends", source, "open", run.expiry)
-            .unwrap();
+    let review = super::super::review_host_policy(&run, &http, &challenge, source).unwrap();
     let policy = review
         .approve(&run.key, &review.digest(), run.deadline)
         .unwrap();
@@ -113,44 +124,86 @@ fn signed(authority: &lab::SecretKey, domain: &str, fields: &[(&str, Value)]) ->
     json!({"body":body,"signature":signature})
 }
 
+#[tokio::test]
+async fn social_private_online_review_is_final_before_consent_and_keeps_capacity_and_expiry() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (mut run, http, _, challenge, public) = fixture(&listener);
+    let source = "127.0.0.1:43001".parse().unwrap();
+    run.request.visibility = Some("private".into());
+    assert!(super::super::review_host_policy(&run, &http, &challenge, source).is_err());
+    run.authority.private_invitations = true;
+    let policy = super::super::review_host_policy(&run, &http, &challenge, source).unwrap();
+    assert_eq!(serde_json::to_value(&policy).unwrap()["schemaVersion"], 6);
+    assert_eq!(
+        serde_json::to_value(&policy).unwrap()["visibility"],
+        "private"
+    );
+    assert_eq!(policy.expires_at_unix_ms(), run.authority.session_expiry);
+    assert_eq!(policy.max_guests(), 8);
+    assert!(policy
+        .approve(&run.key, &public.body().digest(), run.deadline)
+        .is_err());
+    policy
+        .approve(&run.key, &policy.digest(), run.deadline)
+        .unwrap();
+    run.authority.max_players = 2;
+    assert_eq!(
+        super::super::review_host_policy(&run, &http, &challenge, source)
+            .unwrap()
+            .max_guests(),
+        2
+    );
+    run.authority.join_policy = "approval".into();
+    assert!(super::super::review_host_policy(&run, &http, &challenge, source).is_err());
+    run.authority.join_policy = "open".into();
+    run.authority.session_expiry = lab::unix_millis() + 14_400_001;
+    assert!(super::super::review_host_policy(&run, &http, &challenge, source).is_err());
+    run.authority.online_origin = None;
+    let local = super::super::review_host_policy(&run, &http, &challenge, source).unwrap();
+    assert_eq!(local.expires_at_unix_ms(), run.expiry);
+    assert_eq!(local.max_guests(), 1);
+}
+
 fn initial_delivery(inbox: &PollInbox<'_>, authority: &lab::SecretKey, id: &str) -> Value {
     let run = inbox.run;
     let now = lab::unix_millis();
-    let grant = signed(
-        authority,
-        "aurora/connect/social-admission/v1\0",
-        &[
-            ("schemaVersion", json!(2)),
-            ("purpose", json!("socialAdmission")),
-            ("issuerInstance", json!(run.authority.issuer)),
-            ("grantId", json!(id)),
-            ("policyId", json!(POLICY)),
-            ("policyDigest", json!(inbox.policy.body().digest())),
-            ("sessionId", json!(run.request.session_id)),
-            ("sessionDigest", json!(inbox.challenge.session_digest())),
-            ("hostAccountId", json!(run.request.account_id)),
-            ("hostPublicKey", json!(run.key.public().to_string())),
-            ("hostOperationId", json!(run.id)),
-            ("hostGeneration", json!(run.generation)),
-            (
-                "guestAccountId",
-                json!(if id == FIRST {
-                    "first_guest"
-                } else {
-                    "second_guest"
-                }),
-            ),
-            (
-                "guestPublicKey",
-                json!(lab::generate_key().public().to_string()),
-            ),
-            ("guestOperationId", json!(uuid::Uuid::new_v4().to_string())),
-            ("guestGeneration", json!(1)),
-            ("issuedAtUnixMs", json!(now)),
-            ("admissionExpiresAtUnixMs", json!(now + 7_000)),
-            ("sessionExpiresAtUnixMs", json!(run.expiry)),
-        ],
-    );
+    let private = run.request.visibility.as_deref() == Some("private");
+    let mut fields = vec![
+        ("schemaVersion", json!(if private { 6 } else { 2 })),
+        ("purpose", json!("socialAdmission")),
+        ("issuerInstance", json!(run.authority.issuer)),
+        ("grantId", json!(id)),
+        ("policyId", json!(POLICY)),
+        ("policyDigest", json!(inbox.policy.body().digest())),
+        ("sessionId", json!(run.request.session_id)),
+        ("sessionDigest", json!(inbox.challenge.session_digest())),
+        ("hostAccountId", json!(run.request.account_id)),
+        ("hostPublicKey", json!(run.key.public().to_string())),
+        ("hostOperationId", json!(run.id)),
+        ("hostGeneration", json!(run.generation)),
+        (
+            "guestAccountId",
+            json!(if id == FIRST {
+                "first_guest"
+            } else {
+                "second_guest"
+            }),
+        ),
+        (
+            "guestPublicKey",
+            json!(lab::generate_key().public().to_string()),
+        ),
+        ("guestOperationId", json!(uuid::Uuid::new_v4().to_string())),
+        ("guestGeneration", json!(1)),
+        ("issuedAtUnixMs", json!(now)),
+        ("admissionExpiresAtUnixMs", json!(now + 7_000)),
+        ("sessionExpiresAtUnixMs", json!(run.expiry)),
+    ];
+    if private {
+        fields.push(("authorizationId", json!("cd".repeat(32))));
+        fields.push(("authorizationRevision", json!(1)));
+    }
+    let grant = signed(authority, "aurora/connect/social-admission/v1\0", &fields);
     let initial = lease(authority, run, inbox.policy, id, 1);
     json!({"grant":grant,"initialLease":initial,"lease":initial})
 }
@@ -211,8 +264,17 @@ async fn respond(socket: &mut TcpStream, status: u16, value: Value) {
 
 #[tokio::test]
 async fn social_startup_polls_retain_original_pending_delivery_without_reopening_removed_peer() {
+    exercise_startup_polls(false).await;
+}
+
+#[tokio::test]
+async fn social_private_online_polls_preserve_initial_lease_and_removed_peer_tombstone() {
+    exercise_startup_polls(true).await;
+}
+
+async fn exercise_startup_polls(private: bool) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let (run, http, authority, challenge, policy) = fixture(&listener);
+    let (run, http, authority, challenge, policy) = fixture_mode(&listener, private);
     let mut inbox = PollInbox {
         run: &run,
         challenge: &challenge,

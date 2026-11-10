@@ -65,6 +65,7 @@ impl ConnectManager {
     pub(crate) async fn exercise_social_host_player_test(
         binding: NativeVoiceHostBinding,
         mode: u8,
+        private: bool,
         stop_source: impl FnOnce(),
     ) {
         let authority = lab::generate_key();
@@ -72,7 +73,7 @@ impl ConnectManager {
             pin: authority.public(),
             issuer: "33".repeat(32),
             online_origin: Some("https://native-fixture.invalid"),
-            private_invitations: false,
+            private_invitations: private,
             join_policy: "open".into(),
             session_expiry: lab::unix_millis() + 60_000,
             max_players: 8,
@@ -84,13 +85,13 @@ impl ConnectManager {
                     account_epoch: 0,
                     account_id: "native_host_fixture".into(),
                     session_id: Uuid::new_v4().to_string(),
-                    visibility: "friends".into(),
+                    visibility: if private { "private" } else { "friends" }.into(),
                 },
                 binding.clone(),
                 true,
             )
             .unwrap();
-        let run = {
+        let mut run = {
             let state = manager.live.state.lock().unwrap();
             let attempt = state.attempt.as_ref().unwrap();
             let control = attempt.social.as_ref().unwrap();
@@ -121,22 +122,25 @@ impl ConnectManager {
             "challengeId":"11".repeat(32),"accountId":run.request.account_id,"operationId":run.id,"generation":run.generation,"role":"host",
             "publicKey":run.key.public().to_string(),"sessionId":run.request.session_id,"sessionDigest":"44".repeat(32),
             "issuedAtUnixMs":now,"expiresAtUnixMs":now+50_000}).to_string()).unwrap();
-        let (profile, digest) = binding.online_voice_policy().unwrap();
-        let policy = lab::SocialHostPolicy::review_online_voice(
-            &challenge,
-            "friends",
-            binding.targets().0,
-            "open",
-            run.expiry,
-            profile,
-            &digest,
-            true,
-        )
-        .unwrap()
-        .with_runtime_profile(binding.online_runtime_profile().unwrap().version_id())
-        .unwrap()
-        .with_native_voice_transport()
-        .unwrap();
+        let http = Http {
+            client: reqwest::Client::new(),
+            token: Arc::new(Mutex::new("fixture-token".into())),
+            cancel: run.cancel.clone(),
+            deadline: run.deadline,
+            origin: run.authority.online_origin.unwrap(),
+            session_id: run.request.session_id.clone(),
+            online: true,
+        };
+        let policy =
+            super::super::super::review_host_policy(&run, &http, &challenge, binding.targets().0)
+                .unwrap();
+        assert_eq!(
+            serde_json::to_value(&policy).unwrap()["schemaVersion"],
+            if private { 7 } else { 5 }
+        );
+        assert_eq!(policy.max_guests(), 7);
+        assert!(policy.expires_at_unix_ms() <= run.authority.session_expiry);
+        run.expiry = run.expiry.min(policy.expires_at_unix_ms());
         let policy = policy
             .approve(&run.key, &policy.digest(), run.deadline)
             .unwrap();
@@ -414,43 +418,54 @@ async fn monitor_remote_leases(
             .source()
             .online_voice_policy()
             .unwrap();
-        let body = json!({"schemaVersion":5,"purpose":"socialAdmission","issuerInstance":run.authority.issuer,
+        let private = run.request.visibility.as_deref() == Some("private");
+        let mut body = json!({"schemaVersion":if private { 7 } else { 5 },"purpose":"socialAdmission","issuerInstance":run.authority.issuer,
             "grantId":id,"policyId":challenge.challenge_id(),"policyDigest":policy.body().digest(),"sessionId":run.request.session_id,
             "sessionDigest":challenge.session_digest(),"hostAccountId":run.request.account_id,"hostPublicKey":run.key.public().to_string(),
             "hostOperationId":run.id,"hostGeneration":run.generation,"guestAccountId":format!("remote_{index}"),"guestPublicKey":key.public().to_string(),
             "guestOperationId":Uuid::new_v4().to_string(),"guestGeneration":1,"issuedAtUnixMs":now,"admissionExpiresAtUnixMs":now+9000,
             "sessionExpiresAtUnixMs":run.expiry,"voiceProfile":profile,"voiceSourceDigest":digest,"hostPlayer":true,
             "runtimeProfile":policy.body().runtime_profile().unwrap(),"voiceTransportProfile":"nativeVoice8V1"});
+        let mut names = vec![
+            "schemaVersion",
+            "purpose",
+            "issuerInstance",
+            "grantId",
+            "policyId",
+            "policyDigest",
+            "sessionId",
+            "sessionDigest",
+            "hostAccountId",
+            "hostPublicKey",
+            "hostOperationId",
+            "hostGeneration",
+            "guestAccountId",
+            "guestPublicKey",
+            "guestOperationId",
+            "guestGeneration",
+            "issuedAtUnixMs",
+            "admissionExpiresAtUnixMs",
+            "sessionExpiresAtUnixMs",
+            "voiceProfile",
+            "voiceSourceDigest",
+            "hostPlayer",
+            "runtimeProfile",
+            "voiceTransportProfile",
+        ];
+        if private {
+            body["authorizationId"] = json!(if index == 0 {
+                "aa".repeat(32)
+            } else {
+                "bb".repeat(32)
+            });
+            body["authorizationRevision"] = json!(3);
+            names.extend(["authorizationId", "authorizationRevision"]);
+        }
         let encoded = sign_fields(
             authority,
             "aurora/connect/social-admission/v1\0",
             body,
-            &[
-                "schemaVersion",
-                "purpose",
-                "issuerInstance",
-                "grantId",
-                "policyId",
-                "policyDigest",
-                "sessionId",
-                "sessionDigest",
-                "hostAccountId",
-                "hostPublicKey",
-                "hostOperationId",
-                "hostGeneration",
-                "guestAccountId",
-                "guestPublicKey",
-                "guestOperationId",
-                "guestGeneration",
-                "issuedAtUnixMs",
-                "admissionExpiresAtUnixMs",
-                "sessionExpiresAtUnixMs",
-                "voiceProfile",
-                "voiceSourceDigest",
-                "hostPlayer",
-                "runtimeProfile",
-                "voiceTransportProfile",
-            ],
+            &names,
         );
         let grant = lab::VerifiedSocialGrant::for_host(
             &encoded,

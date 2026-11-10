@@ -28,7 +28,7 @@ before(async () => {
   // suite isolates the following SDK request/account lifecycle.
   const clock=dataUrl('export const createSocialServerClock=()=>({ensure:async check=>check(),now:Date.now,writeTime:Date.now});');
   const source=transpile(await readFile(new URL("../../apps/desktop/src/lib/socialFirebase.ts",import.meta.url),"utf8"))
-    .replace('"./socialServerClock"',JSON.stringify(clock)).replace('"./firebase"',JSON.stringify('data:text/javascript,export const socialLabBuild=true'))
+    .replace('"./socialServerClock"',JSON.stringify(clock)).replace('"./firebase"',JSON.stringify(dataUrl(`export const socialLabBuild=true;export const privateSocialOnlineConfiguration=()=>globalThis[${JSON.stringify(fixtureKey)}]?.onlineAllowed===true`)))
     .replace('"./socialOrganization"',JSON.stringify(organization)).replace('"./socialPrivateInvitations"',JSON.stringify(privateInvitations)).replace('"../shared/social"',JSON.stringify(sharedUrl)).replace('"firebase/firestore"',JSON.stringify(fakeSdk));
   createService=(await import(dataUrl(source))).createSocialFirebaseService;
 });
@@ -47,6 +47,52 @@ test("private SDK is absent outside the two explicit local emulator projects",()
     const service=createService({db:{},config:{projectId},auth:{currentUser:{uid:"host"}}});
     assert.equal(typeof service.privateInvitations.invite,"function");
   }
+});
+
+test("private online SDK requires both trusted build configuration and a revalidated native capability", async()=>{
+  const fixture = pendingRead(); globalThis[fixtureKey].onlineAllowed = true;
+  let enabled = false;
+  const services = {db:{},config:{projectId:"auroralauncher"},auth:{currentUser:{uid:"host"}}};
+  assert.equal(createService(services).privateInvitations, undefined, "no callback means no private online adapter");
+  const service = createService(services,{privateOnlineCapability:()=>enabled});
+  assert.equal(service.privateInvitations.environment,"online");
+  await assert.rejects(service.privateInvitations.invite("11111111-1111-4111-8111-111111111111","guest"),cause=>cause.code==="join_unavailable");
+  assert.equal(fixture.calls.length,0);
+  enabled = true; const writes = [];
+  globalThis[fixtureKey].transaction=async(work)=>work({get:ref=>globalThis[fixtureKey].read(ref),set:ref=>writes.push(ref),update:ref=>writes.push(ref),delete:ref=>writes.push(ref)});
+  const result = service.privateInvitations.invite("11111111-1111-4111-8111-111111111111","guest");
+  await new Promise(resolve=>setImmediate(resolve)); assert.equal(fixture.calls.length,1);
+  enabled = false; fixture.resolve(undefined);
+  await assert.rejects(result,cause=>cause.code==="social_uncertain");
+  assert.equal(fixture.calls.length,1); assert.deepEqual(writes,[]);
+  delete globalThis[fixtureKey];
+});
+
+for (const previousPrivate of [false,true]) test(`private capability withdrawal ${previousPrivate?"blocks private rotation":"does not block unrelated public publication"}`,async()=>{
+  const fixture=pendingRead(),writes=[];globalThis[fixtureKey].onlineAllowed=true;
+  let enabled=true;
+  const service=createService({db:{},config:{projectId:"auroralauncher"},auth:{currentUser:{uid:"host"}}},{privateOnlineCapability:()=>enabled});
+  globalThis[fixtureKey].transaction=async(work)=>work({get:ref=>globalThis[fixtureKey].read(ref),set:ref=>writes.push(ref),delete:ref=>writes.push(ref)});
+  const result=service.publishSession({title:"Mundo público",modpackName:"Pack",minecraftVersion:"1.21.1",loader:"Fabric",imageUrl:null,players:0,maxPlayers:8,visibility:"public",joinPolicy:"open"});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(fixture.calls.length,1);enabled=false;
+  fixture.resolve(previousPrivate?{sessionId:"11111111-1111-4111-8111-111111111111",visibility:"private"}:undefined);
+  if(previousPrivate){await assert.rejects(result,cause=>cause.code==="social_uncertain");assert.deepEqual(writes,[]);}
+  else {await result;assert.equal(writes.length,3);}
+  assert.equal(fixture.calls.length,1);delete globalThis[fixtureKey];
+});
+
+test("capability lost while a private commit completes reports uncertainty without retrying writes", async()=>{
+  let enabled=true;const writes=[];let transactions=0;
+  globalThis[fixtureKey]={onlineAllowed:true,transaction:async(work)=>{
+    transactions++;
+    await work({get:async()=>({data:()=>undefined}),set:ref=>writes.push(ref)});
+    enabled=false;
+  }};
+  try {
+    const service=createService({db:{},config:{projectId:"auroralauncher"},auth:{currentUser:{uid:"host"}}},{privateOnlineCapability:()=>enabled});
+    await assert.rejects(service.publishSession({title:"Mundo privado",modpackName:"Pack",minecraftVersion:"1.21.1",loader:"Fabric",imageUrl:null,players:0,maxPlayers:8,visibility:"private",joinPolicy:"open"}),cause=>cause.code==="social_uncertain");
+    assert.equal(transactions,1);assert.equal(writes.length,2);
+  } finally {delete globalThis[fixtureKey];}
 });
 
 for(const action of ["invite","revoke","decline"])test(`private ${action} stops all transaction reads/writes after the account changes`,async()=>{

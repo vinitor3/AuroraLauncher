@@ -1065,7 +1065,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [instanceFilter, setInstanceFilter] = useState("");
   const [activeSection, setActiveSection] = useState<LauncherSection>(socialFeatureBuild ? "social" : "instances");
   const baseSocialService = useMemo(() => socialFeatureBuild && profile && services.auth.currentUser?.uid === profile.uid
-    ? createSocialFirebaseService(services) : null, [services, profile?.uid, services.auth.currentUser?.uid]);
+    ? createSocialFirebaseService(services, { privateOnlineCapability: () => socialConnectOwner.current?.supportsPrivateInvitations() === true }) : null, [services, profile?.uid, services.auth.currentUser?.uid]);
   useEffect(() => {
     const user = services.auth.currentUser, accountId = profile?.uid;
     setSocialConnectState({ accountId: accountId ?? "", value: emptySocialConnectState() });
@@ -1082,6 +1082,8 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     if (!baseSocialService) return null;
     const controller = socialConnectOwner.current, user = services.auth.currentUser;
     return { ...baseSocialService,
+      privateInvitations: baseSocialService.privateInvitations?.environment === "local" || controller?.supportsPrivateInvitations() === true
+        ? baseSocialService.privateInvitations : undefined,
       capabilities: { ...baseSocialService.capabilities, join: !!controller && socialConnectState.accountId === profile?.uid && socialConnectState.value.available },
       prepareJoin: async (sessionId: string) => {
         // A detached card must never redirect its action to a later account's
@@ -1090,7 +1092,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         await controller.join(sessionId);
       },
     };
-  }, [baseSocialService, services, profile?.uid, socialConnectState.accountId, socialConnectState.value.available]);
+  }, [baseSocialService, services, profile?.uid, socialConnectState.accountId, socialConnectState.value.available, socialConnectState.value.privateInvitations]);
   const [connectVisited, setConnectVisited] = useState(false);
   const [dedicatedRevealRequest, setDedicatedRevealRequest] = useState(0);
   const [gameRevealRequest, setGameRevealRequest] = useState(0);

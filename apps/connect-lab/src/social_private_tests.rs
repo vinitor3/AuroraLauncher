@@ -262,6 +262,63 @@ fn social_private_reinvite_is_new_authority_and_never_reanchors_old_continuity()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn social_private_tcp_two_real_agents_obey_revocation_and_never_contact_unapproved_services()
 {
+    private_tcp_agents(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn social_private_online_tcp_two_real_agents_keep_signed_network_ticket_and_revocation() {
+    private_tcp_agents(true).await;
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PrivateTicketBody {
+    schema_version: u8,
+    session_id: String,
+    issuer_instance: String,
+    peer_id: String,
+    host_peer_id: String,
+    account_id: String,
+    generation: u64,
+    issued_at_unix_ms: u64,
+    expires_at_unix_ms: u64,
+    direct_addresses: Vec<String>,
+}
+
+fn private_network_ticket(
+    f: &Fixture,
+    peer: EndpointId,
+    origin: &str,
+) -> crate::OnlineNetworkTicket {
+    let body = PrivateTicketBody {
+        schema_version: 1,
+        session_id: f.grant.session_id.clone(),
+        issuer_instance: f.grant.issuer_instance.clone(),
+        peer_id: peer.to_string(),
+        host_peer_id: f.host.public().to_string(),
+        account_id: f.grant.host_account_id.clone(),
+        generation: f.grant.host_generation,
+        issued_at_unix_ms: unix_millis(),
+        expires_at_unix_ms: f.grant.session_expires_at_unix_ms,
+        direct_addresses: vec![],
+    };
+    let mut bytes = b"aurora/connect/relay-ticket/v1\0".to_vec();
+    bytes.extend(serde_json::to_vec(&body).unwrap());
+    let signature = hex(&f.authority.sign(&bytes).to_bytes());
+    crate::OnlineNetworkTicket::for_local_test(
+        &json!({"body":body,"signature":signature}).to_string(),
+        f.authority.public(),
+        &f.grant.issuer_instance,
+        &f.grant.host_account_id,
+        &f.grant.session_id,
+        peer,
+        f.host.public(),
+        origin,
+    )
+    .unwrap()
+}
+
+async fn private_tcp_agents(online: bool) {
     use crate::{
         Capability, Guest, Host, HostConfig, Limits, Protocol, Service, SessionDeadlines,
         SessionInvitation, UdpReturnPolicy,
@@ -274,7 +331,12 @@ async fn social_private_tcp_two_real_agents_obey_revocation_and_never_contact_un
     let source = listener.local_addr().unwrap();
     let f = fixture(false, source);
     let context = context(&f);
-    let grant = VerifiedSocialGrant::for_guest_private_loopback(
+    let verify = if online {
+        VerifiedSocialGrant::for_guest_online
+    } else {
+        VerifiedSocialGrant::for_guest_private_loopback
+    };
+    let grant = verify(
         &f.encoded(&f.grant),
         f.authority.public(),
         &f.gc,
@@ -304,35 +366,72 @@ async fn social_private_tcp_two_real_agents_obey_revocation_and_never_contact_un
     let reserved = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let bind = reserved.local_addr().unwrap();
     drop(reserved);
-    let invitation = SessionInvitation::issue_loopback(
-        &f.host,
-        f.guest.public(),
-        host_grant.session_id(),
-        bind,
-        std::slice::from_ref(&service),
-        SessionDeadlines {
-            admission_expires_at_unix_ms: host_grant.admission_expires_at_unix_ms(),
-            session_expires_at_unix_ms: host_grant.session_expires_at_unix_ms(),
-        },
-    )
+    let deadlines = SessionDeadlines {
+        admission_expires_at_unix_ms: host_grant.admission_expires_at_unix_ms(),
+        session_expires_at_unix_ms: host_grant.session_expires_at_unix_ms(),
+    };
+    let invitation = if online {
+        SessionInvitation::issue_online(
+            &f.host,
+            f.guest.public(),
+            host_grant.session_id(),
+            std::slice::from_ref(&service),
+            deadlines,
+        )
+    } else {
+        SessionInvitation::issue_loopback(
+            &f.host,
+            f.guest.public(),
+            host_grant.session_id(),
+            bind,
+            std::slice::from_ref(&service),
+            deadlines,
+        )
+    }
     .unwrap();
-    let host = Host::start_invited_session(
-        HostConfig {
-            secret_key: f.host.clone(),
-            bind_addr: bind,
-            session_id: host_grant.session_id().into(),
-            services: vec![service],
-            leases: vec![invitation.lease()],
-            limits: Limits::default(),
-        },
-        &invitation,
-    )
-    .await
+    let relay = if online {
+        Some(
+            crate::LocalRelayFixture::start(
+                [f.host.public(), f.guest.public()],
+                crate::LocalRelayProfile::Normal,
+            )
+            .await
+            .unwrap(),
+        )
+    } else {
+        None
+    };
+    let origin = relay
+        .as_ref()
+        .map(|relay| format!("http://{}", relay.bound_addr()));
+    let host_ticket = origin
+        .as_ref()
+        .map(|origin| private_network_ticket(&f, f.host.public(), origin));
+    let guest_ticket = origin
+        .as_ref()
+        .map(|origin| private_network_ticket(&f, f.guest.public(), origin));
+    let config = HostConfig {
+        secret_key: f.host.clone(),
+        bind_addr: invitation.direct_addr(),
+        session_id: host_grant.session_id().into(),
+        services: vec![service],
+        leases: vec![invitation.lease()],
+        limits: Limits::default(),
+    };
+    let host = if let Some(ticket) = &host_ticket {
+        Host::start_invited_online(config, &invitation, ticket).await
+    } else {
+        Host::start_invited_session(config, &invitation).await
+    }
     .unwrap();
+    let sockets = host.bound_sockets();
     continuity.check().unwrap();
-    let guest = Guest::connect_invited_session(f.guest.clone(), &invitation, Limits::default())
-        .await
-        .unwrap();
+    let guest = if let Some(ticket) = &guest_ticket {
+        Guest::connect_invited_online(f.guest.clone(), &invitation, Limits::default(), ticket).await
+    } else {
+        Guest::connect_invited_session(f.guest.clone(), &invitation, Limits::default()).await
+    }
+    .unwrap();
     assert_eq!(host.metrics().destination_tcp_connects, 0);
     let bridge = guest
         .tcp_bridge("game", 1, "127.0.0.1:0".parse().unwrap())
@@ -353,13 +452,21 @@ async fn social_private_tcp_two_real_agents_obey_revocation_and_never_contact_un
     .unwrap();
     assert!(host.revoke(invitation.invitation_id()));
     assert!(!host.invitation_active(invitation.invitation_id()));
-    let replay =
-        Guest::connect_invited_session(f.guest.clone(), &invitation, Limits::default()).await;
+    let replay = if let Some(ticket) = &guest_ticket {
+        Guest::connect_invited_online(f.guest.clone(), &invitation, Limits::default(), ticket).await
+    } else {
+        Guest::connect_invited_session(f.guest.clone(), &invitation, Limits::default()).await
+    };
     assert!(replay.is_err());
     assert_eq!(host.metrics().destination_tcp_connects, 1);
     bridge.shutdown().await;
     guest.shutdown().await;
     host.shutdown().await;
     drop((bridge, guest, host));
-    assert!(std::net::UdpSocket::bind(bind).is_ok());
+    if let Some(relay) = relay {
+        relay.shutdown().await.unwrap();
+    }
+    for socket in sockets {
+        assert!(std::net::UdpSocket::bind(socket).is_ok());
+    }
 }

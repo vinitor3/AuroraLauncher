@@ -27,6 +27,17 @@ export const socialLabBuild = import.meta.env.MODE === "social-lab";
 // switches the online profile to emulator authentication or configurable relays.
 export const socialFeatureBuild = socialLabBuild || import.meta.env.MODE === "connect-online";
 
+/** Private online invitations require a paired, build-owned opt-in and the existing official services. */
+export function privateSocialOnlineConfiguration(config: FirebasePublicConfig): boolean {
+  return import.meta.env.MODE === "connect-online" && import.meta.env.VITE_AURORA_SOCIAL_PRIVATE_ONLINE === "1"
+    && import.meta.env.VITE_AURORA_SOCIAL_ORIGIN === "https://aurora-connect-social.aurora-edge-proxy.workers.dev"
+    && config.projectId === "auroralauncher" && config.authDomain === "auroralauncher.firebaseapp.com"
+    && config.apiKey === "AIzaSyD4Sn9JkU0CGGz77Mj71QNwvYiFHPM-dvk"
+    && config.appId === "1:246542594321:web:ae2a8206d599f2a4c45cb0" && config.messagingSenderId === "246542594321"
+    && config.storageBucket === "auroralauncher.firebasestorage.app"
+    && config.workerUrl === "https://aurora-api.aurora-edge-proxy.workers.dev";
+}
+
 // Estes valores identificam o aplicativo Web no Firebase e são públicos por
 // definição. Nunca inclua aqui chaves de conta de serviço ou tokens privados.
 export const bundledFirebaseConfig: FirebasePublicConfig = socialLabBuild ? {

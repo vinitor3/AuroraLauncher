@@ -3,13 +3,13 @@ import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
-async function fixture(mode) {
+async function fixture(mode, flags = {}) {
   const calls = [];
   const key = `socialSdk${crypto.randomUUID().replaceAll("-", "")}`;
   globalThis[key] = calls;
   let source = ts.transpileModule(await readFile(new URL("./firebase.ts", import.meta.url), "utf8"), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
-  }).outputText.replaceAll("import.meta.env", JSON.stringify({ MODE: mode }));
+  }).outputText.replaceAll("import.meta.env", JSON.stringify({ MODE: mode, ...flags }));
   source = source.replace(/import\s*\{([^}]+)\}\s*from\s*["']([^"']+)["'];?/g, (_, names, origin) => {
     const body = names.split(",").map(v => v.trim()).map(name => {
       if (name === "validateLauncherAuthScope") return `export const ${name}=value=>value;`;
@@ -65,6 +65,28 @@ test("online experiment exposes social UI with real account configuration and no
     f.module.createFirebaseServices(f.module.bundledFirebaseConfig, { id: "online-test", persistent: false });
     assert.equal(f.calls.some(c => c.name.includes("Emulator")), false);
   } finally { f.close(); }
+});
+
+test("private online configuration requires the exact opt-in, mode, origin and every official Firebase field", async () => {
+  const flags = { VITE_AURORA_SOCIAL_PRIVATE_ONLINE: "1", VITE_AURORA_SOCIAL_ORIGIN: "https://aurora-connect-social.aurora-edge-proxy.workers.dev" };
+  for (const mode of ["production", "social-lab", "connect-online"]) {
+    const f = await fixture(mode, flags);
+    try {
+      const config = f.module.bundledFirebaseConfig;
+      assert.equal(f.module.privateSocialOnlineConfiguration(config), mode === "connect-online");
+      if (mode === "connect-online") for (const key of ["projectId", "authDomain", "apiKey", "appId", "messagingSenderId", "storageBucket", "workerUrl"]) {
+        assert.equal(f.module.privateSocialOnlineConfiguration({ ...config, [key]: "different" }), false, key);
+      }
+      assert.equal(f.calls.length, 0);
+    } finally { f.close(); }
+  }
+  for (const overrides of [{ VITE_AURORA_SOCIAL_PRIVATE_ONLINE: undefined }, { VITE_AURORA_SOCIAL_PRIVATE_ONLINE: "true" },
+    { VITE_AURORA_SOCIAL_PRIVATE_ONLINE: " 1" }, { VITE_AURORA_SOCIAL_PRIVATE_ONLINE: true }, { VITE_AURORA_SOCIAL_PRIVATE_ONLINE: "0" },
+    { VITE_AURORA_SOCIAL_ORIGIN: flags.VITE_AURORA_SOCIAL_ORIGIN + "/" }, { VITE_AURORA_SOCIAL_ORIGIN: "https://other.invalid" }]) {
+    const f = await fixture("connect-online", { ...flags, ...overrides });
+    try { assert.equal(f.module.privateSocialOnlineConfiguration(f.module.bundledFirebaseConfig), false); assert.equal(f.calls.length, 0); }
+    finally { f.close(); }
+  }
 });
 
 for (const [mode, expected] of [["social-lab", "TESTE LOCAL · CONTAS DESCARTÁVEIS · SEM PUBLICAÇÃO NA COMUNIDADE REAL"],

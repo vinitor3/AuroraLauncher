@@ -112,6 +112,15 @@ async function fixture(options = {}) {
   owners.push(controller); await controller.start();
   return { controller, calls, published, handlers, tokenCalls: () => tokenCalls, setUser: value => { currentUser = value; }, setSnapshot: value => { snapshot = value; } };
 }
+test("private capability getter is read-only and fails closed after invalidation or account object replacement", async () => {
+  const normal = await fixture({ online: true }); assert.equal(normal.controller.supportsPrivateInvitations(), false);
+  for (const action of [f => f.controller.invalidate(), f => f.setUser({ uid: "own-account" }), f => f.setUser({ uid: "other-account" })]) {
+    const f = await fixture({ online: true, privateInvitations: true }), calls = f.calls.length;
+    assert.equal(f.controller.supportsPrivateInvitations(), true); assert.equal(f.calls.length, calls);
+    action(f); assert.equal(f.controller.supportsPrivateInvitations(), false);
+    assert.equal(f.calls.length, calls, "getter performs no native or SDK requests");
+  }
+});
 test("join reserves native slot before SDK token and sends no authority URL/pin/UID override in credential command", async () => {
   const f = await fixture(); await f.controller.join(session);
   const names = f.calls.map(([command]) => command);

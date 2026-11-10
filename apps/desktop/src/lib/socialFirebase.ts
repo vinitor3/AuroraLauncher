@@ -1,6 +1,6 @@
 import { arrayRemove, arrayUnion, collection, doc, documentId, getDocFromServer, getDocsFromServer, increment, limit, orderBy, query, runTransaction, serverTimestamp, startAfter, Timestamp, type DocumentData, type Firestore } from "firebase/firestore";
 import type { FirebaseServices } from "./firebase";
-import { socialLabBuild } from "./firebase";
+import { socialLabBuild, privateSocialOnlineConfiguration } from "./firebase";
 import { createSocialServerClock } from "./socialServerClock";
 import { createSocialOrganization } from "./socialOrganization";
 import { createSocialPrivateInvitations } from "./socialPrivateInvitations";
@@ -63,13 +63,15 @@ export async function socialRelationshipWrite(db: Firestore, actor: string, peer
 }
 
 /** Explicitly selected adapter. The caller must keep unpublished social rules disabled in normal builds. */
-export function createSocialFirebaseService(services: FirebaseServices): SocialService {
+export function createSocialFirebaseService(services: FirebaseServices, options: { privateOnlineCapability?: () => boolean } = {}): SocialService {
   const db = services.db;
   const accountUser = services.auth.currentUser;
   const accountId = accountUser?.uid;
   if (!accountId || !uidValid(accountId)) throw new Error("Entre em sua conta Aurora.");
   const clock = createSocialServerClock(services, socialLabBuild);
-  const privateInvitationsAvailable = socialLabBuild && ["demo-aurora-social", "demo-aurora-social-rules-v2"].includes(services.config?.projectId);
+  const privateEnvironment = socialLabBuild && ["demo-aurora-social", "demo-aurora-social-rules-v2"].includes(services.config?.projectId) ? "local"
+    : privateSocialOnlineConfiguration(services.config) && typeof options.privateOnlineCapability === "function" ? "online" : undefined;
+  const privateSupported = () => privateEnvironment === "local" || privateEnvironment === "online" && options.privateOnlineCapability?.() === true;
   function account() {
     if (services.auth.currentUser !== accountUser || services.auth.currentUser?.uid !== accountId) throw new Error("A conta mudou. Abra Amigos novamente.");
     return accountId!;
@@ -96,6 +98,11 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
     try { const result = await getDocFromServer(doc(db, collectionName, id)); check(); return result.data(); }
     catch (cause) { if (denied(cause)) return undefined; throw cause; }
   }
+  async function privateGuarded<T>(work: (check: () => void) => Promise<T>, required = () => true): Promise<T> {
+    const capability = (inFlight = false) => { if (required() && !privateSupported()) throw Object.assign(new Error("Convites privados indisponíveis neste executável."), { code: inFlight ? "social_uncertain" : "join_unavailable" }); };
+    capability();
+    return guarded(async check => { const current = () => { check(); capability(true); }; current(); const value = await work(current); current(); return value; });
+  }
   async function person(uid: string, check: () => void): Promise<SocialPerson> {
     const profile = await optional("publicProfiles", uid, check);
     let nickname = "Perfil indisponível";
@@ -119,7 +126,7 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
     capabilities: Object.freeze({ friends: true, catalog: true, publication: true, join: false }),
     now: clock.now,
     organization: createSocialOrganization(db, account, guarded, person, clock),
-    ...(privateInvitationsAvailable ? { privateInvitations: createSocialPrivateInvitations(db, account, guarded, person, clock, sessionValue) } : {}),
+    ...(privateEnvironment ? { privateInvitations: createSocialPrivateInvitations(db, account, privateGuarded, person, clock, sessionValue, privateEnvironment) } : {}),
     profile: uid => guarded(async check => {
       if (!uidValid(uid)) throw new Error("Conta Aurora inválida.");
       const value = await person(uid, check);
@@ -191,17 +198,23 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
         transaction.set(ref, { ...value, updatedAt: serverTimestamp(), expiresAt: Timestamp.fromMillis(clock.writeTime() + 115_000) });
       }, { maxAttempts: 1 });
     }),
-    publishSession: (input) => guarded(async (check) => {
+    publishSession: (input) => {
+      const value = validateSocialSession(input), privateOperation = privateSupported();
+      let requiresPrivate = value.visibility === "private";
+      const publicationGuard: typeof guarded = privateOperation ? work => privateGuarded(work, () => requiresPrivate) : guarded;
+      return publicationGuard(async (check) => {
       check();
-      const value = validateSocialSession(input);
-      if (privateInvitationsAvailable && value.visibility === "private" && value.joinPolicy !== "open") throw new Error("O convite privado já autoriza o destinatário. Escolha entrada aberta para esta sessão.");
+      if (privateOperation && value.visibility === "private" && value.joinPolicy !== "open") throw new Error("O convite privado já autoriza o destinatário. Escolha entrada aberta para esta sessão.");
       const owner = account();
       await runTransaction(db, async (transaction) => {
         check();
         const ownerRef = doc(db, "socialOwners", owner);
         const current = (await transaction.get(ownerRef)).data();
+        // Public/friends publication remains independent unless it rotates an
+        // earlier private announcement. That original scope stays required.
+        requiresPrivate ||= current?.visibility === "private";
         check();
-        const rotatePrivate = privateInvitationsAvailable && current?.visibility === "private";
+        const rotatePrivate = privateOperation && current?.visibility === "private";
         const id = rotatePrivate ? crypto.randomUUID() : current?.sessionId ?? crypto.randomUUID();
         if (!sessionIdValid(id)) throw new Error("Sessão anterior inválida.");
         if (current && !sessionIdValid(current.sessionId)) throw new Error("Sessão anterior inválida.");
@@ -220,7 +233,7 @@ export function createSocialFirebaseService(services: FirebaseServices): SocialS
         if (value.visibility === "public") transaction.set(doc(db, "socialCatalog", id), { schema: 1, expiresAt });
         else if (current?.visibility === "public") transaction.delete(doc(db, "socialCatalog", id));
       }, { maxAttempts: 1 });
-    }),
+    }); },
     closeSession: () => guarded(async (check) => {
       check();
       const owner = account();

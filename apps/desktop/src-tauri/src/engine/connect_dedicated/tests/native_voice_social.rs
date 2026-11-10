@@ -20,7 +20,7 @@ async fn native_voice_social_host_player_original_source_spawn_expiry_epoch_and_
                 profile,
             )
             .unwrap();
-            exercise(plan, profile, mode, false).await;
+            exercise(plan, profile, mode, false, false).await;
         }
     }
 }
@@ -38,11 +38,34 @@ async fn native_voice_social_host_player_real_resources_and_durable_recovery() {
             }
         };
         let plan = desktop::discover_plan(selection).expect("native_voice_real_compiled_resources");
-        exercise(plan, profile, 0, true).await;
+        exercise(plan, profile, 0, true, false).await;
     }
 }
 
-async fn exercise(plan: FactoryPlan, profile: NativeVoiceProfile, mode: u8, real_resources: bool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn social_private_online_native_voice_shared_slots_expiry_removal_and_recovery() {
+    for profile in PROFILES {
+        for mode in [4, 5] {
+            let fixture = VoiceFixture::new(profile);
+            let plan = factory::fixture_voice_bridge_plan(
+                &fixture.fixture.lab,
+                &fixture.fixture.stage,
+                &fixture.fixture.jdk,
+                profile,
+            )
+            .unwrap();
+            exercise(plan, profile, mode, false, true).await;
+        }
+    }
+}
+
+async fn exercise(
+    plan: FactoryPlan,
+    profile: NativeVoiceProfile,
+    mode: u8,
+    real_resources: bool,
+    private: bool,
+) {
     eprintln!("native_voice_social_case {profile:?} mode={mode} begin");
     let approval = plan.review().digest.clone();
     let mut prepared = plan.create(&approval).unwrap();
@@ -114,7 +137,7 @@ async fn exercise(plan: FactoryPlan, profile: NativeVoiceProfile, mode: u8, real
     }
     ready(running.control()).await;
     let binding = running.control().native_voice_host_binding().unwrap();
-    ConnectManager::exercise_social_host_player_test(binding, mode, || {
+    ConnectManager::exercise_social_host_player_test(binding, mode, private, || {
         if mode >= 4 {
             query_gate.reached();
             query_gate.release();

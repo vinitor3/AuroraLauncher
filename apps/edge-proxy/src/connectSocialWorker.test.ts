@@ -27,23 +27,28 @@ function storage() {
     async transaction<T>(work: (txn: any) => Promise<T>): Promise<T> { return work(value); } };
   return value;
 }
-function fixture(t: Parameters<Parameters<typeof test>[1]>[0]) {
+function fixture(t: Parameters<Parameters<typeof test>[1]>[0], options: { privateSchema?: 6 | 7; gate?: unknown } = {}) {
   const session = crypto.randomUUID(), expiry = Date.now() + 14_000_000, durable = storage();
   let inFlight = 0, maximum = 0, pauseReads = false;
-  const fields = (value: Record<string, unknown>) => Object.fromEntries(Object.entries(value).map(([key, item]) => [key, item === null ? { nullValue: null } : typeof item === "number" ? { integerValue: String(item) } : key === "expiresAt" ? { timestampValue: item } : { stringValue: item }]));
+  let beforeRead: (() => void) | undefined;
+  const fields = (value: Record<string, unknown>) => Object.fromEntries(Object.entries(value).map(([key, item]) => [key, item === null ? { nullValue: null } : typeof item === "number" ? { integerValue: String(item) } : ["createdAt", "updatedAt", "expiresAt"].includes(key) ? { timestampValue: item } : { stringValue: item }]));
   t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
     inFlight++; maximum = Math.max(maximum, inFlight);
     try {
+      const hook = beforeRead; beforeRead = undefined; hook?.();
       if (pauseReads) await new Promise(resolve => setTimeout(resolve, 10));
       const uid = new Headers(init.headers).get("authorization")!.replace("Bearer credential-", "");
       const path = new URL(String(url)).pathname.split("/documents/")[1];
       if (path === `users/${uid}`) return Response.json({ fields: fields({ uid, usernameLower: `${uid}nick` }) });
       if (path === `usernames/${uid}nick`) return Response.json({ fields: fields({ uid }) });
+      if (options.privateSchema && path.startsWith(`socialPrivateInvitations/${session}/guests/`)) return Response.json({ fields: fields({ schema: 1,
+        authorizationId: "d".repeat(64), revision: 1, sessionId: session, hostUid: "host", recipientUid: path.split("/").at(-1), status: "active",
+        createdAt: new Date(expiry - 14_000_000).toISOString(), updatedAt: new Date(expiry - 14_000_000).toISOString(), expiresAt: new Date(expiry).toISOString() }) });
       assert.equal(path, `socialSessions/${session}`);
-      return Response.json({ fields: fields({ schema: 1, hostUid: "host", title: "Group", modpackName: "Pack", minecraftVersion: "1.21.1", loader: "Fabric", imageUrl: null, players: 1, maxPlayers: 9, visibility: "public", joinPolicy: "open", expiresAt: new Date(expiry).toISOString() }) });
+      return Response.json({ fields: fields({ schema: 1, hostUid: "host", title: "Group", modpackName: "Pack", minecraftVersion: "1.21.1", loader: "Fabric", imageUrl: null, players: 1, maxPlayers: 9, visibility: options.privateSchema ? "private" : "public", joinPolicy: "open", expiresAt: new Date(expiry).toISOString() }) });
     } finally { inFlight--; }
   });
-  const env = { FIREBASE_PROJECT_ID: "auroralauncher" }, ctx = { storage: durable };
+  const env = { FIREBASE_PROJECT_ID: "auroralauncher", CONNECT_SOCIAL_PRIVATE_INVITATIONS: options.gate }, ctx = { storage: durable };
   let actor = new Actor(ctx, env);
   const call = (uid: string, path: string, body: unknown = {}) => actor.dispatch(uid, `credential-${uid}`, session, path, body);
   async function prepared(uid: string, role: "host" | "guest") {
@@ -53,12 +58,84 @@ function fixture(t: Parameters<Parameters<typeof test>[1]>[0]) {
   }
   async function host() {
     await call("host", "bootstrap"); const preparedHost = await prepared("host", "host"), c = preparedHost.challenge;
-    const body = { schemaVersion: 2, purpose: "hostSocialSession", issuerInstance: c.issuerInstance, policyId: c.challengeId, accountId: "host", operationId: c.operationId, generation: c.generation, publicKey: c.publicKey, sessionId: session, sessionDigest: c.sessionDigest, visibility: "public", joinPolicy: "open", serviceId: "game", protocol: "tcp", sourceDigest: "a".repeat(64), maxGuests: 8, issuedAtUnixMs: c.issuedAtUnixMs, expiresAtUnixMs: expiry };
+    const body = { schemaVersion: options.privateSchema ?? 2, purpose: "hostSocialSession", issuerInstance: c.issuerInstance, policyId: c.challengeId, accountId: "host", operationId: c.operationId, generation: c.generation, publicKey: c.publicKey, sessionId: session, sessionDigest: c.sessionDigest, visibility: options.privateSchema ? "private" : "public", joinPolicy: "open", serviceId: "game", protocol: "tcp", sourceDigest: "a".repeat(64), maxGuests: options.privateSchema === 7 ? 7 : 8, issuedAtUnixMs: c.issuedAtUnixMs, expiresAtUnixMs: expiry,
+      ...(options.privateSchema === 7 ? { voiceProfile: "svc", voiceSourceDigest: "b".repeat(64), hostPlayer: true, runtimeProfile: "fabric-loader-0.16.14-1.21.1", voiceTransportProfile: "nativeVoice8V1" } : {}) };
     await call("host", "host/register", { proof: preparedHost.proof, policySigned: { body, signature: hex(await crypto.subtle.sign("Ed25519", preparedHost.keys.privateKey, hostSocialPolicyPreimage(body))) } });
     return c.challengeId;
   }
-  return { call, prepared, host, durable, relay: (ticket: any) => actor.relayAuthorize(ticket), parallel: () => { pauseReads = true; maximum = 0; }, maximum: () => maximum, restart: () => { actor = new Actor(ctx, env); } };
+  return { call, prepared, host, durable, session, gate: (value: unknown) => { env.CONNECT_SOCIAL_PRIVATE_INVITATIONS = value; }, beforeNextRead: (hook: () => void) => { beforeRead = hook; },
+    relay: (ticket: any) => actor.relayAuthorize(ticket), parallel: () => { pauseReads = true; maximum = 0; }, maximum: () => maximum, restart: () => { actor = new Actor(ctx, env); } };
 }
+
+test("private online DO gate accepts only trusted exact string 1 and preserves existing public sessions", async t => {
+  for (const gate of [undefined, false, true, "true", "0", "", 1]) {
+    const f = fixture(t, { privateSchema: 6, gate }); await assert.rejects(f.host(), /policy_unavailable/);
+  }
+  const publicSession = fixture(t), policyId = await publicSession.host(); publicSession.gate("1"); publicSession.restart();
+  assert.equal((await publicSession.call("host", "host/poll", { policyId })).state, "group");
+});
+
+for (const privateSchema of [6, 7] as const) test(`private online DO ${privateSchema} delivers exact recipient authority and denies restored state when disabled`, async t => {
+  const f = fixture(t, { privateSchema, gate: "1" }), policyId = await f.host();
+  const context = await f.call("guest", "context", { sessionId: f.session }); assert.equal(context.body.schemaVersion, 2);
+  const guest = await f.prepared("guest", "guest");
+  const joined = await f.call("guest", "join", { proof: guest.proof, policyId, authorizationId: context.body.authorizationId, authorizationRevision: context.body.authorizationRevision });
+  assert.equal(joined.grant.body.schemaVersion, privateSchema); assert.equal(joined.grant.body.authorizationId, context.body.authorizationId);
+  assert.equal(joined.grant.body.authorizationRevision, context.body.authorizationRevision);
+  const poll = await f.call("host", "host/poll", { policyId, transport: { observedAtUnixMs: Date.now(), connectedGrantIds: [joined.grant.body.grantId], hostPlayerConnected: privateSchema === 7 } });
+  assert.equal(poll.deliveries.length, 1);
+  const ticket = await f.call("guest", "relay/ticket", { role: "guest", id: joined.grant.body.grantId });
+  assert.equal((await f.relay(ticket)).allowedPeers.length, 1);
+  assert.equal((await f.call("guest", "presence")).state, "ready");
+  assert.ok(!JSON.stringify([...f.durable.entries]).includes("credential-"));
+  f.gate(undefined);
+  assert.equal((await f.call("guest", "presence")).state, "unavailable");
+  await assert.rejects(f.relay(ticket), /relay_unauthorized/);
+  f.restart(); await assert.rejects(f.call("guest", "continuity", { grantId: joined.grant.body.grantId }), /authority_retired/);
+  f.gate("1"); f.restart(); await assert.rejects(f.call("host", "host/poll", { policyId }), /authority_retired/);
+});
+
+test("private online gate withdrawal during an in-flight observation retires the live and durable claims", async t => {
+  const f = fixture(t, { privateSchema: 6, gate: "1" }), policyId = await f.host();
+  f.beforeNextRead(() => f.gate("0"));
+  await assert.rejects(f.call("host", "host/poll", { policyId }), /authority_retired/);
+  assert.equal((f.durable.entries.get("authority") as any).busy, true);
+  f.gate("1"); await assert.rejects(f.call("host", "host/poll", { policyId }), /authority_retired/);
+  f.restart(); await assert.rejects(f.call("host", "host/poll", { policyId }), /authority_retired/);
+});
+
+test("private online relay-only observation of gate withdrawal cannot revive after re-enabling or restart", async t => {
+  const f = fixture(t, { privateSchema: 6, gate: "1" }), policyId = await f.host();
+  const ticket = await f.call("host", "relay/ticket", { role: "host", id: policyId });
+  f.gate("0"); await assert.rejects(f.relay(ticket), /relay_unauthorized/);
+  assert.equal((f.durable.entries.get("authority") as any).busy, true);
+  f.gate("1"); await assert.rejects(f.relay(ticket), /relay_unauthorized/);
+  f.restart(); await assert.rejects(f.call("host", "host/poll", { policyId }), /authority_retired/);
+  await assert.rejects(f.relay(ticket), /relay_unauthorized/);
+});
+
+test("private online relay rechecks RAM retirement after awaiting an older durable snapshot", async t => {
+  const f = fixture(t, { privateSchema: 6, gate: "1" }), policyId = await f.host();
+  const ticket = await f.call("host", "relay/ticket", { role: "host", id: policyId });
+  const observedRead = Promise.withResolvers<void>(), releaseRead = Promise.withResolvers<void>();
+  const observedWrite = Promise.withResolvers<void>(), releaseWrite = Promise.withResolvers<void>();
+  const originalGet = f.durable.get, originalPut = f.durable.put; let reads = 0;
+  f.durable.get = async key => {
+    const value = await originalGet(key);
+    if (++reads === 2) { observedRead.resolve(); await releaseRead.promise; }
+    return value;
+  };
+  f.durable.put = async (key, value) => {
+    if ((value as any).busy === true) { observedWrite.resolve(); await releaseWrite.promise; }
+    await originalPut(key, value);
+  };
+  const pendingRelay = f.relay(ticket), relayDenied = assert.rejects(pendingRelay, /relay_unauthorized/);
+  await observedRead.promise; f.gate("0");
+  const pendingRetirement = f.call("host", "host/poll", { policyId }), retired = assert.rejects(pendingRetirement, /authority_retired/);
+  await observedWrite.promise; f.gate("1"); releaseRead.resolve();
+  try { await relayDenied; } finally { releaseWrite.resolve(); }
+  await retired; assert.equal((f.durable.entries.get("authority") as any).busy, true);
+});
 
 test("DO concurrent eight guests and host share canonical durable claims without serial Firestore reads or lost leases", async t => {
   const f = fixture(t), policyId = await f.host(); f.parallel();

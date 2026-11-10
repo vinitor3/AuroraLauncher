@@ -1630,15 +1630,26 @@ async fn check_source(
     .await
 }
 
-async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
-    let (source_guard, source) = discovered_source(&run).await?;
-    let (challenge, proof) = challenge(&run, &http, None).await?;
-    check_source(&run, &source_guard, &mut None, None, || Ok(())).await?;
+fn review_host_policy(
+    run: &Run,
+    http: &Http,
+    challenge: &lab::SocialKeyChallenge,
+    source: SocketAddr,
+) -> Result<lab::SocialHostPolicy, ConnectError> {
     let visibility = run
         .request
         .visibility
         .as_deref()
         .ok_or(ConnectError::InvalidRequest)?;
+    let private = visibility == "private";
+    if private
+        && (!run.authority.private_invitations_enabled() || run.authority.join_policy != "open")
+    {
+        return Err(ConnectError::InvalidRequest);
+    }
+    // Build the unchanged TCP/native-voice contract, then bind its final private
+    // schema before any digest, consent, signature or admission can be produced.
+    let policy_visibility = if private { "friends" } else { visibility };
     #[cfg(all(windows, feature = "connect-voice-lab"))]
     let voice_policy = if let Some(binding) = &run.native_voice_source {
         let (profile, digest) = binding
@@ -1654,8 +1665,8 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
         );
         Some(
             lab::SocialHostPolicy::review_online_voice_with_clock(
-                &challenge,
-                visibility,
+                challenge,
+                policy_visibility,
                 source,
                 &run.authority.join_policy,
                 expiry,
@@ -1673,38 +1684,34 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
                 )
             })
             .and_then(lab::SocialHostPolicy::with_native_voice_transport)
-            .map_err(|error| review_failure(&http, error))?,
+            .map_err(|error| review_failure(http, error))?,
         )
     } else {
         None
     };
     #[cfg(not(all(windows, feature = "connect-voice-lab")))]
     let voice_policy: Option<lab::SocialHostPolicy> = None;
-    let policy = if visibility == "private" {
-        if !run.authority.private_invitations_enabled()
-            || voice_policy.is_some()
-            || run.authority.join_policy != "open"
-        {
+    let policy = if private && run.authority.online_origin.is_none() {
+        if voice_policy.is_some() {
             return Err(ConnectError::InvalidRequest);
         }
         // Local private lab preserves its original one-slot/60s loopback run.
         // Only the completed private review can be approved or serialized.
         lab::SocialHostPolicy::review_online_with_clock(
-            &challenge,
-            "friends",
+            challenge,
+            policy_visibility,
             source,
             "open",
             run.expiry,
             run.clock.as_ref(),
         )
         .and_then(|policy| policy.with_guest_limit(1))
-        .and_then(lab::SocialHostPolicy::with_private_recipients)
     } else if let Some(policy) = voice_policy {
         Ok(policy)
     } else if run.authority.online_origin.is_some() {
         lab::SocialHostPolicy::review_online_with_clock(
-            &challenge,
-            visibility,
+            challenge,
+            policy_visibility,
             source,
             &run.authority.join_policy,
             run.authority.session_expiry,
@@ -1712,13 +1719,20 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
         )
     } else {
         lab::SocialHostPolicy::review_with_join_policy(
-            &challenge,
-            visibility,
+            challenge,
+            policy_visibility,
             source,
             &run.authority.join_policy,
         )
     }
-    .map_err(|error| review_failure(&http, error))?;
+    .map_err(|error| review_failure(http, error))?;
+    let policy = if private {
+        policy
+            .with_private_recipients()
+            .map_err(|error| review_failure(http, error))?
+    } else {
+        policy
+    };
     let policy = if run.authority.online_origin.is_some() {
         let maximum = policy.max_guests().min(
             run.authority
@@ -1727,10 +1741,18 @@ async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
         );
         policy
             .with_guest_limit(maximum)
-            .map_err(|error| review_failure(&http, error))?
+            .map_err(|error| review_failure(http, error))?
     } else {
         policy
     };
+    Ok(policy)
+}
+
+async fn host(mut run: Run, mut http: Http) -> Result<(), ConnectError> {
+    let (source_guard, source) = discovered_source(&run).await?;
+    let (challenge, proof) = challenge(&run, &http, None).await?;
+    check_source(&run, &source_guard, &mut None, None, || Ok(())).await?;
+    let policy = review_host_policy(&run, &http, &challenge, source)?;
     let digest = policy.digest();
     let (sender, receiver) = oneshot::channel();
     update(&run.state, &run.id, |a| {
@@ -2760,7 +2782,7 @@ mod tests {
         }
     }
     #[test]
-    fn social_private_capability_and_reservation_are_local_tcp_only() {
+    fn social_private_capability_and_reservation_require_fixed_opt_in() {
         let mut closed = manager();
         closed
             .social_authority
@@ -2804,7 +2826,7 @@ mod tests {
             .social_authority
             .as_mut()
             .unwrap()
-            .private_invitations = true;
+            .private_invitations = false;
         online.social_authority.as_mut().unwrap().online_origin =
             Some("https://compiled.test.invalid");
         assert!(online.social_capabilities().private_invitations.is_none());
@@ -2814,6 +2836,16 @@ mod tests {
                 .unwrap_err(),
             ConnectError::InvalidRequest
         );
+        online
+            .social_authority
+            .as_mut()
+            .unwrap()
+            .private_invitations = true;
+        assert_eq!(online.social_capabilities().private_invitations, Some(true));
+        assert_eq!(online.social_capabilities().max_session_seconds, 14_400);
+        online
+            .social_reserve_inner("main", private.clone(), None, true)
+            .unwrap();
         let mut approval = manager();
         approval
             .social_authority

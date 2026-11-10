@@ -30,7 +30,7 @@ pub(super) fn verify_guest_admission(
     if private && !run.authority.private_invitations_enabled() {
         return Err(ConnectError::InvitationRejected);
     }
-    let verify = if private {
+    let verify = if private && run.authority.online_origin.is_none() {
         lab::VerifiedSocialGrant::for_guest_private_loopback
     } else if run.authority.online_origin.is_some() {
         lab::VerifiedSocialGrant::for_guest_online

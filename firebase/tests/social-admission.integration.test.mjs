@@ -29,7 +29,7 @@ async function socialFactory() {
   const source = compile(await readFile(new URL("../../apps/desktop/src/lib/socialFirebase.ts", import.meta.url), "utf8"))
     .replace('"../shared/social"', JSON.stringify(shared))
     .replace('"./socialServerClock"', JSON.stringify(clock))
-    .replace('"./firebase"', JSON.stringify("data:text/javascript,export const socialLabBuild=true"))
+    .replace('"./firebase"', JSON.stringify("data:text/javascript,export const socialLabBuild=true;export const privateSocialOnlineConfiguration=()=>false"))
     .replace('"./socialOrganization"', JSON.stringify(organization))
     .replace('"./socialPrivateInvitations"', JSON.stringify(privateInvitations))
     .replace('"firebase/firestore"', JSON.stringify(import.meta.resolve("firebase/firestore")));

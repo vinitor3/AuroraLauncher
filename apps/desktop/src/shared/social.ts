@@ -25,10 +25,12 @@ export type SocialPrivateInvitationSnapshot = {
 };
 /** Discovery permission only. Admission remains with the native Connect owner. */
 export type SocialPrivateInvitationService = {
+  readonly environment: "local" | "online";
   snapshot(): Promise<SocialPrivateInvitationSnapshot>;
   invite(sessionId: string, recipientUid: string): Promise<void>;
   revoke(sessionId: string, recipientUid: string): Promise<void>;
   decline(sessionId: string): Promise<void>;
+  cleanupExpired(): Promise<{ removedRecords: number; moreAvailable: boolean }>;
 };
 export type SocialOrganizationService = {
   /** Server-time display projection; NaN means its bounded sample is unavailable. */
@@ -50,7 +52,7 @@ export type SocialService = {
   now?(): number;
   readonly capabilities: { friends: boolean; catalog: boolean; publication: boolean; join: boolean };
   readonly organization?: SocialOrganizationService;
-  /** Local emulator experiment only; absent in the online/normal SDK. */
+  /** Explicit private experiment; absent in normal/default online builds. */
   readonly privateInvitations?: SocialPrivateInvitationService;
   /** Display-only, exact Aurora registry lookup in this authenticated service scope. */
   profile?(uid: string): Promise<SocialPerson | null>;

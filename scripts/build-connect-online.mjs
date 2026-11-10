@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { connectOnlineEnvironment } from "./connect-online-build-options.mjs";
 
 const desktop = fileURLToPath(new URL("../apps/desktop/", import.meta.url));
 // Keep the diagnostic build and its assertions, but avoid spending the launch
@@ -13,7 +14,7 @@ const result = spawnSync(process.execPath, [join(desktop, "node_modules/@tauri-a
   "build", "--debug", "--no-bundle", "--features", "connect-lab,connect-voice-lab",
   "--config", "src-tauri/tauri.connect-online.conf.json", "--", "--offline", "--locked", "--jobs", "2", ...hashBuildOptions], {
   cwd: desktop, stdio: "inherit", windowsHide: true,
-  env: { ...process.env, AURORA_SOCIAL_ORIGIN: "https://aurora-connect-social.aurora-edge-proxy.workers.dev" },
+  env: connectOnlineEnvironment(process.argv.slice(2), process.env),
 });
 if (result.error) { console.error("Não foi possível iniciar o build experimental."); process.exitCode = 1; }
 else process.exitCode = result.status ?? 1;

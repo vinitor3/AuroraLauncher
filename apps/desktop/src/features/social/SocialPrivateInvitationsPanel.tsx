@@ -29,13 +29,13 @@ export function SocialPrivateInvitationsPanel({ service, ownSession, joinEnabled
     const timer = window.setInterval(() => setNow(clock()), 1000);
     return () => { active.current = false; ++scope.current; window.clearInterval(timer); };
   }, [service, invitations, sessionKey]);
-  async function run(work: (generation: number) => Promise<void>, success = "", refresh = true) {
+  async function run(work: (generation: number) => Promise<void | string>, success = "", refresh = true) {
     if (!invitations || busy.current) return;
     busy.current = true; setPending(true); setError(""); setMessage(""); const generation = scope.current;
     try {
-      await work(generation); if (!current(generation)) return;
+      const result = await work(generation); if (!current(generation)) return;
       if (refresh) { setSnapshot(undefined); setResult(null); setSearched(false); await read(generation); }
-      if (current(generation)) setMessage(success);
+      if (current(generation)) setMessage(typeof result === "string" ? result : success);
     } catch (cause) { if (current(generation)) setError(socialError(cause)); }
     finally { if (current(generation)) { busy.current = false; setPending(false); } }
   }
@@ -54,8 +54,13 @@ export function SocialPrivateInvitationsPanel({ service, ownSession, joinEnabled
   }
   if (!invitations) return null;
   return <section className="social-private social-organization" aria-label="Convites privados por conta">
-    <div className="social-community-heading"><div><h3>Convites privados</h3><p>Teste local por conta Aurora. O convite não inicia uma conexão nem adiciona amizade.</p></div>
-      <button className="secondary" disabled={pending} onClick={() => void run(async () => {}, "Lista atualizada.")}>Atualizar convites</button></div>
+    <div className="social-community-heading"><div><h3>Convites privados</h3><p>{invitations.environment === "online" ? "Serviço online do Aurora." : "Teste local por conta Aurora."} O convite não inicia uma conexão nem adiciona amizade.</p>
+      {invitations.environment === "online" && <small>Online aqui é o serviço de convites do Aurora; não altera a autenticação do servidor Minecraft.</small>}</div>
+      <div className="social-actions"><button className="secondary" disabled={pending} onClick={() => void run(async () => {}, "Lista atualizada.")}>Atualizar convites</button>
+        <button className="secondary" disabled={pending} onClick={() => void run(async () => {
+          const result = await invitations.cleanupExpired();
+          return `${result.removedRecords} registros expirados removidos.${result.moreAvailable ? " Há outra parte da lista para conferir; use Limpar convites expirados novamente." : " Esta etapa da limpeza terminou."}`;
+        }, "", false)}>Limpar convites expirados</button></div></div>
     {error && <p className="social-notice" role="alert">{error}</p>}{message && <p className="social-notice" role="status">{message}</p>}
     <h4>Recebidos</h4>
     {!snapshot ? <p>{pending ? "Consultando convites…" : "Atualize os convites para conferir a lista."}</p>
@@ -69,7 +74,7 @@ export function SocialPrivateInvitationsPanel({ service, ownSession, joinEnabled
             if (!(item.expiresAtMs > clock())) return;
             void run(() => invitations.decline(item.session.id), "Convite recusado.");
           }}>Recusar convite</button></div></li>)}</ul>}
-    {!joinEnabled && <small>A entrada privada depende do suporte nativo deste teste local; nenhum convite autoriza um transporte por si só.</small>}
+    {!joinEnabled && <small>A entrada privada depende do suporte nativo deste executável; nenhum convite autoriza um transporte por si só.</small>}
     <h4>Convidar para meu anúncio privado</h4>
     {!host ? <p>Salve um anúncio privado com entrada aberta e atualize esta lista antes de convidar.</p> : <>
       <p>Até 8 contas diferentes por anúncio. Revogar não libera esse limite. Um novo anúncio exige novos convites; remover um participante da conexão não é desfeito por reenviar o convite.</p>

@@ -141,6 +141,7 @@ export function createSocialConnectController(options: Options) {
   }
   return {
     start,
+    supportsPrivateInvitations: () => accountMatches() && capabilities?.available === true && capabilities.privateInvitations === true,
     observeSessions: async (sessionIds: string[]) => {
       const generation = revision;
       check(generation);

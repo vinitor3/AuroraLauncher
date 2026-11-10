@@ -24,7 +24,7 @@ before(async () => {
     .replace('"./socialOrganization"', JSON.stringify(organization))
     .replace('"./socialPrivateInvitations"', JSON.stringify(privateInvitations))
     .replace('"./socialServerClock"', JSON.stringify(clock))
-    .replace('"./firebase"', JSON.stringify("data:text/javascript,export const socialLabBuild=true"))
+    .replace('"./firebase"', JSON.stringify("data:text/javascript,export const socialLabBuild=true;export const privateSocialOnlineConfiguration=()=>false"))
     .replace('"firebase/firestore"', JSON.stringify(import.meta.resolve("firebase/firestore")));
   createService = (await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`)).createSocialFirebaseService;
   env = await initializeTestEnvironment({ projectId, firestore: { host: "127.0.0.1", port: 8187, rules: await readFile(new URL("../firestore.rules", import.meta.url), "utf8") } });

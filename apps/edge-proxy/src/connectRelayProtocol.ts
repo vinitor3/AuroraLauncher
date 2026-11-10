@@ -6,7 +6,7 @@ const challengeContext = new TextEncoder().encode("iroh-relay handshake v1 chall
 export const RELAY_PROTOCOL = "iroh-relay-v2";
 export const MAX_RELAY_FRAME = 65_537;
 export const hex = (bytes: Uint8Array): string => Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
-export function peerBytes(value: string): Uint8Array {
+export function peerBytes(value: string): Uint8Array<ArrayBuffer> {
   if (!/^[0-9a-f]{64}$/.test(value)) throw new Error("relay_invalid_peer");
   return Uint8Array.from(value.match(/../g)!, byte => Number.parseInt(byte, 16));
 }
@@ -22,7 +22,7 @@ export async function verifyRelayAuthentication(challenge: Uint8Array, frame: Ui
   try {
     const key = await crypto.subtle.importKey("raw", peerBytes(expectedPeer), "Ed25519", false, ["verify"]);
     const message = blake3(challenge.subarray(1), { context: challengeContext, dkLen: 32 });
-    return await crypto.subtle.verify("Ed25519", key, frame.slice(34), message);
+    return await crypto.subtle.verify("Ed25519", key, new Uint8Array(frame.subarray(34)), new Uint8Array(message));
   } catch { return false; }
 }
 

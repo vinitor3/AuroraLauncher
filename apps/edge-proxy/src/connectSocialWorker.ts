@@ -8,12 +8,14 @@ import { projectSocialPresence } from "./connectSocialPresence.ts";
 
 interface Env {
   FIREBASE_PROJECT_ID: string;
+  /** Deployment-controlled opt-in only. No request/header can enable private admission. */
+  CONNECT_SOCIAL_PRIVATE_INVITATIONS?: string;
   SOCIAL_SESSIONS: DurableObjectNamespace<SocialSessionAuthority>;
   SOCIAL_ACCOUNTS: DurableObjectNamespace<SocialAccountBudget>;
   RELAY_SESSIONS: DurableObjectNamespace<ConnectRelaySession>;
 }
 const paths = new Set(["bootstrap", "presence", "identity", "key/challenge", "key/proof", "context", "host/register", "join", "continuity", "host/poll", "host/publish", "host/revoke", "guest/receive", "host/stop", "guest/stop", "relay/ticket"]);
-const fail = (code: string): never => { throw new SocialBindingError(code); };
+function fail(code: string): never { throw new SocialBindingError(code); }
 const reply = (data: unknown, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
 function clockRequest(body: unknown): { operationId: string; generation: number; nonce: string } | undefined {
   if (!body || typeof body !== "object" || Array.isArray(body)) return fail("invalid_request");
@@ -24,8 +26,9 @@ function clockRequest(body: unknown): { operationId: string; generation: number;
     || typeof value.nonce !== "string" || !/^[0-9a-f]{32}$/.test(value.nonce)) return fail("invalid_request");
   return value as { operationId: string; generation: number; nonce: string };
 }
-type Live = { stored: Stored; binding: ReturnType<typeof createSocialBindingAuthority>; admission: Awaited<ReturnType<typeof createSocialAdmissionAuthority>>; keys: CryptoKeyPair; clock: { wall(): number; monotonic(): number }; active: number; failed: boolean };
+type Live = { stored: Stored; binding: ReturnType<typeof createSocialBindingAuthority>; admission: Awaited<ReturnType<typeof createSocialAdmissionAuthority>>; keys: CryptoKeyPair; clock: { wall(): number; monotonic(): number }; active: number; failed: boolean; privateInvitations: boolean };
 type Stored = { sessionId: string; until: number; busy: boolean; clock: { wall: number; monotonic: number }; privateJwk: JsonWebKey; publicJwk: JsonWebKey; binding: SocialBindingState; admission: SocialAdmissionState };
+const containsPrivatePolicy = (stored: Stored) => stored.admission.policies.some(([, policy]) => [6, 7].includes(policy.body.schemaVersion));
 
 /** Distributed per-account budget, one bounded row and alarm per active account. */
 export class SocialAccountBudget extends DurableObject<Env> {
@@ -67,19 +70,38 @@ export class SocialAccountBudget extends DurableObject<Env> {
 export class SocialSessionAuthority extends DurableObject<Env> {
   private live?: Live;
   private loading?: Promise<Live>;
+  private privateEnabled() { return this.env.CONNECT_SOCIAL_PRIVATE_INVITATIONS === "1"; }
+  private async retire(stored: Stored, code = "authority_retired"): Promise<never> {
+    if (this.live) this.live.failed = true;
+    try { await this.ctx.storage.put("authority", { ...stored, busy: true }); }
+    catch { fail("backend_unavailable"); }
+    return fail(code);
+  }
+  private async compatible(live: Live) {
+    if (live.failed) fail("authority_retired");
+    if (live.privateInvitations !== this.privateEnabled()) {
+      // Preserve the existing durable retirement barrier if configuration changes
+      // during an in-flight call. Re-enabling cannot recover this session's claims.
+      await this.retire(live.stored);
+    }
+  }
   private async load(sessionId: string, request: Request, bootstrap: boolean): Promise<Live> {
     if (this.live && this.live.stored.until > Date.now()) {
       if (this.live.failed || this.live.stored.sessionId !== sessionId) fail("authority_retired");
+      await this.compatible(this.live);
       return this.live;
     }
     if (this.loading) return this.loading;
     this.loading = (async () => {
-      const now = Date.now(); let stored = await this.ctx.storage.get<Stored>("authority");
+      const now = Date.now(), privateInvitations = this.privateEnabled(); let stored = await this.ctx.storage.get<Stored>("authority");
       if (stored && stored.until > now && stored.busy) fail("authority_retired");
       if (stored && stored.until <= now) { await this.ctx.storage.deleteAll(); stored = undefined; }
       if (stored && stored.sessionId !== sessionId) fail("invalid_request");
       if (!stored && !bootstrap) fail("authority_retired");
       if (stored && (!stored.clock || now < stored.clock.wall)) fail("authority_retired");
+      if (stored && containsPrivatePolicy(stored) && !privateInvitations) {
+        await this.retire(stored);
+      }
       // performance.now has a new epoch after eviction. Restore the original
       // virtual monotonic epoch, consuming all elapsed wall time during dormancy.
       // Signed wall deadlines remain independent caps and rollback fails closed.
@@ -96,27 +118,28 @@ export class SocialSessionAuthority extends DurableObject<Env> {
         privateKey: await crypto.subtle.importKey("jwk", stored.privateJwk, "Ed25519", true, ["sign"]),
         publicKey: await crypto.subtle.importKey("jwk", stored.publicJwk, "Ed25519", true, ["verify"]),
       } : await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
-      const admission = await createSocialAdmissionAuthority(binding, dependencies, { keys, state: stored?.admission, online: true });
+      const admission = await createSocialAdmissionAuthority(binding, dependencies, { keys, state: stored?.admission, online: true, privateInvitations });
       stored ??= { sessionId, until: Math.min(session!.expiresAtMs, now + 14_400_000), busy: false,
         clock: { wall: clock.wall(), monotonic: clock.monotonic() },
         privateJwk: await crypto.subtle.exportKey("jwk", keys.privateKey), publicJwk: await crypto.subtle.exportKey("jwk", keys.publicKey),
         binding: binding.durableState(), admission: admission.durableState() };
       if (stored.until <= now) fail("session_not_authorized");
       await this.ctx.storage.put("authority", stored); await this.ctx.storage.setAlarm(stored.until);
-      return this.live = { stored, binding, admission, keys, clock, active: 0, failed: false };
+      return this.live = { stored, binding, admission, keys, clock, active: 0, failed: false, privateInvitations };
     })();
-    try { return await this.loading; } finally { this.loading = undefined; }
+    try { const live = await this.loading; await this.compatible(live); return live; } finally { this.loading = undefined; }
   }
   private async checkpoint(live: Live) {
-    if (live.failed) fail("authority_retired");
+    await this.compatible(live);
     const wall = live.clock.wall();
     if (wall < live.stored.clock.wall) { live.failed = true; fail("authority_retired"); }
     const snapshot: Stored = { ...live.stored, clock: { wall, monotonic: live.clock.monotonic() }, binding: live.binding.durableState(), admission: live.admission.durableState(), busy: live.active > 0 };
     live.stored.clock = snapshot.clock;
     try { await this.ctx.storage.put("authority", snapshot); }
     catch { live.failed = true; fail("backend_unavailable"); }
+    await this.compatible(live);
   }
-  async dispatch(uid: string, token: string, sessionId: string, path: string, body: unknown): Promise<unknown> {
+  async dispatch(uid: string, token: string, sessionId: string, path: string, body: unknown) {
     const receivedWall = Date.now();
     const request = new Request(`https://social.internal/v1/social/${path}`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "x-aurora-verified-account": uid }, signal: AbortSignal.timeout(5000) });
     if (path === "presence") {
@@ -127,6 +150,7 @@ export class SocialSessionAuthority extends DurableObject<Env> {
         .readSession({ accountId: uid, request }, sessionId, request.signal);
       const stored = await this.ctx.storage.get<Stored>("authority"), now = Date.now();
       const usable = session.expiresAtMs > now && !!stored && stored.sessionId === sessionId && stored.until > now
+        && (this.privateEnabled() || !containsPrivatePolicy(stored))
         && stored.clock.wall <= now && !this.live?.failed && (!stored.busy || !!this.live?.active);
       return { accountId: uid, ...projectSocialPresence(sessionId, stored?.admission, now, usable) };
     }
@@ -189,14 +213,14 @@ export class SocialSessionAuthority extends DurableObject<Env> {
   }
   /** RPC exceptions lose their custom prototype across isolates. Carry only our
    * closed error code across the boundary, never an upstream message or token. */
-  async dispatchHttp(uid: string, token: string, sessionId: string, path: string, body: unknown): Promise<{ ok: true; value: unknown } | { ok: false; code: string }> {
+  async dispatchHttp(uid: string, token: string, sessionId: string, path: string, body: unknown): Promise<{ ok: true; value: Awaited<ReturnType<SocialSessionAuthority["dispatch"]>> } | { ok: false; code: string }> {
     try { return { ok: true, value: await this.dispatch(uid, token, sessionId, path, body) }; }
     catch (error) { return { ok: false, code: error instanceof SocialBindingError ? error.code : "backend_unavailable" }; }
   }
   /** Internal relay RPC. Never accepts an account or destination outside the signed original authority. */
   async relayAuthorize(ticket: { body: Record<string, unknown>; signature: string }): Promise<{ body: Record<string, unknown>; allowedPeers: string[]; freshUntil: number }> {
     const stored = await this.ctx.storage.get<Stored>("authority"), now = Date.now(), body = ticket?.body;
-    if (!stored || (stored.busy && !(this.live && this.live.active > 0 && !this.live.failed)) || stored.until <= now || !body || typeof ticket.signature !== "string" || !/^[0-9a-f]{128}$/.test(ticket.signature)) fail("relay_unauthorized");
+    if (!stored || this.live?.failed || (stored.busy && !(this.live && this.live.active > 0 && !this.live.failed)) || stored.until <= now || !body || typeof ticket.signature !== "string" || !/^[0-9a-f]{128}$/.test(ticket.signature)) fail("relay_unauthorized");
     const keys = ["schemaVersion", "sessionId", "issuerInstance", "peerId", "hostPeerId", "accountId", "generation", "issuedAtUnixMs", "expiresAtUnixMs", "directAddresses"];
     if (Object.keys(body).length !== keys.length || keys.some(key => !Object.hasOwn(body, key)) || body.schemaVersion !== 1
       || body.sessionId !== stored.sessionId || body.issuerInstance !== stored.binding.issuerInstance || !Array.isArray(body.directAddresses) || body.directAddresses.length !== 0
@@ -207,8 +231,9 @@ export class SocialSessionAuthority extends DurableObject<Env> {
     if (!await crypto.subtle.verify("Ed25519", key, signature, new TextEncoder().encode("aurora/connect/relay-ticket/v1\0" + JSON.stringify(ordered)))) fail("relay_unauthorized");
     const current = await this.ctx.storage.get<Stored>("authority");
     const checkedNow = Date.now();
-    if (!current || (current.busy && !(this.live && this.live.active > 0 && !this.live.failed)) || current.binding.issuerInstance !== stored.binding.issuerInstance || current.until <= checkedNow) fail("relay_unauthorized");
+    if (!current || this.live?.failed || (current.busy && !(this.live && this.live.active > 0 && !this.live.failed)) || current.binding.issuerInstance !== stored.binding.issuerInstance || current.until <= checkedNow) fail("relay_unauthorized");
     const policy = current.admission.policies.find(([, entry]) => entry.body.publicKey === body.hostPeerId)?.[1];
+    if (policy && [6, 7].includes(policy.body.schemaVersion) && !this.privateEnabled()) await this.retire(current, "relay_unauthorized");
     if (!policy || policy.state === "terminal" || policy.body.expiresAtUnixMs <= checkedNow || !policy.checkedAt || policy.checkedAt > checkedNow || policy.checkedAt + 3000 <= checkedNow) fail("relay_unauthorized");
     const live = current.admission.grants.filter(([, grant]) => grant.policyId === policy.body.policyId && !grant.terminal
       && grant.body.sessionExpiresAtUnixMs > checkedNow && grant.lastLease && grant.lastLease.issuedAtUnixMs <= checkedNow && grant.lastLease.expiresAtUnixMs > checkedNow);

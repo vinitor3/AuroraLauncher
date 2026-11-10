@@ -212,7 +212,7 @@ pub struct SocialLabAuthority {
 #[cfg(feature = "connect-lab")]
 impl SocialLabAuthority {
     pub(super) fn private_invitations_enabled(&self) -> bool {
-        cfg!(debug_assertions) && self.online_origin.is_none() && self.private_invitations
+        cfg!(debug_assertions) && self.private_invitations
     }
     pub fn from_local_process(pin: &str, issuer: &str) -> Result<Self, ConnectError> {
         let lower_hex = |text: &str| {
@@ -258,7 +258,9 @@ impl SocialLabAuthority {
             pin: aurora_connect_lab::generate_key().public(),
             issuer: String::new(),
             online_origin: Some(origin),
-            private_invitations: false,
+            // Build-owned opt-in; runtime environment and renderer cannot enable it.
+            private_invitations: cfg!(debug_assertions)
+                && option_env!("AURORA_SOCIAL_PRIVATE_ONLINE") == Some("1"),
             join_policy: "open".into(),
             session_expiry: 0,
             max_players: 0,

@@ -1,4 +1,4 @@
-import { collection, doc, getDocFromServer, getDocsFromServer, limit, query, runTransaction, serverTimestamp, Timestamp, where, type DocumentData, type Firestore } from "firebase/firestore";
+import { collection, doc, documentId, getDocFromServer, getDocsFromServer, limit, orderBy, query, runTransaction, serverTimestamp, startAfter, Timestamp, where, type DocumentData, type Firestore } from "firebase/firestore";
 import type { SocialPerson, SocialPrivateInvitationService, SocialPrivateInvitationSnapshot, SocialSession } from "../shared/social";
 
 type Guarded = <T>(work: (check: () => void) => Promise<T>) => Promise<T>;
@@ -10,31 +10,36 @@ const validSession = (value: unknown): value is string => typeof value === "stri
 const changed = () => new Error("O convite ou a sessão mudou. Atualize antes de tentar novamente.");
 const exact = (value: DocumentData, keys: string[]) => Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const expiration = (value: unknown, now: number) => value instanceof Timestamp && Number.isFinite(now) && value.toMillis() > now;
-function authorization(value: DocumentData | undefined, session: string, recipient: string, now: number): Authorization | null {
+function authorization(value: DocumentData | undefined, session: string, recipient: string, now: number, expired = false): Authorization | null {
   if (!value || !exact(value, ["schema", "authorizationId", "revision", "sessionId", "hostUid", "recipientUid", "status", "createdAt", "updatedAt", "expiresAt"])
     || value.schema !== 1 || !validSession(session) || value.sessionId !== session || !validUid(value.hostUid) || !validUid(recipient)
     || value.recipientUid !== recipient || value.hostUid === recipient || typeof value.authorizationId !== "string" || !/^[0-9a-f]{64}$/.test(value.authorizationId)
     || !Number.isInteger(value.revision) || value.revision < 1 || value.revision > 0xffffffff || !["active", "revoked"].includes(value.status)
-    || !(value.createdAt instanceof Timestamp) || !(value.updatedAt instanceof Timestamp) || !expiration(value.expiresAt, now)
-    || value.createdAt.toMillis() > value.updatedAt.toMillis() || value.updatedAt.toMillis() >= value.expiresAt.toMillis()) return null;
+    || !(value.createdAt instanceof Timestamp) || !(value.updatedAt instanceof Timestamp)
+    || !(expired ? value.expiresAt instanceof Timestamp && Number.isFinite(now) && value.expiresAt.toMillis() > 0 && value.expiresAt.toMillis() <= now : expiration(value.expiresAt, now))
+    || value.createdAt.toMillis() > value.updatedAt.toMillis() || !expired && value.updatedAt.toMillis() >= value.expiresAt.toMillis()) return null;
   return value as Authorization;
 }
-function audience(value: DocumentData | undefined, session: SocialSession): Audience | null {
+function audience(value: DocumentData | undefined, session: Pick<SocialSession, "id" | "hostUid" | "expiresAtMs">): Audience | null {
   if (!value || !exact(value, ["schema", "hostUid", "sessionId", "expiresAt", "recipients"]) || value.schema !== 1
     || value.hostUid !== session.hostUid || value.sessionId !== session.id || !(value.expiresAt instanceof Timestamp)
-    || value.expiresAt.toMillis() !== session.expiresAtMs || !Array.isArray(value.recipients) || value.recipients.length > 8
+    || value.expiresAt.toMillis() <= 0 || value.expiresAt.toMillis() !== session.expiresAtMs || !Array.isArray(value.recipients) || value.recipients.length > 8
     || !value.recipients.every(validUid) || new Set(value.recipients).size !== value.recipients.length || value.recipients.includes(session.hostUid)) return null;
   return value as Audience;
 }
-function pointer(value: DocumentData | undefined, id: string, now: number) {
+function pointer(value: DocumentData | undefined, id: string, now: number, expired = false) {
   return !!value && exact(value, ["schema", "sessionId", "hostUid", "expiresAt"]) && value.schema === 1 && validSession(id)
-    && value.sessionId === id && validUid(value.hostUid) && expiration(value.expiresAt, now);
+    && value.sessionId === id && validUid(value.hostUid) && (expired
+      ? value.expiresAt instanceof Timestamp && Number.isFinite(now) && value.expiresAt.toMillis() > 0 && value.expiresAt.toMillis() <= now : expiration(value.expiresAt, now));
 }
 
-/** Instantiated only by the explicitly gated emulator SDK. No transport fields leave this adapter. */
+/** Instantiated only by the explicitly gated SDK. No transport fields leave this adapter. */
 export function createSocialPrivateInvitations(db: Firestore, account: () => string, guarded: Guarded,
-  person: (uid: string, check: () => void) => Promise<SocialPerson>, clock: { now(): number },
-  parseSession: (id: string, value: DocumentData | undefined, now: number) => SocialSession | null): SocialPrivateInvitationService {
+  person: (uid: string, check: () => void) => Promise<SocialPerson>, clock: { now(): number; writeTime(): number },
+  parseSession: (id: string, value: DocumentData | undefined, now: number) => SocialSession | null,
+  environment: "local" | "online" = "local"): SocialPrivateInvitationService {
+  let cleanupCursor: string | undefined;
+  let cleaning = false;
   const authRef = (id: string, peer: string) => doc(db, "socialPrivateInvitations", id, "guests", peer);
   const audienceRef = (id: string) => doc(db, "socialPrivateAudiences", id);
   const inboxRef = (id: string, peer: string) => doc(db, "socialPrivateInbox", peer, "sessions", id);
@@ -60,6 +65,7 @@ export function createSocialPrivateInvitations(db: Firestore, account: () => str
     });
   }
   return {
+    environment,
     snapshot: () => guarded(async check => {
       const actor = account();
       const output: SocialPrivateInvitationSnapshot = { incoming: [], outgoing: [], sessionId: null, expiresAtMs: null, remainingRecipients: 8 };
@@ -118,5 +124,54 @@ export function createSocialPrivateInvitations(db: Firestore, account: () => str
     }),
     revoke: (sessionId, recipient) => withdraw(sessionId, recipient, true),
     decline: sessionId => withdraw(sessionId, account(), false),
+    cleanupExpired: async () => {
+      if (cleaning) throw changed();
+      cleaning = true;
+      try { return await guarded(async check => {
+        const actor = account(), cutoff = clock.writeTime();
+        if (!Number.isFinite(cutoff)) throw changed();
+        let removedRecords = 0;
+        async function removePair(id: string, host: string, recipient: string, expiresAtMs: number) {
+          return runTransaction(db, async tx => {
+            check(); const rawAuth = (await tx.get(authRef(id, recipient))).data(); check();
+            const rawPointer = (await tx.get(inboxRef(id, recipient))).data(); check();
+            const permission = rawAuth ? authorization(rawAuth, id, recipient, cutoff, true) : null;
+            if (rawAuth && (!permission || permission.hostUid !== host || permission.expiresAt.toMillis() !== expiresAtMs)
+              || rawPointer && (!pointer(rawPointer, id, cutoff, true) || rawPointer.hostUid !== host || rawPointer.expiresAt.toMillis() !== expiresAtMs)) throw changed();
+            if (rawPointer) tx.delete(inboxRef(id, recipient));
+            if (rawAuth) tx.delete(authRef(id, recipient));
+            return Number(!!rawPointer) + Number(!!rawAuth);
+          }, { maxAttempts: 1 });
+        }
+        // Every click is bounded. There is no background cleanup or automatic page loop.
+        const inbox = await getDocsFromServer(query(collection(db, "socialPrivateInbox", actor, "sessions"), where("expiresAt", "<=", Timestamp.fromMillis(cutoff)), limit(20))); check();
+        for (const entry of inbox.docs) {
+          const value = entry.data(); if (!pointer(value, entry.id, cutoff, true) || value.hostUid === actor) throw changed();
+          removedRecords += await removePair(entry.id, value.hostUid, actor, value.expiresAt.toMillis()); check();
+        }
+        const base = collection(db, "socialPrivateAudiences");
+        const page = await getDocsFromServer(query(base, where("hostUid", "==", actor), orderBy(documentId()),
+          ...(cleanupCursor ? [startAfter(cleanupCursor)] : []), limit(4))); check();
+        for (const entry of page.docs) {
+          const raw = entry.data();
+          if (!validSession(entry.id) || !(raw.expiresAt instanceof Timestamp)) throw changed();
+          const expected = audience(raw, { id: entry.id, hostUid: actor, expiresAtMs: raw.expiresAt.toMillis() });
+          if (!expected) throw changed();
+          if (expected.expiresAt.toMillis() <= cutoff) {
+            for (const recipient of expected.recipients) { removedRecords += await removePair(entry.id, actor, recipient, expected.expiresAt.toMillis()); check(); }
+            removedRecords += await runTransaction(db, async tx => {
+              check(); const latest = (await tx.get(audienceRef(entry.id))).data(); check();
+              if (!latest) return 0;
+              const value = audience(latest, { id: entry.id, hostUid: actor, expiresAtMs: expected.expiresAt.toMillis() });
+              if (!value || value.expiresAt.toMillis() > cutoff || JSON.stringify(value.recipients) !== JSON.stringify(expected.recipients)) throw changed();
+              tx.delete(audienceRef(entry.id)); return 1;
+            }, { maxAttempts: 1 }); check();
+          }
+          cleanupCursor = entry.id;
+        }
+        if (page.size < 4) cleanupCursor = undefined;
+        return { removedRecords, moreAvailable: inbox.size === 20 || page.size === 4 };
+      }); } finally { cleaning = false; }
+    },
   };
 }
