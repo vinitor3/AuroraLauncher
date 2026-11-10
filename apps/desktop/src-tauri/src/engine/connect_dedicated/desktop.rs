@@ -290,6 +290,31 @@ struct Actor {
     local_udp: Option<lab::UdpBridge>,
 }
 impl Actor {
+    fn reconcile_recovery_candidates(
+        &mut self,
+        bundle_id: BundleId,
+        eula_pending: Option<bool>,
+        announcement: Option<(&str, bool)>,
+    ) {
+        let bundle_id = bundle_id.0.to_string();
+        self.view.recoverable_copies.retain_mut(|candidate| {
+            if candidate.bundle_id != bundle_id {
+                return true;
+            }
+            // EULA belongs to this physical bundle; an announcement result
+            // belongs only to the exact durable receipt just observed/confirmed.
+            if let Some(pending) = eula_pending {
+                candidate.eula_recovery_pending = pending;
+            }
+            if let Some((receipt_id, pending)) = announcement {
+                if candidate.receipt_id == receipt_id {
+                    candidate.announcement_recovery_pending = pending;
+                }
+            }
+            candidate.eula_recovery_pending || candidate.announcement_recovery_pending
+        });
+    }
+
     #[allow(clippy::too_many_arguments)] // Explicit shared owners; no reconstructed source or receipt.
     fn new(
         connect: ConnectManager,
@@ -782,6 +807,11 @@ impl Actor {
                 } else {
                     "stopped"
                 };
+                self.reconcile_recovery_candidates(
+                    BundleId(selected_id),
+                    Some(recovery.eula_pending),
+                    Some((&candidate.receipt_id, self.view.recovery_pending)),
+                );
                 self.view.review = None;
                 self.view.native_review_deadline = None;
             }
@@ -1075,6 +1105,10 @@ impl Actor {
                 self.recovery = Some((instance, receipt));
                 result.map_err(|_| "native_voice_restore_failed")?;
                 self.view.recovery_pending = false;
+                if let (Some(bundle_id), Some((_, receipt))) = (self.bundle_id, &self.recovery) {
+                    let receipt_id = receipt.receipt_id().to_owned();
+                    self.reconcile_recovery_candidates(bundle_id, None, Some((&receipt_id, false)));
+                }
                 self.view.review = None;
                 self.view.native_review_deadline = None;
                 self.view.phase = if self.view.eula_state == "needsRecovery" {
@@ -1136,6 +1170,9 @@ impl Actor {
                     eula::EulaOutcome::Unchanged => "unchanged",
                 };
                 self.view.eula_recovery_available = false;
+                if let Some(bundle_id) = self.bundle_id {
+                    self.reconcile_recovery_candidates(bundle_id, Some(false), None);
+                }
                 self.view.phase = if self.view.recovery_pending {
                     "stopped"
                 } else {

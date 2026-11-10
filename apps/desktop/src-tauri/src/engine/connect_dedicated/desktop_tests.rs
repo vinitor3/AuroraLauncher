@@ -17,6 +17,78 @@ fn actor(lab: PathBuf) -> Actor {
     )
 }
 
+#[test]
+fn native_voice_recovery_inventory_tracks_only_confirmed_bundle_and_receipt_in_both_orders() {
+    for eula_first in [true, false] {
+        let mut actor = actor(PathBuf::new());
+        let bundle = BundleId(Uuid::new_v4());
+        let other_bundle = BundleId(Uuid::new_v4());
+        let candidate = |bundle: BundleId, receipt: &str| NativeVoiceRecoveryCandidate {
+            bundle_id: bundle.0.to_string(),
+            receipt_id: receipt.into(),
+            profile: UiVoiceProfile::SimpleVoiceChat,
+            runtime_profile: NativeVoiceRuntime::Fabric1211,
+            eula_recovery_pending: true,
+            announcement_recovery_pending: true,
+        };
+        actor.view.recoverable_copies = vec![
+            candidate(bundle, "selected-receipt"),
+            candidate(bundle, "other-receipt"),
+            candidate(other_bundle, "selected-receipt"),
+        ];
+        for eula in [eula_first, !eula_first] {
+            if eula {
+                actor.reconcile_recovery_candidates(bundle, Some(false), None);
+            } else {
+                actor.reconcile_recovery_candidates(
+                    bundle,
+                    None,
+                    Some(("selected-receipt", false)),
+                );
+            }
+            let selected = actor.view.recoverable_copies.iter().find(|entry| {
+                entry.bundle_id == bundle.0.to_string() && entry.receipt_id == "selected-receipt"
+            });
+            if eula == eula_first {
+                let selected = selected.unwrap();
+                assert_eq!(selected.eula_recovery_pending, !eula);
+                assert_eq!(selected.announcement_recovery_pending, eula);
+            } else {
+                assert!(
+                    selected.is_none(),
+                    "no Resume action for a fully restored receipt"
+                );
+            }
+            let other = actor
+                .view
+                .recoverable_copies
+                .iter()
+                .find(|entry| entry.receipt_id == "other-receipt")
+                .unwrap();
+            assert!(
+                other.announcement_recovery_pending,
+                "another receipt is never silently retired"
+            );
+            let foreign = actor
+                .view
+                .recoverable_copies
+                .iter()
+                .find(|entry| entry.bundle_id == other_bundle.0.to_string())
+                .unwrap();
+            assert!(foreign.eula_recovery_pending && foreign.announcement_recovery_pending);
+        }
+        actor.publish();
+        let dto = actor.shared.lock().unwrap().clone().projected();
+        let serialized = serde_json::to_value(dto).unwrap();
+        let candidates = serialized["recoverableCopies"].as_array().unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates
+            .iter()
+            .all(|entry| entry["eulaRecoveryPending"] == true
+                || entry["announcementRecoveryPending"] == true));
+    }
+}
+
 pub(in crate::engine::connect_voice::dedicated) async fn exercise_source_revalidation(
     run: DedicatedRun,
     lab: PathBuf,
@@ -403,12 +475,16 @@ async fn native_voice_actor_real_eula_and_announcement_recover_separately_in_bot
             restore_eula(&mut actor, &configuration, &announced).await;
             assert_eq!(actor.view.phase, "stopped");
             assert!(actor.view.recovery_pending);
+            assert!(!actor.view.recoverable_copies[0].eula_recovery_pending);
+            assert!(actor.view.recoverable_copies[0].announcement_recovery_pending);
             assert_eq!(fs::read(copy.root().join("eula.txt")).unwrap(), EULA_FALSE);
             restore_announcement(&mut actor).await;
         } else {
             restore_announcement(&mut actor).await;
             assert_eq!(actor.view.phase, "needsRecovery");
             assert!(actor.view.eula_recovery_available);
+            assert!(actor.view.recoverable_copies[0].eula_recovery_pending);
+            assert!(!actor.view.recoverable_copies[0].announcement_recovery_pending);
             assert_eq!(fs::read(copy.root().join("eula.txt")).unwrap(), EULA_TRUE);
             // A restored announcement receipt still selects an unresolved EULA;
             // reopening it must not manufacture new announcement authority.
@@ -437,6 +513,7 @@ async fn native_voice_actor_real_eula_and_announcement_recover_separately_in_bot
         }
         assert_eq!(actor.view.phase, "restored");
         assert!(!actor.view.eula_recovery_available && !actor.view.recovery_pending);
+        assert!(actor.view.recoverable_copies.is_empty());
         assert_eq!(fs::read(copy.root().join("eula.txt")).unwrap(), EULA_FALSE);
         assert_eq!(
             fs::read(configuration).unwrap(),
