@@ -256,7 +256,7 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
     {uncertain && <p role="status">Aguardando uma observação que confirme o resultado. Nenhum lançamento será repetido automaticamente.</p>}
     {pending && <p role="status">{pending === "prepare" ? "Conferindo a cópia…" : pending === "confirm" ? "Iniciando a cópia…" : "Cancelando o preparo…"}</p>}
     {launchContext && <ReadyCopyPicker sourceInstanceId={launchContext.sourceInstanceId} contextKey={launchContext.contextKey}
-      connectOperationId={operationId} requiredProfile={session?.social?.runtimeProfile} disabled={!canChooseCopy} selectedId={selectedId}
+      connectOperationId={operationId} requiredProfile={session?.social?.runtimeProfile} voiceProfile={session?.social?.voiceProfile} disabled={!canChooseCopy} selectedId={selectedId}
       runtimes={capability && (capability.schemaVersion === 1 ? [capability] : capability.runtimes)}
       onSelect={(id, java) => {
         setSelectedId(id);

@@ -217,6 +217,28 @@ test("a disconnected host player gets matching connection guidance without enabl
   assert.deepEqual(calls.map(call => call.command), ["connect_ready_game_launch_snapshot"]);
 });
 
+test("voice session guidance names the required mod without claiming copy compatibility or triggering preparation", async () => {
+  fixtures();
+  const session = voiceProfile => ({ ...connection, social: { role: "guest", voiceProfile } });
+  const guidance = () => container.querySelector('[aria-label="Selecionar cópia pronta"]').textContent;
+  await panel({ session: session("svc") });
+  assert.match(guidance(), /Esta sessão usa Simple Voice Chat/);
+  assert.match(guidance(), /Escolha uma cópia compatível ou prepare uma nova/);
+  assert.match(guidance(), /Cópias com outro mod de voz não são convertidas/);
+  assert.match(guidance(), /a revisão confere a compatibilidade antes de abrir/);
+  assert.equal(button("Revisar entrada no servidor").disabled, true);
+  await click("Listar cópias prontas");
+  assert.equal([...container.querySelectorAll("option")].find(option => option.value === copyId).textContent, copyId);
+  await panel({ session: session("plasmo") });
+  assert.match(guidance(), /Esta sessão usa Plasmo Voice/);
+  assert.doesNotMatch(guidance(), /Simple Voice Chat/);
+  assert.equal([...container.querySelectorAll("option")].find(option => option.value === copyId).textContent, copyId);
+  await panel();
+  assert.doesNotMatch(guidance(), /Esta sessão usa|Cópias com outro mod de voz/);
+  assert.equal(button("Revisar entrada no servidor").disabled, true);
+  assert.deepEqual(calls.map(call => call.command), ["connect_ready_game_launch_snapshot", "diagnostic_lab_list"]);
+});
+
 test("a reviewed official runtime copy supplies its own Java on a fresh launcher", async () => {
   fixtures();
   const ownJava = `C:/fixture/instances/${copyId}/installers/aurora-managed/runtimes/java-21/jre/bin/java.exe`;

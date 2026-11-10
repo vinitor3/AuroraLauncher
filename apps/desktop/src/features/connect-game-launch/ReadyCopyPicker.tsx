@@ -36,8 +36,9 @@ const profileId = (runtime: ReadyGameRuntime) => runtime.loader === "fabric"
   ? `fabric-loader-${runtime.loaderVersion}-${runtime.minecraftVersion}`
   : `${runtime.minecraftVersion}-forge-${runtime.loaderVersion}`;
 type Props = { sourceInstanceId: string; contextKey?: string; connectOperationId?: string; requiredProfile?: string;
+  voiceProfile?: "svc" | "plasmo";
   disabled: boolean; selectedId: string; onSelect: (id: string, java?: string) => void; runtimes?: readonly ReadyGameRuntime[] };
-export function ReadyCopyPicker({ sourceInstanceId, contextKey, connectOperationId, requiredProfile, disabled, selectedId, onSelect, runtimes = [] }: Props) {
+export function ReadyCopyPicker({ sourceInstanceId, contextKey, connectOperationId, requiredProfile, voiceProfile, disabled, selectedId, onSelect, runtimes = [] }: Props) {
   const [copies, setCopies] = useState<ReadyCopy[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -106,6 +107,7 @@ export function ReadyCopyPicker({ sourceInstanceId, contextKey, connectOperation
     catch (cause) { if (mounted.current) { setError(readyGameError(cause)); setCancelRequested(false); } }
   }
   return <section className="connect-fields connect-ready-copy" aria-label="Selecionar cópia pronta">
+    {voiceProfile && <p>Esta sessão usa <strong>{voiceProfile === "svc" ? "Simple Voice Chat" : "Plasmo Voice"}</strong>. Escolha uma cópia compatível ou prepare uma nova. Cópias com outro mod de voz não são convertidas; a revisão confere a compatibilidade antes de abrir.</p>}
     <button className="secondary" type="button" disabled={disabled || busy || !!install || !sourceInstanceId} onClick={() => { void load(); }}>Listar cópias prontas</button>
     {busy && <p role="status">Conferindo as cópias disponíveis…</p>}
     {error && <p role="alert">{error}</p>}
