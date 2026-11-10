@@ -468,12 +468,24 @@ impl HostPlayerLaunchAuthority {
             .with_current(work)
             .map_err(|_| ReadyGameLaunchError::Unavailable)?
     }
-    pub(super) fn check_transport_current(&self) -> Result<(), ConnectError> {
+    pub(super) fn check_transport_current(
+        &self,
+        local_ticket: &lab::HostLocalPlayerTicket,
+    ) -> Result<(), ConnectError> {
         let mut current = self.current.lock().map_err(|_| ConnectError::Internal)?;
         self.valid(&mut current, true)?;
         self.binding
-            .with_current(|| ())
-            .map_err(|_| current.reject(SocialFailureGate::Source, ConnectError::SourceChanged))
+            .with_current(|| local_ticket.refresh_idle_activity(&self.invitation))
+            .map_err(|_| current.reject(SocialFailureGate::Source, ConnectError::SourceChanged))?
+            .map_err(|_| {
+                current.reject(
+                    SocialFailureGate::HostTransport,
+                    ConnectError::SocialFailure(
+                        SocialFailureStage::SessionContinuity,
+                        SocialFailureReason::AuthorityChanged,
+                    ),
+                )
+            })
     }
     pub(super) fn failure_gate(&self) -> SocialFailureGate {
         self.current

@@ -9,6 +9,8 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[path = "host_local_player_idle_tests.rs"]
+mod host_local_player_idle_tests;
 #[path = "native_voice_budget_tests.rs"]
 mod native_voice_budget_tests;
 

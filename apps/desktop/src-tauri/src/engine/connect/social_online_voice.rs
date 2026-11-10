@@ -279,6 +279,7 @@ pub(super) struct LocalPlayer {
     guest: Option<Arc<lab::Guest>>,
     tcp: Option<Arc<lab::TcpBridge>>,
     authority: Option<Arc<ready_source::HostPlayerLaunchAuthority>>,
+    local_ticket: Option<lab::HostLocalPlayerTicket>,
     seen_poll: bool,
     udp: Option<lab::UdpBridge>,
     sockets: Vec<SocketAddr>,
@@ -339,6 +340,7 @@ impl LocalPlayer {
         .await;
         self.guest = Some(Arc::new(result.map_err(|_| ConnectError::TransportFailed)?));
         self.sockets = self.guest.as_ref().unwrap().bound_sockets();
+        self.local_ticket = Some(ticket);
         if let Some(error) = interrupted {
             return Err(error);
         }
@@ -448,7 +450,8 @@ impl LocalPlayer {
     pub(super) async fn tick(&mut self, run: &Run) -> Result<(), ConnectError> {
         if self.seen_poll {
             if let Some(authority) = &self.authority {
-                if let Err(error) = authority.check_transport_current() {
+                let ticket = self.local_ticket.as_ref().ok_or(ConnectError::Internal)?;
+                if let Err(error) = authority.check_transport_current(ticket) {
                     run.observe_failure(authority.failure_gate());
                     return Err(error);
                 }
@@ -478,6 +481,7 @@ impl LocalPlayer {
     }
     pub(super) async fn shutdown(&mut self, run: &Run) -> Result<(), ConnectError> {
         self.invalidate(run);
+        self.local_ticket.take();
         if let Some(guest) = self.guest.take() {
             guest.shutdown().await;
         }

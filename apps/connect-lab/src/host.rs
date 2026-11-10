@@ -226,6 +226,7 @@ struct LeaseState {
     invitation: Option<InvitationAuthority>,
     consumed: AtomicBool,
     cancel: CancellationToken,
+    local_player_activity: Mutex<Option<Instant>>,
     udp_limiters: Mutex<HashMap<u32, Arc<Mutex<UdpLimiter>>>>,
     downstream_limiters: Mutex<HashMap<u32, Arc<Mutex<UdpLimiter>>>>,
     fragment_ingress: Arc<Mutex<UdpLimiter>>,
@@ -256,6 +257,7 @@ impl LeaseState {
             invitation,
             consumed: AtomicBool::new(false),
             cancel: CancellationToken::new(),
+            local_player_activity: Mutex::new(None),
             udp_limiters: Mutex::new(HashMap::new()),
             downstream_limiters: Mutex::new(HashMap::new()),
         }
@@ -1081,7 +1083,8 @@ async fn serve_peer(connection: Connection, state: Arc<State>) {
             _ = connection.closed() => break,
             _ = tokio::time::sleep(Duration::from_millis(100)) => {
                 if tcp.available_permits() == state.limits.max_tcp_per_peer && associations.lock().unwrap().is_empty()
-                    && last_activity.elapsed() >= state.limits.idle_timeout { break; }
+                    && last_activity.elapsed() >= state.limits.idle_timeout
+                    && lease.local_player_activity.lock().unwrap().is_none_or(|activity| activity.elapsed() >= state.limits.idle_timeout) { break; }
             }
             stream = connection.accept_bi() => {
                 let Ok((mut send, mut recv)) = stream else { break; };

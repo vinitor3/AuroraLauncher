@@ -13,6 +13,29 @@ pub struct HostLocalPlayerTicket {
     used: AtomicBool,
 }
 impl HostLocalPlayerTicket {
+    /// Activity of the explicitly approved player owned by this same process.
+    /// The caller must first revalidate its live source and Social continuity.
+    /// This touches no destination and never extends admission/session authority.
+    pub fn refresh_idle_activity(&self, invitation: &SessionInvitation) -> Result<()> {
+        if !self.used.load(Ordering::Acquire) {
+            return Err(Error::Unauthorized);
+        }
+        self.check(invitation, invitation.guest_key(), true)?;
+        let state = self.state.upgrade().ok_or(Error::Closed)?;
+        let original = self.lease.upgrade().ok_or(Error::Closed)?;
+        // Same lock as admission/revocation. An unused ticket, disconnected
+        // connection or terminal lease cannot manufacture activity or reopen it.
+        let active = state.active_leases.lock().map_err(|_| Error::Closed)?;
+        if !active_invitation(&state, &active, invitation.invitation_id()) {
+            return Err(Error::Closed);
+        }
+        *original
+            .local_player_activity
+            .lock()
+            .map_err(|_| Error::Closed)? = Some(Instant::now());
+        Ok(())
+    }
+
     pub(crate) fn begin(
         &self,
         invitation: &SessionInvitation,
