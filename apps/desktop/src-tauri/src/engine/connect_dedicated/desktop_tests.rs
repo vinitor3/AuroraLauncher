@@ -18,6 +18,54 @@ fn actor(lab: PathBuf) -> Actor {
 }
 
 #[test]
+fn native_voice_completion_preserves_execution_review_expiry() {
+    let mut report = DedicatedReport {
+        reason: producer::DedicatedReason::Failure,
+        failure: Some(DedicatedFailure::Preparation(Error::Expired)),
+        process: None,
+        eula: EulaDisposition::Unchanged,
+        reached_ready: false,
+    };
+    for eula in [EulaDisposition::Unchanged, EulaDisposition::Restored] {
+        report.eula = eula;
+        assert_eq!(
+            source_completion_error(&report),
+            Some("native_voice_execution_review_expired")
+        );
+    }
+    report.reason = producer::DedicatedReason::Deadline;
+    report.failure = Some(DedicatedFailure::Deadline);
+    assert_eq!(
+        source_completion_error(&report),
+        Some("native_voice_source_expired"),
+        "the original source lifetime is distinct from the execution review"
+    );
+    report.failure = Some(DedicatedFailure::Preparation(Error::Changed));
+    assert_eq!(
+        source_completion_error(&report),
+        Some("native_voice_source_failed"),
+        "other preparation failures must not be diagnosed as expiry"
+    );
+}
+
+#[test]
+fn native_voice_completion_expiry_preserves_recovery_and_forced_stop_priority() {
+    let mut report = DedicatedReport {
+        reason: producer::DedicatedReason::Failure,
+        failure: Some(DedicatedFailure::Preparation(Error::Expired)),
+        process: None,
+        eula: EulaDisposition::NeedsRecovery,
+        reached_ready: false,
+    };
+    assert_eq!(
+        source_completion_error(&report),
+        Some("native_voice_recovery_required")
+    );
+    report.failure = Some(DedicatedFailure::Child(OwnedRunFailure::Forced));
+    assert_eq!(source_completion_error(&report), Some(FORCED_STOP));
+}
+
+#[test]
 fn native_voice_recovery_inventory_tracks_only_confirmed_bundle_and_receipt_in_both_orders() {
     for eula_first in [true, false] {
         let mut actor = actor(PathBuf::new());

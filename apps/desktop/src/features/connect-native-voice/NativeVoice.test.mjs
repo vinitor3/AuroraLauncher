@@ -22,6 +22,14 @@ test("errors never echo a raw backend path or credential", () => {
   assert.match(nativeVoiceError("native_voice_local_udp_in_use"), /35554/);
 });
 
+test("execution review expiry is distinct from the original source deadline", () => {
+  const message = nativeVoiceError("native_voice_execution_review_expired");
+  assert.equal(message, "A revisão de execução expirou durante as verificações. Confira o estado da cópia e prepare uma nova revisão.");
+  assert.notEqual(message, nativeVoiceError("native_voice_source_expired"));
+  assert.notEqual(message, nativeVoiceError("native_voice_source_failed"));
+  assert.doesNotMatch(message, /não iniciou|não foi iniciado|renovado/);
+});
+
 test("source revalidation has its own bounded review and typed states", () => {
   const review = { kind: "socialSource", digest: "b".repeat(64), remainingMs: 60_000, before: "Source active", after: "New claim", details: [] };
   for (const phase of ["socialSourceReviewing", "socialSourceReviewed", "socialSourceApplying"]) assert.equal(nativeVoiceSnapshotFrom({ ...idle, phase, review, socialRevalidationAvailable: false }).phase, phase);

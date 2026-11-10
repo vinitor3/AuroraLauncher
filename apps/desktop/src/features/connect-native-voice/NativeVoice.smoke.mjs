@@ -152,6 +152,16 @@ test("needsRecovery offers distinct EULA and announcement reviews without prepar
   assert.deepEqual(calls.filter(call => call.command === "native_voice_execute").at(-1).args.request, { action: "prepareRestore", reconciled: false });
 });
 
+test("execution expiry retains recovery controls without automatically retrying Java", async () => {
+  snapshot = { ...idle(), phase: "stopped", errorCode: "native_voice_execution_review_expired", eulaState: "restored", recoveryPending: true };
+  await render();
+  assert.match(container.textContent, /A revisão de execução expirou durante as verificações/);
+  assert.match(container.querySelector("dl").textContent, /EULAOriginal restaurado/);
+  assert.equal(button("Revisar restauração estrita").disabled, false);
+  assert.equal([...container.querySelectorAll("button")].some(node => node.textContent === "Confirmar etapa revisada"), false);
+  assert.equal(calls.some(call => call.command === "native_voice_execute"), false);
+});
+
 test("EULA review confirmation cannot become an announcement approval", async () => {
   snapshot = { ...idle(), phase: "eulaRestoreReviewed", eulaRecoveryAvailable: true, review: review("eulaRestore") };
   await render(); await approve(); await click("Confirmar etapa revisada");

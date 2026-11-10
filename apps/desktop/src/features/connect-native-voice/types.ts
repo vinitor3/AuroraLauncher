@@ -52,6 +52,7 @@ export function nativeVoiceError(value: unknown): string {
   if (code === "native_voice_transport_cleanup_failed") return "O encerramento do transporte de voz ainda precisa ser confirmado.";
   if (code === "native_voice_stop_forced_cleanup_failed") return "O servidor dedicado foi encerrado à força e o salvamento do mundo pode ter ficado incompleto. O encerramento do transporte de voz ainda precisa ser confirmado.";
   if (code === "native_voice_source_expired") return "O prazo original do servidor dedicado terminou.";
+  if (code === "native_voice_execution_review_expired") return "A revisão de execução expirou durante as verificações. Confira o estado da cópia e prepare uma nova revisão.";
   if (code === "native_voice_source_cancelled") return "A execução do servidor dedicado foi cancelada.";
   if (code === "native_voice_source_failed") return "A execução do servidor dedicado terminou com falha. Confira o estado da cópia.";
   if (code === "native_voice_preparation_failed") return "O preparo não foi concluído. Revise o estado abaixo e tente novamente quando os recursos forem liberados.";

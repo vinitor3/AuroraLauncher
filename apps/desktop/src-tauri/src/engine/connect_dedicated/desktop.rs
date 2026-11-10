@@ -1346,6 +1346,9 @@ fn source_completion_error(report: &DedicatedReport) -> Option<&'static str> {
         Some(DedicatedFailure::Preparation(_)) if report.eula == EulaDisposition::NeedsRecovery => {
             Some("native_voice_recovery_required")
         }
+        Some(DedicatedFailure::Preparation(Error::Expired)) => {
+            Some("native_voice_execution_review_expired")
+        }
         Some(_) => Some("native_voice_source_failed"),
         None => None,
     }
