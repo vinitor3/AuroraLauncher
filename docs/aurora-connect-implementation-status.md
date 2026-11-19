@@ -1,6 +1,6 @@
 # Aurora Connect — implementação
 
-19/11/2026: IMPLEMENTADO MAS NÃO HOMOLOGADO. Integração alpha.15 em validação, baseada em `fb37b09`, com Java `568392f`, temas `3f30785` e documentação já reconciliada de `d6f31db`. Nove pares Core/Skins e Assistente preservados. “Online” é o serviço Aurora; servidores autorizados com `online-mode=false` continuam no escopo para perfis originais/offline, com autenticação Connect obrigatória.
+19/11/2026: IMPLEMENTADO MAS NÃO HOMOLOGADO. Instalador local alpha.15 gerado, baseada em `fb37b09`, com Java `568392f`, temas `3f30785` e documentação já reconciliada de `d6f31db`. Nove pares Core/Skins e Assistente preservados. “Online” é o serviço Aurora; servidores autorizados com `online-mode=false` continuam no escopo para perfis originais/offline, com autenticação Connect obrigatória.
 
 | Área | Evidência e limite atual |
 |---|---|
@@ -8,11 +8,11 @@
 | UDP | NativeVoice8 anterior: oito participantes locais a 50 datagramas/s, retorno isolado, cinco ensaios passaram. Não repetido nesta rodada TCP. |
 | Direto | IPv6 externo anterior preservado; novo teste usa o mesmo PC. IPv4/NAT e outras redes ainda precisam de validação externa. RTT observado não garante menor latência absoluta. |
 | Relay | Serviço existente ativo, limites gratuitos preservados; sem novos recursos/faturamento. Cota não comporta oito vozes no pior caso. Novo teste privado não homologa relay. |
-| Amigos / grupos / convites | Busca por nick Aurora, catálogo, Entrar, grupos e pedidos implementados. Privados por conta: receber, entrar, recusar, revogar, reenviar e limpar expirados; oito destinatários por anúncio, prazo original preservado. Builder oficial agora seleciona o perfil online e gates pareados; instalador ainda não gerado. |
+| Amigos / grupos / convites | Busca por nick Aurora, catálogo, Entrar, grupos e pedidos implementados. Privados por conta: receber, entrar, recusar, revogar, reenviar e limpar expirados; oito destinatários por anúncio, prazo original preservado. Perfil oficial online incluído no instalador. |
 | Minecraft | GUI anterior Fabric 1.21.1 com Core/Skins entrou pelo HostPlayer Social, SVC e Plasmo por 191s cada. Novo teste usa fonte própria de laboratório; não é entrada em mundo. Nove clientes completos não homologados. |
 | Simple Voice Chat | Nove servidores oficiais preparados/testados; cliente real autenticou UDP pela ponte. Áudio audível não homologado. |
 | Plasmo Voice | Oito servidores oficiais testados; cliente Fabric 1.21.1/Plasmo 2.1.17 entrou e conectou UDP nos dois lados. Áudio não homologado; não há versão oficial Forge 1.12.2. |
-| Interface | Amigos/comunidade/Entrar como fluxo principal; Abrir meu mundo, grupos, privados e controles técnicos recolhidos. Entrar abre o preparo do jogo após autenticar a sessão escolhida. Erros e recuperação continuam acessíveis. Temas preservam consentimentos oficiais; Java/RAM da cópia selecionada aplicado ao Entrar. Executável integrado ainda aguarda teste GUI. |
+| Interface | Amigos/comunidade/Entrar como fluxo principal; Abrir meu mundo, grupos, privados e controles técnicos recolhidos. Entrar abre o preparo do jogo após autenticar a sessão escolhida. Erros e recuperação continuam acessíveis. Temas preservam consentimentos oficiais; Java/RAM da cópia selecionada aplicado ao Entrar. Na GUI do pacote, a conta de teste atualizou a lista, encontrou um nick cadastrado e conferiu a visibilidade privada inicial. |
 
 Integração atual: temas v1 migram quatro para seis seções sem perder ordem/associações; ADR de temas renumerada 035 para preservar recuperação 027. Java no ReadyGame vincula preferências ao digest e relê antes do spawn. O pacote oficial preserva identidade, CSP restrita, matriz e preflight; laboratório de voz continua restrito a debug. Grupos fechados/ocultos suspendem consultas automáticas sem cancelar reconciliação de ações.
 
@@ -26,4 +26,8 @@ Ativação autorizada: `rules-update.mjs apply` e API Cloudflare de versões/dep
 
 Rollback preparado em `social-private-online-20261110/`: Worker `38d190c1-e163-455a-9b06-069b80f1f5aa` e regras `9810d06c-1a9f-4e57-b4ed-4d61cc0d6ff6`, somente após conferir a versão atual. Revalidação antes do deploy não é CAS; rollback não apaga dados. Limpeza do laboratório usa journal/hash e CAS Firestore; recuperação Auth por UID não tem CAS, e signup sem UID exige revisão restrita.
 
-Pendentes: ingresso privado completo pela GUI, áudio real, duas máquinas/contas mistas, outras redes e estabilidade longa. Matriz/18 JARs preservados não equivalem a homologação. Sem push ou publicação de release. Instalador local autorizado, ainda pendente das verificações integradas. Rollback local: conservar a instalação anterior; não aplicar o novo pacote enquanto houver falha. Fontes e evidências anteriores permanecem intactas.
+Pacote local de `35f6425` em `releases/`: 13.445.863 bytes, SHA-256 `5044178d497ecb828d5adc3d8801b55bf2fce8de022fd9408b2786d02dcbf450`. Os três testes de distribuição passaram em release. O primeiro empacotamento recusou a saída porque o commit mudou. A execução final de `npm run release:package` passou no mesmo commit do início ao fim. Arquivo NSIS íntegro, 18 hashes do manifesto conferidos e conteúdo do EXE extraído idêntico ao compilado exceto pelo marcador de pacote UNK→NSS do Tauri.
+
+Na GUI extraída, Java 8/17/21 apareceram, a detecção foi acionada e a prévia temporária de tema reverteu após 10 s. O app exibiu seu aviso de recuperação da aparência padrão e conservou quatro temas na biblioteca. Nenhuma preferência foi salva manualmente. A janela autenticada encerrou pelo botão do launcher. A janela auxiliar de login e a cópia alpha.14 aberta na seleção inicial foram encerradas ociosas pelo processo. A instalação pessoal não foi substituída.
+
+Pendentes: catálogo vazio durante o teste GUI, portanto a entrada em mundo por esse pacote, áudio ouvido, duas máquinas/contas mistas, outras redes e estabilidade longa precisam de validação. Para rollback, encerre sessões, conserve cópias das instâncias e configurações e use o instalador local alpha.14 preservado. Sem push ou publicação online do pacote.
