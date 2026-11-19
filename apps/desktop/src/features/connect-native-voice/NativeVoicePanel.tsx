@@ -105,7 +105,7 @@ export function NativeVoicePanel({ disabled = false, revealRequest = 0, revealRe
   const details = review ? voiceReviewDetails(review.details) : undefined;
   const guestIds = guests.split(/\s+/).filter(Boolean);
   const count = guestIds.length + Number(localPlayer);
-  return <details className="connect-native-voice" ref={panel}>
+  return <details className="connect-native-voice theme-protected" ref={panel}>
     <summary ref={heading} tabIndex={0}>Voz dos mods · sessão dedicada experimental</summary>
     <p>Simple Voice Chat e Plasmo Voice usam seus próprios mods. Este fluxo cria uma cópia dedicada local, anuncia a ponte 127.0.0.1:35554 e mantém a recuperação do anúncio. Áudio e entrada no mundo precisam de validação manual.</p>
     <dl><dt>Sessão</dt><dd>{voicePhase[snapshot.phase]}</dd><dt>UDP</dt><dd>{snapshot.phase === "socialSource" && snapshot.udpState === "notStarted" ? "Acompanhe em Amigos e comunidade" : nativeVoiceUdpLabel(snapshot.udpState)}</dd><dt>EULA</dt><dd>{nativeVoiceEulaLabel(snapshot.eulaState)}</dd><dt>Áudio</dt><dd>Não verificado</dd></dl>

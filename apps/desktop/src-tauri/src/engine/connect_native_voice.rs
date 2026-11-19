@@ -372,4 +372,24 @@ mod tests {
         assert!(value.tcp_address.is_none());
         assert!(value.review.is_none());
     }
+
+    #[test]
+    fn native_voice_distribution_does_not_enable_manual_lab_or_claim_audio() {
+        let value = NativeVoiceSnapshot::default();
+        assert_eq!(value.audio_state, "notVerified");
+        assert_eq!(
+            value.manual_lab_available,
+            cfg!(all(
+                windows,
+                debug_assertions,
+                feature = "connect-lab",
+                feature = "connect-voice-lab"
+            ))
+        );
+        if cfg!(all(windows, feature = "connect-online")) {
+            assert!(value.available);
+            assert!(value.tcp_address.is_none());
+            assert!(value.exported_invitation.is_none());
+        }
+    }
 }

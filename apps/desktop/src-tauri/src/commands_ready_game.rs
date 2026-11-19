@@ -11,6 +11,7 @@ use aurora_launcher_core::engine::{
     connect_ready_profile::{select_ready_profile, ReadyProfile},
     connect_ready_runtime::{inspect_ready_runtime_for_voice, ReadyRuntime, ReadyVoiceInstall},
     connect_status_profile::protocol_for_ready_profile,
+    launch_settings::{inspect_ready_settings, ReadyLaunchSettings},
 };
 use std::net::SocketAddr;
 use std::sync::{
@@ -282,6 +283,7 @@ fn inspect(
         ReadyRuntime,
         JavaRuntime,
         Option<PathBuf>,
+        ReadyLaunchSettings,
     ),
     Error,
 > {
@@ -344,8 +346,21 @@ fn inspect(
         return Err(Error::JavaIncompatible);
     }
     let java = JavaRuntime::from_executable(java_path).map_err(|_| Error::JavaUnavailable)?;
+    // Preferences belong to this independent copy. Never import or overwrite
+    // the source instance's settings during review or confirmation.
+    let additional_mods = proof.voice_review.as_ref().map_or(0, |review| {
+        review
+            .mods
+            .iter()
+            .filter(|item| {
+                item.action == aurora_launcher_core::engine::connect::ReadyVoiceAction::Install
+            })
+            .count() as u32
+    });
+    let settings = inspect_ready_settings(&instance, &guard, observed, additional_mods)
+        .map_err(|_| Error::InstanceNotReady)?;
     check_cancel(cancel)?;
-    Ok((instance, guard, proof, java, skin))
+    Ok((instance, guard, proof, java, skin, settings))
 }
 
 fn check_server_status(
@@ -388,7 +403,7 @@ impl ReadyGameBackend for DesktopReadyGameBackend {
         if voice_profile.is_some() && runtime_profile.is_none() {
             return Err(Error::Unavailable);
         }
-        let (_, _guard, proof, _, _) = inspect(
+        let (_, _guard, proof, _, _, settings) = inspect(
             &self.app,
             request,
             endpoint,
@@ -407,11 +422,14 @@ impl ReadyGameBackend for DesktopReadyGameBackend {
         } else {
             None
         };
+        settings
+            .recheck_before_spawn()
+            .map_err(|_| Error::InstanceChanged)?;
         Ok(Box::new(DesktopPrepared {
             app: self.app.clone(),
             request: request.clone(),
             endpoint,
-            fingerprint: proof.fingerprint.clone(),
+            fingerprint: settings.bind_runtime_fingerprint(&proof.fingerprint),
             core: proof.core_sha256.clone(),
             skins: proof.skins_sha256.clone(),
             profile: proof.profile,
@@ -441,7 +459,7 @@ impl PreparedReadyGame for DesktopPrepared {
         cancel: &CancellationToken,
     ) -> Result<ReadyGameLaunchResult, Error> {
         let voice_profile = self.voice_review().map(|review| review.profile);
-        let (instance, mutation_lock, mut proof, java, skin) = inspect(
+        let (instance, mutation_lock, mut proof, java, skin, settings) = inspect(
             &self.app,
             &self.request,
             self.endpoint,
@@ -450,7 +468,7 @@ impl PreparedReadyGame for DesktopPrepared {
             cancel,
         )?;
         if proof.profile != self.profile
-            || proof.fingerprint != self.fingerprint
+            || settings.bind_runtime_fingerprint(&proof.fingerprint) != self.fingerprint
             || proof.core_sha256 != self.core
             || proof.skins_sha256 != self.skins
             || proof.voice_review.as_ref() != self.voice_review()
@@ -505,7 +523,7 @@ impl PreparedReadyGame for DesktopPrepared {
                 .push(format!("-Daurora.profile.skinModel={model}"));
         }
         let prepared = LauncherEngine
-            .prepare_launch(&instance, &java, &identity, &spec, 4096)
+            .prepare_launch_with_settings(&instance, &java, &identity, &spec, settings.effective())
             .map_err(|_| Error::LaunchFailed)?;
         check_cancel(cancel)?;
         let directory = doctor_directory(&self.app).map_err(|_| Error::LaunchFailed)?;
@@ -528,7 +546,7 @@ impl PreparedReadyGame for DesktopPrepared {
             minecraft_version: proof.profile.descriptor().minecraft_version.into(),
             java_executable: self.request.java_executable.clone(),
             java_major: Some(proof.profile.descriptor().java_major),
-            max_memory_mb: 4096,
+            max_memory_mb: settings.effective().max_memory_mb,
             failure: None,
             logs_before: snapshot_logs(&instance),
         };
@@ -564,6 +582,9 @@ impl PreparedReadyGame for DesktopPrepared {
             ensure_no_external_instance_game(instance.root()).map_err(|_| Error::InstanceBusy)?;
             check_cancel(cancel)?;
             proof.recheck_before_spawn()?;
+            settings
+                .recheck_before_spawn()
+                .map_err(|_| Error::InstanceChanged)?;
             let run_id = run.run_id.clone();
             let status_runtime =
                 aurora_launcher_core::engine::connect_status_profile::inspect_launch_profile(

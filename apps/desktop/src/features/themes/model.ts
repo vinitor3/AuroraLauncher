@@ -1,5 +1,5 @@
 /** Theme documents are untrusted data. Never turn their contents into markup or code. */
-export type NavId = "instances" | "discover" | "appearance" | "java";
+export type NavId = "instances" | "discover" | "appearance" | "java" | "connect" | "social";
 export type ThemeSectionId = "header" | "decorations" | "content";
 export type ThemeAsset = { mime: "image/png" | "image/gif" | "video/mp4" | "video/webm"; data: string };
 export type GifInfo = { width: number; height: number; frames: number; durationMs: number };
@@ -30,7 +30,8 @@ export type ThemePreview = { token: string; deadlineMs: number };
 
 const MIB = 1024 * 1024;
 export const THEME_LIMITS = { json: 34 * MIB, png: 2 * MIB, gif: 24 * MIB, video: 20 * MIB, assets: 24 * MIB, assetCount: 4 } as const;
-export const NAV_IDS: readonly NavId[] = ["instances", "discover", "appearance", "java"];
+const LEGACY_NAV_IDS: readonly NavId[] = ["instances", "discover", "appearance", "java"];
+export const NAV_IDS: readonly NavId[] = [...LEGACY_NAV_IDS, "connect", "social"];
 export const THEME_SECTION_IDS: readonly ThemeSectionId[] = ["header", "decorations", "content"];
 export const THEME_ICON_NAMES = ["default", "star", "leaf", "moon", "heart", "gamepad", "sparkles"] as const;
 export const THEME_WINDOW_DEFAULTS: AuroraTheme["window"] = { titlebarColor: "#171224", titlebarText: "#f8f6ff", frameColor: "#0b0812", titlebarHeight: 44, borderWidth: 1, outerRadius: 20, contentInset: 16 };
@@ -351,15 +352,26 @@ export function parseTheme(source: string): AuroraTheme {
     return key;
   }
   const media = closed(raw.media, ["background", "logo"], "media");
-  const icons = closed(raw.icons, NAV_IDS, "icons");
+  // Only the complete, known four-section v1 shape migrates. New documents
+  // cannot omit a section or mix current navigation with incomplete icons.
+  const legacyNavigation = Array.isArray(layout.navOrder) && layout.navOrder.length === 4
+    && new Set(layout.navOrder).size === 4 && layout.navOrder.every((id) => LEGACY_NAV_IDS.includes(id));
+  const expectedNavIds = legacyNavigation ? LEGACY_NAV_IDS : NAV_IDS;
+  if (!Array.isArray(layout.navOrder) || layout.navOrder.length !== expectedNavIds.length
+    || new Set(layout.navOrder).size !== expectedNavIds.length) invalid("layout.navOrder", "inclua os seis IDs de navegação exatamente uma vez.");
+  const navOrder = layout.navOrder.map((entry, i) => choice(entry, expectedNavIds, `layout.navOrder[${i}]`));
+  const icons = closed(raw.icons, expectedNavIds, "icons");
   const parsedIcons = {} as Record<NavId, string>;
-  for (const key of NAV_IDS) {
+  for (const key of expectedNavIds) {
     const icon = icons[key];
     if (typeof icon === "string" && icon.startsWith("asset:")) { reference(icon.slice(6), `icons.${key}`, true); parsedIcons[key] = icon; }
     else parsedIcons[key] = choice(icon, THEME_ICON_NAMES, `icons.${key}`);
   }
-  if (!Array.isArray(layout.navOrder) || layout.navOrder.length !== 4 || new Set(layout.navOrder).size !== 4) invalid("layout.navOrder", "inclua os quatro IDs de navegação exatamente uma vez.");
-  const navOrder = layout.navOrder.map((entry, i) => choice(entry, NAV_IDS, `layout.navOrder[${i}]`));
+  if (legacyNavigation) {
+    navOrder.push("connect", "social");
+    parsedIcons.connect = "default";
+    parsedIcons.social = "default";
+  }
   const sectionList = fallback(layout.sectionOrder, THEME_SECTION_IDS);
   if (!Array.isArray(sectionList) || sectionList.length !== 3 || new Set(sectionList).size !== 3) invalid("layout.sectionOrder", "inclua header, decorations e content exatamente uma vez.");
   const sectionOrder = sectionList.map((entry, i) => choice(entry, THEME_SECTION_IDS, `layout.sectionOrder[${i}]`));
@@ -419,13 +431,13 @@ export const DEFAULT_THEME: AuroraTheme = {
   typography: { font: "system", scale: 1 },
   layout: { sidebar: "left", density: "comfortable", navOrder: [...NAV_IDS], radius: 12, sidebarWidth: 240, statusSide: "right", sectionOrder: [...THEME_SECTION_IDS], decorationHeight: 160 },
   effects: { background: "none", intensity: 0.5, speed: 1, glass: 0, transition: "fade", transitionMs: 300 }, assets: {}, media: { background: null, logo: null },
-  icons: { instances: "default", discover: "default", appearance: "default", java: "default" }, decorations: [],
+  icons: { instances: "default", discover: "default", appearance: "default", java: "default", connect: "default", social: "default" }, decorations: [],
 };
 
 export const THEME_EXAMPLES: AuroraTheme[] = [
-  { ...DEFAULT_THEME, id: "aurora-boreal", name: "Aurora boreal", colors: { background: "#080f19", panel: "#101d2b", text: "#edf8ff", muted: "#a5bbca", accent: "#83e9c4", accentText: "#09281e", border: "#2a4856" }, effects: { ...DEFAULT_THEME.effects, background: "aurora", intensity: 0.65, speed: 0.65, glass: 10 }, icons: { instances: "gamepad", discover: "sparkles", appearance: "star", java: "default" } },
-  { ...DEFAULT_THEME, id: "jardim-sakura", name: "Jardim de cerejeiras", colors: { background: "#171322", panel: "#251d30", text: "#fff1f7", muted: "#c9b1c0", accent: "#f1adcd", accentText: "#361629", border: "#574050" }, typography: { font: "rounded", scale: 1 }, effects: { ...DEFAULT_THEME.effects, background: "sakura", intensity: 0.7, speed: 0.55, glass: 8 }, icons: { instances: "gamepad", discover: "leaf", appearance: "heart", java: "star" }, decorations: [{ type: "text", text: "Um novo mundo floresce a cada aventura.", asset: null, align: "center", x: 50, y: 50, width: 100, height: 64, fontSize: 20 }] },
-  { ...DEFAULT_THEME, id: "lago-de-vidro", name: "Lago de vidro", colors: { background: "#071520", panel: "#102938", text: "#ecf9ff", muted: "#a2c3d2", accent: "#84d8f4", accentText: "#072b3a", border: "#315569" }, layout: { ...DEFAULT_THEME.layout, sidebar: "right", navOrder: ["instances", "appearance", "discover", "java"], radius: 18 }, effects: { ...DEFAULT_THEME.effects, background: "water", intensity: 0.6, speed: 0.45, glass: 14 }, icons: { instances: "gamepad", discover: "moon", appearance: "sparkles", java: "default" } },
+  { ...DEFAULT_THEME, id: "aurora-boreal", name: "Aurora boreal", colors: { background: "#080f19", panel: "#101d2b", text: "#edf8ff", muted: "#a5bbca", accent: "#83e9c4", accentText: "#09281e", border: "#2a4856" }, effects: { ...DEFAULT_THEME.effects, background: "aurora", intensity: 0.65, speed: 0.65, glass: 10 }, icons: { ...DEFAULT_THEME.icons, instances: "gamepad", discover: "sparkles", appearance: "star", java: "default" } },
+  { ...DEFAULT_THEME, id: "jardim-sakura", name: "Jardim de cerejeiras", colors: { background: "#171322", panel: "#251d30", text: "#fff1f7", muted: "#c9b1c0", accent: "#f1adcd", accentText: "#361629", border: "#574050" }, typography: { font: "rounded", scale: 1 }, effects: { ...DEFAULT_THEME.effects, background: "sakura", intensity: 0.7, speed: 0.55, glass: 8 }, icons: { ...DEFAULT_THEME.icons, instances: "gamepad", discover: "leaf", appearance: "heart", java: "star" }, decorations: [{ type: "text", text: "Um novo mundo floresce a cada aventura.", asset: null, align: "center", x: 50, y: 50, width: 100, height: 64, fontSize: 20 }] },
+  { ...DEFAULT_THEME, id: "lago-de-vidro", name: "Lago de vidro", colors: { background: "#071520", panel: "#102938", text: "#ecf9ff", muted: "#a2c3d2", accent: "#84d8f4", accentText: "#072b3a", border: "#315569" }, layout: { ...DEFAULT_THEME.layout, sidebar: "right", navOrder: ["instances", "appearance", "discover", "java", "connect", "social"], radius: 18 }, effects: { ...DEFAULT_THEME.effects, background: "water", intensity: 0.6, speed: 0.45, glass: 14 }, icons: { ...DEFAULT_THEME.icons, instances: "gamepad", discover: "moon", appearance: "sparkles", java: "default" } },
 ];
 
 export function themeVariables(theme: AuroraTheme): Record<string, string> {
@@ -477,7 +489,7 @@ const FIELD_COMMENTS: Record<string, string> = {
   layout: "Organização visual; IDs e ações do launcher continuam os mesmos.",
   "layout.sidebar": "Lado do menu de navegação: left ou right.",
   "layout.density": "Densidade dos espaços: comfortable ou compact.",
-  "layout.navOrder": "Ordem do menu: instances, discover, appearance e java, exatamente uma vez cada.",
+  "layout.navOrder": "Ordem do menu: instances, discover, appearance, java, connect e social, exatamente uma vez cada. A disponibilidade de cada seção continua definida pelo launcher.",
   "layout.radius": "Arredondamento dos cartões: número de 0 a 24 pixels.",
   "layout.sidebarWidth": "Largura do menu lateral: número de 180 a 300 pixels.",
   "layout.statusSide": "Lado dos painéis de status: right ou left.",
@@ -497,7 +509,7 @@ const FIELD_COMMENTS: Record<string, string> = {
   media: "Referências aos IDs existentes em assets. Use null para desativar.",
   "media.background": "ID de PNG estático, GIF animado ou vídeo silencioso para o fundo, ou null.",
   "media.logo": "ID de PNG estático para o logo visual, ou null.",
-  icons: "Ícones visuais das quatro seções; nenhuma ação é alterada.",
+  icons: "Ícones visuais das seis seções; nenhuma ação ou permissão é alterada.",
   "icons.*": "Ícone: default, star, leaf, moon, heart, gamepad, sparkles ou asset:ID de PNG existente.",
   decorations: "Lista com até 6 elementos somente visuais, posicionados dentro da área de decoração.",
   "decorations.*.type": "Tipo do elemento: text ou image.",
@@ -546,11 +558,11 @@ export function buildThemeAiPrompt(theme: AuroraTheme): string {
     "- window: titlebarColor, titlebarText e frameColor #RRGGBB; contraste titlebarText/titlebarColor 4.5:1; titlebarHeight 36–64 px, borderWidth 0–3 px, outerRadius 0–24 px, contentInset 0–24 px. Os controles da janela preservam suas funções.",
     "- cursor: style system|pixel|ring|crosshair; color #RRGGBB; size 16–40 px; trail none|sparkle. É só aparência do mouse no conteúdo do launcher; não muda cliques, atalhos ou permissões. Rastro respeita movimento reduzido e a janela oculta.",
     "- typography: font system|rounded|serif|mono; scale 0.9–1.15. Fontes locais.",
-    "- layout: sidebar left|right; density comfortable|compact; navOrder contém instances, discover, appearance, java uma vez cada; radius 0–24 px; sidebarWidth 180–300 px; statusSide right|left; sectionOrder contém header, decorations, content uma vez cada; decorationHeight 80–400 px.",
+    "- layout: sidebar left|right; density comfortable|compact; navOrder contém instances, discover, appearance, java, connect, social uma vez cada; radius 0–24 px; sidebarWidth 180–300 px; statusSide right|left; sectionOrder contém header, decorations, content uma vez cada; decorationHeight 80–400 px.",
     "- effects: background none|aurora|water|sakura; intensity 0–1; speed 0.25–2; glass 0–16 px; transition fade|slide|zoom|none; transitionMs 100–700 ms. Somente efeitos internos, respeitando movimento reduzido e a janela oculta.",
     "- assets: até 4 IDs válidos, cada um com mime e data base64 puro, sem prefixo data:. PNG estático (sem APNG) image/png até 2 MiB/4096 px/8 milhões de pixels. GIF animado image/gif apenas no fundo, até 24 MiB/1920×1080/240 frames/160 milhões de pixels de canvas acumulados; até 60 segundos por ciclo somando o atraso de cada frame com mínimo de 40 ms. Somente looping padrão e comentários; sem extensões interativas ou externas. Vídeo silencioso video/mp4 ou video/webm até 20 MiB/1920×1080 (1080p)/180 segundos. Soma até 24 MiB; documento até 34 MiB. Preserve base64 existente; não invente recursos. Anexos faltantes são adicionados localmente no Aurora.",
     "- media: background ID de PNG/GIF/vídeo ou null; logo ID de PNG ou null. GIF não pode ser logo, ícone ou decoração. Sem caminhos nem URLs.",
-    "- icons: instances, discover, appearance, java; cada valor default|star|leaf|moon|heart|gamepad|sparkles ou asset:ID de PNG existente.",
+    "- icons: instances, discover, appearance, java, connect, social; cada valor default|star|leaf|moon|heart|gamepad|sparkles ou asset:ID de PNG existente.",
     "- decorations: até 6 objetos: type text|image; text até 160 caracteres literais; asset null para texto ou ID de PNG para imagem; align left|center|right; x e y 0–100% do espaço livre após descontar largura/altura; width 8–100%; height 24–160 px; fontSize 12–56 px. São elementos somente visuais.",
     "- Documentos antigos sem os novos campos recebem padrões; use os valores completos do exemplo abaixo. O usuário confirma dentro de uma prévia de 10 segundos. Autenticação, permissões, alertas de segurança e ações do launcher permanecem protegidos.",
     "",

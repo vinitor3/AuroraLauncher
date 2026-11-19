@@ -138,6 +138,48 @@ test("disabled backend exposes no host, guest, network or clipboard operation", 
   assert.deepEqual(copied, []);
 });
 
+test("online compact entry hides inactive manual controls until explicitly requested without preparing anything", async () => {
+  await render({ manualControls: false });
+  assert.ok(container.querySelector('[aria-label="Seu jogo multiplayer"]'));
+  assert.match(container.textContent, /Escolha Entrar em uma sessão de amigos ou da comunidade/);
+  assert.equal(container.querySelector("form.connect-form"), null);
+  assert.equal(container.querySelector("textarea"), null);
+  assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot"]);
+  await render({ manualControls: true });
+  assert.ok(container.querySelector("form.connect-form"));
+  await render({ manualControls: false });
+  assert.equal(container.querySelector("form.connect-form"), null);
+  assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot"]);
+  assert.deepEqual(copied, []);
+});
+
+test("online compact mode preserves a recovered manual review and requires fresh explicit consent", async () => {
+  snapshot = { ...idle(), operationId, generation: 1, role: "host", phase: "reviewed", preparation, review,
+    expiresAtMs: preparation.expiresAtMs };
+  await render({ manualControls: false });
+  assert.ok(container.querySelector(".connect-review"));
+  assert.equal(button("Autorizar conexão").disabled, true);
+  assert.equal(container.querySelector(".connect-consent input").checked, false);
+  assert.equal(count("connect_confirm"), 0);
+  await click("Cancelar tentativa");
+  assert.equal(count("connect_stop"), 1);
+  assert.ok(container.querySelector('[aria-label="Seu jogo multiplayer"]'));
+  assert.equal(container.querySelector("form.connect-form"), null);
+  assert.deepEqual(copied, []);
+});
+
+for (const cleanupState of ["pending", "failed"]) test(`online compact mode preserves Stop for failed manual cleanup ${cleanupState}`, async () => {
+  snapshot = terminalSingleSource("legacy", cleanupState);
+  await render({ manualControls: false });
+  assert.equal(container.querySelector('[aria-label="Seu jogo multiplayer"]'), null);
+  assert.equal(button("Encerrar Connect").disabled, false);
+  assert.equal(container.querySelector("form.connect-form"), null);
+  await click("Encerrar Connect");
+  assert.equal(count("connect_stop"), 1);
+  assert.ok(container.querySelector('[aria-label="Seu jogo multiplayer"]'));
+  assert.equal(count("connect_prepare_host"), 0);
+});
+
 test("host requires separate preparation, review and explicit consent before native confirmation", async () => {
   await render();
   assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot"]);
@@ -3223,6 +3265,21 @@ function socialReadyFixture(available = false) {
     phase: "idle", review: null, result: null, errorCode: null }));
   handlers.set("diagnostic_lab_list", () => []);
 }
+for (const phase of ["closed", "failed"]) test(`online compact mode preserves terminal Social ${phase} feedback and cleanup without a manual form`, async () => {
+  socialReadyFixture();
+  snapshot = { ...snapshot, phase, transportState: "closed", tcpAddress: null, cleanupState: "complete",
+    errorCode: phase === "failed" ? "connect_social_continuity_lost" : null,
+    social: { ...snapshot.social, stage: phase, ...(phase === "failed" ? { failureStage: "sessionContinuity" } : {}) } };
+  await render({ manualControls: false });
+  assert.match(container.textContent, /Esta sessão foi preparada em Amigos e comunidade/);
+  assert.match(container.textContent, /Recursos da conexão liberados/);
+  if (phase === "failed") assert.match(container.textContent, /Não foi possível confirmar a continuidade da sessão a tempo/);
+  assert.equal(container.querySelector("form.connect-form"), null);
+  assert.equal(container.querySelectorAll("#connect-social-title").length, 1);
+  assert.deepEqual([...container.querySelectorAll("button")].map(element => element.textContent), ["Atualizar estado"]);
+  assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot"]);
+  assert.deepEqual(copied, []);
+});
 for (const role of ["host", "guest"]) test(`the Connect client page presents the existing ${role} Social failure without new queries`, async () => {
   socialReadyFixture();
   snapshot = { ...snapshot, role, phase: "failed", transportState: "closed", tcpAddress: null, cleanupState: "complete",

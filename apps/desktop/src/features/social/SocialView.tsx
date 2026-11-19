@@ -68,6 +68,7 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [waitingJoinRequests, setWaitingJoinRequests] = useState<Record<string, number>>({});
+  const [groupsExpanded, setGroupsExpanded] = useState(false);
   const [query, setQuery] = useState("");
   const [searched, setSearched] = useState(false);
   const [result, setResult] = useState<SocialPerson | null>(null);
@@ -84,6 +85,13 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
   const epoch = useRef(0);
   const busy = useRef(false);
   const active = useRef(false);
+  type JoinNavigation = {
+    accountId: string; service: SocialService; controller: SocialConnectionControls["controller"];
+    epoch: number; sessionId: string; expiresAtMs: number; previousOperationId: string | null;
+    minimumGeneration: number; operationId: string | null; dispatched: boolean;
+  };
+  const joinNavigation = useRef<JoinNavigation | null>(null);
+  const [joinNavigationRevision, setJoinNavigationRevision] = useState(0);
   const availability = useSocialAvailability(connection?.controller, connection?.state.available === true && connection.state.maxSessionSeconds === 14400);
   const available = !!service?.capabilities.friends;
   const observedModpack = currentModpack?.trim().slice(0, 64) || null;
@@ -122,7 +130,7 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
     const observeClock = () => setNow(readNow());
     const timer = window.setInterval(observeClock, 1000);
     window.addEventListener("focus", observeClock); document.addEventListener("visibilitychange", observeClock);
-    return () => { active.current = false; ++epoch.current; window.clearInterval(timer); window.removeEventListener("focus", observeClock); document.removeEventListener("visibilitychange", observeClock); };
+    return () => { active.current = false; ++epoch.current; joinNavigation.current = null; window.clearInterval(timer); window.removeEventListener("focus", observeClock); document.removeEventListener("visibilitychange", observeClock); };
   }, [service, accountId]);
 
   async function run(action: () => Promise<unknown>, success: string, refresh = true) {
@@ -169,8 +177,48 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
       setWaitingJoinRequests(previous => { const next = { ...previous }; delete next[session.id]; return next; });
     }
     if (!live()) return;
-    await service.prepareJoin(session.id);
+    // A click requests navigation only. The native owner still authenticates
+    // this session, including any separate voice review/consent.
+    const intent: JoinNavigation | null = onOpenConnectedGame && connection?.state.available ? {
+      accountId, service, controller: connection.controller, epoch: generation, sessionId: session.id,
+      expiresAtMs: session.expiresAtMs, previousOperationId: connection.state.snapshot?.operationId ?? null,
+      minimumGeneration: connection.state.snapshot?.generation ?? 0, operationId: null, dispatched: false,
+    } : null;
+    joinNavigation.current = intent;
+    try { await service.prepareJoin(session.id); }
+    catch (cause) { if (joinNavigation.current === intent) joinNavigation.current = null; throw cause; }
+    finally {
+      if (intent && current(generation) && joinNavigation.current === intent) {
+        intent.dispatched = true;
+        setJoinNavigationRevision(value => value + 1);
+      }
+    }
   }
+
+  useEffect(() => {
+    const intent = joinNavigation.current;
+    if (!intent) return;
+    const state = connection?.state, observed = state?.snapshot, social = observed?.social;
+    if (!current(intent.epoch) || intent.accountId !== accountId || intent.service !== service
+      || intent.controller !== connection?.controller || !state?.available || state.error || !onOpenConnectedGame
+      || !(intent.expiresAtMs > readNow())) { joinNavigation.current = null; return; }
+    if (!observed?.operationId || observed.operationId === intent.previousOperationId) {
+      if (intent.operationId || intent.dispatched && !state.pending) joinNavigation.current = null;
+      return;
+    }
+    if (observed.errorCode || observed.generation < intent.minimumGeneration || observed.role !== "guest" || social?.role !== "guest"
+      || social.sessionId !== intent.sessionId || intent.operationId && intent.operationId !== observed.operationId
+      || ["closing", "closed", "failed"].includes(observed.phase) || ["closed", "failed"].includes(social.stage)
+      || ["complete", "failed"].includes(observed.cleanupState)
+      || social.expiresAtMs !== null && !(social.expiresAtMs > Date.now())) { joinNavigation.current = null; return; }
+    intent.operationId = observed.operationId;
+    intent.minimumGeneration = observed.generation;
+    if (!intent.dispatched || state.pending || observed.phase !== "guestConnected" || observed.transportState !== "authenticated"
+      || social.stage !== "connected" || social.readyGameLaunchAvailable !== true || !observed.tcpAddress
+      || social.expiresAtMs === null) return;
+    joinNavigation.current = null;
+    onOpenConnectedGame();
+  }, [connection, service, accountId, onOpenConnectedGame, now, joinNavigationRevision]);
 
   const waitingForApproval = (session: SocialSession) => session.joinPolicy === "approval"
     && session.expiresAtMs > now && waitingJoinRequests[session.id] === session.expiresAtMs;
@@ -290,15 +338,14 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
         </div>}
       </aside>
       <div className="social-community">
-        {service?.organization && <SocialOrganizationPanel service={service.organization} accountId={accountId} friends={snapshot?.friends ?? []} />}
-        {connection && <SocialConnectionPanel connection={connection} ownSession={snapshot?.ownSession} now={Date.now()} catalogNow={now} onOpenConnectedGame={onOpenConnectedGame} onPrepareDedicatedServer={onPrepareDedicatedServer} service={service} />}
+        {connection && (connectionBusy || connectSnapshot?.social || connection.state.error) && <SocialConnectionPanel connection={connection} ownSession={snapshot?.ownSession} now={Date.now()} catalogNow={now} onOpenConnectedGame={onOpenConnectedGame} onPrepareDedicatedServer={onPrepareDedicatedServer} service={service} />}
         <header className="social-community-heading"><div><h3>Mundos da comunidade</h3><p>Encontre uma sessão para a sua próxima aventura.</p></div><div className="social-layout-switch" aria-label="Visualização das sessões"><button aria-pressed={layout === "grid"} onClick={() => setLayout("grid")}>Grade</button><button aria-pressed={layout === "list"} onClick={() => setLayout("list")}>Lista</button></div></header>
         <div className="social-filters"><div className="social-tabs" aria-label="Origem das sessões"><button aria-pressed={scope === "public"} onClick={() => setScope("public")}>Comunidade</button><button aria-pressed={scope === "friends"} onClick={() => setScope("friends")}>Dos amigos</button></div><input aria-label="Filtrar sessões carregadas" placeholder="Filtrar modpack ou versão" value={filter} onChange={event => setFilter(event.target.value)} /></div>
         {available && !service?.capabilities.join && <p className="social-notice">O serviço online não está ativado neste executável. Você pode organizar amizades e descobrir anúncios.</p>}
         {!visibleSessions.length ? <Empty title={loading ? "Procurando sessões…" : "Nenhuma sessão disponível"}>{filter ? "Nenhum anúncio carregado corresponde ao filtro." : scope === "friends" ? "As sessões compartilhadas pelos seus amigos aparecerão aqui." : "Os mundos publicados voluntariamente pelos anfitriões aparecerão aqui."}</Empty> : <div className="social-catalog" data-layout={layout}>{visibleSessions.map(session => <SessionCard key={session.id} session={session} now={now} availability={availability} waitingForApproval={waitingForApproval(session)} pending={disabled || connectionBusy || session.hostUid === accountId} joinEnabled={service?.capabilities.join === true && (session.joinPolicy === "open" || !!service.organization)} onJoin={() => { if (!connectionBusy && session.hostUid !== accountId && session.expiresAtMs > readNow() && service?.capabilities.join) void run(() => enterSession(session), "", false); }} onCancelRequest={service?.organization?.cancelJoinRequest ? () => void run(() => cancelEntryRequest(session), "", false) : undefined} />)}</div>}
         {scope === "public" && nextCursor && <div className="social-pagination"><button className="secondary" disabled={disabled} onClick={() => void more()}>Carregar mais</button></div>}
         {sessions.length >= MAX_VISIBLE_SESSIONS && <small>Exibindo até 100 anúncios. Atualize para consultar a lista novamente.</small>}
-        {available && service?.capabilities.publication && snapshot && <details className="social-publish"><summary>{snapshot.ownSession ? "Meu anúncio de sessão" : "Compartilhar uma sessão"}</summary>
+        {available && service?.capabilities.publication && snapshot && <details className="social-publish theme-protected"><summary>{snapshot.ownSession ? "Meu mundo" : "Abrir meu mundo"}</summary>
           <form onSubmit={event => { event.preventDefault(); if (publicationDisabled || (draft.visibility !== "private" && !publicationConsent)
             || (service.privateInvitations && draft.visibility === "private" && draft.joinPolicy !== "open")) return; void run(() => service.publishSession(validateSocialSession(draft)), draft.visibility === "private"
             ? service.privateInvitations ? "Anúncio privado salvo. Use Convites privados para selecionar contas. O anúncio não inicia o compartilhamento." : "Anúncio privado salvo. Ele não envia convites nem inicia o compartilhamento."
@@ -310,8 +357,8 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
               <p>{service.privateInvitations
                 ? "Use Convites privados para buscar uma conta pelo nick do Aurora. Salvar novamente este anúncio cria outra sessão e exige novos convites. Os códigos manuais continuam como alternativa."
                 : "Para convidar alguém diretamente, use os convites manuais do Connect e troque os códigos pelo canal combinado. O anúncio só muda quando você salva; ainda não há entrega de convite para uma conta Aurora."}</p>
-              {onOpenManualConnect ? <><button type="button" className="secondary" disabled={disabled || !manualConnectReady} onClick={() => { if (!disabled && manualConnectReady) onOpenManualConnect(); }}>Abrir convites do Connect</button>
-                {!manualConnectReady && <small>{connectionBusy ? "Encerre a conexão atual e aguarde a liberação dos recursos antes de preparar outro convite." : "Atualize a conexão para conferir se os recursos estão liberados."}</small>}</>
+              {onOpenManualConnect ? <details className="social-extra"><summary>Convite manual avançado</summary><button type="button" className="secondary" disabled={disabled || !manualConnectReady} onClick={() => { if (!disabled && manualConnectReady) onOpenManualConnect(); }}>Abrir convites do Connect</button>
+                {!manualConnectReady && <small>{connectionBusy ? "Encerre a conexão atual e aguarde a liberação dos recursos antes de preparar outro convite." : "Atualize a conexão para conferir se os recursos estão liberados."}</small>}</details>
                 : <small>Os convites manuais do Connect não estão disponíveis neste executável.</small>}
             </div>}
             {hostPublicationLocked && <p className="social-notice" role="status">Este anúncio está vinculado à hospedagem em andamento. Use Desconectar e aguarde a liberação dos recursos antes de editar ou salvar.</p>}
@@ -330,10 +377,16 @@ function SocialAccountView({ service, accountId, nickname, currentModpack, conne
             {draft.visibility !== "private" && <label className="social-consent"><input type="checkbox" checked={publicationConsent} disabled={publicationDisabled} onChange={event => setPublicationConsent(event.target.checked)} />Quero publicar estes dados {draft.visibility === "friends" ? "para meus amigos" : "para a comunidade do Aurora"}. Posso encerrar o anúncio.</label>}
             <div className="social-actions"><button disabled={publicationDisabled || (draft.visibility !== "private" && !publicationConsent) || (!!service.privateInvitations && draft.visibility === "private" && draft.joinPolicy !== "open")}>Salvar anúncio</button></div>
           </form>
+          {connection && !connectionBusy && !connectSnapshot?.social && !connection.state.error && <SocialConnectionPanel connection={connection} ownSession={snapshot.ownSession} now={Date.now()} catalogNow={now} onOpenConnectedGame={onOpenConnectedGame} onPrepareDedicatedServer={onPrepareDedicatedServer} service={service} />}
         </details>}
-        {service?.privateInvitations && <SocialPrivateInvitationsPanel service={service} ownSession={snapshot?.ownSession}
+        {service?.organization && <details className="social-extra" onToggle={event => { if (event.target === event.currentTarget) setGroupsExpanded(event.currentTarget.open); }}><summary>Grupos e pedidos</summary><SocialOrganizationPanel service={service.organization} accountId={accountId} friends={snapshot?.friends ?? []} expanded={groupsExpanded} /></details>}
+        {service?.privateInvitations && <details className="social-extra theme-protected"><summary>Convites privados</summary><SocialPrivateInvitationsPanel service={service} ownSession={snapshot?.ownSession}
           joinEnabled={service.capabilities.join && connection?.state.available === true && connection.state.privateInvitations === true && !connection.state.error}
-          connectionBusy={connectionBusy || disabled} onJoin={enterSession} />}
+          connectionBusy={connectionBusy || disabled} onJoin={enterSession} /></details>}
+        {onOpenManualConnect && <details className="social-extra"><summary>Opções avançadas e recuperação</summary>
+          <p>Use estes controles para convites manuais ou para conferir uma conexão, mesmo se a comunidade estiver indisponível.</p>
+          <button type="button" className="secondary" onClick={onOpenManualConnect}>Conexão manual e recuperação</button>
+        </details>}
       </div>
     </div>
   </section>;

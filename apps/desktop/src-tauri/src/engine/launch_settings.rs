@@ -74,12 +74,18 @@ impl Default for LaunchSettings {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct EffectiveLaunchSettings {
     pub min_memory_mb: Option<u32>,
     pub max_memory_mb: u32,
     pub jvm_args: Vec<String>,
 }
+
+#[cfg(all(windows, feature = "connect-lab"))]
+#[path = "launch_settings_ready.rs"]
+mod ready;
+#[cfg(all(windows, feature = "connect-lab"))]
+pub use ready::{inspect_ready_settings, ReadyLaunchSettings};
 
 impl EffectiveLaunchSettings {
     pub fn validate(&self) -> Result<(), LaunchSettingsError> {

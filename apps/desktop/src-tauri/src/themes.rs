@@ -36,7 +36,7 @@ fn nullable_string<'de, D: serde::Deserializer<'de>>(
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(try_from = "ThemeDocument", rename_all = "camelCase")]
 pub struct AuroraTheme {
     schema_version: u32,
     id: String,
@@ -53,6 +53,93 @@ pub struct AuroraTheme {
     media: ThemeMedia,
     icons: ThemeIcons,
     decorations: Vec<ThemeDecoration>,
+}
+
+// Keep migration in deserialization so both imports and persisted libraries
+// receive the same closed, deterministic navigation upgrade.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ThemeDocument {
+    schema_version: u32,
+    id: String,
+    name: String,
+    colors: ThemeColors,
+    #[serde(default)]
+    window: ThemeWindow,
+    #[serde(default)]
+    cursor: ThemeCursor,
+    typography: ThemeTypography,
+    layout: ThemeLayout,
+    effects: ThemeEffects,
+    assets: BTreeMap<String, ThemeAsset>,
+    media: ThemeMedia,
+    icons: ThemeDocumentIcons,
+    decorations: Vec<ThemeDecoration>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeDocumentIcons {
+    instances: String,
+    discover: String,
+    appearance: String,
+    java: String,
+    #[serde(default, deserialize_with = "present_icon")]
+    connect: Option<String>,
+    #[serde(default, deserialize_with = "present_icon")]
+    social: Option<String>,
+}
+
+fn present_icon<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
+
+impl TryFrom<ThemeDocument> for AuroraTheme {
+    type Error = &'static str;
+
+    fn try_from(mut document: ThemeDocument) -> Result<Self, Self::Error> {
+        let order = &mut document.layout.nav_order;
+        let legacy = order.len() == 4
+            && order.iter().collect::<BTreeSet<_>>().len() == 4
+            && order.iter().all(|id| {
+                matches!(
+                    id,
+                    NavId::Instances | NavId::Discover | NavId::Appearance | NavId::Java
+                )
+            });
+        let (connect, social) = match (document.icons.connect, document.icons.social) {
+            (None, None) if legacy => {
+                order.extend([NavId::Connect, NavId::Social]);
+                ("default".to_owned(), "default".to_owned())
+            }
+            (Some(connect), Some(social)) if !legacy && order.len() == 6 => (connect, social),
+            _ => return Err(THEME_ERROR),
+        };
+        Ok(Self {
+            schema_version: document.schema_version,
+            id: document.id,
+            name: document.name,
+            colors: document.colors,
+            window: document.window,
+            cursor: document.cursor,
+            typography: document.typography,
+            layout: document.layout,
+            effects: document.effects,
+            assets: document.assets,
+            media: document.media,
+            icons: ThemeIcons {
+                instances: document.icons.instances,
+                discover: document.icons.discover,
+                appearance: document.icons.appearance,
+                java: document.icons.java,
+                connect,
+                social,
+            },
+            decorations: document.decorations,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -200,6 +287,8 @@ enum NavId {
     Discover,
     Appearance,
     Java,
+    Connect,
+    Social,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -281,6 +370,8 @@ struct ThemeIcons {
     discover: String,
     appearance: String,
     java: String,
+    connect: String,
+    social: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -901,8 +992,8 @@ impl AuroraTheme {
                 .collect::<BTreeSet<_>>()
                 .len()
                 != 3
-            || self.layout.nav_order.len() != 4
-            || self.layout.nav_order.iter().collect::<BTreeSet<_>>().len() != 4
+            || self.layout.nav_order.len() != 6
+            || self.layout.nav_order.iter().collect::<BTreeSet<_>>().len() != 6
             || !bounded(self.effects.intensity, 0.0, 1.0)
             || !bounded(self.effects.speed, 0.25, 2.0)
             || !bounded(self.effects.glass, 0.0, 16.0)
@@ -975,6 +1066,8 @@ impl AuroraTheme {
             &self.icons.discover,
             &self.icons.appearance,
             &self.icons.java,
+            &self.icons.connect,
+            &self.icons.social,
         ] {
             if !matches!(
                 icon.as_str(),
@@ -1648,6 +1741,129 @@ mod tests {
 
     fn theme() -> AuroraTheme {
         AuroraTheme::parse(&document().to_string()).unwrap()
+    }
+
+    #[test]
+    fn navigation_migrates_only_complete_legacy_documents_and_preserves_order() {
+        let mut legacy = document();
+        legacy["layout"]["navOrder"] = json!(["java", "appearance", "instances", "discover"]);
+        let migrated = AuroraTheme::parse(&legacy.to_string()).unwrap();
+        let normalized = serde_json::to_value(&migrated).unwrap();
+        assert_eq!(
+            normalized["layout"]["navOrder"],
+            json!([
+                "java",
+                "appearance",
+                "instances",
+                "discover",
+                "connect",
+                "social"
+            ])
+        );
+        assert_eq!(migrated.icons.connect, "default");
+        assert_eq!(migrated.icons.social, "default");
+        assert_eq!(migrated.icons.java, "default");
+        assert_eq!(
+            AuroraTheme::parse(&normalized.to_string()).unwrap(),
+            migrated
+        );
+
+        let mut current = normalized.clone();
+        current["layout"]["navOrder"] = json!([
+            "social",
+            "java",
+            "connect",
+            "appearance",
+            "instances",
+            "discover"
+        ]);
+        current["icons"]["social"] = json!("heart");
+        current["icons"]["connect"] = json!("gamepad");
+        assert_eq!(
+            serde_json::to_value(AuroraTheme::parse(&current.to_string()).unwrap()).unwrap(),
+            current
+        );
+
+        for (path, invalid) in [
+            (
+                "/layout/navOrder",
+                json!(["instances", "discover", "appearance", "java"]),
+            ),
+            (
+                "/layout/navOrder",
+                json!(["instances", "discover", "appearance", "java", "connect"]),
+            ),
+            (
+                "/layout/navOrder",
+                json!([
+                    "instances",
+                    "discover",
+                    "appearance",
+                    "java",
+                    "connect",
+                    "connect"
+                ]),
+            ),
+            (
+                "/layout/navOrder",
+                json!([
+                    "instances",
+                    "discover",
+                    "appearance",
+                    "java",
+                    "connect",
+                    "shell"
+                ]),
+            ),
+            ("/icons/social", Value::Null),
+            ("/icons/social", json!("asset:missing")),
+        ] {
+            let mut value = current.clone();
+            *value.pointer_mut(path).unwrap() = invalid;
+            assert!(
+                AuroraTheme::parse(&value.to_string()).is_err(),
+                "accepted {path}"
+            );
+        }
+        for keys in [vec!["connect"], vec!["connect", "social"]] {
+            let mut value = current.clone();
+            for key in keys {
+                value["icons"].as_object_mut().unwrap().remove(key);
+            }
+            assert!(AuroraTheme::parse(&value.to_string()).is_err());
+        }
+        legacy["icons"]["connect"] = json!("default");
+        assert!(AuroraTheme::parse(&legacy.to_string()).is_err());
+    }
+
+    #[test]
+    fn navigation_migration_loads_saved_library_without_losing_selection_or_bindings() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(&fixture.0).unwrap();
+        let old = document();
+        let id = old["id"].as_str().unwrap();
+        let stored = json!({"schemaVersion": 1, "themes": [old.clone()], "selectedThemeId": id, "bindings": {"example-instance": id}, "automatic": true});
+        fs::write(
+            fixture.0.join("library.json"),
+            serde_json::to_vec(&stored).unwrap(),
+        )
+        .unwrap();
+        let (library, recovered) = load_library(&fixture.0).unwrap();
+        assert!(!recovered);
+        assert_eq!(library.selected_theme_id.as_deref(), Some(id));
+        assert_eq!(
+            library.bindings.get("example-instance").map(String::as_str),
+            Some(id)
+        );
+        assert!(library.automatic);
+        assert_eq!(library.themes[0].layout.nav_order.len(), 6);
+        assert_eq!(library.themes[0].icons.social, "default");
+        // Reading a legacy library does not overwrite its source or a backup.
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(fixture.0.join("library.json")).unwrap())
+                .unwrap(),
+            stored
+        );
     }
 
     fn with_asset(mime: &str, bytes: &[u8]) -> Value {

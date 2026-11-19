@@ -13,6 +13,7 @@ import { ThemeScene, ThemeDecorations } from "./features/themes/ThemeScene";
 import { ThemeWorkspace } from "./features/themes/ThemeWorkspace";
 import { ThemeCursor, themeCursorValue } from "./features/themes/ThemeCursor";
 import { ThemeLogo, ThemeNavIcon } from "./features/themes/ThemeIcon";
+import { LaunchSettingsPanel } from "./features/java-engine/LaunchSettingsPanel";
 import { DEFAULT_THEME, themeVariables } from "./features/themes/model";
 import { guardSessionProfile, startSessionStartup, type SessionStartupState } from "./lib/sessionStartup";
 import { browserLauncherAuthScope, prepareLauncherServices } from "./lib/launcherAuthScope";
@@ -965,6 +966,7 @@ function LauncherStartup() {
 function LauncherApp({ services }: { services: FirebaseServices }) {
   const themes = useThemes();
   const [themesOpen, setThemesOpen] = useState(false);
+  const [manualConnectRequested, setManualConnectRequested] = useState(false);
   const [profile, setProfileState] = useState<AuroraUserProfile>();
   const explainDoctorReport = useCallback((report: DoctorReport, signal: AbortSignal) =>
     requestDoctorAdvice(services, report, signal), [services, profile?.uid]);
@@ -3574,7 +3576,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     connect: "Aurora Connect · experimental",
     social: "Amigos e comunidade",
   };
-  const sectionIcons: Record<LauncherSection, string> = { instances: "◈", discover: "⌕", appearance: "✦", java: "▣" };
+  const sectionIcons: Record<LauncherSection, string> = { instances: "◈", discover: "⌕", appearance: "✦", java: "▣", connect: "⇄", social: "◉" };
   const selectedContentFiles = contentType === "mod"
     ? instanceContent.mods
     : contentType === "shader"
@@ -3632,7 +3634,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           <span><strong>{profile.username}</strong><small>{services.authScope.persistent ? "Conta Aurora" : "Sessão independente"}</small></span>
         </div>
         <nav aria-label="Seções do launcher" className="app-nav">
-          {themes.theme.layout.navOrder.map((section) => (
+          {themes.theme.layout.navOrder.filter(section => section === "connect" ? connectAvailable && (!socialFeatureBuild || activeSection === "connect" || manualConnectRequested) : section === "social" ? socialFeatureBuild : true).map((section) => (
             <button
               aria-current={activeSection === section ? "page" : undefined}
               className={activeSection === section ? "nav-item active" : "nav-item"}
@@ -3647,17 +3649,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
               <span aria-hidden="true"><ThemeNavIcon theme={themes.theme} section={section} fallback={sectionIcons[section]} onError={themes.mediaFailed} /></span>{sectionTitles[section]}
             </button>
           ))}
-          {connectAvailable && <button
-            aria-current={activeSection === "connect" ? "page" : undefined}
-            className={activeSection === "connect" ? "nav-item active" : "nav-item"}
-            onClick={() => setActiveSection("connect")}
-            type="button"
-          ><span aria-hidden="true">⇄</span>Connect · experimental</button>}
-          {socialFeatureBuild && <button
-            aria-current={activeSection === "social" ? "page" : undefined}
-            className={activeSection === "social" ? "nav-item active" : "nav-item"}
-            onClick={() => setActiveSection("social")} type="button"
-          ><span aria-hidden="true">◉</span>Amigos e comunidade</button>}
         </nav>
         <div className="sidebar-bottom">
           <button className={assistantOpen ? "compact sidebar-action" : "secondary compact sidebar-action"} onClick={() => setAssistantOpen((current) => !current)} type="button">Assistente</button>
@@ -3691,10 +3682,12 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         {socialService && activeSection === "social" && !signingOut && <div className="section-social"><SocialBuildBanner /><SocialView key={profile.uid} service={socialService} accountId={profile.uid} nickname={profile.username}
           connection={socialConnection}
           onOpenConnectedGame={connectAvailable ? () => { setGameRevealRequest(value => value + 1); setActiveSection("connect"); } : undefined}
-          onOpenManualConnect={connectAvailable && connectAccountBarrier === "idle" && !signingOut ? () => setActiveSection("connect") : undefined}
+          onOpenManualConnect={connectAvailable && connectAccountBarrier === "idle" && !signingOut ? () => { setManualConnectRequested(true); setActiveSection("connect"); } : undefined}
           onPrepareDedicatedServer={connectAvailable && socialConnection?.state.maxSessionSeconds === 14400 ? () => { setDedicatedRevealRequest(value => value + 1); setActiveSection("connect"); } : undefined}
           currentModpack={runningInstances.length === 1 ? instances.find(item => item.id === runningInstances[0].instanceId)?.displayName || runningInstances[0].instanceId : undefined} /></div>}
-        {connectAvailable && (connectVisited || activeSection === "connect") && <div className="section-connect" hidden={activeSection !== "connect"} inert={signingOut || activeSection !== "connect"}><ConnectView launchContext={connectLaunchContext} onInitialReadReady={setConnectViewReady} onChooseSource={() => setActiveSection("instances")} gameRevealRequest={gameRevealRequest} gameRevealReady={!signingOut && activeSection === "connect"} /><NativeVoicePanel disabled={signingOut} revealRequest={dedicatedRevealRequest} revealReady={connectViewReady && activeSection === "connect"} /></div>}
+        {connectAvailable && (connectVisited || activeSection === "connect") && <div className="section-connect" hidden={activeSection !== "connect"} inert={signingOut || activeSection !== "connect"}>
+          {socialFeatureBuild && <button className="secondary compact" type="button" onClick={() => setActiveSection("social")}>Voltar para amigos e comunidade</button>}
+          <ConnectView manualControls={!socialFeatureBuild || manualConnectRequested} launchContext={connectLaunchContext} onInitialReadReady={setConnectViewReady} onChooseSource={() => setActiveSection("instances")} gameRevealRequest={gameRevealRequest} gameRevealReady={!signingOut && activeSection === "connect"} /><NativeVoicePanel disabled={signingOut} revealRequest={dedicatedRevealRequest} revealReady={connectViewReady && activeSection === "connect"} /></div>}
         <article className="panel instances section-instances">
           <div className="panel-heading">
             <div>
@@ -3865,7 +3858,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           <div className="catalog-pagination"><button className="secondary compact" disabled={busy || modrinthPage === 0} onClick={() => void loadModrinthPage(modrinthPage - 1)} type="button">← Anterior</button><span>Página {modrinthPage + 1} de {Math.max(1, Math.ceil(modrinthTotalHits / modrinthPageSize))}</span><button className="secondary compact" disabled={busy || (modrinthPage + 1) * modrinthPageSize >= modrinthTotalHits} onClick={() => void loadModrinthPage(modrinthPage + 1)} type="button">Próxima →</button></div>
         </article>
         {editingInstance && (
-            <section aria-label={`Editor da instância ${editingInstance}`} aria-modal="true" className="editor-panel" role="dialog">
+            <section aria-label={`Editor da instância ${editingInstance}`} aria-modal="true" className="editor-panel theme-protected" role="dialog">
               <div className="editor-heading">
                 <div className="editor-title">
                   {editingInstanceSummary?.iconUrl ? <img className="editor-instance-artwork" alt="" src={editingInstanceSummary.iconUrl} /> : <span className="editor-instance-icon">◈</span>}
@@ -4114,6 +4107,18 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
               })}
             </div>
             <details className="java-manual"><summary>Usar um executável manualmente</summary><form onSubmit={verifyJava} className="java-form"><input value={javaPath} onChange={(event) => { setJavaPath(event.target.value); window.localStorage.setItem("aurora.javaExecutable", event.target.value); }} placeholder="C:\\Java\\bin\\java.exe" /><button className="secondary" disabled={busy} type="submit">Validar Java</button></form></details>
+          </article>
+          <article className="panel section-java">
+            <label htmlFor="java-engine-instance">Configurar inicialização da instância
+              <select id="java-engine-instance" value={targetInstance} disabled={busy || recoveryBusy || voice?.isBlocking()}
+                onChange={event => { if (event.target.value) void selectInstance(event.target.value); }}>
+                <option value="">Selecione uma instância</option>
+                {instances.map(instance => <option key={instance.id} value={instance.id}>{instance.displayName || instance.id}</option>)}
+              </select>
+            </label>
+            <LaunchSettingsPanel key={targetInstance} instanceId={targetInstance}
+              busy={busy || recoveryBusy || !!voice?.isBlocking()}
+              running={runningInstances.some(running => running.instanceId === targetInstance)} />
           </article>
           <article className="panel section-appearance wardrobe-panel">
             <div className="wardrobe-heading">

@@ -119,22 +119,14 @@ pub struct PreparedLaunch {
 impl PreparedLaunch {
     /// Explicit ready-copy policy: remove inherited JVM option injection. File
     /// preparation happens before the Connect spawn gate; only Command::spawn
-    /// belongs inside that short gate. The normal launch path is unchanged.
+    /// belongs inside that short gate. Both launch paths share option isolation.
     #[cfg(feature = "connect-lab")]
     pub fn into_connect_command(self) -> Result<std::process::Command, LaunchError> {
         let mut command = background_command(&self.command.executable);
         command
             .args(&self.command.args)
-            .current_dir(&self.command.working_dir)
-            .envs(&self.command.environment);
-        for name in [
-            "JAVA_TOOL_OPTIONS",
-            "JDK_JAVA_OPTIONS",
-            "_JAVA_OPTIONS",
-            "CLASSPATH",
-        ] {
-            command.env_remove(name);
-        }
+            .current_dir(&self.command.working_dir);
+        configure_java_environment(&mut command, &self.command.environment);
         #[cfg(target_os = "windows")]
         configure_windows_game_output(&mut command, &self.command.working_dir)?;
         Ok(command)

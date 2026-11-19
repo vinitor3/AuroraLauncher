@@ -268,7 +268,7 @@ test("GIF preparation/playback and cursor cleanup use the actual components", { 
 
     await t.test("cursor trails stop for reduced motion, hidden windows, protected areas and unmount", async () => {
       const theme = { ...THEME_EXAMPLES[0], cursor: { style: "ring", color: "#abcdef", size: 24, trail: "sparkle" } };
-      await mount(React.createElement("div", { className: "launcher-theme-root" }, React.createElement("button", { id: "content-target" }, "Conteúdo"), React.createElement("div", { className: "theme-manager" }, React.createElement("button", { id: "protected-target" }, "Editor")), React.createElement(ThemeCursor, { theme })));
+      await mount(React.createElement("div", { className: "launcher-theme-root" }, React.createElement("button", { id: "content-target" }, "Conteúdo"), React.createElement("div", { className: "theme-manager" }, React.createElement("button", { id: "protected-target" }, "Editor")), React.createElement("section", { className: "theme-protected" }, React.createElement("button", { id: "consent-target" }, "Confirmar entrada")), React.createElement(ThemeCursor, { theme })));
       const pointer = (target = document.getElementById("content-target"), pointerType = "mouse") => {
         now += 50;
         for (const callback of windowListeners.get("pointermove") ?? []) callback({ target, pointerType, clientX: 50, clientY: 60 });
@@ -286,6 +286,8 @@ test("GIF preparation/playback and cursor cleanup use the actual components", { 
       pointer(); assert.equal(animationFrames.size, 0);
       hidden = false;
       pointer(document.getElementById("protected-target")); assert.equal(animationFrames.size, 0);
+      pointer(); assert.equal(animationFrames.size, 1);
+      pointer(document.getElementById("consent-target")); assert.equal(animationFrames.size, 0, "entering a security review clears the decorative trail");
       pointer(document.body); assert.equal(animationFrames.size, 0);
       pointer(document.getElementById("content-target"), "touch"); assert.equal(animationFrames.size, 0);
       pointer(); assert.equal(animationFrames.size, 1);

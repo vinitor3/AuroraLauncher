@@ -98,7 +98,7 @@ export function UpdateReviewDialog({
       aria-labelledby="update-review-title"
       aria-modal="true"
       aria-busy={busy}
-      className="update-review-dialog"
+      className="update-review-dialog theme-protected"
       ref={dialogRef}
       role="dialog"
       tabIndex={-1}

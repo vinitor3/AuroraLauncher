@@ -43,7 +43,7 @@ export function ThemeCursor({ theme }: { theme: AuroraTheme }) {
     };
     const move = (event: PointerEvent) => {
       if (document.hidden || motion.matches || event.pointerType === "touch" || !(event.target instanceof Element)
-        || !event.target.closest(".launcher-theme-root") || event.target.closest(".theme-manager")) { stop(); return; }
+        || !event.target.closest(".launcher-theme-root") || event.target.closest(".theme-manager, .theme-protected")) { stop(); return; }
       const now = performance.now();
       if (now - last < 45) return;
       last = now;

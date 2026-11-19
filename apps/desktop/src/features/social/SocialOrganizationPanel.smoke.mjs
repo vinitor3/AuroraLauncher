@@ -34,7 +34,11 @@ const now = 1_800_000_000_000;
 const group = (ownerUid = "host", expiresAtMs = now + 60_000) => ({
   id: ownerUid, name: "Grupo", ownerUid, members: [{ uid: ownerUid, nickname: "Host", avatarUrl: null }], invited: [], expiresAtMs,
 });
-let root;
+let root, layoutVisible = true, visibility = "visible";
+const intervals = new Map();
+const nativeSetInterval = globalThis.setInterval, nativeClearInterval = globalThis.clearInterval;
+const originalRects = Object.getOwnPropertyDescriptor(window.HTMLElement.prototype, "getClientRects");
+Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
 const button = () => [...container.querySelectorAll("button")].find(item => item.textContent === "Convidar ao grupo");
 const select = () => container.querySelector('[aria-label="Amigo para convidar ao grupo"]');
 const render = async (service, props = {}) => act(async () => root.render(createElement(SocialOrganizationPanel, { service, accountId: "host", friends: [alice, bob], ...props })));
@@ -45,13 +49,27 @@ const choose = async uid => act(async () => {
 const click = async () => act(async () => button().dispatchEvent(new window.Event("click", { bubbles: true })));
 const refresh = async () => act(async () => document.dispatchEvent(new window.Event("visibilitychange")));
 function fixture(value = group()) {
-  const state = { group: value, calls: [], now };
-  state.service = { now: () => state.now, snapshot: async () => ({ group: structuredClone(state.group), invitations: [], joinRequests: [] }),
+  const state = { group: value, calls: [], reads: 0, now };
+  state.service = { now: () => state.now, snapshot: async () => { state.reads++; return { group: structuredClone(state.group), invitations: [], joinRequests: [] }; },
     inviteToGroup: async uid => { state.calls.push(uid); state.group.invited.push([alice, bob].find(item => item.uid === uid)); } };
   return state;
 }
-beforeEach(() => { root = createRoot(container); });
-afterEach(async () => act(async () => root.unmount()));
+const tick = async () => act(async () => { for (const callback of intervals.values()) callback(); });
+beforeEach(() => {
+  layoutVisible = true; visibility = "visible";
+  Object.defineProperty(window.HTMLElement.prototype, "getClientRects", { configurable: true, value: () => layoutVisible ? [{}] : [] });
+  globalThis.setInterval = callback => { const id = Symbol("poll"); intervals.set(id, callback); return id; };
+  globalThis.clearInterval = id => intervals.delete(id);
+  root = createRoot(container);
+});
+afterEach(async () => {
+  try { await act(async () => root.unmount()); assert.equal(intervals.size, 0); }
+  finally {
+    intervals.clear(); globalThis.setInterval = nativeSetInterval; globalThis.clearInterval = nativeClearInterval;
+    if (originalRects) Object.defineProperty(window.HTMLElement.prototype, "getClientRects", originalRects);
+    else delete window.HTMLElement.prototype.getClientRects;
+  }
+});
 
 test("successful group invitation clears selection and cannot resend the removed option", async () => {
   const f = fixture(); await render(f.service); await choose("alice");
@@ -111,4 +129,58 @@ test("the existing contract caps active invitations separately from current memb
   await render(f.service); await choose("alice"); assert.equal(button().disabled, false);
   f.group.invited.push(bob); await refresh(); assert.equal(button().disabled, true);
   await click(); assert.deepEqual(f.calls, []);
+});
+
+test("collapsed groups make no automatic reads and reopening preserves the user's selection", async () => {
+  const f = fixture(); await render(f.service, { expanded: false });
+  await tick(); await refresh(); assert.equal(f.reads, 0);
+  await render(f.service, { expanded: true }); assert.equal(f.reads, 1);
+  await choose("alice"); await render(f.service, { expanded: false });
+  await tick(); await refresh(); assert.equal(f.reads, 1);
+  await render(f.service, { expanded: true }); assert.equal(f.reads, 2);
+  assert.equal(select().value, "alice", "opening details does not remount the account scope");
+});
+
+test("an expanded group avoids reads in hidden document or hidden layout", async () => {
+  const f = fixture(); layoutVisible = false;
+  await render(f.service); await tick(); assert.equal(f.reads, 0);
+  layoutVisible = true; visibility = "hidden";
+  await tick(); await refresh(); assert.equal(f.reads, 0);
+  visibility = "visible"; await refresh(); assert.equal(f.reads, 1);
+  layoutVisible = false; await tick(); assert.equal(f.reads, 1);
+  layoutVisible = true; await tick(); assert.equal(f.reads, 2);
+});
+
+test("polling never queues a second read behind an in-flight request that becomes hidden", async () => {
+  const f = fixture(); let complete;
+  f.service.snapshot = () => { f.reads++; return new Promise(resolve => { complete = resolve; }); };
+  await render(f.service); await tick(); await refresh(); assert.equal(f.reads, 1);
+  await render(f.service, { expanded: false }); layoutVisible = false;
+  await act(async () => complete({ group: f.group, invitations: [], joinRequests: [] }));
+  await tick(); assert.equal(f.reads, 1);
+  assert.ok(container.textContent.includes("Grupo"), "the already-started read may settle normally");
+});
+
+test("a mutation started while open completes and reconciles while collapsed", async () => {
+  const f = fixture(); let complete;
+  f.service.inviteToGroup = uid => { f.calls.push(uid); return new Promise(resolve => { complete = () => { f.group.invited.push(alice); resolve(); }; }); };
+  await render(f.service); await choose("alice"); await click();
+  await render(f.service, { expanded: false }); layoutVisible = false;
+  await tick(); assert.equal(f.reads, 1);
+  await act(async () => complete());
+  assert.equal(f.reads, 2, "required post-write reconciliation is not a background poll");
+  assert.deepEqual(f.calls, ["alice"]); assert.equal(select().value, "");
+  await tick(); assert.equal(f.reads, 2);
+});
+
+test("a closed replacement account neither fetches automatically nor accepts the old response", async () => {
+  const old = fixture(); let complete;
+  old.group.name = "Old private group";
+  old.service.snapshot = () => { old.reads++; return new Promise(resolve => { complete = resolve; }); };
+  await render(old.service);
+  const next = fixture(group("other-host"));
+  await render(next.service, { accountId: "other-host", expanded: false });
+  await act(async () => complete({ group: old.group, invitations: [], joinRequests: [] }));
+  await tick(); assert.equal(next.reads, 0); assert.doesNotMatch(container.textContent, /Old private group/);
+  await render(next.service, { accountId: "other-host", expanded: true }); assert.equal(next.reads, 1);
 });

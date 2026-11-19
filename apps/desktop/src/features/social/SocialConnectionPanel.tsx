@@ -75,7 +75,7 @@ export function SocialConnectionPanel({ connection, ownSession, now, catalogNow 
   const readyHostPlayer = social?.role === "host" && social.hostPlayer === true && snapshot?.role === "host" && snapshot.phase === "hostListening" && ["connected", "waitingGuest"].includes(social.stage);
   const canOpenGame = !!onOpenConnectedGame && state.available && social?.readyGameLaunchAvailable === true && (readyGuest || readyHostPlayer)
     && !!snapshot.tcpAddress && !["complete", "failed"].includes(snapshot.cleanupState) && social.expiresAtMs !== null && social.expiresAtMs > now && !state.pending && !state.error;
-  return <section className="social-connection" aria-label="Sua conexão multiplayer">
+  return <section className="social-connection theme-protected" aria-label="Sua conexão multiplayer">
     <div className="social-community-heading"><div><h3>{snapshot?.phase === "closing" ? "Desconectando…" : social ? socialStageText[social.stage] : active ? "Há outra conexão em andamento" : "Sua conexão multiplayer"}</h3>
       <p>{state.maxSessionSeconds === 14400 ? "Compartilhamento por até 4 horas, limitado ao prazo da origem e à disponibilidade das cotas gratuitas." : "Uma pessoa convidada, somente jogo, por até 60 segundos. Voz desativada."}</p></div><span className="social-tag">Experimental</span></div>
     {state.error && <p className="social-notice" role="alert">{state.error}</p>}

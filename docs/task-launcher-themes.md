@@ -38,7 +38,7 @@ ThemeManager recebe `{library, instances:Array<{id:string;name:string}>, selecte
 
 ## Evidências e pendências
 
-Implementação: biblioteca/editor e anexos, parser TypeScript e schema Rust fechados, renderer SVG/CSS interno, integração à seleção de instância e barra de navegação, camada de confirmação externa ao tema, persistência, watchdog e recuperação via bandeja. Documentação: [uso](launcher-themes.md) e [ADR-027](engineering/ADR/ADR-027-declarative-launcher-themes.md).
+Implementação: biblioteca/editor e anexos, parser TypeScript e schema Rust fechados, renderer SVG/CSS interno, integração à seleção de instância e barra de navegação, camada de confirmação externa ao tema, persistência, watchdog e recuperação via bandeja. Documentação: [uso](launcher-themes.md) e [ADR-027](engineering/ADR/ADR-035-declarative-launcher-themes.md).
 
 Validação executada em 28/10/2026:
 

@@ -77,6 +77,66 @@ test("unavailable service performs no reads, mutations or automatic social activ
   assert.equal(button("Buscar").disabled, true);
 });
 
+test("advanced recovery remains an explicit navigation when the social service is absent", async () => {
+  let navigations = 0;
+  await render({ service: null, onOpenManualConnect: () => { navigations++; } });
+  const action = button("Conexão manual e recuperação"), details = action.closest("details");
+  assert.ok(details);
+  assert.equal(details.querySelector("summary").textContent, "Opções avançadas e recuperação");
+  assert.equal(details.hasAttribute("open"), false);
+  assert.equal(action.closest(".social-publish"), null);
+  assert.equal(navigations, 0); assert.deepEqual(calls, []);
+  await act(async () => { details.setAttribute("open", ""); details.dispatchEvent(new window.Event("toggle")); });
+  assert.equal(navigations, 0); assert.deepEqual(calls, []);
+  await click("Conexão manual e recuperação");
+  assert.equal(navigations, 1); assert.deepEqual(calls, []);
+  await render({ service: null });
+  assert.equal(buttons("Conexão manual e recuperação").length, 0, "the App still controls whether navigation is authorized");
+});
+
+test("advanced recovery survives loading and an initial catalog failure without replaying network work", async () => {
+  const reply = deferred(); handlers.snapshot = () => reply.promise;
+  let navigations = 0;
+  await render({ onOpenManualConnect: () => { navigations++; } });
+  assert.equal(container.querySelector(".social-publish"), null);
+  const observed = structuredClone(calls);
+  await click("Conexão manual e recuperação");
+  assert.equal(navigations, 1); assert.deepEqual(calls, observed);
+  await act(async () => reply.reject(new Error("private-provider-token")));
+  assert.ok(container.querySelector('[role="alert"]'));
+  assert.doesNotMatch(container.textContent, /private-provider-token/);
+  assert.equal(container.querySelector(".social-publish"), null);
+  await click("Conexão manual e recuperação");
+  assert.equal(navigations, 2); assert.deepEqual(calls, observed);
+});
+
+test("publication groups and private invitations start closed and opening them does not authorize work", async () => {
+  service.organization = { snapshot: async () => { calls.push({ name: "organization:snapshot" }); return organizationData(null); } };
+  service.privateInvitations = { environment: "online", snapshot: async () => {
+    calls.push({ name: "private:snapshot" });
+    return { sessionId: null, expiresAtMs: null, remainingRecipients: 8, incoming: [], outgoing: [] };
+  } };
+  await render({ connection: connection() });
+  const sections = ["Abrir meu mundo", "Grupos e pedidos", "Convites privados"].map(title => {
+    const details = [...container.querySelectorAll("details")].find(item => item.querySelector("summary")?.textContent === title);
+    assert.ok(details, title); assert.equal(details.hasAttribute("open"), false, title);
+    return details;
+  });
+  const inactivePanel = container.querySelector(".social-connection");
+  assert.ok(inactivePanel); assert.equal(inactivePanel.closest("details"), sections[0]);
+  const observed = structuredClone(calls);
+  assert.deepEqual(observed.map(call => call.name).sort(), ["snapshot", "listPublicSessions", "private:snapshot"].sort());
+  assert.equal(count("organization:snapshot"), 0, "closed groups do not spend a remote read on mount");
+  for (const details of sections) {
+    await act(async () => { details.open = true; details.setAttribute("open", ""); details.dispatchEvent(new window.Event("toggle")); });
+    await act(async () => { details.open = false; details.removeAttribute("open"); details.dispatchEvent(new window.Event("toggle")); });
+  }
+  assert.equal(container.querySelector(".social-connection"), inactivePanel, "collapsing publication preserves the presentation instance");
+  assert.deepEqual(calls, [...observed, { name: "organization:snapshot" }], "opening groups reads once but never publishes, prepares, joins or approves");
+  await act(async () => document.dispatchEvent(new window.Event("visibilitychange")));
+  assert.equal(count("organization:snapshot"), 1, "the closed wrapper stops its next automatic read");
+});
+
 test("mount only reads projections and never searches, mutates, publishes or joins", async () => {
   await render();
   assert.deepEqual(calls.map(call => call.name), ["snapshot", "listPublicSessions"]);
@@ -404,6 +464,19 @@ function connectionSnapshot(stage = "hostReview", role = "host") {
     social: { sessionId: baseSession.id, role, stage, digest: role === "host" ? "a".repeat(64) : null,
       gameTarget: role === "host" ? "127.0.0.1:43001" : null, visibility: role === "host" ? "public" : null, expiresAtMs: fixedNow + 60_000 } };
 }
+for (const catalogAvailable of [true, false]) test(`join failure before a native operation stays visible outside collapsed publication with catalog ${catalogAvailable}`, async () => {
+  const control = connection(); control.state.error = "Não foi possível preparar a entrada. Atualize a conexão.";
+  await render({ connection: control, ...(catalogAvailable ? {} : { service: null }) });
+  const panel = container.querySelector(".social-connection");
+  assert.ok(panel); assert.equal(container.querySelectorAll(".social-connection").length, 1);
+  assert.equal(panel.closest("details"), null);
+  assert.equal(panel.querySelector('[role="alert"]').textContent, control.state.error);
+  assert.equal(buttons("Desconectar").length, 0, "no operation or cleanup is invented");
+  assert.equal(button("Atualizar conexão").disabled, false);
+  await click("Atualizar conexão");
+  assert.equal(count("connect:refresh"), 1);
+  assert.equal(count("connect:prepareHost"), 0); assert.equal(count("connect:confirmHost"), 0); assert.equal(count("connect:stop"), 0);
+});
 test("lost host continuity reports its relative observation separately from the long session deadline", async () => {
   const snapshot = connectionSnapshot("failed"); snapshot.phase = "failed"; snapshot.cleanupState = "complete";
   snapshot.errorCode = "connect_social_continuity_lost";
@@ -651,6 +724,87 @@ test("social game navigation refuses expiry at click before the timer renders", 
   await render({ connection: connection(snapshot), onOpenConnectedGame: () => { opened++; } });
   const savedNow = Date.now; Date.now = () => fixedNow + 1001;
   try { await click("Abrir Minecraft"); assert.equal(opened, 0); } finally { Date.now = savedNow; }
+});
+
+async function explicitGameEntry(visibility = "public", initialSnapshot) {
+  const session = { ...baseSession, visibility };
+  service.capabilities.join = true;
+  const control = connection(initialSnapshot), reply = deferred(); let opened = 0;
+  const navigate = () => { opened++; };
+  if (visibility === "friends") state.friends = [{ ...person, presence: null, session }];
+  else if (visibility === "private") {
+    control.state.privateInvitations = true;
+    service.privateInvitations = { environment: "online", snapshot: async () => ({ sessionId: null, expiresAtMs: null,
+      remainingRecipients: 8, outgoing: [], incoming: [{ session, host: person, expiresAtMs: session.expiresAtMs }] }) };
+  } else page.items = [session];
+  handlers.prepareJoin = () => reply.promise;
+  const show = async (snapshot, update = {}, props = {}) => {
+    control.state = { ...control.state, ...update, snapshot };
+    await render({ connection: { state: control.state, controller: control.controller }, onOpenConnectedGame: navigate, ...props });
+  };
+  await show(initialSnapshot); await click("Entrar");
+  const reserved = { ...connectionSnapshot("reserved", "guest"), operationId: "clicked-operation", generation: 3,
+    phase: "guestPrepared", transportState: "notStarted", social: { ...connectionSnapshot("reserved", "guest").social, expiresAtMs: null } };
+  await show(reserved, { pending: true });
+  await act(async () => reply.resolve());
+  const ready = { ...connectionSnapshot("connected", "guest"), operationId: reserved.operationId, generation: 4, transportState: "authenticated" };
+  ready.social.readyGameLaunchAvailable = true;
+  return { control, show, ready, reserved, opened: () => opened };
+}
+
+for (const visibility of ["public", "friends", "private"]) test(`explicit ${visibility} Enter opens the game review once after the selected native guest is ready`, async () => {
+  const entry = await explicitGameEntry(visibility);
+  assert.equal(entry.opened(), 0); assert.equal(count("prepareJoin"), 1);
+  await entry.show({ ...entry.ready, social: { ...entry.ready.social, readyGameLaunchAvailable: undefined } }, { pending: false });
+  assert.equal(entry.opened(), 0, "transport alone does not authorize opening the game flow");
+  await entry.show(entry.ready); assert.equal(entry.opened(), 1);
+  await entry.show({ ...entry.ready, generation: 5 }); assert.equal(entry.opened(), 1);
+  assert.equal(count("prepareJoin"), 1);
+  assert.equal(calls.some(call => call.name.startsWith("connect:") || /launch|confirm|approve/i.test(call.name)), false);
+  assert.ok(button("Abrir Minecraft"), "manual navigation remains available");
+});
+
+test("automatic game navigation waits through the existing voice consent review", async () => {
+  const entry = await explicitGameEntry();
+  const voice = { ...guestVoiceReviewSnapshot(), operationId: entry.reserved.operationId, generation: 4 };
+  await entry.show(voice, { pending: false }); assert.equal(entry.opened(), 0);
+  assert.equal(button("Confirmar entrada com voz").disabled, true); assert.equal(count("connect:confirmGuest"), 0);
+  await entry.show(entry.ready); assert.equal(entry.opened(), 1, "only a later native authenticated result can open the next review");
+});
+
+for (const reason of ["error", "native-error", "stop", "replacement-operation", "wrong-session", "wrong-role", "cleanup-failed", "catalog-expired", "native-expired", "account", "service", "controller"]) {
+  test(`the explicit game navigation intention is discarded after ${reason}`, async () => {
+    const entry = await explicitGameEntry();
+    let observed = entry.ready, update = { pending: false }, props = {};
+    if (reason === "error") update.error = "Entrada recusada.";
+    if (reason === "native-error") observed = { ...observed, errorCode: "connect_transport_failed" };
+    if (reason === "stop") observed = { ...observed, phase: "closing" };
+    if (reason === "replacement-operation") observed = { ...observed, operationId: "other-operation" };
+    if (reason === "wrong-session") observed = { ...observed, social: { ...observed.social, sessionId: "another-session" } };
+    if (reason === "wrong-role") observed = { ...observed, role: "host", social: { ...observed.social, role: "host" } };
+    if (reason === "cleanup-failed") observed = { ...observed, cleanupState: "failed" };
+    if (reason === "catalog-expired") service.now = () => baseSession.expiresAtMs;
+    if (reason === "native-expired") observed = { ...observed, social: { ...observed.social, expiresAtMs: fixedNow } };
+    if (reason === "account") props.accountId = "replacement-account";
+    if (reason === "service") props.service = makeService();
+    if (reason === "controller") entry.control.controller = connection().controller;
+    await entry.show(observed, update, props); assert.equal(entry.opened(), 0);
+    delete service.now;
+    await entry.show(entry.ready, { error: "", pending: false }, props);
+    assert.equal(entry.opened(), 0, "later recovery cannot revive a consumed navigation intention");
+  });
+}
+
+test("a failed dispatch never navigates when a ready snapshot arrives later", async () => {
+  const control = connection(); let opened = 0;
+  service.capabilities.join = true; page.items = [baseSession];
+  handlers.prepareJoin = async () => { throw { code: "join_unavailable" }; };
+  const navigate = () => { opened++; };
+  await render({ connection: control, onOpenConnectedGame: navigate }); await click("Entrar");
+  const ready = { ...connectionSnapshot("connected", "guest"), transportState: "authenticated" };
+  ready.social.readyGameLaunchAvailable = true;
+  await render({ connection: { state: { ...control.state, snapshot: ready }, controller: control.controller }, onOpenConnectedGame: navigate });
+  assert.equal(opened, 0); assert.equal(count("prepareJoin"), 1);
 });
 for (const enabled of [false, true]) {
   test(`private publication does not suggest unavailable host activation with social connection ${enabled ? "available" : "unavailable"}`, async () => {

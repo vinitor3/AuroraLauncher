@@ -2,7 +2,7 @@
 
 Este contrato permite que novas telas adotem a personalização existente sem criar outro motor de temas. Os exemplos de Java e Aurora Connect abaixo são pontos de integração para as respectivas features; não declaram que essas funcionalidades estejam implementadas.
 
-Leia também [AGENTS.md](../AGENTS.md), [o formato e o uso dos temas](launcher-themes.md) e a [decisão de arquitetura](engineering/ADR/ADR-027-declarative-launcher-themes.md). Antes de iniciar trabalho de Aurora, confira o HEAD e a matriz ativa no repositório atual, seguindo o fluxo de worktree do AGENTS.
+Leia também [AGENTS.md](../AGENTS.md), [o formato e o uso dos temas](launcher-themes.md) e a [decisão de arquitetura](engineering/ADR/ADR-035-declarative-launcher-themes.md). Antes de iniciar trabalho de Aurora, confira o HEAD e a matriz ativa no repositório atual, seguindo o fluxo de worktree do AGENTS.
 
 ## Uma superfície visual confiável
 

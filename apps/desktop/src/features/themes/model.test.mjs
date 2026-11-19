@@ -31,12 +31,17 @@ test("os exemplos passam pelo schema fechado e o padrão tem id reservado", () =
 
 test("documentos v1 antigos continuam válidos e recebem os novos padrões completos", () => {
   const old = fixture();
+  old.layout.navOrder = ["java", "appearance", "instances", "discover"];
+  delete old.icons.connect;
+  delete old.icons.social;
   delete old.window;
   delete old.cursor;
   for (const key of ["sidebarWidth", "statusSide", "sectionOrder", "decorationHeight"]) delete old.layout[key];
   for (const key of ["transition", "transitionMs"]) delete old.effects[key];
   old.decorations = [{ type: "text", text: "Tema antigo", asset: null, align: "left" }];
   const parsed = parseTheme(JSON.stringify(old));
+  assert.deepEqual(parsed.layout.navOrder, [...old.layout.navOrder, "connect", "social"]);
+  assert.deepEqual(parsed.icons, { ...old.icons, connect: "default", social: "default" });
   assert.deepEqual(parsed.window, THEME_WINDOW_DEFAULTS);
   assert.deepEqual(parsed.cursor, THEME_CURSOR_DEFAULTS);
   assert.equal(parsed.layout.sidebarWidth, 240);
@@ -49,6 +54,28 @@ test("documentos v1 antigos continuam válidos e recebem os novos padrões compl
   const partial = read((x) => { x.window = { titlebarHeight: 56 }; });
   assert.deepEqual(partial.window, { ...THEME_WINDOW_DEFAULTS, titlebarHeight: 56 });
   assert.throws(() => { delete old.typography.font; parseTheme(JSON.stringify(old)); }, /obrigatório/);
+});
+
+test("navegação atual preserva as seis seções e recusa formatos legados misturados", () => {
+  const current = read((x) => {
+    x.layout.navOrder = ["social", "java", "connect", "appearance", "instances", "discover"];
+    x.icons.connect = "gamepad";
+    x.icons.social = "heart";
+  });
+  assert.deepEqual(parseTheme(JSON.stringify(current)), current, "normalização permanece idempotente");
+  for (const change of [
+    (x) => { delete x.icons.connect; },
+    (x) => { delete x.icons.connect; delete x.icons.social; },
+    (x) => { x.layout.navOrder = ["instances", "discover", "appearance", "java"]; },
+    (x) => { x.layout.navOrder.pop(); },
+    (x) => { x.layout.navOrder[5] = "connect"; },
+    (x) => { x.layout.navOrder[5] = "shell"; },
+    (x) => { x.icons.social = null; },
+    (x) => { x.icons.social = "asset:missing"; },
+    (x) => { x.icons.shell = "default"; },
+  ]) assert.throws(() => read(change));
+  assert.match(formatThemeCode(current), /connect e social/);
+  assert.match(buildThemeAiPrompt(current), /java, connect, social/);
 });
 
 test("cursor aceita somente estilos internos, cores sólidas, tamanhos e rastros limitados", () => {

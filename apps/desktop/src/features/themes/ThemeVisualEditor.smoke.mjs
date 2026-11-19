@@ -65,10 +65,14 @@ test("visual editing and commented code stay synchronized without applying unsav
     assert.ok(renderedValue(code()).includes("//"));
     await settle(async () => change(code(), "{ broken draft"));
     await settle(async () => click("Editor visual"));
+
     assert.equal(renderedValue(code()), "{ broken draft", "invalid code is preserved when switching modes fails");
     assert.ok(document.querySelector(".theme-manager-error"));
     await settle(async () => change(code(), formatThemeCode(THEME_EXAMPLES[1])));
     await settle(async () => click("Editor visual"));
+    assert.equal(document.querySelectorAll(".tv-nav").length, 6);
+    assert.ok([...document.querySelectorAll(".tv-nav")].some((item) => item.textContent.includes("Aurora Connect")));
+    assert.ok([...document.querySelectorAll(".tv-nav")].some((item) => item.textContent.includes("Amigos e comunidade")));
     assert.equal(renderedValue(document.querySelector(".tv-identity input")), THEME_EXAMPLES[1].name);
     await settle(async () => change(document.querySelector(".tv-identity input"), "Meu jardim editado"));
     await settle(async () => click("Cursor"));
@@ -119,6 +123,15 @@ test("visual editing and commented code stay synchronized without applying unsav
     await settle(async () => click("Código comentado"));
     assert.equal(parseTheme(renderedValue(code())).layout.sidebar, "left");
     assert.equal(parseTheme(renderedValue(code())).layout.navOrder[0], "appearance");
+    await settle(async () => click("Editor visual"));
+    await settle(async () => click("Organização"));
+    const downJava = document.querySelector('[aria-label="Descer Java"]');
+    assert.equal(downJava.disabled, false, "Java is no longer the final navigation section");
+    assert.equal(document.querySelector('[aria-label="Descer Amigos e comunidade"]').disabled, true);
+    await settle(async () => downJava.click());
+    await settle(async () => click("Código comentado"));
+    assert.deepEqual(parseTheme(renderedValue(code())).layout.navOrder, ["appearance", "instances", "discover", "connect", "java", "social"]);
+    assert.equal(previews.length, 1, "reordering a new section does not authorize or activate it");
 
     const dragTheme = { ...THEME_EXAMPLES[1], decorations: THEME_EXAMPLES[1].decorations.map((item) => ({ ...item, width: 35 })) };
     await settle(async () => change(code(), formatThemeCode(dragTheme)));

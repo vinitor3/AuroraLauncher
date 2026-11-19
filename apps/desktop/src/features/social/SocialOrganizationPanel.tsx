@@ -2,16 +2,27 @@ import { useEffect, useRef, useState } from "react";
 import type { SocialOrganizationService, SocialPerson } from "../../shared/social";
 import { socialError } from "./presentation";
 
-export function SocialOrganizationPanel({ service, accountId, friends }: { service: SocialOrganizationService; accountId: string; friends: SocialPerson[] }) {
+export function SocialOrganizationPanel({ service, accountId, friends, expanded = true }: { service: SocialOrganizationService; accountId: string; friends: SocialPerson[]; expanded?: boolean }) {
   type Snapshot = Awaited<ReturnType<SocialOrganizationService["snapshot"]>>;
   type Scope = { service: SocialOrganizationService; accountId: string; active: boolean; loading: boolean; mutation: boolean; revision: number; refreshAgain: boolean; clockUnavailable: boolean };
   const scope = useRef<Scope | null>(null);
+  const panel = useRef<HTMLElement>(null);
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
   const [view, setView] = useState<{ service: SocialOrganizationService; accountId: string; data: Snapshot }>();
   const data = view?.service === service && view.accountId === accountId ? view.data : undefined;
   const [name, setName] = useState("");
   const [invitee, setInvitee] = useState<{ groupKey: string; uid: string }>();
   const [pending, setPending] = useState(false); const [error, setError] = useState("");
   const current = (owner: Scope) => owner.active && scope.current === owner;
+  function poll(owner: Scope) {
+    if (!current(owner) || !expandedRef.current || document.visibilityState === "hidden"
+      || owner.loading || owner.mutation || owner.clockUnavailable) return;
+    // Closing details or opening Personalização may hide the panel without
+    // unmounting it. Non-layout test DOMs lack this API; the real WebView has it.
+    if (panel.current?.getClientRects && panel.current.getClientRects().length === 0) return;
+    void refresh(owner);
+  }
   async function refresh(owner: Scope) {
     if (!current(owner)) return;
     if (owner.loading) { owner.refreshAgain = true; return; }
@@ -24,12 +35,16 @@ export function SocialOrganizationPanel({ service, accountId, friends }: { servi
   useEffect(() => {
     const owner: Scope = { service, accountId, active: true, loading: false, mutation: false, revision: 0, refreshAgain: false, clockUnavailable: false };
     scope.current = owner; setView(undefined); setError(""); setInvitee(undefined); setName(""); setPending(false);
-    void refresh(owner);
-    const update = () => { if (document.visibilityState !== "hidden" && !owner.mutation && !owner.clockUnavailable) void refresh(owner); };
+    const update = () => poll(owner);
+    update();
     const timer = setInterval(update, 5000);
     document.addEventListener("visibilitychange", update);
     return () => { owner.active = false; clearInterval(timer); document.removeEventListener("visibilitychange", update); };
   }, [service, accountId]);
+  useEffect(() => {
+    const owner = scope.current;
+    if (owner) poll(owner);
+  }, [expanded]);
   async function run(work: () => Promise<unknown>) {
     const owner = scope.current;
     if (!owner || !current(owner) || owner.service !== service || owner.accountId !== accountId || owner.mutation) return;
@@ -59,7 +74,7 @@ export function SocialOrganizationPanel({ service, accountId, friends }: { servi
       if (current(owner)) setInvitee(previous => previous?.groupKey === groupKey && previous.uid === uid ? undefined : previous);
     });
   }
-  return <section className="social-connection" aria-label="Grupos e pedidos de entrada">
+  return <section ref={panel} className="social-connection" aria-label="Grupos e pedidos de entrada">
     <div className="social-community-heading"><h3>Meu grupo</h3><button className="secondary" disabled={pending} onClick={() => void run(async () => {})}>Atualizar grupos e pedidos</button></div>
     {error && <p role="alert">{error}</p>}
     {!clockReady && <p role="status">O horário do serviço está indisponível. Atualize os grupos e pedidos.</p>}

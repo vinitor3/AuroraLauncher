@@ -212,7 +212,11 @@ pub struct SocialLabAuthority {
 #[cfg(feature = "connect-lab")]
 impl SocialLabAuthority {
     pub(super) fn private_invitations_enabled(&self) -> bool {
-        cfg!(debug_assertions) && self.private_invitations
+        self.private_invitations
+            && (cfg!(debug_assertions)
+                || (cfg!(feature = "connect-online")
+                    && self.online_origin
+                        == Some("https://aurora-connect-social.aurora-edge-proxy.workers.dev")))
     }
     pub fn from_local_process(pin: &str, issuer: &str) -> Result<Self, ConnectError> {
         let lower_hex = |text: &str| {
@@ -240,6 +244,11 @@ impl SocialLabAuthority {
     /// The provisional key is unusable: execute() must fetch authenticated bootstrap first.
     pub fn from_compiled_online() -> Result<Self, ConnectError> {
         let origin = option_env!("AURORA_SOCIAL_ORIGIN").ok_or(ConnectError::Disabled)?;
+        if cfg!(feature = "connect-online")
+            && origin != "https://aurora-connect-social.aurora-edge-proxy.workers.dev"
+        {
+            return Err(ConnectError::InvalidRequest);
+        }
         let url = reqwest::Url::parse(origin).map_err(|_| ConnectError::InvalidRequest)?;
         if url.scheme() != "https"
             || url.origin().ascii_serialization() != origin
@@ -259,12 +268,68 @@ impl SocialLabAuthority {
             issuer: String::new(),
             online_origin: Some(origin),
             // Build-owned opt-in; runtime environment and renderer cannot enable it.
-            private_invitations: cfg!(debug_assertions)
+            private_invitations: cfg!(any(debug_assertions, feature = "connect-online"))
                 && option_env!("AURORA_SOCIAL_PRIVATE_ONLINE") == Some("1"),
             join_policy: "open".into(),
             session_expiry: 0,
             max_players: 0,
         })
+    }
+}
+
+#[cfg(all(test, feature = "connect-lab"))]
+mod distribution_tests {
+    use super::*;
+
+    #[test]
+    fn social_distribution_private_gate_keeps_local_authority_debug_only() {
+        let mut authority = SocialLabAuthority {
+            pin: aurora_connect_lab::generate_key().public(),
+            issuer: String::new(),
+            online_origin: None,
+            private_invitations: true,
+            join_policy: "open".into(),
+            session_expiry: 0,
+            max_players: 1,
+        };
+        assert_eq!(
+            authority.private_invitations_enabled(),
+            cfg!(debug_assertions)
+        );
+        authority.online_origin = Some("https://other.invalid");
+        assert_eq!(
+            authority.private_invitations_enabled(),
+            cfg!(debug_assertions)
+        );
+        authority.online_origin =
+            Some("https://aurora-connect-social.aurora-edge-proxy.workers.dev");
+        assert_eq!(
+            authority.private_invitations_enabled(),
+            cfg!(any(debug_assertions, feature = "connect-online"))
+        );
+        authority.private_invitations = false;
+        assert!(!authority.private_invitations_enabled());
+    }
+
+    #[test]
+    #[cfg(feature = "connect-online")]
+    fn social_distribution_uses_only_the_compiled_official_origin_and_opt_in() {
+        let result = SocialLabAuthority::from_compiled_online();
+        if option_env!("AURORA_SOCIAL_ORIGIN")
+            != Some("https://aurora-connect-social.aurora-edge-proxy.workers.dev")
+        {
+            assert!(result.is_err());
+            return;
+        }
+        let authority = result.unwrap();
+        assert_eq!(authority.online_origin, option_env!("AURORA_SOCIAL_ORIGIN"));
+        assert!(authority.issuer.is_empty()); // Bootstrap must still authenticate the authority.
+        assert_eq!(authority.max_players, 0);
+        assert_eq!(authority.session_expiry, 0);
+        assert_eq!(
+            authority.private_invitations_enabled(),
+            option_env!("AURORA_SOCIAL_PRIVATE_ONLINE") == Some("1")
+        );
     }
 }
 

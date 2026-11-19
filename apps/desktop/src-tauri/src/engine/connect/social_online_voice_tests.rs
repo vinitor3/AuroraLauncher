@@ -134,16 +134,25 @@ impl ConnectManager {
         let policy =
             super::super::super::review_host_policy(&run, &http, &challenge, binding.targets().0)
                 .unwrap();
+        let original_source_deadline = run.deadline;
         assert_eq!(
             serde_json::to_value(&policy).unwrap()["schemaVersion"],
             if private { 7 } else { 5 }
         );
         assert_eq!(policy.max_guests(), 7);
         assert!(policy.expires_at_unix_ms() <= run.authority.session_expiry);
-        run.expiry = run.expiry.min(policy.expires_at_unix_ms());
+        // Separate civil/monotonic samples can project this same source deadline
+        // one millisecond apart. Exercise that case deterministically in the real
+        // local-player ingress below, rather than relying on clock rounding.
+        run.expiry = policy.expires_at_unix_ms().checked_sub(1).unwrap();
+        assert_ne!(run.expiry, policy.expires_at_unix_ms());
         let policy = policy
             .approve(&run.key, &policy.digest(), run.deadline)
             .unwrap();
+        // Match the production host: invitation and policy use the exact signed
+        // expiry after approval. The original source deadline is never renewed.
+        run.expiry = policy.body().expires_at_unix_ms();
+        assert_eq!(run.deadline, original_source_deadline);
         let remote_keys = [lab::generate_key(), lab::generate_key()];
         let relay = lab::LocalRelayFixture::start_native_group(
             [
@@ -169,6 +178,10 @@ impl ConnectManager {
             },
         )
         .unwrap();
+        assert_eq!(
+            invitation.session_expires_at_unix_ms(),
+            policy.body().expires_at_unix_ms()
+        );
         let mut host = None;
         let mut sockets = Vec::new();
         let mut local = LocalPlayer::default();
@@ -195,6 +208,7 @@ impl ConnectManager {
         ))
         .await
         .unwrap();
+        assert_eq!(run.deadline, original_source_deadline);
         run.stage("waitingGuest", "hostListening");
         let original = local.authority.as_ref().unwrap().clone();
         let mut observed_failure = None;

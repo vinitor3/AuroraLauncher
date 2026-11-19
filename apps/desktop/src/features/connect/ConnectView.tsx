@@ -32,7 +32,7 @@ type SourcePreparationAwaiting = {
   profile?: HostSourceProfile; baseline?: ConnectSnapshot; controlledRejectionSettled?: symbol;
 };
 
-export function ConnectView({ launchContext, onInitialReadReady, onChooseSource, gameRevealRequest = 0, gameRevealReady = true }: { launchContext?: ReadyGameLaunchContext; onInitialReadReady?: (ready: boolean) => void; onChooseSource?: () => void; gameRevealRequest?: number; gameRevealReady?: boolean }) {
+export function ConnectView({ launchContext, onInitialReadReady, onChooseSource, gameRevealRequest = 0, gameRevealReady = true, manualControls = true }: { launchContext?: ReadyGameLaunchContext; onInitialReadReady?: (ready: boolean) => void; onChooseSource?: () => void; gameRevealRequest?: number; gameRevealReady?: boolean; manualControls?: boolean }) {
   const [capabilities, setCapabilities] = useState<ConnectCapabilities>();
   const [snapshot, setSnapshot] = useState<ConnectSnapshot>();
   const [loading, setLoading] = useState(true);
@@ -463,7 +463,7 @@ export function ConnectView({ launchContext, onInitialReadReady, onChooseSource,
 
   const manualAfterSocial = !!snapshot?.social && ["closed", "failed"].includes(snapshot.phase) && snapshot.cleanupState === "complete"
     && capabilities?.available === true && !loading && !warning && !busy && !active;
-  const socialPanel = snapshot?.social ? <section className={manualAfterSocial ? "connect-card" : "connect-view"} aria-labelledby="connect-social-title">
+  const socialPanel = snapshot?.social ? <section className={manualAfterSocial ? "connect-card theme-protected" : "connect-view theme-protected"} aria-labelledby="connect-social-title">
     <header className="connect-heading"><div>{manualAfterSocial ? <h3 id="connect-social-title">Sessão Social anterior</h3> : <h2 id="connect-social-title">Aurora Connect</h2>}<p>{snapshot.phase === "closing" ? "Desconectando…" : socialStageText[snapshot.social.stage]}</p></div>{!manualAfterSocial && <span className="connect-badge">Experimental</span>}</header>
     <p>Esta sessão foi preparada em Amigos e comunidade. Volte àquela página para acompanhar a entrada ou revisar o compartilhamento.</p>
     <p>Jogo e voz ainda não verificados. A conexão social utiliza o mesmo controle de encerramento do launcher.</p>
@@ -478,9 +478,20 @@ export function ConnectView({ launchContext, onInitialReadReady, onChooseSource,
       revealRequest={gameRevealRequest} revealReady={gameRevealReady && !loading}
       sessionStale={!snapshot.social.readyGameLaunchAvailable || Boolean(warning) || loading || pending === "stop"} />
   </section> : undefined;
-  if (socialPanel && !manualAfterSocial) return socialPanel;
+  if (socialPanel && (!manualAfterSocial || !manualControls)) return socialPanel;
+  // The online entry point opens sessions from Friends/Community. Keep the
+  // protocol laboratory behind an explicit advanced action, while preserving
+  // visibility and stop controls for any operation that is already running.
+  if (!manualControls && !activeOperation) return <section className="connect-view theme-protected" aria-label="Seu jogo multiplayer">
+    <header className="connect-heading"><div><h2>Seu jogo multiplayer</h2><p>Escolha Entrar em uma sessão de amigos ou da comunidade. Para hospedar, use Abrir meu mundo.</p></div></header>
+    {loading && <p role="status">Verificando disponibilidade…</p>}
+    {error && <p role="alert">{error}</p>}{warning && <p role="status">{warning}</p>}
+    <ConnectGameLaunchPanel capability={capabilities?.readyGameLaunch} session={snapshot} launchContext={launchContext} onChooseSource={onChooseSource}
+      revealRequest={gameRevealRequest} revealReady={gameRevealReady && !loading}
+      observeExisting={!capabilities && !loading} sessionStale={Boolean(warning) || loading || pending === "stop"} />
+  </section>;
 
-  return <section className="connect-view" aria-labelledby="connect-title">
+  return <section className="connect-view theme-protected" aria-labelledby="connect-title">
     <header className="connect-heading"><div><h2 id="connect-title">Aurora Connect</h2><p>Compartilhe um servidor autorizado ou use um convite recebido.</p></div><span className="connect-badge">Experimental</span></header>
     {loading && <p role="status">Verificando disponibilidade…</p>}
     {error && <p className="connect-error" role="alert">{error}</p>}

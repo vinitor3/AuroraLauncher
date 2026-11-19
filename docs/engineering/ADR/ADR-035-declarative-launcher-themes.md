@@ -1,6 +1,6 @@
-# ADR-027 — Temas locais declarativos e recuperação independente
+# ADR-035 — Temas locais declarativos e recuperação independente
 
-Data: 28/10/2026. Estado: IMPLEMENTADO MAS NÃO HOMOLOGADO.
+Data: 28/10/2026. Renumerada de 027 na integração para preservar o ADR-027 de recuperação. Estado: IMPLEMENTADO MAS NÃO HOMOLOGADO.
 
 ## Decisão
 

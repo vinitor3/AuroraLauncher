@@ -11,8 +11,8 @@ mod doctor_runs;
 mod launcher_sessions;
 mod manual_downloads;
 mod player_profiles;
-mod voice_announcement_commands;
 mod themes;
+mod voice_announcement_commands;
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},

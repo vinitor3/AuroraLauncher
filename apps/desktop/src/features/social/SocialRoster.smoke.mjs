@@ -19,6 +19,7 @@ let code = ts.transpileModule(await readFile(path, "utf8"), { fileName: fileURLT
 } }).outputText;
 for (const { fileName: specifier } of ts.preProcessFile(code).importedFiles) {
   const resolved = specifier === "../connect/DiscoveryPicker" ? dataUrl("export function DiscoveryPicker(){return null;}")
+    : specifier === "./SocialConnectionFailure" ? dataUrl("export function SocialConnectionFailure(){return null;}")
     : specifier === "./connect-types" ? dataUrl("export const socialRuntimeLabels={};export const socialStageText={connected:'Conectado',waitingGuest:'Aguardando'};export const socialGameTarget=()=>false;export const socialConnectError=()=>'';")
       : pathToFileURL(require.resolve(specifier)).href;
   code = code.replaceAll(`from "${specifier}"`, `from ${JSON.stringify(resolved)}`);
