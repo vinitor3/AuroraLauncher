@@ -432,3 +432,38 @@ test("pending join cancellation refuses expired or replaced scope without modify
   await assertFails(raw.commit());
   assert.deepEqual((await getDoc(queue)).data(), before);
 });
+
+test("sidebar inbox tracks two other accounts sending and withdrawing real friend requests", async () => {
+  const receiver = service("b"), first = service("a"), second = service("c");
+  let latest, changed;
+  const stop = receiver.watchFriendInbox(value => { latest = value; changed?.(); });
+  async function expectCount(count) {
+    if (latest?.count === count) return;
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Expected inbox size ${count}`)), 10000);
+      changed = () => { if (latest?.count === count) { clearTimeout(timer); resolve(); } };
+    });
+    changed = undefined;
+  }
+  try {
+    await expectCount(0);
+    await first.requestFriend("b"); await expectCount(1);
+    await second.requestFriend("b"); await expectCount(2);
+    assert.deepEqual(latest.requests.map(request => request.nickname).sort(), ["User_a", "User_c"]);
+    await receiver.respondFriend("a", "accept"); await expectCount(1);
+    await second.cancelRequest("b"); await expectCount(0);
+    assert.deepEqual(latest.requests, []);
+  } finally { stop(); }
+});
+
+test("LAN publication returns the discoverable session ID and preserves an existing world", async () => {
+  await friendship();
+  const host = service("a"), friend = service("b"), community = service("c");
+  const friendsId = await host.publishSession({ ...draft, visibility: "friends" }, true);
+  assert.equal((await friend.snapshot()).friends[0].session.id, friendsId);
+  assert.equal((await community.listPublicSessions()).items.length, 0);
+  await assert.rejects(host.publishSession(draft, true), { code: "session_exists" });
+  await host.closeSession();
+  const publicId = await host.publishSession(draft, true);
+  assert.equal((await community.listPublicSessions()).items[0].id, publicId);
+});

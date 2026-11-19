@@ -1,5 +1,18 @@
 # Aurora Connect — amigos, sessões públicas e entrada simples
 
+## Jogar com amigos e compartilhar um mundo LAN
+
+O botão **Amigos e comunidade** exibe o número de pedidos de amizade recebidos e ainda válidos na conta conectada. O indicador acompanha a caixa de entrada mesmo quando outra seção está aberta. Abra **Meus amigos** para aceitar ou recusar os pedidos. Em **Encontrar mundos**, use **Comunidade** ou **Dos amigos** e escolha **Entrar** ou **Pedir para entrar**, conforme a preferência do anfitrião.
+
+No Windows, em uma execução compatível iniciada pelo Aurora com a descoberta de jogos habilitada, abra um mundo de um jogador. No menu de pausa do Minecraft, selecione **Abrir para LAN** e inicie o mundo em LAN.
+
+1. No launcher, abra **Amigos e comunidade → Compartilhar mundo** e clique em **Encontrar meu mundo LAN**. Se houver várias instâncias ou portas, escolha a instância e a porta informada pelo Minecraft.
+2. Use **Verificar este mundo**. O Aurora consulta a porta selecionada e preenche o modpack e a versão a partir da execução verificada.
+3. Confira o nome do mundo, escolha **Meus amigos** ou **Toda a comunidade** e decida se quer aprovar cada entrada. Clique no botão de publicação com o público escolhido.
+4. Confira a revisão da conexão e confirme **Compartilhar agora**. Mantenha o mundo e o launcher abertos enquanto joga. O painel da conexão permite desconectar os participantes. Em **Meu mundo** o anfitrião pode encerrar o anúncio.
+
+Ao encontrar um anúncio existente, o launcher oferece os controles desse mundo. Convites individuais, servidor dedicado e recuperação continuam disponíveis em suas respectivas opções. A conexão depende do perfil de Minecraft e dos recursos habilitados no executável. A homologação deste fluxo entre dois computadores permanece **PRECISA DE TESTE**.
+
 Integração com a customização visual: seguir o [ponto de integração Connect/temas](aurora-connect-theme-integration.md) ao incorporar a branch correspondente. A aparência não concede autorização ou muda callbacks/estado da conexão; preservar confirmação e recuperação oficiais. A combinação das duas bases ainda exige commit concluído e testes próprios.
 
 Requisito explícito confirmado e detalhado pelo usuário em 24/10/2026. O [incremento87](aurora-connect-social-87.md) implementa **PROTÓTIPO** local de amigos, busca de nick Aurora, presença opcional e anúncios públicos/para amigos, com SDK/regras em emuladores e interface. Essas capacidades continuam **IMPLEMENTADO MAS NÃO HOMOLOGADO** para publicação e desligadas no build normal. [88A](aurora-connect-social-key-binding-88a.md), [88B](aurora-connect-social-admission-88b.md) e [88C](task-aur-r4-connect-social-88c.md) acrescentam vínculo de chave, autorização e contexto social. [89](task-aur-r4-connect-social-89.md) integra **Entrar sem copiar convite pela interface** ao mesmo ConnectManager no perfil local social-lab, para uma vaga/TCP loopback/public-friends+open/até60s. As provas de integração e GUI são registradas separadamente na tarefa89; não liberam produção. Seleção automática do melhor caminho, pedidos de ingresso e experiência final entre máquinas conservam seus gates. Este documento define a experiência final de R4; não promove o laboratório à liberação pública.

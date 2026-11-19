@@ -35,6 +35,7 @@ const { SocialView } = await import(await sourceModule(new URL("./SocialView.tsx
 const { SocialConnectionPanel } = await import(await sourceModule(new URL("./SocialConnectionPanel.tsx", import.meta.url)));
 const { SocialOrganizationPanel } = await import(await sourceModule(new URL("./SocialOrganizationPanel.tsx", import.meta.url)));
 const { socialArtwork } = await import(await sourceModule(new URL("./presentation.ts", import.meta.url)));
+const { useFriendInbox } = await import(await sourceModule(new URL("./useFriendInbox.ts", import.meta.url)));
 const actualNow = Date.now;
 const fixedNow = 1_800_000_000_000;
 const person = { uid: "friend-uid", nickname: "Aventureiro", avatarUrl: "https://attacker.example/avatar.png", expiresAtMs: fixedNow + 7 * 86_400_000 };
@@ -1046,4 +1047,102 @@ test("native host review exposes the same transport budget without changing lega
   await act(async () => limits.dispatchEvent(new window.Event("toggle")));
   assert.equal(button("Compartilhar agora").disabled, true);
   assert.equal(count("connect:confirmHost"), 0, "opening technical details cannot grant consent");
+});
+
+test("a live incoming request opens the requests list and can be accepted without reloading the catalog", async () => {
+  const inbox = { count: 1, requests: [person] };
+  await render({ inbox });
+  assert.equal(container.querySelector(".social-friends").hidden, false);
+  assert.equal(button("Aceitar").disabled, false);
+  assert.equal(container.querySelector(".social-request-count").textContent, "1");
+  await click("Aceitar");
+  assert.deepEqual(calls.find(call => call.name === "respondFriend").args, [person.uid, "accept"]);
+  await render({ inbox: { count: 0, requests: [] } });
+  assert.equal(container.querySelector(".social-request-count"), null);
+  assert.equal(buttons("Aceitar").length, 0);
+});
+
+for (const visibility of ["friends", "public"]) test(`ordinary LAN publication for ${visibility} uses the reviewed game and requires host confirmation`, async () => {
+  const source = discoveryFixture();
+  const control = connection();
+  control.state.ownedGameTcpDiscovery = true;
+  handlers.publishSession = () => baseSession.id;
+  await render({ connection: control, instanceNames: { "owned-game": "Meu modpack" } });
+  await click("Compartilhar mundo");
+  assert.equal(count("list_running_instances"), 0);
+  await click("Encontrar meu mundo LAN");
+  assert.equal(count("connect_review_discovered"), 1);
+  assert.equal(count("connect_confirm_discovered_status"), 0);
+  assert.equal(count("publishSession"), 0);
+  await click("Verificar este mundo");
+  if (visibility === "public") {
+    const select = container.querySelector(".lan-world-share select");
+    select.querySelector('option[value="public"]').selected = true;
+    await act(async () => select.dispatchEvent(new window.Event("change", { bubbles: true })));
+  }
+  const publish = visibility === "friends" ? "Publicar para amigos" : "Publicar para a comunidade";
+  assert.equal(button(publish).disabled, false);
+  await submit(".lan-world-share form");
+  assert.deepEqual(calls.find(call => call.name === "publishSession").args, [{ title: "Mundo de Explorador", modpackName: "Meu modpack",
+    minecraftVersion: "1.21.1", loader: "fabric", players: 0, maxPlayers: 2, imageUrl: null, visibility, joinPolicy: "open" }, true]);
+  assert.deepEqual(calls.find(call => call.name === "connect:prepareHostDiscovered").args, [baseSession.id, visibility, source.selectionId]);
+  assert.equal(count("connect:confirmHost"), 0);
+});
+
+test("guided LAN sharing handles a full world and respects remaining guest capacity", async () => {
+  const source = discoveryFixture(), control = connection();
+  control.state.ownedGameTcpDiscovery = true;
+  source.summary.reportedPlayersOnline = 2;
+  await render({ connection: control });
+  await click("Compartilhar mundo"); await click("Encontrar meu mundo LAN"); await click("Verificar este mundo");
+  assert.match(container.querySelector(".lan-world-share").textContent, /mundo está lotado/);
+  assert.equal(container.querySelector(".lan-world-share form"), null);
+  assert.equal(count("publishSession"), 0);
+  source.summary.reportedPlayersOnline = 1;
+  await click("Encontrar meu mundo LAN"); await click("Verificar este mundo");
+  assert.equal(container.querySelector(".lan-world-share input[type=checkbox]"), null);
+  await submit(".lan-world-share form");
+  assert.equal(calls.find(call => call.name === "publishSession").args[0].maxPlayers, 1);
+});
+
+test("the sidebar subscription tolerates synchronous sign-out and discards late reads on same-UID login", async () => {
+  function Badge({ service }) {
+    const inbox = useFriendInbox(service);
+    return createElement("span", null, inbox?.count ?? "");
+  }
+  let notifyOld, notifyNew;
+  const oldService = { watchFriendInbox: notify => { notifyOld = notify; return () => {}; } };
+  const failedService = { watchFriendInbox: () => { throw new Error("A conta mudou."); } };
+  const nextService = { watchFriendInbox: notify => { notifyNew = notify; return () => {}; } };
+  const show = async service => act(async () => root.render(createElement(Badge, { service })));
+  await show(oldService);
+  await act(async () => notifyOld({ count: 2, requests: [] }));
+  assert.equal(container.textContent, "2");
+  await show(failedService); assert.equal(container.textContent, "");
+  await show(nextService); await act(async () => notifyNew({ count: 1, requests: [] }));
+  await act(async () => notifyOld({ count: 2, requests: [] }));
+  assert.equal(container.textContent, "1");
+});
+
+test("an explicit sidebar click reveals incoming requests while preserving the open LAN draft", async () => {
+  discoveryFixture();
+  const control = connection(); control.state.ownedGameTcpDiscovery = true;
+  // A previous click is already consumed. A late arrival alone must leave the current panel intact.
+  const initial = { connection: control, revealInboxRequest: 3, inbox: { count: 0, requests: [] } };
+  await render(initial);
+  await click("Compartilhar mundo"); await click("Encontrar meu mundo LAN"); await click("Verificar este mundo");
+  const draft = container.querySelector(".lan-world-share form input");
+  await edit(draft, "Mundo do sábado");
+  const next = { ...initial, inbox: { count: 1, requests: [person] } };
+  await render(next);
+  assert.equal(container.querySelector(".social-host").hidden, false);
+  await render({ ...next, revealInboxRequest: 4 });
+  assert.equal(container.querySelector(".social-friends").hidden, false);
+  assert.equal(button("Recebidos 1").getAttribute("aria-pressed"), "true");
+  assert.equal(button("Aceitar").disabled, false);
+  await click("Compartilhar mundo");
+  assert.equal(container.querySelector(".lan-world-share form input"), draft);
+  assert.equal(draft.value, "Mundo do sábado");
+  assert.equal(count("list_running_instances"), 1);
+  assert.equal(count("publishSession"), 0);
 });

@@ -204,3 +204,20 @@ fn ready_settings_require_the_copy_guard_and_feed_exact_heap_into_connect_comman
     observed.recheck_before_spawn().unwrap();
     drop(command);
 }
+
+#[test]
+fn ready_copy_inherits_global_heap_and_detects_changes_after_review() {
+    let fixture = Fixture::new();
+    save_global_memory(&fixture.root, 1536, true).unwrap();
+    let guard = acquire_instance_mutation_lock(&fixture.copy).unwrap();
+    let review = inspect_with_memory(&fixture.copy, &guard, 17, 0, Some(8192)).unwrap();
+    assert_eq!(review.effective().max_memory_mb, 1536);
+    save_global_memory(&fixture.root, 2048, false).unwrap();
+    assert!(review.recheck_before_spawn().is_err());
+    let fresh = inspect_with_memory(&fixture.copy, &guard, 17, 0, Some(8192)).unwrap();
+    assert_eq!(fresh.effective().max_memory_mb, 2048);
+    assert_ne!(
+        review.bind_runtime_fingerprint("runtime"),
+        fresh.bind_runtime_fingerprint("runtime")
+    );
+}

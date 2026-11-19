@@ -15,6 +15,7 @@ export function socialError(error: unknown): string {
   if (code.includes("permission-denied") || code === "forbidden") return "Esta ação não está disponível para sua conta ou a permissão mudou. Atualize a lista.";
   if (code.includes("unauthenticated") || code === "signed_out") return "Sua sessão terminou. Entre novamente no Aurora.";
   if (code.includes("resource-exhausted") || code === "rate_limited") return "Muitas ações em pouco tempo. Aguarde um pouco antes de tentar novamente.";
+  if (code === "session_exists") return "Você já publicou um mundo. Atualize a lista para abrir o anúncio atual.";
   if (code === "already_exists") return "Já existe um pedido ou uma amizade com essa pessoa. Atualize a lista.";
   if (code === "invalid_nickname") return "Use o nick completo do Aurora: de 3 a 16 letras, números ou _.";
   if (code === "join_unavailable") return "A entrada automática ainda não está habilitada nesta versão.";

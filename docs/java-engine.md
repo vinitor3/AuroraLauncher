@@ -1,6 +1,14 @@
 # Java e engine — configurações de inicialização
 
-Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. O backend usa as configurações na inicialização; o painel independente aguarda o patch de montagem em `App.tsx`, cujo responsável nesta wave é o chat de temas. Não foi gerado instalador nem publicada release.
+**IMPLEMENTADO MAS NÃO HOMOLOGADO**. O launcher resolve a RAM ao preparar cada inicialização.
+
+## Memória padrão para os modpacks
+
+Em **Java & engine**, escolha um valor em MB ou use os atalhos em GB e clique em **Salvar padrão**. Instâncias novas e existentes que usam o padrão recebem esse limite na próxima execução. O valor inicial é 4096 MB. Marque **Incluir modpacks com memória personalizada** e clique em **Aplicar a todos** para que as configurações anteriores de RAM também passem a seguir o padrão. O coletor e os argumentos JVM de cada instância são preservados.
+
+Para mudar uma única instância, abra **Instâncias → Editar → Memória**. Escolha **Manual**, **Automático** ou **Padrão do launcher** e salve. O coletor de memória e os argumentos personalizados ficam em **Opções avançadas da JVM**.
+
+A preferência compartilhada fica em `launcher-memory.json` no diretório de dados do aplicativo. Aplicar a todos troca a revisão de memória nesse arquivo em uma única gravação atômica. O launcher lê essa revisão ao preparar o jogo e as cópias do Connect. Se outra janela aplicar a memória a todos durante uma edição individual, o editor pede a releitura dos valores antes de salvar. Alterações após a revisão de uma cópia pronta exigem revisar o preparo. A memória de jogos já em execução é mantida pelo processo Java.
 
 ## O que já existia
 
@@ -8,7 +16,7 @@ Inventário/seleção/instalação de Java, catálogo Temurin, verificação de 
 
 ## Configuração por instância
 
-O arquivo local `.aurora/launch-settings.json` pertence à instância. Não contém caminho Java, conta, credencial ou comando de shell. Ausência do arquivo ou campos antigos conhecidos ausentes conserva os padrões: RAM manual de 4096 MB, memória inicial definida pelo Java, coletor padrão e nenhum argumento extra. Versão desconhecida, campos desconhecidos, conteúdo inválido e arquivo acima de 32 KiB são recusados; não são silenciosamente usados como defaults. O painel permite carregar os padrões nos campos e só substitui o arquivo após **Salvar configurações**.
+O arquivo local `.aurora/launch-settings.json` pertence à instância. Não contém caminho Java, conta, credencial ou comando de shell. Uma instância sem arquivo segue o padrão do launcher. Configurações salvas nas versões anteriores conservam os valores individuais até a aplicação em lote. Campos antigos opcionais ausentes recebem os padrões da versão original. Versão desconhecida, campos desconhecidos, conteúdo inválido e arquivo acima de 32 KiB são recusados; não são silenciosamente usados como defaults. O painel permite carregar os padrões nos campos e só substitui o arquivo após **Salvar configurações**.
 
 - **Manual:** máximo entre 512 e 262144 MB; inicial opcional entre 512 MB e o máximo. Se a RAM física for conhecida, um máximo maior que ela é recusado.
 - **Automático:** conta JARs regulares habilitados diretamente em `mods`, sem contar subpastas, links ou `.disabled`, com enumeração limitada a 10000 entradas. Usa a fórmula existente `min(max(mods × 48, 4096), RAM_total − 2048)`, com saturação e teto de 262144 MB. Recalcula no launch, depois da instalação dos módulos internos. Resultado menor que 512 MB ou RAM desconhecida bloqueia esse modo, sem emitir `-Xmx0M`; use manual.
@@ -44,6 +52,6 @@ Os comandos `read_launch_settings` e `save_launch_settings` validam IDs e leem/g
 
 Doctor registra a memória efetiva da execução; a análise sem uma execução solicitada resolve a configuração atual. Preferências inválidas não desativam o Doctor: ele informa essa limitação e usa a memória da tentativa anterior ou 4096 MB como referência explicitamente identificada, sem usar esse fallback no lançamento. Java é verificado também no launch vanilla, preservando os requisitos existentes por Minecraft/mods. Os locks, a recuperação/CAS e o laboratório alpha.14 continuam no mesmo caminho de preparação. Configurações de launch não entram no escopo de restauração de mods/configs da recuperação existente.
 
-`LaunchSettingsPanel` usa tokens semânticos `--theme-*` com fallbacks oficiais e o identificador estável `data-theme-surface="java-memory-settings"`. A integração segue `docs/theme-integration.md` na entrega de temas: cores/apresentação não alteram settings, permissões ou comandos. Não há alteração do schema JSONC, IDs de navegação nem migração de temas salvos. O patch em `docs/integration/java-engine-App.patch` monta o seletor de instância e o painel; não modifica o fluxo de Jogar porque o backend já lê as preferências.
+`LaunchSettingsPanel` usa tokens semânticos `--theme-*` com fallbacks oficiais e o identificador estável `data-theme-surface="java-memory-settings"`. A integração segue `docs/theme-integration.md` na entrega de temas: cores/apresentação não alteram settings, permissões ou comandos. Não há alteração do schema JSONC, IDs de navegação nem migração de temas salvos. O editor da instância e o painel global chamam o backend nativo. Os comandos globais recebem a memória máxima e a opção de incluir as personalizações. O diretório e a revisão são definidos pelo backend.
 
 Assistente desktop, IPC e Core 1.1.5/Skins 0.3.1 foram preservados. Build/testes sintéticos não homologam Minecraft, loaders, Gemini, voz ou microfone. Evidências e roteiro restante: [tarefa Java/engine](task-java-engine.md).

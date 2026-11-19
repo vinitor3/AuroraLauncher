@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isPlayerIdentifier, PlayerSkinsClient, type CatalogPage, type PlayerSuggestion } from "../../lib/playerSkins";
+import { isPlayerIdentifier, LAST_CATALOG_PAGE_NUMBER, PlayerSkinsClient, type CatalogPage, type PlayerSuggestion } from "../../lib/playerSkins";
 import "./onlineSkins.css";
 import { SkinFace } from "./SkinFace";
 
@@ -10,29 +10,64 @@ export function OnlineSkinSearch({ workerUrl, onSelect, disabled = false }: { wo
   const [query, setQuery] = useState("");
   const [players, setPlayers] = useState<PlayerSuggestion[]>([]);
   const [catalog, setCatalog] = useState<CatalogPage>();
-  const [page, setPage] = useState(0);
+  const [request, setRequest] = useState({ page: 0, from: 0 });
+  const [pageInput, setPageInput] = useState("1");
+  const [retry, setRetry] = useState(false);
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
   const selection = useRef<AbortController | null>(null);
   const search = useRef<AbortController | null>(null);
+  const currentPage = catalog?.page ?? 0;
+  const requestedNumber = Number(pageInput);
+  const validPage = /^\d+$/.test(pageInput) && requestedNumber >= 1 && requestedNumber <= LAST_CATALOG_PAGE_NUMBER;
+  function requestPage(page: number) {
+    setRequest({ page, from: currentPage });
+  }
+  function resetSearch(nextMode: typeof mode, nextQuery: string) {
+    setMode(nextMode);
+    setQuery(nextQuery);
+    setCatalog(undefined);
+    setPlayers([]);
+    setRequest({ page: 0, from: 0 });
+    setPageInput("1");
+  }
   useEffect(() => {
     const controller = new AbortController();
     search.current = controller;
     selection.current?.abort();
     if (disabled) { setLoading(false); return () => controller.abort(); }
-    setPlayers([]); setCatalog(undefined); setStatus(""); setLoading(false);
-    if (mode === "players" && !/^[A-Za-z0-9_]{3,16}$/.test(query.trim())) return () => controller.abort();
+    setStatus(""); setRetry(false);
+    if (mode === "players" && !/^[A-Za-z0-9_]{3,16}$/.test(query.trim())) {
+      setLoading(false);
+      return () => controller.abort();
+    }
+    setLoading(true);
     const timer = window.setTimeout(() => {
       if (controller.signal.aborted) return;
-      setLoading(true);
       const load = mode === "players"
         ? client.autocompleteSkinNames(query.trim(), controller.signal).then((value) => { if (!controller.signal.aborted) setPlayers(value); })
-        : client.getCatalog(query.trim(), page, controller.signal).then((value) => { if (!controller.signal.aborted) setCatalog(value); });
-      void load.catch((error) => { if (!controller.signal.aborted) setStatus(error instanceof Error ? error.message : "Falha na busca."); })
+        : client.getCatalog(query.trim(), request.page, controller.signal).then((value) => {
+          if (controller.signal.aborted) return;
+          if (!value.sources.includes("mcstat") && value.entries.length === 0) {
+            throw new Error("O catálogo online está indisponível no momento.");
+          }
+          if (value.page > 0 && !value.hasMore && value.entries.length === 0) {
+            setStatus(`A página ${value.page + 1} está vazia. Escolha outro número.`);
+            setPageInput(String(request.from + 1));
+            return;
+          }
+          setCatalog(value);
+          setPageInput(String(value.page + 1));
+        });
+      void load.catch((error) => {
+        if (controller.signal.aborted) return;
+        setStatus(error instanceof Error ? error.message : "Falha na busca.");
+        setRetry(mode === "catalog");
+      })
         .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     }, 250);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [client, mode, query, page, disabled]);
+  }, [client, mode, query, request, disabled]);
   useEffect(() => () => selection.current?.abort(), []);
   async function choosePlayer(identifier: string) {
     if (disabled || !isPlayerIdentifier(identifier)) return;
@@ -50,15 +85,26 @@ export function OnlineSkinSearch({ workerUrl, onSelect, disabled = false }: { wo
   }
   return <section className="online-skin-search" aria-label="Buscar skins online">
     <div className="import-tabs">
-      <button type="button" disabled={disabled} className={mode === "catalog" ? "selected compact" : "secondary compact"} aria-pressed={mode === "catalog"} onClick={() => { setMode("catalog"); setPage(0); setQuery(""); }}>Catálogo de skins</button>
-      <button type="button" disabled={disabled} className={mode === "players" ? "selected compact" : "secondary compact"} aria-pressed={mode === "players"} onClick={() => { setMode("players"); setPage(0); setQuery(""); }}>Jogadores</button>
+      <button type="button" disabled={disabled} className={mode === "catalog" ? "selected compact" : "secondary compact"} aria-pressed={mode === "catalog"} onClick={() => resetSearch("catalog", "")}>Catálogo de skins</button>
+      <button type="button" disabled={disabled} className={mode === "players" ? "selected compact" : "secondary compact"} aria-pressed={mode === "players"} onClick={() => resetSearch("players", "")}>Jogadores</button>
     </div>
     <form className="username-search" onSubmit={(event) => { event.preventDefault(); if (mode === "players" && query.trim()) void choosePlayer(query.trim()); }}>
       <input aria-label={mode === "players" ? "Nome ou UUID Minecraft" : "Tema da skin"} value={query} maxLength={80} disabled={disabled}
-        onChange={(event) => { setQuery(event.target.value); setPage(0); }} placeholder={mode === "players" ? "Nome (mínimo 3 letras) ou UUID" : "Tema, nome ou #tag, como #ninja"} />
+        onChange={(event) => resetSearch(mode, event.target.value)} placeholder={mode === "players" ? "Nome ou UUID Minecraft" : "Tema, nome ou #tag"} />
       {mode === "players" && <button type="submit" disabled={disabled || !isPlayerIdentifier(query)}>Buscar perfil</button>}
     </form>
-    <div className="online-skin-results" aria-label="Resultados da busca">
+    {mode === "catalog" && <nav className="online-skin-pagination" aria-label="Paginação do catálogo">
+      <form onSubmit={(event) => { event.preventDefault(); if (!disabled && !loading && validPage) requestPage(requestedNumber - 1); }}>
+        <label>Página<input type="number" inputMode="numeric" min="1" max={LAST_CATALOG_PAGE_NUMBER} step="1" value={pageInput} aria-label="Ir para página"
+          disabled={disabled || loading} onChange={(event) => setPageInput(event.target.value)} /></label>
+        <button type="submit" className="secondary compact" disabled={disabled || loading || !validPage}>Ir</button>
+      </form>
+      <div>
+        <button className="secondary compact" type="button" disabled={disabled || loading || currentPage === 0} onClick={() => requestPage(currentPage - 1)}>Anterior</button>
+        <button className="secondary compact" type="button" disabled={disabled || loading || !catalog?.hasMore || currentPage + 1 >= LAST_CATALOG_PAGE_NUMBER} onClick={() => requestPage(currentPage + 1)}>Próxima</button>
+      </div>
+    </nav>}
+    <div className="online-skin-results" aria-label={mode === "catalog" ? `Skins da página ${currentPage + 1}` : "Jogadores encontrados"} aria-busy={loading}>
       {players.map((player) => <button type="button" className="secondary online-player-result" key={`${player.uuid ?? player.name}:${player.name}`} disabled={disabled}
         onClick={() => void choosePlayer(player.uuid || player.name)}><strong>{player.name}</strong><small>{player.metadata.current === false ? "Nome anterior · " : ""}{player.source}</small></button>)}
       {catalog?.entries.map((entry) => <button className="secondary online-catalog-result" disabled={disabled || loading} type="button" key={entry.id} onClick={() => {
@@ -66,9 +112,9 @@ export function OnlineSkinSearch({ workerUrl, onSelect, disabled = false }: { wo
         setStatus(`${entry.name} carregada na prévia.`);
       }}><SkinFace url={client.resolveCatalogUrl(entry)} name={entry.name} /><span><strong>{entry.name}</strong><small>{entry.author}</small></span></button>)}
     </div>
-    {mode === "catalog" && <div className="online-skin-pagination"><button className="secondary compact" type="button" disabled={disabled || loading || page === 0} onClick={() => setPage(page - 1)}>Anterior</button><span>Página {page + 1}</span><button className="secondary compact" type="button" disabled={disabled || loading || !catalog?.hasMore} onClick={() => setPage(page + 1)}>Próxima</button></div>}
-    <p className="muted" role="status" aria-live="polite">{loading ? "Buscando skins…" : status || (catalog?.entries.length === 0 ? "Nenhuma skin encontrada." : mode === "players" && players.length === 0
-      ? "Digite o nome da conta Minecraft Java e clique em Buscar perfil. As sugestões aparecem a partir de 3 caracteres."
-      : "Selecione uma skin e clique em Aplicar skin. Não é preciso abrir o Minecraft.")}</p>
+    <p className="muted" role="status" aria-live="polite">{loading ? "Buscando skins…" : status || (catalog?.entries.length === 0 ? catalog.hasMore ? "Nenhuma skin nesta página. Avance para a próxima." : "Nenhuma skin encontrada." : mode === "players" && players.length === 0
+      ? "Busque pelo nome ou UUID. Sugestões aparecem a partir de 3 caracteres."
+      : catalog ? `Página ${currentPage + 1} · ${catalog.entries.length} ${catalog.entries.length === 1 ? "skin" : "skins"}` : "")}</p>
+    {retry && <button className="secondary compact" type="button" disabled={disabled || loading} onClick={() => requestPage(request.page)}>Tentar novamente</button>}
   </section>;
 }

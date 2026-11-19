@@ -330,6 +330,8 @@ fn main() {
             commands::load_local_appearance,
             commands::save_local_appearance,
             commands::verify_java,
+            commands::read_global_memory,
+            commands::save_global_memory,
             commands::read_launch_settings,
             commands::save_launch_settings,
             commands::discover_java,

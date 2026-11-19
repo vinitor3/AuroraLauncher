@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { before, test } from "node:test";
 const requireDesktop = createRequire(new URL("../../apps/desktop/package.json", import.meta.url));
-let createService, shared;
+let createService, shared, Timestamp;
 const fixtureKey = `__aurora_social_boundary_${process.pid}`;
 const dataUrl = source => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
 before(async () => {
@@ -16,12 +16,18 @@ before(async () => {
     const fixture=()=>globalThis[${JSON.stringify(fixtureKey)}];
     export function doc(...args){return args.slice(1);}
     export async function getDocFromServer(ref){return fixture().read(ref);}
+    export function onSnapshot(ref, options, next, error){return fixture().listen(ref, options, next, error);}
     export async function runTransaction(db, work, options){return fixture().transaction(work, options);}
-    export class Timestamp { static fromMillis(ms){ return {toMillis:()=>ms}; } }
+    export class Timestamp {
+      constructor(ms){ this.ms = ms; }
+      static fromMillis(ms){ return new Timestamp(ms); }
+      toMillis(){ return this.ms; }
+    }
     const unused=()=>{throw Error("Unexpected SDK operation");};
     export const arrayRemove=unused,arrayUnion=unused,collection=unused,documentId=unused,getDocsFromServer=unused,
       increment=unused,limit=unused,orderBy=unused,query=unused,serverTimestamp=unused,startAfter=unused,deleteDoc=unused,where=unused;
   `);
+  ({Timestamp} = await import(fakeSdk));
   const organization=dataUrl(transpile(await readFile(new URL("../../apps/desktop/src/lib/socialOrganization.ts",import.meta.url),"utf8")).replace('"firebase/firestore"',JSON.stringify(fakeSdk)));
   const privateInvitations=dataUrl(transpile(await readFile(new URL("../../apps/desktop/src/lib/socialPrivateInvitations.ts",import.meta.url),"utf8")).replace('"firebase/firestore"',JSON.stringify(fakeSdk)));
   // Clock bounds/authentication have their own real implementation fixtures; this
@@ -190,4 +196,64 @@ test("pending join cancellation stops before another read or write when the orig
       assert.equal(pending.calls.length,1);assert.deepEqual(writes,[]);
     } finally {delete globalThis[fixtureKey];}
   }
+});
+
+test("incoming badge follows the account inbox, expires and ignores cached or detached reads", async () => {
+  let snapshot, releaseLate;
+  let stopped = 0;
+  const auth = { currentUser: { uid: "reader" } };
+  const seen = [];
+  globalThis[fixtureKey] = {
+    listen(ref, options, next) {
+      assert.deepEqual(ref, ["socialState", "reader"]);
+      assert.equal(options.includeMetadataChanges, true);
+      snapshot = next;
+      return () => { stopped++; };
+    },
+    async read(ref) {
+      if (ref[0] === "socialRequests") {
+        assert.equal(ref[3], "reader");
+        if (ref[1] === "delayed") return new Promise(resolve => { releaseLate = resolve; });
+        return { data: () => ({ expiresAt: Timestamp.fromMillis(Date.now() + (ref[1] === "brief" ? 75 : 60000)) }) };
+      }
+      assert.equal(ref[0], "publicProfiles");
+      return { data: () => undefined };
+    },
+  };
+  const service = createService({ db: {}, auth });
+  const stop = service.watchFriendInbox(value => seen.push(value));
+  const emit = (incoming, fromCache = false) => snapshot({
+    metadata: { fromCache, hasPendingWrites: false },
+    data: () => ({ incoming, outgoing: ["sent"], blocked: [], friends: [] }),
+  });
+  const settled = () => new Promise(resolve => setImmediate(resolve));
+  try {
+    emit([]); assert.equal(seen.at(-1).count, 0);
+    emit(["other"]); await settled(); assert.equal(seen.at(-1).count, 1);
+    emit(["other", "brief"]); await settled(); assert.equal(seen.at(-1).count, 2);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(seen.at(-1).count, 1);
+    assert.equal(seen.at(-1).requests.length, 2, "expired requests remain removable");
+    emit(["other"], true); assert.equal(seen.at(-1), undefined);
+    emit(["delayed"]); await settled();
+    emit([]); assert.equal(seen.at(-1).count, 0);
+    auth.currentUser = { uid: "reader" };
+    releaseLate({ data: () => ({ expiresAt: Timestamp.fromMillis(Date.now() + 60000) }) });
+    await settled(); assert.equal(seen.at(-1).count, 0);
+  } finally { stop(); delete globalThis[fixtureKey]; }
+  assert.equal(stopped, 1);
+});
+
+test("publishing a new LAN world cannot replace an advert created by another launcher", async () => {
+  const oldId = "11111111-1111-4111-8111-111111111111";
+  globalThis[fixtureKey] = { transaction: async work => work({
+    get: async ref => ({ data: () => ref[0] === "socialOwners" ? { sessionId: oldId, visibility: "friends" }
+      : { expiresAt: Timestamp.fromMillis(Date.now() + 60000) } }),
+    set: () => assert.fail("must preserve existing publication"),
+  }) };
+  try {
+    const service = createService({ db: {}, auth: { currentUser: { uid: "host" } } });
+    await assert.rejects(service.publishSession({ title: "LAN", modpackName: "Pack", minecraftVersion: "1.21.1", loader: "fabric",
+      imageUrl: null, players: 0, maxPlayers: 8, visibility: "friends", joinPolicy: "open" }, true), { code: "session_exists" });
+  } finally { delete globalThis[fixtureKey]; }
 });

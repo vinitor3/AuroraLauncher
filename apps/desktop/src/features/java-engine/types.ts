@@ -1,26 +1,29 @@
 export type LaunchSettings = {
   schemaVersion: 1;
-  memoryMode: "manual" | "automatic";
+  memoryRevision?: string | null;
+  memoryMode: "manual" | "automatic" | "launcher";
   minMemoryMb: number | null;
   maxMemoryMb: number;
   gcMode: "runtime" | "recommended";
   jvmArgs: string[];
 };
 
+export type GlobalMemoryOverview = { maxMemoryMb: number; totalMemoryMb: number | null; memoryRevision?: string | null };
+
 export type LaunchSettingsOverview = {
   settings: LaunchSettings;
+  globalMaxMemoryMb: number;
   totalMemoryMb: number | null;
   modCount: number;
   recommendedMemoryMb: number | null;
 };
 
-// Existing instances keep the previous heap and the JVM's collector by default.
-export function defaultLaunchSettings(): LaunchSettings {
+export function defaultLaunchSettings(globalMaxMemoryMb = 4096): LaunchSettings {
   return {
     schemaVersion: 1,
-    memoryMode: "manual",
+    memoryMode: "launcher",
     minMemoryMb: null,
-    maxMemoryMb: 4096,
+    maxMemoryMb: globalMaxMemoryMb,
     gcMode: "runtime",
     jvmArgs: [],
   };

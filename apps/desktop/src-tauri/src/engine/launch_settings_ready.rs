@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 pub struct ReadyLaunchSettings {
     effective: EffectiveLaunchSettings,
     fingerprint: String,
+    global: memory::GlobalMemory,
     instance: Instance,
     file: Option<recovery::SecureFile>,
     _directories: Vec<fs::File>,
@@ -27,6 +28,9 @@ impl ReadyLaunchSettings {
     }
 
     pub fn recheck_before_spawn(&self) -> Result<(), LaunchSettingsError> {
+        if memory::load(self.instance.data_dir())? != self.global {
+            return Err(LaunchSettingsError::InvalidSettings);
+        }
         let path = checked_path(&self.instance)?;
         match &self.file {
             Some(file) => {
@@ -100,7 +104,7 @@ fn inspect_with_memory(
             (settings, bytes, Some(file))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            (LaunchSettings::default(), Vec::new(), None)
+            (LaunchSettings::inherited(), Vec::new(), None)
         }
         Err(_) => return Err(LaunchSettingsError::Storage),
     };
@@ -108,7 +112,11 @@ fn inspect_with_memory(
         .checked_add(additional_mods)
         .filter(|count| *count <= 10_000)
         .ok_or(LaunchSettingsError::Storage)?;
-    let effective = settings.resolve(total_memory_mb, count, java_major)?;
+    settings.validate()?;
+    let global = memory::load(instance.data_dir())?;
+    let effective = global
+        .apply(settings)
+        .resolve(total_memory_mb, count, java_major)?;
     let mut hash = Sha256::new();
     hash.update(b"aurora-ready-copy-preferences-v1\0");
     hash.update([u8::from(file.is_some())]);
@@ -117,6 +125,7 @@ fn inspect_with_memory(
     hash.update(serde_json::to_vec(&effective).map_err(|_| LaunchSettingsError::InvalidSettings)?);
     let observed = ReadyLaunchSettings {
         effective,
+        global,
         fingerprint: format!("{:x}", hash.finalize()),
         instance: instance.clone(),
         file,

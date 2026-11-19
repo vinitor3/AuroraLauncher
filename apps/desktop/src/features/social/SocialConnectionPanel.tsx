@@ -20,8 +20,8 @@ function NativeVoiceLimits() {
 }
 
 /** Presentation only: the App-owned controller and native manager survive tabs. */
-export function SocialConnectionPanel({ connection, ownSession, now, catalogNow = now, onOpenConnectedGame, onPrepareDedicatedServer, service }: {
-  connection: SocialConnectionControls; ownSession?: SocialSession | null; now: number; catalogNow?: number; onOpenConnectedGame?: () => void; onPrepareDedicatedServer?: () => void; service?: SocialService | null;
+export function SocialConnectionPanel({ connection, ownSession, now, catalogNow = now, onOpenConnectedGame, onPrepareDedicatedServer, service, instanceNames }: {
+  connection: SocialConnectionControls; ownSession?: SocialSession | null; now: number; catalogNow?: number; onOpenConnectedGame?: () => void; onPrepareDedicatedServer?: () => void; service?: SocialService | null; instanceNames?: Record<string, string>;
 }) {
   const { state, controller } = connection;
   const snapshot = state.snapshot, social = snapshot?.social;
@@ -81,16 +81,17 @@ export function SocialConnectionPanel({ connection, ownSession, now, catalogNow 
     {state.error && <p className="social-notice" role="alert">{state.error}</p>}
     <SocialConnectionFailure errorCode={snapshot?.errorCode} social={social} />
     {active && !social && <p>Encerre a conexão anterior para compartilhar ou entrar em uma sessão.</p>}
-    {!active && !voiceReady && state.available && onPrepareDedicatedServer && <div className="social-notice">
+    {!active && !voiceReady && state.available && onPrepareDedicatedServer && <details className="social-extra">
+      <summary>Usar um servidor dedicado</summary>
       <p>Prepare um servidor dedicado ou revise novamente a origem em execução; depois escolha a origem pronta aqui.</p>
       <button type="button" className="secondary" disabled={state.pending} onClick={() => { if (!state.pending) onPrepareDedicatedServer(); }}>Abrir painel do servidor dedicado</button>
-    </div>}
+    </details>}
     {!active && hostEligible && voiceReady && <div className="social-notice">
       <label className="social-consent"><input type="checkbox" checked={useVoice} disabled={state.pending} onChange={event => setUseVoice(event.target.checked)} />Compartilhar a origem de voz pronta ({state.nativeVoiceReady === "simpleVoiceChat" ? "Simple Voice Chat" : "Plasmo Voice"})</label>
       {useVoice && <label className="social-consent"><input type="checkbox" checked={hostPlayer} disabled={state.pending || (ownSession?.maxPlayers ?? 0) < 2} onChange={event => setHostPlayer(event.target.checked)} />Também jogar neste computador (até 7 convidados e 1 vaga local, dentro do limite do anúncio)</label>}
     </div>}
     {!active && hostEligible && discovery && !useVoice && <>
-      <DiscoveryPicker key={selectionEpoch} disabled={!state.available || state.pending} onSelect={setSelected} />
+      <DiscoveryPicker key={selectionEpoch} instanceNames={instanceNames} disabled={!state.available || state.pending} onSelect={setSelected} />
       {selected && !socialGameTarget(selected.target) && <p role="alert">Esta sessão local exige uma porta IPv4 em 127.0.0.1. Escolha outra porta do próprio jogo.</p>}
       {selected && selected.expiresAtMs <= now && <p role="alert">A seleção expirou. Faça uma nova busca.</p>}
     </>}

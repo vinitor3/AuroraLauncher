@@ -60,17 +60,26 @@ impl InstanceLayout {
 
     pub fn open(&self, id: InstanceId) -> Instance {
         let root = self.path_for(&id);
-        Instance { id, root }
+        Instance {
+            id,
+            root,
+            data_dir: self.root.clone(),
+        }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct Instance {
+    data_dir: PathBuf,
     id: InstanceId,
     root: PathBuf,
 }
 
 impl Instance {
+    pub(super) fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+
     pub fn id(&self) -> &InstanceId {
         &self.id
     }

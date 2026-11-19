@@ -9,6 +9,7 @@ export type SocialSessionDraft = {
 export type SocialSession = SocialSessionDraft & { id: string; hostUid: string; expiresAtMs: number };
 export type SocialFriend = SocialPerson & { presence: SocialPresence | null; session: SocialSession | null };
 export type SocialRequest = SocialPerson & { expiresAtMs: number };
+export type FriendInbox = { requests: SocialRequest[]; count: number };
 export type SocialSnapshot = {
   friends: SocialFriend[]; incoming: SocialRequest[]; outgoing: SocialRequest[]; blocked: SocialPerson[];
   ownSession: SocialSession | null; presenceSharing: "friends" | "hidden"; modpackName: string | null;
@@ -58,6 +59,7 @@ export type SocialService = {
   profile?(uid: string): Promise<SocialPerson | null>;
   searchByNickname(nickname: string): Promise<SocialPerson | null>;
   snapshot(): Promise<SocialSnapshot>;
+  watchFriendInbox?(notify: (inbox: FriendInbox | undefined) => void): () => void;
   requestFriend(uid: string): Promise<void>;
   respondFriend(uid: string, decision: "accept" | "decline"): Promise<void>;
   cancelRequest(uid: string): Promise<void>;
@@ -65,7 +67,7 @@ export type SocialService = {
   block(uid: string): Promise<void>;
   unblock(uid: string): Promise<void>;
   setPresence(value: { sharing: "friends" | "hidden"; modpackName: string | null }): Promise<void>;
-  publishSession(value: SocialSessionDraft): Promise<void>;
+  publishSession(value: SocialSessionDraft, onlyIfNoLiveSession?: boolean): Promise<string | void>;
   closeSession(): Promise<void>;
   listPublicSessions(cursor?: string | null): Promise<SocialPage>;
   prepareJoin(sessionId: string): Promise<void>;

@@ -1,6 +1,6 @@
 /* Only validated semantic values reach this scope. Authentication,
    confirmation and recovery never inherit theme properties. */
-.launcher-theme-root { position: relative; min-height: inherit; isolation: isolate; }
+.launcher-theme-root { position: relative; display: flow-root; isolation: isolate; }
 .theme-cursor-trail { position: fixed; inset: 0; z-index: 90; width: 100vw; height: 100vh; pointer-events: none; }
 .aurora-themed[data-custom-cursor="true"] button:not(:where(.theme-protected, .theme-protected *)), .aurora-themed[data-custom-cursor="true"] a:not(:where(.theme-protected, .theme-protected *)),
 .aurora-themed[data-custom-cursor="true"] [role="button"]:not(:where(.theme-protected, .theme-protected *)) { cursor: inherit; }
@@ -19,15 +19,16 @@
 .aurora-themed[data-status-side="left"] .workspace.active-instances .workspace-grid:not(:where(.theme-protected, .theme-protected *)) { grid-template-columns: minmax(245px, .43fr) minmax(0, 1fr); }
 .aurora-themed[data-status-side="left"] .workspace.active-instances .side-stack:not(:where(.theme-protected, .theme-protected *)) { grid-column: 1; grid-row: 1; }
 .aurora-themed[data-status-side="left"] .workspace.active-instances .workspace-main:not(:where(.theme-protected, .theme-protected *)) { grid-column: 2; grid-row: 1; }
-.aurora-themed[data-status-side="left"] .workspace.active-java .side-stack:not(:where(.theme-protected, .theme-protected *)) { grid-template-columns: minmax(245px, .43fr) minmax(0, 1fr); }
-.aurora-themed[data-status-side="left"] .workspace.active-java .side-stack > .status:not(:where(.theme-protected, .theme-protected *)) { grid-column: 1; grid-row: 1; }
-.aurora-themed[data-status-side="left"] .workspace.active-java .side-stack > .section-java:not(:where(.theme-protected, .theme-protected *)) { grid-column: 2; grid-row: 1; }
+.aurora-themed[data-status-side="left"] .workspace.active-java .side-stack > .status { justify-self: start; }
 .aurora-themed .workspace[data-theme-editing="true"]:not(:where(.theme-protected, .theme-protected *)) { min-width: 0; }
 .aurora-themed .panel:not(:where(.theme-protected, .theme-protected *)), .aurora-themed .instance:not(:where(.theme-protected, .theme-protected *)), .aurora-themed .sidebar-user:not(:where(.theme-protected, .theme-protected *)) { border-color: var(--theme-border); border-radius: var(--theme-radius); color: var(--theme-text); background: var(--theme-panel); }
 .aurora-themed .panel:not(:where(.theme-protected, .theme-protected *)) { padding: calc(1.05rem * var(--theme-spacing)); }
 .aurora-themed .nav-item:not(:where(.theme-protected, .theme-protected *)) { color: var(--theme-text); }
 .aurora-themed .nav-item.active:not(:where(.theme-protected, .theme-protected *)), .aurora-themed button:not(.secondary, .text-button, .nav-item, .danger, .editor-close, .theme-library-card):not(:where(.theme-protected, .theme-protected *)) { color: var(--theme-accent-text); background: var(--theme-accent); }
-.aurora-themed .nav-item.active:not(:where(.theme-protected, .theme-protected *)) { color: var(--theme-accent-text); background: var(--theme-accent); }
+.aurora-themed .nav-item.active:hover:not(:disabled):not(:where(.theme-protected, .theme-protected *)) { color: var(--theme-accent-text); background: var(--theme-accent); }
+.aurora-themed .catalog-browser .pack-row:not(:where(.theme-protected, .theme-protected *)) { color: var(--theme-text); background: var(--theme-panel); }
+.aurora-themed .catalog-browser .pack-row:is(.selected, :hover):not(:where(.theme-protected, .theme-protected *)) { background: color-mix(in srgb, var(--theme-accent) 14%, var(--theme-panel)); box-shadow: inset 3px 0 var(--theme-accent); }
+.aurora-themed .catalog-browser .pack-row small:not(:where(.theme-protected, .theme-protected *)) { color: var(--theme-muted); }
 .aurora-themed button:not(:where(.theme-protected, .theme-protected *)), .aurora-themed input:not(:where(.theme-protected, .theme-protected *)), .aurora-themed select:not(:where(.theme-protected, .theme-protected *)), .aurora-themed textarea:not(:where(.theme-protected, .theme-protected *)) { font-family: var(--theme-font); border-radius: min(var(--theme-radius), 16px); }
 .aurora-themed .secondary:not(:where(.theme-protected, .theme-protected *)) { border-color: var(--theme-border); color: var(--theme-text); background: color-mix(in srgb, var(--theme-text) 8%, var(--theme-panel)); }
 .aurora-themed input:not(:where(.theme-protected, .theme-protected *)), .aurora-themed textarea:not(:where(.theme-protected, .theme-protected *)), .aurora-themed select:not(:where(.theme-protected, .theme-protected *)) { border-color: var(--theme-border); color: var(--theme-text); background: var(--theme-panel); }
@@ -53,14 +54,17 @@
 .theme-confirmation p { margin: .3rem 0 0; color: #e0d2ed; font-size: 13px; }
 .theme-safety-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .theme-emergency { position: absolute; right: 16px; bottom: 14px; pointer-events: auto; box-shadow: 0 3px 20px #0007; }
+@media (min-width: 901px) {
+  body:has(.aurora-themed[data-sidebar="right"]) .theme-emergency { right: auto; left: 16px; }
+}
 .theme-recovery { position: absolute; right: 16px; bottom: 62px; display: flex; align-items: center; gap: .8rem; width: min(460px, calc(100% - 2rem)); padding: .8rem 1rem; border: 1px solid #cab9f5; border-radius: 10px; background: #191125; pointer-events: auto; }
 .theme-error-notice { position: absolute; right: 16px; bottom: 120px; display: flex; align-items: center; gap: .8rem; width: min(460px, calc(100% - 2rem)); padding: .8rem 1rem; border: 1px solid #ffb2bb; border-radius: 10px; color: #ffe8ee; background: #291426; pointer-events: auto; }
 /* Respond to the space left by the chosen sidebar, not just the window width. */
 @container aurora-workspace (max-width: 850px) {
   .catalog-browser, .wardrobe-panel .wardrobe-layout { grid-template-columns: minmax(0, 1fr); }
   .wardrobe-nav { min-height: auto; border-right: 0; }
-  .workspace-grid, .side-stack { grid-template-columns: minmax(0, 1fr) !important; }
-  .workspace-main, .side-stack, .side-stack > .status, .side-stack > .section-java { grid-column: auto !important; grid-row: auto !important; }
+  .workspace-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .workspace-main, .side-stack { grid-column: auto !important; grid-row: auto !important; }
   .workspace-header { flex-wrap: wrap; }
 }
 @media (max-width: 900px) {

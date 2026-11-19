@@ -5,6 +5,8 @@ export type SkinResult = { name: string; uuid: string; model: "classic" | "slim"
   textureUrl: string; contentHash: string; headUrl?: string; bodyUrl?: string; source: string; stale: boolean };
 export type CatalogEntry = { id: string; name: string; author: string; model: "classic" | "slim"; hash: string; source: string; tags: string[] };
 export type CatalogPage = { entries: CatalogEntry[]; page: number; hasMore: boolean; sources: string[] };
+// Zero-based Worker pages are accepted through index 100000.
+export const LAST_CATALOG_PAGE_NUMBER = 100001;
 
 export function isPlayerIdentifier(value: string): boolean {
   return /^(?:[A-Za-z0-9_]{1,16}|[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.test(value.trim());
@@ -87,7 +89,7 @@ export class PlayerSkinsClient {
       || result.entries.some((entry) => !entry || typeof entry.name !== "string" || typeof entry.author !== "string"
         || typeof entry.id !== "string" || !/^[0-9a-f]{64}$/.test(entry.hash) || !["classic", "slim"].includes(entry.model)
         || !this.validAsset(entry.source))) throw new Error("Catálogo de skins inválido.");
-    return result;
+    return { ...result, entries: result.entries.filter((entry) => entry.author.trim().toLowerCase() !== "aurora studio") };
   }
   resolveCatalogUrl(entry: CatalogEntry): string {
     const url = new URL(entry.source, this.base);

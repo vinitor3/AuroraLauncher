@@ -95,7 +95,10 @@ fn windows_physical_inventory_returns_a_plausible_nonzero_measurement() {
 #[test]
 fn absent_or_partial_preferences_preserve_the_previous_launch_defaults() {
     let fixture = Fixture::new();
-    assert_eq!(read(&fixture.instance).unwrap(), LaunchSettings::default());
+    assert_eq!(
+        read(&fixture.instance).unwrap(),
+        LaunchSettings::inherited()
+    );
     fixture.write_raw(b"{}");
     let settings = read(&fixture.instance).unwrap();
     assert_eq!(settings.memory_mode, MemoryMode::Manual);
@@ -633,4 +636,51 @@ fn failed_windows_atomic_replacement_preserves_previous_settings_and_cleans_stag
     save(&fixture.instance, &guard, &replacement).unwrap();
     assert_eq!(read(&fixture.instance).unwrap(), replacement);
     fixture.assert_no_staging();
+}
+
+#[test]
+fn shared_memory_applies_to_existing_and_future_instances_without_rewriting_their_files() {
+    let fixture = Fixture::new();
+    let guard = acquire_instance_mutation_lock(&fixture.instance).unwrap();
+    fixture.write_raw(br#"{"maxMemoryMb":1536,"jvmArgs":["-ea"]}"#);
+    let original = fs::read(fixture.path()).unwrap();
+    save_global_memory(&fixture.root, 2048, false).unwrap();
+    assert_eq!(read(&fixture.instance).unwrap().max_memory_mb, 1536);
+    let old_editor = read_overview(&fixture.instance).unwrap().settings;
+    save_global_memory(&fixture.root, 2048, true).unwrap();
+    assert!(matches!(
+        prepare_save(&fixture.instance, old_editor),
+        Err(LaunchSettingsError::MemoryRevisionChanged)
+    ));
+    let inherited = read(&fixture.instance).unwrap();
+    assert_eq!(inherited.memory_mode, MemoryMode::Launcher);
+    assert_eq!(inherited.max_memory_mb, 2048);
+    assert_eq!(inherited.jvm_args, vec!["-ea"]);
+    assert_eq!(fs::read(fixture.path()).unwrap(), original);
+
+    let next = InstanceLayout::new(&fixture.root).open(InstanceId::parse("next").unwrap());
+    next.ensure_layout().unwrap();
+    assert_eq!(read(&next).unwrap().max_memory_mb, 2048);
+    let manual = LaunchSettings {
+        memory_mode: MemoryMode::Manual,
+        max_memory_mb: 1024,
+        ..inherited
+    };
+    let own = prepare_save(&fixture.instance, manual).unwrap();
+    save(&fixture.instance, &guard, &own.settings).unwrap();
+    save_global_memory(&fixture.root, 2560, false).unwrap();
+    assert_eq!(read(&next).unwrap().max_memory_mb, 2560);
+    assert_eq!(read(&fixture.instance).unwrap().max_memory_mb, 1024);
+    let back = prepare_save(
+        &fixture.instance,
+        LaunchSettings {
+            memory_mode: MemoryMode::Launcher,
+            ..own.settings
+        },
+    )
+    .unwrap();
+    save(&fixture.instance, &guard, &back.settings).unwrap();
+    assert_eq!(read(&fixture.instance).unwrap().max_memory_mb, 2560);
+    assert!(save_global_memory(&fixture.root, 100, true).is_err());
+    assert_eq!(read(&fixture.instance).unwrap().max_memory_mb, 2560);
 }

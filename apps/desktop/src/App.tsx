@@ -10,9 +10,11 @@ import { StartupScreen } from "./features/auth/StartupScreen";
 import { useThemes } from "./features/themes/ThemeProvider";
 import { ThemeManager } from "./features/themes/ThemeManager";
 import { ThemeScene, ThemeDecorations } from "./features/themes/ThemeScene";
+import { ThemeSurface } from "./features/themes/ThemeSurface";
 import { ThemeWorkspace } from "./features/themes/ThemeWorkspace";
 import { ThemeCursor, themeCursorValue } from "./features/themes/ThemeCursor";
 import { ThemeLogo, ThemeNavIcon } from "./features/themes/ThemeIcon";
+import { GlobalMemoryPanel } from "./features/java-engine/GlobalMemoryPanel";
 import { LaunchSettingsPanel } from "./features/java-engine/LaunchSettingsPanel";
 import { DEFAULT_THEME, themeVariables } from "./features/themes/model";
 import { guardSessionProfile, startSessionStartup, type SessionStartupState } from "./lib/sessionStartup";
@@ -61,6 +63,7 @@ import { DiagnosticLabView } from "./features/diagnostic-lab/DiagnosticLabView";
 import { ConnectView } from "./features/connect/ConnectView";
 import { NativeVoicePanel } from "./features/connect-native-voice/NativeVoicePanel";
 import { ExitLauncherButton } from "./features/connect/ExitLauncherButton";
+import { useFriendInbox } from "./features/social/useFriendInbox";
 import { SocialView } from "./features/social/SocialView";
 import { SocialBuildBanner } from "./features/social/SocialBuildBanner";
 import { createSocialConnectController, emptySocialConnectState, type SocialConnectController, type SocialConnectState } from "./features/social/connect-controller";
@@ -147,7 +150,7 @@ type ModrinthContent = {
   dateModified: string;
 };
 type ContentType = "mod" | "shader" | "resourcepack";
-type EditorView = "installed" | "updates" | "discover" | "doctor" | "recovery" | "diagnostic-lab";
+type EditorView = "installed" | "memory" | "updates" | "discover" | "doctor" | "recovery" | "diagnostic-lab";
 type ContentSort = "popular" | "relevance" | "updated";
 type CatalogContent = ModrinthContent & {
   source: CatalogSource;
@@ -242,7 +245,7 @@ type CoreConnection =
 type IpcEvent = CoreConnection | { kind: "moduleEvent"; name: string; payload: unknown };
 type IpcSessionEvent = { processId: number; event: IpcEvent };
 type AuthMode = "login" | "register";
-type SkinAddMode = "file" | "url" | "username";
+type SkinAddMode = "file" | "url";
 type LocalSkinView = LocalSkin & { previewUrl: string };
 type EquippedSkinView = EquippedSkinSelection & { name: string; image: Blob; previewUrl: string };
 type OverlayMessage = { role: "user" | "assistant"; text: string };
@@ -268,7 +271,7 @@ const DEFAULT_FORGE_VERSION: Record<string, string> = {
   "1.21.1": "52.0.57",
 };
 const UPDATE_CONTENT_TYPES: ContentType[] = ["mod", "shader", "resourcepack"];
-const EDITOR_VIEWS: EditorView[] = ["installed", "updates", "discover", "doctor", "recovery", "diagnostic-lab"];
+const EDITOR_VIEWS: EditorView[] = ["installed", "memory", "updates", "discover", "doctor", "recovery", "diagnostic-lab"];
 
 function formatBytes(value?: number) {
   if (!value || value < 1) return "0 B";
@@ -1061,14 +1064,14 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [skinModel, setSkinModel] = useState<"classic" | "slim">("classic");
   const [favoriteName, setFavoriteName] = useState("");
   const [favoriteSearch, setFavoriteSearch] = useState("");
-  const [skinAddMode, setSkinAddMode] = useState<SkinAddMode>("username");
+  const [skinAddMode, setSkinAddMode] = useState<SkinAddMode>("file");
   const [localSkins, setLocalSkins] = useState<LocalSkinView[]>([]);
   const [selectedLocalSkinId, setSelectedSkinIdState] = useState("");
   const selectedSkinIdRef = useRef("");
   function setSelectedLocalSkinId(id: string) { selectedSkinIdRef.current = id; setSelectedSkinIdState(id); }
   const [localSkinPath, setLocalSkinPath] = useState("");
   const [equippedSkin, setEquippedSkin] = useState<EquippedSkinView>();
-  const [wardrobeView, setWardrobeView] = useState<"library" | "equipped">("library");
+  const [wardrobeView, setWardrobeView] = useState<"explore" | "library" | "import" | "equipped">("explore");
   const [wardrobeLoading, setWardrobeLoading] = useState(false);
   const [wardrobeReadyOwner, setWardrobeReadyOwner] = useState("");
   const [wardrobeRetry, setWardrobeRetry] = useState(0);
@@ -1077,7 +1080,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [instanceFilter, setInstanceFilter] = useState("");
   const [activeSection, setActiveSection] = useState<LauncherSection>(socialFeatureBuild ? "social" : "instances");
   const baseSocialService = useMemo(() => socialFeatureBuild && profile && services.auth.currentUser?.uid === profile.uid
-    ? createSocialFirebaseService(services, { privateOnlineCapability: () => socialConnectOwner.current?.supportsPrivateInvitations() === true }) : null, [services, profile?.uid, services.auth.currentUser?.uid]);
+    ? createSocialFirebaseService(services, { privateOnlineCapability: () => socialConnectOwner.current?.supportsPrivateInvitations() === true }) : null, [services, profile?.uid, services.auth.currentUser]);
   useEffect(() => {
     const user = services.auth.currentUser, accountId = profile?.uid;
     setSocialConnectState({ accountId: accountId ?? "", value: emptySocialConnectState() });
@@ -1087,7 +1090,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     socialConnectOwner.current = controller;
     void controller.start();
     return () => { controller.invalidate(); if (socialConnectOwner.current === controller) socialConnectOwner.current = undefined; };
-  }, [services, profile?.uid, connectAccountBarrier, socialConnectRetry]);
+  }, [services, services.auth.currentUser, profile?.uid, connectAccountBarrier, socialConnectRetry]);
   const socialConnection = profile && socialConnectState.accountId === profile.uid && socialConnectOwner.current
     ? { state: socialConnectState.value, controller: socialConnectOwner.current } : undefined;
   const socialService = useMemo(() => {
@@ -1113,6 +1116,8 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [connectAvailable, setConnectAvailable] = useState(false);
   const voice = useVoiceAnnouncement();
   const [signingOut, setSigningOut] = useState(false);
+  const friendInbox = useFriendInbox(signingOut ? null : baseSocialService);
+  const [friendInboxReveal, setFriendInboxReveal] = useState(0);
   const signOutPending = useRef(false);
   useEffect(() => {
     if (!isTauri()) return;
@@ -1516,7 +1521,8 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     setCapeUrl(profile?.capeUrl ?? "");
     setFavoriteName("");
     setFavoriteSearch("");
-    setWardrobeView("library");
+    setWardrobeView("explore");
+    setSkinAddMode("file");
     if (!profile) { setWardrobeLoading(false); return; }
     const ownerId = profile.uid;
     let cancelled = false;
@@ -3582,6 +3588,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     : contentType === "shader"
       ? instanceContent.shaderpacks
       : instanceContent.resourcepacks;
+  const filteredSkins = localSkins.filter((skin) => skin.name.toLocaleLowerCase().includes(favoriteSearch.trim().toLocaleLowerCase()));
   const visibleInstalledContent = selectedContentFiles.filter((file) =>
     file.name.toLocaleLowerCase().includes(installedContentFilter.trim().toLocaleLowerCase()),
   );
@@ -3642,11 +3649,13 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
               onClick={() => {
                 setThemesOpen(false);
                 setActiveSection(section);
+                if (section === "social" && friendInbox && friendInbox.count > 0) setFriendInboxReveal(value => value + 1);
                 if (section === "discover" && modrinthPacks.length === 0) void loadModrinthPage(0);
               }}
               type="button"
             >
               <span aria-hidden="true"><ThemeNavIcon theme={themes.theme} section={section} fallback={sectionIcons[section]} onError={themes.mediaFailed} /></span>{sectionTitles[section]}
+              {section === "social" && friendInbox && friendInbox.count > 0 && <span className="social-request-count" aria-label={`${friendInbox.count} ${friendInbox.count === 1 ? "pedido de amizade recebido" : "pedidos de amizade recebidos"}`}>{friendInbox.count}</span>}
             </button>
           ))}
         </nav>
@@ -3659,7 +3668,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       <ThemeWorkspace theme={themes.theme} editing={themesOpen} className={`workspace active-${activeSection}`}
         header={<header className="workspace-header">
           <div>
-            <p className="eyebrow">AURORA SMART LAUNCHER · {profile.username}</p>
             <h1>{themesOpen ? "Personalização" : sectionTitles[activeSection]}</h1>
           </div>
           <button className="secondary compact" aria-pressed={themesOpen} type="button" onClick={() => setThemesOpen((open) => !open)}>{themesOpen ? "Voltar ao launcher" : "Personalização"}</button>
@@ -3680,6 +3688,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         <section className="workspace-grid" style={themesOpen ? { display: "none" } : undefined}>
           <div className="workspace-main">
         {socialService && activeSection === "social" && !signingOut && <div className="section-social"><SocialBuildBanner /><SocialView key={profile.uid} service={socialService} accountId={profile.uid} nickname={profile.username}
+          inbox={friendInbox} revealInboxRequest={friendInboxReveal} instanceNames={Object.fromEntries(instances.map(instance => [instance.id, instance.displayName || instance.id]))}
           connection={socialConnection}
           onOpenConnectedGame={connectAvailable ? () => { setGameRevealRequest(value => value + 1); setActiveSection("connect"); } : undefined}
           onOpenManualConnect={connectAvailable && connectAccountBarrier === "idle" && !signingOut ? () => { setManualConnectRequested(true); setActiveSection("connect"); } : undefined}
@@ -3691,7 +3700,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         <article className="panel instances section-instances">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">INSTÂNCIAS</p>
               <h2>Meus modpacks</h2>
             </div>
             <div className="panel-heading-actions">
@@ -3725,7 +3733,12 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                   className={`instance${targetInstance === instance.id ? " selected" : ""}${isRunning ? " running" : ""}`}
                   key={instance.id}
                   onClick={() => void selectInstance(instance.id)}
-                  onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void selectInstance(instance.id); } }}
+                  onKeyDown={(event) => {
+                    if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+                      event.preventDefault();
+                      void selectInstance(instance.id);
+                    }
+                  }}
                   role="button"
                   tabIndex={0}
                 >
@@ -3814,8 +3827,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         <article className="panel catalog-panel section-discover">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">CATÁLOGO</p>
-              <h2>Encontre seu próximo mundo</h2>
+              <h2>Modpacks</h2>
             </div>
           </div>
           <div aria-label="Fonte do catálogo" className="catalog-tabs" role="tablist">
@@ -3838,7 +3850,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
             <div className="catalog-browser">
               <div className="pack-compact-list">
                 {modrinthPacks.map((pack) => (
-                  <button className={selectedModrinthPack?.projectId === pack.projectId ? "pack-row selected" : "pack-row"} key={pack.projectId} onClick={() => { setSelectedModrinthPack(pack); void openModpackDetail(pack); }} type="button">
+                  <button aria-haspopup="dialog" className={selectedModrinthPack?.projectId === pack.projectId ? "pack-row selected" : "pack-row"} key={pack.projectId} onClick={() => { setSelectedModrinthPack(pack); void openModpackDetail(pack); }} type="button">
                     {pack.iconUrl ? <img className="pack-icon" src={pack.iconUrl} alt="" /> : <span className="orb">◈</span>}
                     <span><strong>{pack.title}</strong><small>{pack.author || pack.loaders.join(", ")} · {pack.downloads.toLocaleString("pt-BR")} downloads</small></span>
                   </button>
@@ -3883,6 +3895,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
               </div>
               <div className="editor-view-tabs" role="tablist" aria-label="Conteúdo da instância" inert={recoveryBusy}>
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "installed"} className={editorView === "installed" ? "active" : ""} id="editor-view-tab-installed" onClick={() => activateEditorView("installed")} onKeyDown={(event) => handleEditorViewKeyDown(event, "installed")} role="tab" tabIndex={editorView === "installed" ? 0 : -1} type="button">Instalados</button>
+                <button aria-controls="editor-view-panel" aria-selected={editorView === "memory"} className={editorView === "memory" ? "active" : ""} id="editor-view-tab-memory" onClick={() => activateEditorView("memory")} onKeyDown={(event) => handleEditorViewKeyDown(event, "memory")} role="tab" tabIndex={editorView === "memory" ? 0 : -1} type="button">Memória</button>
                 <button aria-controls="editor-view-panel" aria-label={updateTabLabel} aria-selected={editorView === "updates"} className={editorView === "updates" ? "active" : ""} id="editor-view-tab-updates" onClick={() => activateEditorView("updates")} onKeyDown={(event) => handleEditorViewKeyDown(event, "updates")} role="tab" tabIndex={editorView === "updates" ? 0 : -1} type="button">Atualizações{updateTabBadge && <span aria-hidden="true" className={`tab-count ${updatesScanning ? "scanning" : updateScanIssueCount > 0 || (totalAvailableUpdates === 0 && totalUpdateAttention > 0) ? "attention" : ""}`}>{updateTabBadge}</span>}</button>
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "discover"} className={editorView === "discover" ? "active" : ""} id="editor-view-tab-discover" onClick={() => activateEditorView("discover")} onKeyDown={(event) => handleEditorViewKeyDown(event, "discover")} role="tab" tabIndex={editorView === "discover" ? 0 : -1} type="button">＋ Adicionar</button>
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "doctor"} className={editorView === "doctor" ? "active" : ""} id="editor-view-tab-doctor" onClick={() => activateEditorView("doctor")} onKeyDown={(event) => handleEditorViewKeyDown(event, "doctor")} role="tab" tabIndex={editorView === "doctor" ? 0 : -1} type="button">Diagnóstico</button>
@@ -3890,7 +3903,11 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "diagnostic-lab"} className={editorView === "diagnostic-lab" ? "active" : ""} id="editor-view-tab-diagnostic-lab" onClick={() => activateEditorView("diagnostic-lab")} onKeyDown={(event) => handleEditorViewKeyDown(event, "diagnostic-lab")} role="tab" tabIndex={editorView === "diagnostic-lab" ? 0 : -1} type="button">Ambiente de teste</button>
               </div>
               <div aria-labelledby={`editor-view-tab-${editorView}`} className="editor-body" id="editor-view-panel" role="tabpanel" tabIndex={0}>
-                {editorView === "doctor" ? (
+                {editorView === "memory" ? (
+                  <LaunchSettingsPanel key={editingInstance} instanceId={editingInstance}
+                    busy={busy || recoveryBusy || !!voice?.isBlocking()}
+                    running={runningInstances.some(running => running.instanceId === editingInstance)} />
+                ) : editorView === "doctor" ? (
                   <DoctorView
                     busy={busy || updatesApplying}
                     instanceId={editingInstance}
@@ -4080,12 +4097,17 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           </div>
         <aside className="side-stack">
           <article className="panel section-java">
+            {activeSection === "java" && <div hidden={javaInstallOpen}><GlobalMemoryPanel busy={busy || recoveryBusy || !!voice?.isBlocking()} /></div>}
             <div className="java-manager-heading">
-              <div><p className="eyebrow">JAVA & ENGINE</p><h2>Runtimes disponíveis</h2><p className="muted">O Aurora escolhe a versão compatível com cada Minecraft e pode manter Javas isolados sem alterar o restante do computador.</p></div>
-              <div className="java-manager-actions"><button className="secondary compact" disabled={busy} onClick={() => void discoverJava()} type="button">↻ Verificar novamente</button><button className="compact" disabled={busy} onClick={() => setJavaInstallOpen((current) => !current)} type="button">+ Instalar Java</button></div>
+              <div><h2>{javaInstallOpen ? "Instalar Java" : "Versões do Java"}</h2><p className="muted">{javaInstallOpen ? "Escolha a versão que deseja instalar." : "Seleção automática ao iniciar o jogo."}</p></div>
+              <div className="java-manager-actions">
+                {!javaInstallOpen && <button className="secondary compact" disabled={busy} onClick={() => void discoverJava()} type="button">↻ Verificar novamente</button>}
+                <button className={javaInstallOpen ? "secondary compact" : "compact"} aria-expanded={javaInstallOpen} aria-controls={javaInstallOpen ? "java-install-picker" : undefined}
+                  disabled={busy} onClick={() => setJavaInstallOpen(current => !current)} type="button">{javaInstallOpen ? "Voltar para versões" : "+ Instalar Java"}</button>
+              </div>
             </div>
             {javaInstallOpen && (
-              <section className="java-install-picker" aria-label="Versões de Java disponíveis para instalação">
+              <section id="java-install-picker" className="java-install-picker" aria-label="Versões de Java disponíveis para instalação">
                 <div className="java-install-copy"><strong>Instalar um runtime gerenciado</strong><small>O Aurora baixa o Eclipse Temurin, verifica a integridade e mantém cada versão isolada.</small></div>
                 <div className="java-recommended-options" aria-label="Versões recomendadas">
                   {RECOMMENDED_JAVA_MAJORS.filter((major) => availableJavaMajors.includes(major)).map((major) => {
@@ -4099,6 +4121,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                 </div>
               </section>
             )}
+            {!javaInstallOpen && <>
             <div className="java-runtime-list">
               {javaRuntimes.length === 0 ? <div className="editor-empty compact-empty"><strong>Nenhum Java encontrado</strong><p>Use “Instalar Java” para baixar uma versão gerenciada pelo Aurora.</p></div> : javaRuntimes.map((runtime) => {
                 const selected = runtime.executable === javaPath;
@@ -4107,83 +4130,71 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
               })}
             </div>
             <details className="java-manual"><summary>Usar um executável manualmente</summary><form onSubmit={verifyJava} className="java-form"><input value={javaPath} onChange={(event) => { setJavaPath(event.target.value); window.localStorage.setItem("aurora.javaExecutable", event.target.value); }} placeholder="C:\\Java\\bin\\java.exe" /><button className="secondary" disabled={busy} type="submit">Validar Java</button></form></details>
+            </>}
           </article>
-          <article className="panel section-java">
-            <label htmlFor="java-engine-instance">Configurar inicialização da instância
-              <select id="java-engine-instance" value={targetInstance} disabled={busy || recoveryBusy || voice?.isBlocking()}
-                onChange={event => { if (event.target.value) void selectInstance(event.target.value); }}>
-                <option value="">Selecione uma instância</option>
-                {instances.map(instance => <option key={instance.id} value={instance.id}>{instance.displayName || instance.id}</option>)}
-              </select>
-            </label>
-            <LaunchSettingsPanel key={targetInstance} instanceId={targetInstance}
-              busy={busy || recoveryBusy || !!voice?.isBlocking()}
-              running={runningInstances.some(running => running.instanceId === targetInstance)} />
-          </article>
-          <article className="panel section-appearance wardrobe-panel">
+          {activeSection === "appearance" && <ThemeSurface as="article" surfaceId="wardrobe" className="panel section-appearance wardrobe-panel">
             <div className="wardrobe-heading">
-              <div><p className="eyebrow">GUARDA-ROUPA</p><h2>Skins <span>({localSkins.length} neste computador)</span></h2></div>
-              <div className="wardrobe-actions">
-                <button className={skinAddMode === "username" ? "compact" : "secondary compact"} disabled={busy || wardrobeLoading} onClick={() => { setWardrobeView("library"); setSkinAddMode("username"); }} type="button">+ Adicionar skin</button>
-                <button className="secondary compact" disabled={busy || wardrobeLoading || !skinUrl.trim()} onClick={() => void saveAppearance({ preventDefault() {} } as FormEvent)} type="button">Aplicar skin</button>
-              </div>
+              <nav className="wardrobe-tabs" aria-label="Guarda-roupa">
+                <button className={wardrobeView === "explore" ? "compact" : "secondary compact"} aria-pressed={wardrobeView === "explore"} onClick={() => setWardrobeView("explore")} type="button">Explorar</button>
+                <button className={wardrobeView === "library" ? "compact" : "secondary compact"} aria-pressed={wardrobeView === "library"} onClick={() => { setWardrobeView("library"); setFavoriteSearch(""); }} type="button">Minhas skins <span>({localSkins.length})</span></button>
+                <button className={wardrobeView === "equipped" ? "compact" : "secondary compact"} aria-pressed={wardrobeView === "equipped"} onClick={showEquippedSkin} type="button">Equipada</button>
+                <button className={wardrobeView === "import" ? "compact" : "secondary compact"} aria-pressed={wardrobeView === "import"} onClick={() => setWardrobeView("import")} type="button">Importar</button>
+              </nav>
             </div>
             <div className="wardrobe-layout">
-              <aside className="wardrobe-nav" aria-label="Biblioteca de skins">
-                <strong>Biblioteca</strong>
-                <button className={`wardrobe-nav-item${wardrobeView === "library" ? " active" : ""}`} aria-pressed={wardrobeView === "library"} onClick={() => { setWardrobeView("library"); setFavoriteSearch(""); }} type="button">Minhas skins <span>{localSkins.length}</span></button>
-                <button className={`wardrobe-nav-item${wardrobeView === "equipped" ? " active" : ""}`} aria-pressed={wardrobeView === "equipped"} onClick={showEquippedSkin} type="button">Equipada <span>{equippedSkin || profile.skinUrl || localSkinPath ? 1 : 0}</span></button>
-                <small>Cosméticos e emotes chegarão depois.</small>
-              </aside>
               <div className="wardrobe-controls">
-                {wardrobeView === "equipped" ? (
-                  <section className="equipped-skin-panel" aria-label="Skin equipada no jogo">
-                    <p className="eyebrow">EM USO NO JOGO</p>
-                    {equippedSkin ? <>
-                      <SkinThumbnail src={equippedSkin.previewUrl} name={equippedSkin.name} className="equipped-skin-thumbnail" />
-                      <h3>{equippedSkin.name}</h3>
-                      <p className="muted">Modelo {equippedSkin.skinModel === "slim" ? "Slim" : "Clássico"}. PNG salvo neste computador.</p>
-                      <p className="field-hint">Selecionar outra skin na biblioteca só altera a prévia. Clique em Aplicar skin para usá-la na próxima vez que iniciar Minecraft.</p>
-                    </> : <>
-                      <p className="muted">{wardrobeLoading ? "Carregando a skin equipada…" : profile.skinUrl ? "Não foi possível recuperar o PNG da skin equipada. Tente novamente ou importe o arquivo salvo." : "Nenhuma skin equipada ainda. Selecione uma na biblioteca e clique em Aplicar skin."}</p>
-                      {!wardrobeLoading && (profile.skinUrl || window.localStorage.getItem(`aurora.localSkinPath.${profile.uid}`)) && <button className="secondary compact" disabled={busy} onClick={() => setWardrobeRetry((value) => value + 1)} type="button">Tentar recuperar novamente</button>}
-                    </>}
-                  </section>
-                ) : <>
                 {wardrobeLoading && <p className="muted" role="status">Recuperando sua biblioteca e a skin equipada…</p>}
-                <div className="skin-import">
+                {wardrobeView === "explore" && (
+                  <OnlineSkinSearch disabled={busy || wardrobeLoading} workerUrl={services.config.workerUrl || "https://aurora-api.aurora-edge-proxy.workers.dev"} onSelect={(skin) => void selectOnlineSkin(skin)} />
+                )}
+                {wardrobeView === "equipped" && <section className="equipped-skin-panel" aria-label="Skin equipada no jogo">
+                  <h2>Skin equipada</h2>
+                  {equippedSkin ? <>
+                    <SkinThumbnail src={equippedSkin.previewUrl} name={equippedSkin.name} className="equipped-skin-thumbnail" />
+                    <h3>{equippedSkin.name}</h3>
+                    <p className="muted">Modelo {equippedSkin.skinModel === "slim" ? "Slim" : "Clássico"} · Salva neste computador</p>
+                  </> : <>
+                    <p className="muted">{wardrobeLoading ? "Carregando a skin equipada…" : profile.skinUrl ? "Não foi possível recuperar o PNG da skin equipada. Tente novamente ou importe o arquivo salvo." : "Escolha uma skin e clique em Aplicar skin para usá-la no jogo."}</p>
+                    {!wardrobeLoading && (profile.skinUrl || window.localStorage.getItem(`aurora.localSkinPath.${profile.uid}`)) && <button className="secondary compact" disabled={busy} onClick={() => setWardrobeRetry((value) => value + 1)} type="button">Tentar recuperar novamente</button>}
+                  </>}
+                </section>}
+                {wardrobeView === "import" && <section className="skin-import" aria-label="Importar skin">
+                  <h2>Importar skin</h2>
                   <div className="import-tabs">
-                    <button className={skinAddMode === "file" ? "selected compact" : "secondary compact"} onClick={() => setSkinAddMode("file")} type="button">Arquivo</button>
-                    <button className={skinAddMode === "url" ? "selected compact" : "secondary compact"} onClick={() => setSkinAddMode("url")} type="button">URL</button>
-                    <button className={skinAddMode === "username" ? "selected compact" : "secondary compact"} onClick={() => setSkinAddMode("username")} type="button">Buscar online</button>
+                    <button aria-pressed={skinAddMode === "file"} className={skinAddMode === "file" ? "compact" : "secondary compact"} onClick={() => setSkinAddMode("file")} type="button">Arquivo PNG</button>
+                    <button aria-pressed={skinAddMode === "url"} className={skinAddMode === "url" ? "compact" : "secondary compact"} onClick={() => setSkinAddMode("url")} type="button">URL da imagem</button>
                   </div>
-                  {skinAddMode === "file" && <label className="file-input">Escolher PNG da skin<input accept="image/png" disabled={busy || wardrobeLoading} onChange={(event) => void uploadAppearance("skin", event.target.files?.[0])} type="file" /></label>}
-                  {skinAddMode === "url" && <input value={skinUrl} disabled={busy || wardrobeLoading} onChange={(event) => { setSkinUrl(event.target.value); setSelectedLocalSkinId(""); }} placeholder="Cole a URL HTTPS da skin PNG" />}
-                  {skinAddMode === "username" && <OnlineSkinSearch disabled={busy || wardrobeLoading} workerUrl={services.config.workerUrl || "https://aurora-api.aurora-edge-proxy.workers.dev"} onSelect={(skin) => void selectOnlineSkin(skin)} />}
-                  <div className="model-row"><span>Modelo</span><select value={skinModel} disabled={busy || wardrobeLoading} onChange={(event) => setSkinModel(event.target.value as "classic" | "slim")}><option value="classic">Clássico</option><option value="slim">Slim</option></select></div>
-                </div>
-                <div className="library-toolbar">
-                  <input className="favorite-search" value={favoriteSearch} onChange={(event) => setFavoriteSearch(event.target.value)} placeholder="Pesquisar nas suas skins" />
-                  <div className="favorite-tools"><input value={favoriteName} onChange={(event) => setFavoriteName(event.target.value)} maxLength={32} placeholder="Nome desta skin" /><button disabled={busy || wardrobeLoading || !skinUrl.trim() || Boolean(selectedLocalSkinId)} onClick={() => void favoriteCurrentSkin()} type="button">Guardar localmente</button></div>
-                </div>
-                <div className="skin-library wardrobe-library">
-                  {localSkins.filter((skin) => skin.name.toLocaleLowerCase().includes(favoriteSearch.trim().toLocaleLowerCase())).map((skin) => (
-                    <button className={selectedLocalSkinId === skin.id ? "skin-card active" : "skin-card"} key={skin.id} disabled={busy || wardrobeLoading} onClick={() => void useFavoriteSkin(skin)} type="button">
-                      <SkinThumbnail src={skin.previewUrl} name={skin.name} /><strong>{skin.name}</strong><span>{skin.skinModel === "slim" ? "Slim" : "Clássico"}{equippedSkin?.id === skin.id ? " · Equipada" : ""}</span><em onClick={(event) => { event.stopPropagation(); void removeFavoriteSkin(skin.id); }}>Remover</em>
-                    </button>
-                  ))}
-                  {localSkins.length === 0 && !wardrobeLoading && <p className="muted empty-library">Escolha uma skin no catálogo acima ou busque pelo nick de um jogador.</p>}
-                </div>
-                </>}
+                  <label>Nome da skin<input value={favoriteName} onChange={(event) => setFavoriteName(event.target.value)} maxLength={32} placeholder="Minha skin" /></label>
+                  {skinAddMode === "file" ? <label className="file-input">Escolher arquivo PNG<input accept="image/png" disabled={busy || wardrobeLoading} onChange={(event) => void uploadAppearance("skin", event.target.files?.[0])} type="file" /></label> : <>
+                    <label>Link do PNG<input type="url" value={selectedLocalSkinId ? "" : skinUrl} disabled={busy || wardrobeLoading} onChange={(event) => { setSkinUrl(event.target.value); setSelectedLocalSkinId(""); }} placeholder="https://…" /></label>
+                    <button className="secondary compact" disabled={busy || wardrobeLoading || !skinUrl.trim() || Boolean(selectedLocalSkinId)} onClick={() => void favoriteCurrentSkin()} type="button">Guardar localmente</button>
+                  </>}
+                </section>}
+                {wardrobeView === "library" && <section className="wardrobe-saved" aria-label="Biblioteca de skins">
+                  <h2>Minhas skins</h2>
+                  <input aria-label="Pesquisar nas suas skins" value={favoriteSearch} onChange={(event) => setFavoriteSearch(event.target.value)} placeholder="Pesquisar nas suas skins" />
+                  <div className="skin-library wardrobe-library">
+                    {filteredSkins.map((skin) => (
+                      <div className={selectedLocalSkinId === skin.id ? "skin-card active" : "skin-card"} key={skin.id}>
+                        <button className="secondary wardrobe-select" aria-pressed={selectedLocalSkinId === skin.id} disabled={busy || wardrobeLoading} onClick={() => void useFavoriteSkin(skin)} type="button">
+                          <SkinThumbnail src={skin.previewUrl} name={skin.name} /><strong>{skin.name}</strong><small>{skin.skinModel === "slim" ? "Slim" : "Clássico"}{equippedSkin?.id === skin.id ? " · Equipada" : ""}</small>
+                        </button>
+                        <button className="secondary compact wardrobe-remove" aria-label={`Remover ${skin.name}`} disabled={busy || wardrobeLoading || equippedSkin?.id === skin.id} onClick={() => void removeFavoriteSkin(skin.id)} type="button">Remover</button>
+                      </div>
+                    ))}
+                    {filteredSkins.length === 0 && !wardrobeLoading && <p className="muted empty-library">{localSkins.length ? "Nenhuma skin com esse nome." : "Sua biblioteca está vazia. Explore o catálogo ou importe um PNG."}</p>}
+                  </div>
+                </section>}
               </div>
               <div className="skin-preview-stage">
-                <p className="eyebrow">PRÉVIA</p>
+                <h2>Prévia</h2>
                 <SkinPreviewCanvas skinModel={skinModel} skinUrl={skinUrl} />
-                <strong>{favoriteName || profile.username}</strong>
-                <span>{equippedSkin?.id === selectedLocalSkinId && skinModel === equippedSkin.skinModel ? "Skin equipada neste computador." : "Prévia da seleção — clique em Aplicar skin para aplicar."}</span>
+                {skinUrl && <strong>{favoriteName || localSkins.find(skin => skin.id === selectedLocalSkinId)?.name || profile.username}</strong>}
+                <label className="model-row">Modelo<select value={skinModel} disabled={busy || wardrobeLoading || wardrobeView === "equipped"} onChange={(event) => setSkinModel(event.target.value as "classic" | "slim")}><option value="classic">Clássico</option><option value="slim">Slim</option></select></label>
+                <button className="compact theme-surface-action" disabled={busy || wardrobeLoading || !skinUrl.trim()} onClick={() => void saveAppearance({ preventDefault() {} } as FormEvent)} type="button">Aplicar skin</button>
               </div>
             </div>
-          </article>
+          </ThemeSurface>}
           {coreConnection && (
             <article className="panel status">
               <p className="eyebrow">AURORA CORE</p>

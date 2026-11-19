@@ -9,6 +9,10 @@ use thiserror::Error;
 use super::content_updates::{ensure_no_symlink_components, metadata_is_link};
 use super::{recommended_memory_mb, Instance, InstanceMutationGuard};
 
+#[path = "launch_memory.rs"]
+mod memory;
+pub use memory::{global_memory, prepare_save, save_global_memory, GlobalMemoryOverview};
+
 const SETTINGS_PATH: &str = ".aurora/launch-settings.json";
 const MAX_BYTES: u64 = 32 * 1024;
 pub const MIN_MEMORY_MB: u32 = 512;
@@ -20,13 +24,15 @@ pub enum LaunchSettingsError {
     Memory,
     #[error("A memória configurada excede a RAM física deste computador.")]
     MemoryExceedsSystem,
+    #[error("global_memory_changed")]
+    MemoryRevisionChanged,
     #[error("Não foi possível calcular a RAM automática. Use o modo manual com pelo menos 512 MB disponíveis para o jogo.")]
     MemoryUnavailable,
     #[error("Argumento JVM não permitido. Use somente as opções de desempenho documentadas, um argumento por linha; configure a RAM nos campos próprios.")]
     Argument,
     #[error("Selecione apenas um coletor de lixo; use o modo padrão ao definir um coletor nos argumentos JVM.")]
     CollectorConflict,
-    #[error("As configurações de inicialização são inválidas ou usam uma versão não suportada. Revise ou restaure os padrões no painel Java & engine.")]
+    #[error("As configurações de inicialização são inválidas ou usam uma versão não suportada. Revise a memória em Java & engine ou em Editar no modpack.")]
     InvalidSettings,
     #[error("Não foi possível acessar as configurações de inicialização. Verifique espaço, permissões e caminhos; a configuração anterior foi preservada.")]
     Storage,
@@ -40,6 +46,7 @@ pub enum MemoryMode {
     #[default]
     Manual,
     Automatic,
+    Launcher,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -55,6 +62,8 @@ pub enum GcMode {
 pub struct LaunchSettings {
     pub schema_version: u32,
     pub memory_mode: MemoryMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_revision: Option<uuid::Uuid>,
     pub min_memory_mb: Option<u32>,
     pub max_memory_mb: u32,
     pub gc_mode: GcMode,
@@ -66,6 +75,7 @@ impl Default for LaunchSettings {
         Self {
             schema_version: 1,
             memory_mode: MemoryMode::Manual,
+            memory_revision: None,
             min_memory_mb: None,
             max_memory_mb: 4096,
             gc_mode: GcMode::Runtime,
@@ -180,6 +190,13 @@ fn validate_arguments(args: &[String]) -> Result<(), LaunchSettingsError> {
 }
 
 impl LaunchSettings {
+    fn inherited() -> Self {
+        Self {
+            memory_mode: MemoryMode::Launcher,
+            ..Self::default()
+        }
+    }
+
     pub fn validate(&self) -> Result<(), LaunchSettingsError> {
         if self.schema_version != 1 {
             return Err(LaunchSettingsError::InvalidSettings);
@@ -207,7 +224,7 @@ impl LaunchSettings {
     ) -> Result<EffectiveLaunchSettings, LaunchSettingsError> {
         self.validate()?;
         let max_memory_mb = match self.memory_mode {
-            MemoryMode::Manual => self.max_memory_mb,
+            MemoryMode::Manual | MemoryMode::Launcher => self.max_memory_mb,
             MemoryMode::Automatic => recommendation(total_memory_mb, mod_count)
                 .ok_or(LaunchSettingsError::MemoryUnavailable)?,
         };
@@ -240,6 +257,7 @@ pub fn recommendation(total_memory_mb: Option<u32>, mod_count: u32) -> Option<u3
 #[serde(rename_all = "camelCase")]
 pub struct LaunchSettingsOverview {
     pub settings: LaunchSettings,
+    pub global_max_memory_mb: u32,
     pub total_memory_mb: Option<u32>,
     pub mod_count: u32,
     pub recommended_memory_mb: Option<u32>,
@@ -249,10 +267,20 @@ pub fn overview(
     instance: &Instance,
     settings: LaunchSettings,
 ) -> Result<LaunchSettingsOverview, LaunchSettingsError> {
+    overview_with_global(instance, settings, &memory::load(instance.data_dir())?)
+}
+
+fn overview_with_global(
+    instance: &Instance,
+    settings: LaunchSettings,
+    global: &memory::GlobalMemory,
+) -> Result<LaunchSettingsOverview, LaunchSettingsError> {
+    let settings = global.apply(settings);
     let total_memory_mb = physical_memory_mb();
     let mod_count = enabled_mod_count(instance)?;
     Ok(LaunchSettingsOverview {
         recommended_memory_mb: recommendation(total_memory_mb, mod_count),
+        global_max_memory_mb: global.max_memory_mb,
         settings,
         total_memory_mb,
         mod_count,
@@ -278,19 +306,28 @@ pub fn diagnostic_memory(
 }
 
 fn checked_path(instance: &Instance) -> Result<PathBuf, LaunchSettingsError> {
-    for ancestor in instance.root().ancestors() {
+    checked_settings_path(instance.root(), SETTINGS_PATH)
+}
+
+fn check_root(root: &Path) -> Result<(), LaunchSettingsError> {
+    for ancestor in root.ancestors() {
         let metadata = fs::symlink_metadata(ancestor).map_err(|_| LaunchSettingsError::Storage)?;
         if !metadata.is_dir() || metadata_is_link(&metadata) {
             return Err(LaunchSettingsError::Storage);
         }
     }
-    ensure_no_symlink_components(instance.root(), SETTINGS_PATH)
-        .map_err(|_| LaunchSettingsError::Storage)?;
-    Ok(instance.root().join(SETTINGS_PATH))
+    Ok(())
 }
 
-pub fn read(instance: &Instance) -> Result<LaunchSettings, LaunchSettingsError> {
-    let path = checked_path(instance)?;
+fn checked_settings_path(root: &Path, relative: &str) -> Result<PathBuf, LaunchSettingsError> {
+    check_root(root)?;
+    ensure_no_symlink_components(root, relative).map_err(|_| LaunchSettingsError::Storage)?;
+    Ok(root.join(relative))
+}
+
+fn read_json<T: serde::de::DeserializeOwned>(
+    path: &Path,
+) -> Result<Option<T>, LaunchSettingsError> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(windows)]
@@ -298,11 +335,9 @@ pub fn read(instance: &Instance) -> Result<LaunchSettings, LaunchSettingsError> 
         use std::os::windows::fs::OpenOptionsExt;
         options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
     }
-    let file = match options.open(&path) {
+    let file = match options.open(path) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(LaunchSettings::default())
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(LaunchSettingsError::Storage),
     };
     let metadata = file.metadata().map_err(|_| LaunchSettingsError::Storage)?;
@@ -316,10 +351,25 @@ pub fn read(instance: &Instance) -> Result<LaunchSettings, LaunchSettingsError> 
     if bytes.len() as u64 > MAX_BYTES {
         return Err(LaunchSettingsError::Storage);
     }
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|_| LaunchSettingsError::InvalidSettings)
+}
+
+fn local_settings(instance: &Instance) -> Result<LaunchSettings, LaunchSettingsError> {
     let settings: LaunchSettings =
-        serde_json::from_slice(&bytes).map_err(|_| LaunchSettingsError::InvalidSettings)?;
+        read_json(&checked_path(instance)?)?.unwrap_or_else(LaunchSettings::inherited);
     settings.validate()?;
     Ok(settings)
+}
+
+pub fn read(instance: &Instance) -> Result<LaunchSettings, LaunchSettingsError> {
+    let settings = local_settings(instance)?;
+    Ok(memory::load(instance.data_dir())?.apply(settings))
+}
+
+pub fn read_overview(instance: &Instance) -> Result<LaunchSettingsOverview, LaunchSettingsError> {
+    overview(instance, local_settings(instance)?)
 }
 
 pub fn save(
@@ -336,10 +386,18 @@ pub fn save(
     {
         return Err(LaunchSettingsError::WrongLock);
     }
-    let path = checked_path(instance)?;
+    write_json(instance.root(), SETTINGS_PATH, settings)
+}
+
+fn write_json<T: Serialize>(
+    root: &Path,
+    relative: &str,
+    settings: &T,
+) -> Result<(), LaunchSettingsError> {
+    let path = checked_settings_path(root, relative)?;
     let parent = path.parent().ok_or(LaunchSettingsError::Storage)?;
     fs::create_dir_all(parent).map_err(|_| LaunchSettingsError::Storage)?;
-    checked_path(instance)?;
+    checked_settings_path(root, relative)?;
     let temporary = parent.join(format!(
         "launch-settings-{}.tmp",
         uuid::Uuid::new_v4().simple()
@@ -356,7 +414,7 @@ pub fn save(
             .and_then(|_| file.sync_all())
             .map_err(|_| LaunchSettingsError::Storage)?;
         drop(file);
-        checked_path(instance)?;
+        checked_settings_path(root, relative)?;
         atomic_replace(&temporary, &path).map_err(|_| LaunchSettingsError::Storage)
     })();
     // Only this unique staging file is ours. A failed publication leaves the old file intact.

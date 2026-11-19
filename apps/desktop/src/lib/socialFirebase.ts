@@ -1,10 +1,10 @@
-import { arrayRemove, arrayUnion, collection, doc, documentId, getDocFromServer, getDocsFromServer, increment, limit, orderBy, query, runTransaction, serverTimestamp, startAfter, Timestamp, type DocumentData, type Firestore } from "firebase/firestore";
+import { arrayRemove, arrayUnion, collection, doc, documentId, getDocFromServer, getDocsFromServer, increment, limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, startAfter, Timestamp, type DocumentData, type Firestore } from "firebase/firestore";
 import type { FirebaseServices } from "./firebase";
 import { socialLabBuild, privateSocialOnlineConfiguration } from "./firebase";
 import { createSocialServerClock } from "./socialServerClock";
 import { createSocialOrganization } from "./socialOrganization";
 import { createSocialPrivateInvitations } from "./socialPrivateInvitations";
-import { normalizeSocialNickname, validateSocialSession, type SocialPerson, type SocialService, type SocialSession } from "../shared/social";
+import { normalizeSocialNickname, validateSocialSession, type SocialPerson, type SocialRequest, type SocialService, type SocialSession } from "../shared/social";
 
 type Kind = "request" | "accept" | "decline" | "cancel" | "remove" | "block";
 type State = { friends: string[]; incoming: string[]; outgoing: string[]; blocked: string[] };
@@ -115,6 +115,12 @@ export function createSocialFirebaseService(services: FirebaseServices, options:
     }
     return { uid, nickname, avatarUrl: null }; // Existing skin/avatar URLs are not approved social image origins.
   }
+  async function readFriendRequest(uid: string, incoming: boolean, check: () => void): Promise<SocialRequest> {
+    check();
+    const record = (await getDocFromServer(doc(db, "socialRequests", incoming ? uid : account(), "peers", incoming ? account() : uid))).data();
+    check();
+    return { ...await person(uid, check), expiresAtMs: record?.expiresAt instanceof Timestamp ? record.expiresAt.toMillis() : 0 };
+  }
   async function sessionForHost(uid: string, check: () => void) {
     const pointer = await optional("socialOwners", uid, check);
     if (!pointer || !sessionIdValid(pointer.sessionId)) return null;
@@ -147,6 +153,46 @@ export function createSocialFirebaseService(services: FirebaseServices, options:
       // The registry, not an arbitrary public display name or Minecraft API, owns this nick.
       return { uid: data.uid, nickname, avatarUrl: null };
     }),
+    watchFriendInbox: notify => {
+      let generation = 0;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let previous: string | undefined;
+      let closed = false;
+      const reset = () => { ++generation; clearTimeout(timer); previous = undefined; notify(undefined); };
+      const stop = onSnapshot(doc(db, "socialState", account()), { includeMetadataChanges: true }, result => {
+        if (closed) return;
+        try {
+          account();
+          if (result.metadata.fromCache || result.metadata.hasPendingWrites) { reset(); return; }
+          const incoming = parseState(result.data()).incoming;
+          const key = JSON.stringify(incoming);
+          if (key === previous) return;
+          previous = key;
+          const revision = ++generation;
+          clearTimeout(timer);
+          const current = () => !closed && revision === generation && services.auth.currentUser === accountUser;
+          if (!incoming.length) { notify({ requests: [], count: 0 }); return; }
+          const checkSubscription = () => { if (!current()) throw new Error("A lista mudou."); };
+          void guarded(async guardedCheck => {
+            const check = () => { checkSubscription(); guardedCheck(); };
+            const requests = await Promise.all(incoming.map(uid => readFriendRequest(uid, true, check)));
+            return { requests, serverNow: clock.now() };
+          }).then(({requests, serverNow}) => {
+            if (!current() || !Number.isFinite(serverNow)) return;
+            const measuredAt = performance.now();
+            const update = () => {
+              if (!current()) return;
+              const now = serverNow + performance.now() - measuredAt;
+              const live = requests.filter(request => request.expiresAtMs > now);
+              notify({ requests, count: live.length });
+              if (live.length) timer = setTimeout(update, Math.ceil(Math.min(...live.map(item => item.expiresAtMs)) - now));
+            };
+            update();
+          }).catch(() => { if (current()) reset(); });
+        } catch { reset(); }
+      }, () => { if (!closed) reset(); });
+      return () => { closed = true; ++generation; clearTimeout(timer); stop(); };
+    },
     snapshot: () => guarded(async (check) => {
       check();
       const state = parseState((await getDocFromServer(doc(db, "socialState", account()))).data());
@@ -165,9 +211,7 @@ export function createSocialFirebaseService(services: FirebaseServices, options:
       const requests = async (uids: string[], incoming: boolean) => {
         const result = [];
         for (const uid of uids) {
-          check();
-          const request = (await getDocFromServer(doc(db, "socialRequests", incoming ? uid : account(), "peers", incoming ? account() : uid))).data();
-          result.push({ ...await person(uid, check), expiresAtMs: request?.expiresAt instanceof Timestamp ? request.expiresAt.toMillis() : 0 });
+          result.push(await readFriendRequest(uid, incoming, check));
         }
         return result;
       };
@@ -198,7 +242,7 @@ export function createSocialFirebaseService(services: FirebaseServices, options:
         transaction.set(ref, { ...value, updatedAt: serverTimestamp(), expiresAt: Timestamp.fromMillis(clock.writeTime() + 115_000) });
       }, { maxAttempts: 1 });
     }),
-    publishSession: (input) => {
+    publishSession: (input, onlyIfNoLiveSession = false) => {
       const value = validateSocialSession(input), privateOperation = privateSupported();
       let requiresPrivate = value.visibility === "private";
       const publicationGuard: typeof guarded = privateOperation ? work => privateGuarded(work, () => requiresPrivate) : guarded;
@@ -206,7 +250,7 @@ export function createSocialFirebaseService(services: FirebaseServices, options:
       check();
       if (privateOperation && value.visibility === "private" && value.joinPolicy !== "open") throw new Error("O convite privado já autoriza o destinatário. Escolha entrada aberta para esta sessão.");
       const owner = account();
-      await runTransaction(db, async (transaction) => {
+      return runTransaction(db, async (transaction) => {
         check();
         const ownerRef = doc(db, "socialOwners", owner);
         const current = (await transaction.get(ownerRef)).data();
@@ -219,6 +263,11 @@ export function createSocialFirebaseService(services: FirebaseServices, options:
         if (!sessionIdValid(id)) throw new Error("Sessão anterior inválida.");
         if (current && !sessionIdValid(current.sessionId)) throw new Error("Sessão anterior inválida.");
         const previousId = current?.sessionId ?? id;
+        if (onlyIfNoLiveSession && current) {
+          const previous = (await transaction.get(doc(db, "socialSessions", previousId))).data();
+          check();
+          if (previous?.expiresAt instanceof Timestamp && previous.expiresAt.toMillis() > clock.now()) throw Object.assign(new Error("Um mundo já foi publicado."), { code: "session_exists" });
+        }
         const queue = current ? (await transaction.get(doc(db, "socialJoinQueues", previousId))).data() : undefined; check();
         if (queue) {
           for (const guest of queue.guests ?? []) transaction.delete(doc(db, "socialJoinRequests", previousId, "guests", guest));
@@ -232,6 +281,7 @@ export function createSocialFirebaseService(services: FirebaseServices, options:
         transaction.set(doc(db, "socialSessions", id), { ...value, schema: 1, hostUid: owner, expiresAt });
         if (value.visibility === "public") transaction.set(doc(db, "socialCatalog", id), { schema: 1, expiresAt });
         else if (current?.visibility === "public") transaction.delete(doc(db, "socialCatalog", id));
+        return id;
       }, { maxAttempts: 1 });
     }); },
     closeSession: () => guarded(async (check) => {

@@ -160,7 +160,7 @@ h2 { margin-bottom: .35rem; font-size: 1.18rem; letter-spacing: -.025em; }
 .app-nav { display: grid; gap: .18rem; }
 .nav-item { display: flex; align-items: center; gap: .65rem; width: 100%; padding: .67rem .7rem; color: #c9c0da; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: .88rem; font-weight: 650; text-align: left; }
 .nav-item:hover:not(:disabled) { background: #ffffff0b; box-shadow: none; transform: none; }
-.nav-item.active { color: #180b25; background: linear-gradient(135deg, #eeb1fb, #ae91ff); }
+.nav-item.active, .nav-item.active:hover:not(:disabled) { color: #180b25; background: linear-gradient(135deg, #eeb1fb, #ae91ff); }
 .nav-item > span { width: 1rem; text-align: center; font-size: 1rem; }
 .sidebar-bottom { display: grid; gap: .6rem; margin-top: auto; padding: 1rem .45rem .1rem; }
 .sidebar-action { width: 100%; margin: 0; text-align: left; }
@@ -713,4 +713,80 @@ code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 420px) {
   .editor-name-form { grid-template-columns: 1fr; }
   .editor-name-form button { justify-self: start; }
+}
+
+/* The native window reserves its own titlebar. Keep navigation and page
+   actions in view while long collections scroll inside the available space. */
+@media (min-width: 901px) {
+  .launcher-theme-root { --shell-inset: clamp(.5rem, 1.5vh, 1rem); }
+  .launcher-theme-root.aurora-themed { --shell-inset: var(--theme-content-inset); }
+  .launcher-theme-root .app-shell {
+    height: calc(100dvh - var(--window-titlebar-height, 0px) - 2 * var(--shell-inset));
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .launcher-theme-root:not(.aurora-themed) .app-shell { margin-block: var(--shell-inset); }
+  .app-sidebar { min-height: 0; overflow-y: auto; }
+  .brand-lockup { padding-bottom: .8rem; }
+  .sidebar-user { margin-bottom: .65rem; }
+  .sidebar-bottom { gap: .35rem; padding-top: .6rem; }
+  .workspace { min-height: 0; padding: clamp(.7rem, 1.5vw, 1.25rem); overflow: auto; }
+  .workspace > :is(.workspace-header, footer, .doctor-failure-banner) { flex: none; }
+  .workspace-header { align-items: center; padding: 0 0 .7rem; }
+  .workspace-header h1 { margin: 0; font-size: clamp(1.45rem, 2.4vw, 2rem); }
+  .workspace > footer { align-items: center; padding-top: .5rem; }
+  .workspace > footer > span { flex: none; }
+  .workspace .theme-decorations { max-height: 20%; }
+  .workspace > .theme-manager { min-height: 0; overflow: auto; }
+  .workspace-grid { flex: 1 1 0%; min-height: 0; align-items: start; overflow: auto; padding-top: .75rem; }
+  .workspace-main, .side-stack { min-height: 0; }
+  .workspace:is(.active-java, .active-appearance) .workspace-main { display: contents; }
+  .workspace.active-appearance .side-stack { height: 100%; }
+  .workspace.active-instances .workspace-grid:not(:has(.side-stack > .status)) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .workspace.active-instances .workspace-grid:not(:has(.side-stack > .status)) > .workspace-main { grid-column: 1; }
+  .workspace.active-instances .side-stack:not(:has(> .status)) { display: none; }
+  .workspace:is(.active-instances, .active-discover) .workspace-main { display: flex; flex-direction: column; height: 100%; }
+  .workspace.active-instances .instances { display: flex; flex-direction: column; min-height: 0; max-height: 100%; }
+  .instances > :is(.instance-filter, .panel-heading) { flex: none; }
+  .instances .instance-grid { align-content: start; overflow: auto; padding: 2px; }
+  .instance-copy strong { overflow-wrap: anywhere; }
+  .workspace.active-discover .catalog-panel {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(7rem, 1fr) auto;
+    min-height: 0;
+    height: 100%;
+  }
+  .catalog-panel > * { grid-column: 1 / -1; }
+  .catalog-panel .panel-heading { grid-column: 1; align-items: center; }
+  .catalog-panel .panel-heading h2 { margin: 0; }
+  .catalog-panel .catalog-tabs { grid-column: 2; justify-self: end; align-self: center; padding: 0; border: 0; }
+  .catalog-browser { min-height: 0; }
+  .catalog-browser .pack-compact-list, .catalog-browser .pack-detail { min-height: 0; max-height: none; overflow: auto; }
+  .catalog-panel .discover-empty { min-height: 5rem; }
+}
+
+@media (min-width: 901px) and (max-height: 700px) {
+  .brand-lockup { padding-bottom: .5rem; }
+  .sidebar-user { margin-bottom: .35rem; }
+  .nav-item { padding-block: .48rem; }
+  .workspace .catalog-panel { gap: .5rem; }
+  /* Each result opens the full project dialog, including version and install actions. */
+  .catalog-panel .catalog-browser { grid-template-columns: 1fr; }
+  .catalog-panel .pack-detail { display: none; }
+  .catalog-panel .pack-compact-list {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+    border-right: 0;
+  }
+  .catalog-panel .pack-row { grid-template-columns: 2.4rem minmax(0, 1fr) .5rem; }
+  .catalog-panel .pack-row::after {
+    content: "";
+    width: .35rem;
+    height: .35rem;
+    border: solid currentColor;
+    border-width: 1px 1px 0 0;
+    transform: rotate(45deg);
+  }
 }

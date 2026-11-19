@@ -1,9 +1,6 @@
 .java-engine-settings { margin-top: 1.25rem; min-width: 0; padding: calc(1.1rem * var(--theme-spacing, 1)); border: 1px solid var(--theme-border, #443557); border-radius: var(--theme-radius, 12px); color: var(--theme-text, #f2efff); background: var(--theme-panel, #110d20); font-family: var(--theme-font, Inter, ui-sans-serif, system-ui, sans-serif); }
 .java-engine-settings .java-engine-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: 1rem; }
 .java-engine-settings .java-engine-heading h3 { margin: .25rem 0 .6rem; font-size: calc(1.1rem * var(--theme-scale, 1)); }
-.java-engine-settings .java-engine-heading p { margin: .25rem 0; }
-.java-engine-settings .java-engine-eyebrow { color: var(--theme-muted, #aea7bd); font-size: .7rem; letter-spacing: .12em; }
-.java-engine-settings .java-engine-scope { flex: 0 0 auto; padding: .3rem .6rem; border: 1px solid var(--theme-border, #443557); border-radius: var(--theme-radius, 12px); color: var(--theme-muted, #aea7bd); font-size: .75rem; }
 .java-engine-settings fieldset { min-width: 0; margin: 1.1rem 0 0; padding: 1rem 0; border: 0; border-top: 1px solid var(--theme-border, #443557); }
 .java-engine-settings legend { padding: 0 .5rem 0 0; font-size: .9rem; font-weight: 650; }
 .java-engine-settings .java-engine-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: .85rem; }
@@ -20,3 +17,113 @@
 .java-engine-settings button:disabled, .java-engine-settings fieldset:disabled { opacity: .6; }
 .java-engine-settings button:disabled { cursor: not-allowed; }
 .java-engine-settings :is(button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--theme-accent, #c9a7ff); outline-offset: 3px; }
+
+.workspace.active-java .workspace-grid > .side-stack {
+  grid-template-columns: minmax(0, 1fr);
+  overflow-y: auto;
+  align-items: start;
+  align-content: start;
+}
+.workspace.active-java .section-java {
+  min-height: 0;
+  min-width: 0;
+  align-content: start;
+  grid-auto-rows: max-content;
+  gap: .8rem;
+}
+.workspace.active-java .java-runtime-list {
+  grid-template-columns: repeat(auto-fit, minmax(min(235px, 100%), 1fr));
+  align-items: start;
+  max-height: clamp(8rem, 28vh, 18rem);
+  overflow-y: auto;
+}
+.workspace.active-java .java-manager-heading {
+  gap: .8rem;
+  padding-bottom: .6rem;
+}
+.java-manager-heading h2 { margin: 0 0 .25rem; }
+.global-memory.theme-surface {
+  margin: 0;
+  padding: clamp(.8rem, 1.4vw, 1.2rem);
+}
+.global-memory h2 { margin: 0 0 .25rem; }
+.global-memory p { margin: 0; color: var(--theme-muted, #aea7bd); font-size: .83rem; }
+.global-memory form { display: grid; gap: .85rem; margin-top: .85rem; }
+.global-memory-values, .global-memory-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .5rem .85rem;
+}
+.global-memory-values { align-items: end; }
+.global-memory-values label {
+  display: grid;
+  gap: .28rem;
+  width: 10rem;
+  font-size: .8rem;
+  font-weight: 650;
+}
+.global-memory-values input { width: 100%; }
+.global-memory-presets { display: flex; gap: .3rem; }
+.global-memory-presets [aria-pressed="true"] {
+  border-color: var(--theme-accent, #c9a7ff);
+  color: var(--theme-accent, #c9a7ff);
+}
+.global-memory-values small {
+  align-self: end;
+  padding-bottom: .55rem;
+  font-size: .75rem;
+  color: var(--theme-muted, #aea7bd);
+}
+.global-memory-actions { justify-content: space-between; }
+.global-memory-actions label { display: inline-flex; align-items: center; gap: .45rem; font-size: .8rem; }
+.global-memory-actions input[type="checkbox"] { width: 1rem; height: 1rem; min-height: 0; accent-color: var(--theme-accent, #c9a7ff); }
+.global-memory .global-memory-feedback { margin-top: .5rem; color: var(--theme-text, #f2efff); }
+.editor-body .java-engine-settings { margin: .5rem 0; }
+.editor-body .java-engine-settings fieldset { margin: .45rem 0; padding: .65rem 0 .35rem; }
+.editor-body .java-engine-settings .java-engine-heading h3 { margin-top: 0; }
+.java-engine-settings .java-advanced { padding: .45rem 0; }
+.java-engine-settings .java-advanced > summary { font-weight: 650; }
+@media (max-width: 720px) {
+  .workspace.active-java .java-manager-heading { display: grid; }
+  .global-memory-values small { padding-bottom: 0; }
+}
+
+@media (min-width: 901px) {
+  .workspace.active-java .workspace-grid { grid-template-rows: minmax(0, 1fr); }
+  .workspace.active-java .workspace-grid > .side-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    height: 100%;
+  }
+  .workspace.active-java .section-java {
+    display: flex;
+    flex-direction: column;
+    max-height: 100%;
+    overflow-y: auto;
+  }
+  .workspace.active-java .section-java > * { flex-shrink: 0; }
+  .workspace.active-java .section-java > .java-runtime-list {
+    flex: 0 1 auto;
+    min-height: 3.25rem;
+    align-content: start;
+  }
+  .workspace.active-java .side-stack > .status { flex: none; }
+}
+@media (min-width: 901px) and (max-height: 700px) {
+  .workspace.active-java .section-java { gap: .45rem; }
+  .workspace.active-java .global-memory.theme-surface { padding: .65rem .8rem; }
+  .workspace.active-java .global-memory form { gap: .45rem; margin-top: .45rem; }
+  .workspace.active-java .java-manager-heading { padding-bottom: .35rem; }
+  .workspace.active-java button.java-runtime { padding: .4rem .65rem; }
+  .workspace.active-java .java-runtime code { margin-top: .1rem; }
+}
+.aurora-themed .workspace.active-java button.java-runtime {
+  color: var(--theme-text);
+  background: var(--theme-panel);
+  border-color: var(--theme-border);
+}
+.aurora-themed .workspace.active-java button.java-runtime.selected { border-color: var(--theme-accent); }
+.aurora-themed .workspace.active-java .java-runtime :is(small, code) { color: var(--theme-muted); }
+.aurora-themed .workspace.active-java .java-runtime em { color: var(--theme-accent); }

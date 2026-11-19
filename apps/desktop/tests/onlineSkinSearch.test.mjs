@@ -4,7 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
-import { isPlayerIdentifier } from "../src/lib/playerSkins.ts";
+import { isPlayerIdentifier, LAST_CATALOG_PAGE_NUMBER, PlayerSkinsClient } from "../src/lib/playerSkins.ts";
 
 function deferred() {
   let resolve, reject;
@@ -48,7 +48,7 @@ function setup() {
   vm.runInNewContext(code, { exports, AbortController, Error,
     clearTimeout: (id) => timers.delete(id), window: { setTimeout: (fn) => { timers.set(++timerId, fn); return timerId; } },
     require: (name) => name === "react" ? hooks : name === "react/jsx-runtime" ? runtime
-      : name.includes("playerSkins") ? { PlayerSkinsClient, isPlayerIdentifier } : {},
+      : name.includes("playerSkins") ? { PlayerSkinsClient, isPlayerIdentifier, LAST_CATALOG_PAGE_NUMBER } : {},
   });
   return { requests, selected,
     render(next = {}) { props = { ...props, ...next }; cursor = 0; const tree = exports.OnlineSkinSearch(props); while (effects.length) effects.shift()(); return tree; },
@@ -73,7 +73,74 @@ test("fresh wardrobe starts with a browsable catalog without typing or importing
   run.render(); run.tick();
   assert.equal(run.requests[0].kind, "catalog");
   assert.equal(run.requests[0].query, "0:");
-  run.requests[0].resolve({ entries: [], page: 0, hasMore: false });
+  run.requests[0].resolve({ entries: [], page: 0, hasMore: false, sources: ["mcstat"] });
+  await setImmediate();
+  assert.equal(status(run.render()), "Nenhuma skin encontrada.");
+  run.unmount();
+});
+
+test("a page jump fetches just the requested page and a jump past the end keeps the results", async () => {
+  const run = setup();
+  const pageField = (tree) => find(tree, (node) => node.props?.["aria-label"] === "Ir para página");
+  const entry = { id: "forest", name: "Forest", author: "Ana", source: "/forest.png" };
+  run.render(); run.tick();
+  run.requests[0].resolve({ entries: [entry], page: 0, hasMore: true, sources: ["mcstat"] });
+  await setImmediate();
+  function jump(number) {
+    pageField(run.render()).props.onChange({ target: { value: number } });
+    const tree = run.render();
+    form(find(tree, (node) => node.type === "nav")).props.onSubmit({ preventDefault() {} });
+    run.render(); run.tick();
+  }
+  for (const invalid of ["0", "1.5", "", "100002"]) {
+    jump(invalid);
+    assert.equal(run.requests.length, 1);
+    assert.equal(button(run.render(), "Ir").props.disabled, true);
+  }
+  jump("27");
+  assert.equal(run.requests.length, 2);
+  assert.equal(run.requests[1].query, "26:");
+  run.requests[1].resolve({ entries: [entry], page: 26, hasMore: true, sources: ["mcstat"] });
+  await setImmediate();
+  assert.equal(pageField(run.render()).props.value, "27");
+  jump("95");
+  run.requests[2].resolve({ entries: [], page: 94, hasMore: false, sources: ["mcstat"] });
+  await setImmediate();
+  const retained = run.render();
+  assert.match(status(retained), /página 95 está vazia/);
+  assert.equal(pageField(retained).props.value, "27");
+  assert.ok(find(retained, (node) => node.type === "strong" && node.props.children === "Forest"));
+  button(retained, "Anterior").props.onClick();
+  run.render(); run.tick();
+  assert.equal(run.requests[3].query, "25:");
+  input(run.render()).props.onChange({ target: { value: "#pirata" } });
+  run.render(); run.tick();
+  assert.equal(run.requests[3].signal.aborted, true);
+  assert.equal(run.requests[4].query, "0:#pirata");
+  run.unmount();
+});
+
+test("desktop filters Studio results from the deployed mixed catalog and preserves page metadata", async (t) => {
+  const common = { hash: "a".repeat(64), model: "classic", tags: [] };
+  const studio = { ...common, id: "aurora-voyager", name: "Viajante", author: "Aurora Studio", source: "/v1/skins/catalog/aurora-voyager.png" };
+  const community = { ...common, id: "mcstat-1", name: "Aurora Studio fan", author: "Mika", source: "/v1/skins/catalog/mcstat/1.png" };
+  t.mock.method(globalThis, "fetch", async () => Response.json({ entries: [studio, community], page: 2, hasMore: true, sources: ["aurora", "mcstat"] }));
+  const result = await new PlayerSkinsClient("https://aurora.test").getCatalog("", 2);
+  assert.deepEqual(result.entries, [community]);
+  assert.equal(result.page, 2);
+  assert.equal(result.hasMore, true);
+});
+
+test("a Studio-only provider fallback offers retry and can recover", async () => {
+  const run = setup();
+  run.render(); run.tick();
+  run.requests[0].resolve({ entries: [], page: 0, hasMore: false, sources: ["aurora"] });
+  await setImmediate();
+  const offline = run.render();
+  assert.match(status(offline), /indisponível/);
+  button(offline, "Tentar novamente").props.onClick();
+  run.render(); run.tick();
+  run.requests[1].resolve({ entries: [], page: 0, hasMore: false, sources: ["mcstat"] });
   await setImmediate();
   assert.equal(status(run.render()), "Nenhuma skin encontrada.");
   run.unmount();

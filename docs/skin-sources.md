@@ -2,7 +2,8 @@
 
 ## Como usar
 
-- Launcher: Guarda-roupa → Adicionar skin abre **Catálogo de skins**, com opções MCStat + Aurora prontas para selecionar. Use `#ninja` para filtrar pela tag. **Aplicar skin** guarda a aparência neste computador sem exigir que o Minecraft esteja aberto.
+- No launcher, **Guarda-roupa → Explorar** abre o catálogo da comunidade (MCStat). Busque por tema ou tag, como `#ninja`. Para ir direto a uma página, digite seu número no campo **Página** e pressione Enter ou **Ir**. Uma pesquisa nova começa na página 1. Se o destino estiver vazio, a página anterior continua visível.
+- O catálogo do launcher oculta as skins de autoria do Aurora Studio. **Minhas skins** conserva as que a pessoa já guardou, inclusive de catálogos anteriores. **Importar** aceita um arquivo PNG ou link. Selecione o modelo na prévia e use **Aplicar skin** para equipar a seleção neste computador.
 - Launcher: **Jogadores** aceita o nome ou UUID da conta Minecraft Java. Sugestões aparecem a partir de três caracteres; **Buscar perfil** continua disponível enquanto elas carregam. A seleção baixa e guarda o PNG; aplicar continua sendo uma ação separada.
 - Minecraft: Skins → Explorar. `@Not` sugere jogadores, `@Notch` pesquisa o nome, `@069a79f444e94726a5befca90e38aaf5` consulta UUID diretamente. Sem `@`, pesquisa catálogo; `#tag` filtra MCStat. A grade mantém 12 slots: clique numa skin pronta para selecionar e use **Usar skin** para aplicar. As setas navegam páginas inteiras; uma pesquisa nova volta à primeira página sem seleção.
 - Selecionar um resultado não altera a skin ativa. No desktop, a seleção online já guarda o PNG na biblioteca para permitir aplicar sem uma nova consulta remota. No mod, aplicar/favoritar materializa o PNG validado.
@@ -116,7 +117,7 @@ As rotas Aurora são `GET /v1/skins/players?query=Not`, `GET /v1/skins/profile/N
 - `SKIN_API_REQUESTS_PER_MINUTE` (Worker var) ajusta o orçamento das consultas de jogador, padrão 30/min, máximo 120. No código, o catálogo MCStat tem orçamento separado de 30/min em `fetchMcstatPage`; rotas de jogador têm proteção por IP de 60/min. Respeite também as cotas do seu plano externo.
 - HTTP 429 respeita `Retry-After`; não há repetição imediata em autocomplete. 401/403 entram em espera, JSON/URLs inválidas são rejeitados. Logs contêm operação/status/cache hit/miss, nunca credencial.
 - Texturas: host/path permitidos, HTTPS, sem redirect, limite 256 KiB no Worker, dimensões 64×64/64×32, CRC e dados PNG íntegros, hash conferido antes de servir/aplicar.
-- Sem rede: catálogo original e biblioteca local continuam disponíveis. Nome não encontrado/limite/falha aparece como mensagem; não se aplica uma skin aleatória.
+- Sem rede, a biblioteca local continua disponível. O catálogo do launcher oferece nova tentativa quando o Worker perde acesso ao MCStat. O mod mantém seu catálogo original de reserva.
 
 Correção desktop de 22/09/2026: o rosto da conta prioriza o PNG equipado local,
 inclusive quando a sincronização online falha. Miniaturas e avatar usam a mesma

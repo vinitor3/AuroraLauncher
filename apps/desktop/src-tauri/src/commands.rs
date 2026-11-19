@@ -3334,6 +3334,33 @@ fn public_profile_url(value: Option<&str>) -> Option<&str> {
 }
 
 #[tauri::command]
+pub async fn read_global_memory(
+    app: AppHandle,
+) -> Result<launch_settings::GlobalMemoryOverview, String> {
+    let root = data_directory(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        launch_settings::global_memory(&root).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "Não foi possível ler a memória padrão.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn save_global_memory(
+    app: AppHandle,
+    max_memory_mb: u32,
+    replace_overrides: bool,
+) -> Result<launch_settings::GlobalMemoryOverview, String> {
+    let root = data_directory(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        launch_settings::save_global_memory(&root, max_memory_mb, replace_overrides)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "Não foi possível salvar a memória padrão.".to_owned())?
+}
+
+#[tauri::command]
 pub async fn read_launch_settings(
     app: AppHandle,
     id: String,
@@ -3341,8 +3368,7 @@ pub async fn read_launch_settings(
     tauri::async_runtime::spawn_blocking(move || {
         let id = InstanceId::parse(id).map_err(|_| "Identificador de instância inválido.")?;
         let instance = layout(&app)?.open(id);
-        let settings = launch_settings::read(&instance).map_err(|error| error.to_string())?;
-        launch_settings::overview(&instance, settings).map_err(|error| error.to_string())
+        launch_settings::read_overview(&instance).map_err(|error| error.to_string())
     })
     .await
     .map_err(|_| "Não foi possível ler a configuração de inicialização.".to_owned())?
@@ -3371,8 +3397,8 @@ pub async fn save_launch_settings(
         {
             return Err("Aguarde a inicialização terminar antes de alterar a configuração.".into());
         }
-        let overview =
-            launch_settings::overview(&instance, settings).map_err(|error| error.to_string())?;
+        let overview = launch_settings::prepare_save(&instance, settings)
+            .map_err(|error| error.to_string())?;
         overview
             .settings
             .resolve(overview.total_memory_mb, overview.mod_count, 0)

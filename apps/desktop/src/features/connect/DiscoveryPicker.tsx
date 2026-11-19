@@ -45,7 +45,12 @@ export function discoveredTargetFrom(v: unknown): DiscoveredTarget {
   return v as DiscoveredTarget;
 }
 
-export function DiscoveryPicker({ disabled, onSelect }: { disabled: boolean; onSelect: (target: DiscoveredTarget | undefined) => void }) {
+export function DiscoveryPicker({ disabled, onSelect, instanceNames }: {
+  disabled: boolean; onSelect: (target: DiscoveredTarget | undefined) => void;
+  instanceNames?: Record<string, string>;
+}) {
+  const guided = instanceNames !== undefined;
+  const gameName = (id: string) => instanceNames?.[id] || id;
   const [instances, setInstances] = useState<string[]>([]);
   const [inventory, setInventory] = useState<Inventory>();
   const [review, setReview] = useState<Review>();
@@ -67,45 +72,54 @@ export function DiscoveryPicker({ disabled, onSelect }: { disabled: boolean; onS
     catch (cause) { if (current()) { setReview(undefined); setError(connectError(cause)); } }
     finally { if (mounted.current && request === generation.current) setBusy(false); }
   }
+  async function reviewPort(inv: Inventory, item: Candidate, current: () => boolean) {
+    setReview(undefined);
+    const next = discoveryReviewFrom(await invoke("connect_review_discovered", { inventoryId: inv.inventoryId, candidateId: item.candidateId }));
+    if (next.inventoryId !== inv.inventoryId || next.instanceId !== inv.instanceId || next.runId !== inv.runId
+      || next.candidate.candidateId !== item.candidateId || next.candidate.target !== item.target
+      || !inv.runtime || !sameRuntime(next.runtime, inv.runtime)) return invalid();
+    if (current()) setReview(next);
+  }
+  async function findPorts(id: string, current: () => boolean) {
+    setInventory(undefined); setReview(undefined);
+    const next = inventoryFrom(await invoke("connect_discover_instance", { instanceId: id }));
+    if (next.instanceId !== id) return invalid();
+    if (!current()) return;
+    setInventory(next);
+    if (guided && next.runtime && next.candidates.length === 1) await reviewPort(next, next.candidates[0], current);
+  }
   async function loadInstances(current: () => boolean) {
     setInventory(undefined); setReview(undefined);
     const value: unknown = await invoke("list_running_instances");
     if (!Array.isArray(value) || value.length > 64 || !value.every(v => object(v) && text(v.instanceId))) return invalid();
-    if (current()) { setInstances([...new Set(value.map(v => v.instanceId as string))]); setLoaded(true); }
+    if (!current()) return;
+    const ids = [...new Set(value.map(v => v.instanceId as string))];
+    setInstances(ids); setLoaded(true);
+    if (guided && ids.length === 1) await findPorts(ids[0], current);
   }
   return <section className="connect-discovery" aria-label="Descobrir servidor da instância">
-    <p>Abra o mundo para LAN no jogo iniciado pelo Aurora. A busca confere somente portas desse processo; não envia consultas até sua confirmação.</p>
-    <button type="button" className="secondary" disabled={disabled || busy} onClick={() => { void perform(loadInstances); }}>Buscar jogos abertos pelo Aurora</button>
-    {busy && <p role="status">Conferindo a seleção…</p>}
+    <p>{guided ? "No mundo de um jogador iniciado pelo Aurora, aperte Esc, escolha Abrir para LAN e inicie o mundo em LAN." : "Abra o mundo para LAN no jogo iniciado pelo Aurora. A busca confere somente portas desse processo; não envia consultas até sua confirmação."}</p>
+    <button type="button" className="secondary" disabled={disabled || busy} onClick={() => { void perform(loadInstances); }}>{guided ? "Encontrar meu mundo LAN" : "Buscar jogos abertos pelo Aurora"}</button>
+    {busy && <p role="status">Procurando o mundo…</p>}
     {error && <p role="alert">{error}</p>}
-    {loaded && instances.length === 0 && <p>Nenhum jogo iniciado por este launcher está aberto. Servidores iniciados fora dele podem usar o endereço manual.</p>}
-    {instances.map(id => <div key={id}><button type="button" className="secondary" disabled={disabled || busy} onClick={() => { void perform(async current => {
-      setInventory(undefined); setReview(undefined);
-      const next = inventoryFrom(await invoke("connect_discover_instance", { instanceId: id }));
-      if (next.instanceId !== id) return invalid();
-      if (current()) setInventory(next);
-    }); }}>Ver portas de {id}</button></div>)}
-    {inventory && <div><p>Instância: {inventory.instanceId}. Seleção válida até {connectDate(inventory.expiresAtMs)}.</p>
-      {!inventory.runtime && <p>O perfil desta execução não pôde ser confirmado. As portas são somente um inventário; a consulta Minecraft está indisponível.</p>}
+    {loaded && instances.length === 0 && <p>Nenhum jogo iniciado por este launcher está aberto. {guided ? "Inicie o Minecraft pelo Aurora e tente novamente." : "Servidores iniciados fora dele podem usar o endereço manual."}</p>}
+    {(!guided || instances.length > 1) && instances.map(id => <div key={id}><button type="button" className="secondary" disabled={disabled || busy} onClick={() => { void perform(current => findPorts(id, current)); }}>{guided ? gameName(id) : `Ver portas de ${id}`}</button></div>)}
+    {inventory && <div>
+      {!guided && <p>Instância: {inventory.instanceId}. Seleção válida até {connectDate(inventory.expiresAtMs)}.</p>}
+      {!inventory.runtime && <p>{guided ? "Este perfil de Minecraft não oferece descoberta de mundos pelo Aurora Connect." : "O perfil desta execução não pôde ser confirmado. As portas são somente um inventário; a consulta Minecraft está indisponível."}</p>}
       {inventory.candidates.length === 0 && <p>Nenhuma porta local disponível. Abra o mundo para LAN e repita a busca.</p>}
-      {inventory.candidates.map(item => <div key={item.candidateId}><button type="button" className="secondary" disabled={disabled || busy || !inventory.runtime} onClick={() => { void perform(async current => {
-        setReview(undefined);
-        const next = discoveryReviewFrom(await invoke("connect_review_discovered", { inventoryId: inventory.inventoryId, candidateId: item.candidateId }));
-        if (next.inventoryId !== inventory.inventoryId || next.instanceId !== inventory.instanceId || next.runId !== inventory.runId
-          || next.candidate.candidateId !== item.candidateId || next.candidate.target !== item.target
-          || !inventory.runtime || !sameRuntime(next.runtime, inventory.runtime)) return invalid();
-        if (current()) setReview(next);
-      }); }}>Revisar {item.target}</button></div>)}
+      {guided && inventory.candidates.length > 1 && <p>Escolha a porta que apareceu no chat do Minecraft ao abrir para LAN.</p>}
+      {(!guided || inventory.candidates.length > 1) && inventory.candidates.map(item => <div key={item.candidateId}><button type="button" className="secondary" disabled={disabled || busy || !inventory.runtime} onClick={() => { void perform(current => reviewPort(inventory, item, current)); }}>Revisar {item.target}</button></div>)}
     </div>}
-    {review && !selected && <div className="connect-review"><p>Consultar Minecraft {review.runtime.minecraftVersion} ({review.runtime.loader} {review.runtime.loaderVersion}, protocolo {review.statusProtocol}) na porta <code>{review.candidate.target}</code> da instância {review.instanceId}.</p>
-      <p>A resposta confirma disponibilidade, sem comprovar entrada no mundo. O jogo pode estar escutando também em outras interfaces; esta ação não muda sua configuração.</p>
+    {review && !selected && <div className="connect-review"><p>{guided ? <>Verificar Minecraft {review.runtime.minecraftVersion} em <strong>{gameName(review.instanceId)}</strong>, porta {review.handshakePort}.</> : <>Consultar Minecraft {review.runtime.minecraftVersion} ({review.runtime.loader} {review.runtime.loaderVersion}, protocolo {review.statusProtocol}) na porta <code>{review.candidate.target}</code> da instância {gameName(review.instanceId)}.</>}</p>
+      {!guided && <p>A resposta confirma disponibilidade, sem comprovar entrada no mundo. O jogo pode estar escutando também em outras interfaces; esta ação não muda sua configuração.</p>}
       <button type="button" disabled={disabled || busy} onClick={() => { void perform(async current => {
         const next = discoveredTargetFrom(await invoke("connect_confirm_discovered_status", { reviewId: review.reviewId, digest: review.digest }));
         if (next.target !== review.candidate.target || next.instanceId !== review.instanceId || next.runId !== review.runId
           || !sameRuntime(next.runtime, review.runtime)) return invalid();
         if (current()) { setSelected(next); setReview(undefined); onSelect(next); }
-      }); }}>Autorizar consulta e selecionar porta</button>
+      }); }}>{guided ? "Verificar este mundo" : "Autorizar consulta e selecionar porta"}</button>
     </div>}
-    {selected && <p role="status">Servidor respondeu em <code>{selected.target}</code>. Protocolo {selected.summary.reportedProtocol}, {selected.summary.protocolMatchesRequested ? "correspondente" : "diferente"} ao solicitado ({selected.summary.requestedProtocol}). Prepare o anfitrião até {connectDate(selected.expiresAtMs)}; o processo e a porta serão conferidos novamente.</p>}
+    {selected && !guided && <p role="status">Servidor respondeu em <code>{selected.target}</code>. Protocolo {selected.summary.reportedProtocol}, {selected.summary.protocolMatchesRequested ? "correspondente" : "diferente"} ao solicitado ({selected.summary.requestedProtocol}). Prepare o anfitrião até {connectDate(selected.expiresAtMs)}; o processo e a porta serão conferidos novamente.</p>}
   </section>;
 }
