@@ -23,6 +23,25 @@ async function fixture(mode, flags = {}) {
   return { module, moduleUrl, calls, close() { delete globalThis[key]; } };
 }
 
+test("syncing a signed-in user's profile sends only public appearance fields to Firestore", async () => {
+  const f = await fixture("connect-online");
+  try {
+    const db = {};
+    const publicFields = { uid: "profile-id", username: "Jogador", avatarUrl: null,
+      skinUrl: "https://assets.invalid/example.png", skinModel: "slim" };
+    await f.module.syncAuroraPublicProfile({ db }, {
+      ...publicFields, email: "private@example.invalid", role: "PLAYER",
+      skinFavorites: ["private-library"], stats: { lastPlayedModpack: "private-pack" },
+      updatedAt: "untrusted timestamp", unexpected: true,
+    });
+    assert.deepEqual(f.calls.find(call => call.name === "doc").args, [db, "publicProfiles", publicFields.uid]);
+    const writes = f.calls.filter(call => call.name === "setDoc");
+    assert.equal(writes.length, 1);
+    assert.deepEqual(writes[0].args[1], { ...publicFields, updatedAt: { origin: "firebase/firestore" } });
+    assert.deepEqual(writes[0].args[2], { merge: true });
+  } finally { f.close(); }
+});
+
 test("social build pins only emulator demo and strips caller remote service fields", async () => {
   const f = await fixture("social-lab");
   try {

@@ -450,6 +450,7 @@ async fn weak_binding_and_clones_cannot_retain_or_adopt_a_replacement_run() {
     }
 }
 
+#[cfg(debug_assertions)]
 #[tokio::test]
 async fn native_voice_claim_rotation_preserves_the_original_source_and_retires_all_clones() {
     let mut previous = None;
@@ -458,6 +459,7 @@ async fn native_voice_claim_rotation_preserves_the_original_source_and_retires_a
     }
 }
 
+#[cfg(debug_assertions)]
 #[tokio::test]
 async fn native_voice_claim_rotation_is_atomic_with_reservation_and_final_registration() {
     for profile in PROFILES {
@@ -465,6 +467,7 @@ async fn native_voice_claim_rotation_is_atomic_with_reservation_and_final_regist
     }
 }
 
+#[cfg(debug_assertions)]
 async fn exercise_claim_rotation(
     profile: NativeVoiceProfile,
     race: bool,

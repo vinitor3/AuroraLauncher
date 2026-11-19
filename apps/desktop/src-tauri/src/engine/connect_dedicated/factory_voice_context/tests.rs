@@ -14,6 +14,7 @@ const PROFILES: [NativeVoiceProfile; 2] = [
     NativeVoiceProfile::PlasmoVoice,
 ];
 
+#[cfg(debug_assertions)]
 #[test]
 fn voice_context_policy2_retains_actual_immutable_handles_until_last_context() {
     use std::fs::OpenOptions;

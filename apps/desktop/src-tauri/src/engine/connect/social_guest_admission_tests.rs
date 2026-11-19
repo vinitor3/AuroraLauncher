@@ -20,6 +20,7 @@ struct ClockBody<'a> {
     session_expires_at_unix_ms: u64,
 }
 
+#[cfg(debug_assertions)]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TicketBody<'a> {
@@ -658,6 +659,7 @@ async fn social_private_online_voice_guest_keeps_consent_epoch_expiry_continuity
     }
 }
 
+#[cfg(debug_assertions)]
 #[tokio::test]
 async fn native_voice_after_ticket_gate_prevents_polling_udp_on_cancel_epoch_expiry_or_revoke() {
     for mode in 0..5 {

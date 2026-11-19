@@ -269,6 +269,15 @@ fn appearance(app: &AppHandle, request: &ReadyGameLaunchRequest) -> Result<Optio
     }
     Ok(skin)
 }
+struct ReadyGameInspection {
+    instance: aurora_launcher_core::engine::Instance,
+    mutation_lock: InstanceMutationGuard,
+    proof: ReadyRuntime,
+    java: JavaRuntime,
+    skin: Option<PathBuf>,
+    settings: ReadyLaunchSettings,
+}
+
 fn inspect(
     app: &AppHandle,
     request: &ReadyGameLaunchRequest,
@@ -276,17 +285,7 @@ fn inspect(
     voice_profile: Option<NativeVoiceProfile>,
     runtime_profile: Option<ReadyProfile>,
     cancel: &CancellationToken,
-) -> Result<
-    (
-        aurora_launcher_core::engine::Instance,
-        InstanceMutationGuard,
-        ReadyRuntime,
-        JavaRuntime,
-        Option<PathBuf>,
-        ReadyLaunchSettings,
-    ),
-    Error,
-> {
+) -> Result<ReadyGameInspection, Error> {
     check_cancel(cancel)?;
     validate_nickname(&request.nickname).map_err(|_| Error::InvalidRequest)?;
     let id = InstanceId::parse(&request.instance_id).map_err(|_| Error::InvalidRequest)?;
@@ -360,7 +359,14 @@ fn inspect(
     let settings = inspect_ready_settings(&instance, &guard, observed, additional_mods)
         .map_err(|_| Error::InstanceNotReady)?;
     check_cancel(cancel)?;
-    Ok((instance, guard, proof, java, skin, settings))
+    Ok(ReadyGameInspection {
+        instance,
+        mutation_lock: guard,
+        proof,
+        java,
+        skin,
+        settings,
+    })
 }
 
 fn check_server_status(
@@ -403,7 +409,12 @@ impl ReadyGameBackend for DesktopReadyGameBackend {
         if voice_profile.is_some() && runtime_profile.is_none() {
             return Err(Error::Unavailable);
         }
-        let (_, _guard, proof, _, _, settings) = inspect(
+        let ReadyGameInspection {
+            mutation_lock: _guard,
+            proof,
+            settings,
+            ..
+        } = inspect(
             &self.app,
             request,
             endpoint,
@@ -459,7 +470,14 @@ impl PreparedReadyGame for DesktopPrepared {
         cancel: &CancellationToken,
     ) -> Result<ReadyGameLaunchResult, Error> {
         let voice_profile = self.voice_review().map(|review| review.profile);
-        let (instance, mutation_lock, mut proof, java, skin, settings) = inspect(
+        let ReadyGameInspection {
+            instance,
+            mutation_lock,
+            mut proof,
+            java,
+            skin,
+            settings,
+        } = inspect(
             &self.app,
             &self.request,
             self.endpoint,

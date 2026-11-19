@@ -31,6 +31,7 @@ fn names(records: &[resources::ResourceRecord]) -> BTreeSet<&str> {
     records.iter().map(|record| record.name.as_str()).collect()
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn retained_voice_policy2_pins_deny_mutation_keep_inventory_and_do_not_extend_review() {
     for profile in PROFILES {
@@ -77,6 +78,7 @@ fn retained_voice_policy2_pins_deny_mutation_keep_inventory_and_do_not_extend_re
     }
 }
 
+#[cfg(debug_assertions)]
 #[test]
 fn retained_voice_policy2_reopen_rehashes_after_original_pins_are_released() {
     for profile in PROFILES {

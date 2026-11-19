@@ -3551,7 +3551,7 @@ mod tests {
             (r#"java --gameDir "c:/aurora qa/instances/foo/""#, false),
             (r#"java --gameDir C:\other\instance"#, true),
         ] {
-            let fixture = serde_json::json!([{"CommandLine": line}]).to_string();
+            let fixture = serde_json::json!([{"ProcessId": 764, "CommandLine": line}]).to_string();
             assert_eq!(
                 super::run_instance_game_probe(&script, root, Some(&fixture)).is_ok(),
                 stopped
@@ -3567,7 +3567,7 @@ mod tests {
             "ConvertFrom-Json $env:AURORA_QA_GAMES",
         );
         let root = std::path::Path::new(r"C:\Aurora QA\instances\foo");
-        let fixture = serde_json::json!([{ "CommandLine": null }]).to_string();
+        let fixture = serde_json::json!([{ "ProcessId": 764, "CommandLine": null }]).to_string();
         let error = super::run_instance_game_probe(&script, root, Some(&fixture)).unwrap_err();
         assert!(error.contains("Não foi possível confirmar"));
         assert!(!error.contains("migração"));
@@ -3587,14 +3587,14 @@ mod tests {
             "net.fabricmc.loader.impl.launch.knot.KnotClient",
             "cpw.mods.bootstraplauncher.BootstrapLauncher",
         ] {
-            let fixture = serde_json::json!([{ "CommandLine": format!("java.exe -cp fixture {main_class}") }]).to_string();
+            let fixture = serde_json::json!([{ "ProcessId": 764, "CommandLine": format!("java.exe -cp fixture {main_class}") }]).to_string();
             assert_eq!(
                 super::run_instance_game_probe(&script, root, Some(&fixture)).unwrap_err(),
                 super::INSTANCE_GAME_UNAVAILABLE
             );
         }
         let fixture =
-            serde_json::json!([{ "CommandLine": "java.exe -jar synthetic-build-tool.jar" }])
+            serde_json::json!([{ "ProcessId": 764, "CommandLine": "java.exe -jar synthetic-build-tool.jar" }])
                 .to_string();
         assert!(super::run_instance_game_probe(&script, root, Some(&fixture)).is_ok());
     }

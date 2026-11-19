@@ -217,7 +217,11 @@ export async function saveAuroraAppearance(
 
 export async function syncAuroraPublicProfile(services: FirebaseServices, profile: AuroraPublicProfile) {
   await setDoc(doc(services.db, "publicProfiles", profile.uid), {
-    ...profile,
+    uid: profile.uid,
+    username: profile.username,
+    avatarUrl: profile.avatarUrl,
+    skinUrl: profile.skinUrl,
+    skinModel: profile.skinModel,
     updatedAt: serverTimestamp(),
   }, { merge: true });
 }
