@@ -33,7 +33,6 @@ Ativos protegidos: contas, tokens, mundos/instâncias, filesystem fora da instâ
 - IDs/nomes são normalizados, paths são confinados e ZIPs usam caminhos fechados contra traversal.
 - Download deve exigir HTTPS quando aplicável, tamanho/hash conhecido, staging e commit que preserve o destino anterior em qualquer falha. A implementação atual ainda não satisfaz integralmente esse requisito.
 - Updater futuro exige manifesto assinado, hash, canal explícito e rejeição fail-closed.
-- Nenhuma mutação irreversível de IA sem snapshot, diff e confirmação.
 
 ### Aurora Core e IPC
 
@@ -42,13 +41,10 @@ Ativos protegidos: contas, tokens, mundos/instâncias, filesystem fora da instâ
 - O nonce atual na linha de comando é observável por processos locais do mesmo usuário: não tratá-lo como segredo de alto valor; estudar canal herdado/arquivo ACL e autenticação de processo antes de ampliar capabilities.
 - IPC remoto, túnel ou convite usa protocolo e credenciais separados.
 
-### IA e conteúdo não confiável
+### Diagnóstico
 
-- Gemini sugere chamada tipada; a aplicação valida e executa.
-- Logs, nomes, manifests, páginas e tool outputs são dados, nunca instruções.
-- Allowlist de funções/paths, schema fechado, limite de tamanho/tempo/iterações e orçamento por usuário.
-- Human-in-the-loop para qualquer escrita relevante; auditoria sem conteúdo sensível.
-- Captura de tela só por ação + confirmação por ocorrência; não entra em telemetria.
+- Trate logs, nomes de arquivos e mensagens de mods como dados externos. A ajuda para IA gera texto local para o usuário revisar e copiar.
+- Proteja dados de conta e caminhos pessoais. O filtro auxilia a revisão e a pessoa escolhe o conteúdo e o destinatário.
 
 ### Privacidade e custo
 
@@ -59,10 +55,9 @@ Ativos protegidos: contas, tokens, mundos/instâncias, filesystem fora da instâ
 ## Gates de segurança
 
 - Master Panel bloqueado até teste de rules/roles no Emulator e administração server-side.
-- Tools nível 2 bloqueadas até snapshot/rollback testado.
 - Multiplayer social bloqueado até autenticação de sessão, bloqueio/denúncia e threat model.
 - Auto-updater bloqueado até assinatura end-to-end e rotação/recuperação de chave documentadas.
 
 ## Versões suportadas
 
-Durante a alpha, correções chegam à `main`; builds anteriores podem ficar sem correção. Confirme tag, SHA-256 e canal. Compilação de Core/Skins não equivale a suporte runtime; consulte `docs/engineering/COMPATIBILITY_MATRIX.md`.
+Durante a beta, correções chegam à `main`; builds anteriores podem ficar sem correção. Confirme tag, SHA-256 e canal. Compilação de Core/Skins não equivale a suporte runtime; consulte `docs/engineering/COMPATIBILITY_MATRIX.md`.

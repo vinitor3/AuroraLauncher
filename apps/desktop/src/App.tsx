@@ -1,10 +1,10 @@
+import activeMods from "../../../scripts/active-mod-matrix.json";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { register } from "@tauri-apps/plugin-global-shortcut";
-import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ProjectDescription } from "./features/catalog/ProjectDescription";
+import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense } from "react";
 import { drawSkinFace } from "./lib/skinFace";
-import { SkinPreviewCanvas } from "./features/skins/SkinPreviewCanvas";
+import { SkinPreview } from "./features/skins/SkinPreview";
 import { SkinThumbnail } from "./features/skins/SkinThumbnail";
 import { StartupScreen } from "./features/auth/StartupScreen";
 import { useThemes } from "./features/themes/ThemeProvider";
@@ -37,9 +37,6 @@ import {
   type FirebaseServices,
 } from "./lib/firebase";
 import {
-  askAuroraAssistant,
-  requestDoctorAdvice,
-  requestAiToolAdvice,
   requestCurseForgeCatalog,
   uploadAuroraAppearanceImage,
   type CurseForgeUpdateFile,
@@ -50,13 +47,15 @@ import {
   groupedCatalogCategories,
   type CatalogCategoryOption,
 } from "./lib/catalogCategories";
-import { cacheLocalSkinImage, deleteLocalSkin, listLocalSkins, saveLocalSkin, updateLocalSkinSource, type LocalSkin } from "./lib/localSkins";
+import { cacheLocalSkinImage, deleteLocalSkin, isRetiredLocalSkin, listLocalSkins, saveLocalSkin, updateLocalSkinSource, type LocalSkin } from "./lib/localSkins";
+import { isRetiredSkinSource, publicCatalogSource, PUBLIC_SKIN_WORKER, skinSha256, verifyPublicCatalogSkin } from "./lib/skinCatalogSources";
 import { findMatchingLocalSkin, parseEquippedSkinSelection, type EquippedSkinSelection } from "./lib/equippedSkin";
 import { ExternalDownloadQueue, type ExternalDownloadEvent } from "./lib/externalDownloadQueue";
 import { observeDownloadProgress, type DownloadProgress } from "./lib/downloadProgress";
 import { OnlineSkinSearch } from "./features/skins/OnlineSkinSearch";
 import { ContentUpdatesView } from "./features/content-updates/ContentUpdatesView";
 import { UpdateReviewDialog } from "./features/content-updates/UpdateReviewDialog";
+import { SupportContextButton, SupportDialog } from "./features/support/SupportContextButton";
 import { DoctorView } from "./features/doctor/DoctorView";
 import { RecoveryView } from "./features/recovery/RecoveryView";
 import { DiagnosticLabView } from "./features/diagnostic-lab/DiagnosticLabView";
@@ -71,11 +70,7 @@ import { createSocialFirebaseService } from "./lib/socialFirebase";
 import { createAccountTransition, stopConnectForAccountTransition } from "./features/connect/account-transition";
 import { VoiceAnnouncementProvider, useVoiceAnnouncement, withVoiceAnnouncementLogout } from "./features/voice-announcement/VoiceAnnouncementProvider";
 import { capabilitiesFrom } from "./features/connect/types";
-import type { DoctorReport, DoctorRun } from "./features/doctor/types";
-import { publicAiError } from "../../../shared/aiErrors";
-import type { AiToolAdvice, AiToolContext } from "../../../shared/aiTools";
-import { AiToolProposalList } from "./features/ai-tools/AiToolProposalList";
-import { nativeToolError, type AiToolAdviceRequest } from "./features/ai-tools/types";
+import type { DoctorRun } from "./features/doctor/types";
 import type {
   ContentRollbackSummary,
   ContentUpdateFilter,
@@ -87,6 +82,8 @@ import type {
   ModpackUpdateSummary,
   UpdateReviewRequest,
 } from "./features/content-updates/types";
+
+const ProjectDescription = lazy(() => import("./features/catalog/ProjectDescription").then(module => ({ default: module.ProjectDescription })));
 
 type EngineStatus = { dataDirectory: string; ready: boolean };
 type Instance = {
@@ -237,8 +234,6 @@ type LaunchSummary = {
   coreInstalled: boolean;
   skinsInstalled: boolean;
 };
-type SpeechBoundary = { offsetMs: number; durationMs: number; text: string };
-type SpeechResult = { audioBase64: string; mimeType: string; boundaries: SpeechBoundary[] };
 type CoreConnection =
   | { kind: "connected"; loader: string; minecraft_version: string }
   | { kind: "disconnected" };
@@ -248,28 +243,20 @@ type AuthMode = "login" | "register";
 type SkinAddMode = "file" | "url";
 type LocalSkinView = LocalSkin & { previewUrl: string };
 type EquippedSkinView = EquippedSkinSelection & { name: string; image: Blob; previewUrl: string };
-type OverlayMessage = { role: "user" | "assistant"; text: string };
-type SpeechRecognitionLike = {
-  lang: string;
-  interimResults: boolean;
-  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
-  onerror: (() => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-};
-type SpeechWindow = Window & {
-  SpeechRecognition?: new () => SpeechRecognitionLike;
-  webkitSpeechRecognition?: new () => SpeechRecognitionLike;
-};
-const AURORA_MODS_SUPPORTED = new Set(["1.12.2", "1.16.5", "1.19.2", "1.20.1", "1.21.1"]);
+// Published build targets and loader pins govern Aurora's integrated profiles.
+const integratedTarget = (minecraft: string, loader: string) =>
+  activeMods.targets.some((target) => target.minecraft === minecraft && target.loader === loader);
 const DEFAULT_FORGE_VERSION: Record<string, string> = {
-  "1.12.2": "14.23.5.2860",
-  "1.16.5": "36.2.42",
-  "1.19.2": "43.4.16",
-  "1.20.1": "47.4.10",
-  "1.21.1": "52.0.57",
+  "26.3": "66.1.9",
+  "26.2": "65.1.5",
+  "26.1.2": "64.1.5",
+  "1.21.11": "61.2.4",
+  "1.18.2": "40.3.0",
+  ...Object.fromEntries(activeMods.targets.filter((target) => target.loader === "forge")
+    .reverse().map((target) => [target.minecraft, target.defaultInstallLoaderVersion ?? target.loaderVersion])),
 };
+const INSTALLABLE_VERSIONS = Object.keys(DEFAULT_FORGE_VERSION)
+  .sort((left, right) => right.localeCompare(left, "en", { numeric: true }));
 const UPDATE_CONTENT_TYPES: ContentType[] = ["mod", "shader", "resourcepack"];
 const EDITOR_VIEWS: EditorView[] = ["installed", "memory", "updates", "discover", "doctor", "recovery", "diagnostic-lab"];
 
@@ -484,12 +471,12 @@ function fileAsDataUrl(file: File) {
 }
 
 function requiredJavaMajor(minecraftVersion: string, versionId = "") {
-  if (minecraftVersion === "1.12.2") return 8;
-  if (minecraftVersion === "1.16.5") {
-    return versionId.startsWith("fabric-loader-") ? 17 : 8;
-  }
-  if (minecraftVersion === "1.21.1") return 21;
-  return 17;
+  const [generation, minor, patch = 0] = minecraftVersion.split(".").map(Number);
+  if (generation >= 26) return 25;
+  if (generation === 1 && (minor >= 21 || (minor === 20 && patch >= 5))) return 21;
+  if (minor >= 18) return 17;
+  if (minor === 17) return 16;
+  return minecraftVersion === "1.16.5" && versionId.startsWith("fabric-loader-") ? 17 : 8;
 }
 
 function fabricLoaderNeedsUpgrade(versionId: string, minecraftVersion: string) {
@@ -497,7 +484,9 @@ function fabricLoaderNeedsUpgrade(versionId: string, minecraftVersion: string) {
   const match = versionId.match(/^fabric-loader-(\d+)\.(\d+)\.(\d+)(?:[-+]|$)/);
   if (!match) return true;
   const current = match.slice(1, 4).map(Number);
-  const minimum = minecraftVersion.startsWith("1.21") ? [0, 16, 10] : [0, 14, 0];
+  const target = activeMods.targets.find((item) => item.minecraft === minecraftVersion && item.loader === "fabric");
+  if (!target) return false;
+  const minimum = target.loaderVersionRange.slice(2).split(".").map(Number);
   return current.some((component, index) => component !== minimum[index]
     ? component < minimum[index] && current.slice(0, index).every((value, prior) => value === minimum[prior])
     : false);
@@ -510,8 +499,8 @@ function javaVersionDescription(major: number) {
   if (major === 8) return "Minecraft e Forge legados";
   if (major === 16) return "Mods Fabric 1.16.5 antigos";
   if (major === 17) return "Minecraft 1.18–1.20.4";
-  if (major === 21) return "Minecraft 1.20.5 ou mais recente";
-  if (major === 25) return "Java LTS atual e ferramentas";
+  if (major === 21) return "Minecraft 1.20.5–1.21.11";
+  if (major === 25) return "Minecraft 26.1–26.3";
   return "Runtime alternativo para mods específicos";
 }
 
@@ -575,266 +564,6 @@ function curseForgeProjectContentType(project: CurseForgeProject | undefined, fa
   if (project?.classId === 6552) return "shader";
   if (project?.classId === 12) return "resourcepack";
   return fallback;
-}
-
-async function playAuroraSpeech(text: string) {
-  const speech = await invoke<SpeechResult>("synthesize_speech", { text });
-  if (speech.mimeType !== "audio/mpeg" || !speech.audioBase64) {
-    throw new Error("O Edge TTS retornou um áudio incompatível.");
-  }
-  let binary: string;
-  try {
-    binary = window.atob(speech.audioBase64);
-  } catch {
-    throw new Error("O áudio do Edge TTS chegou corrompido.");
-  }
-  if (binary.length < 128) {
-    throw new Error("O Edge TTS retornou um áudio vazio.");
-  }
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  const objectUrl = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
-  const audio = new Audio();
-  audio.preload = "auto";
-  audio.src = objectUrl;
-  let released = false;
-  const release = () => {
-    if (released) return;
-    released = true;
-    URL.revokeObjectURL(objectUrl);
-  };
-  audio.addEventListener("ended", release, { once: true });
-  audio.addEventListener("error", release, { once: true });
-  audio.addEventListener("pause", release, { once: true });
-  await new Promise<void>((resolve, reject) => {
-    const ready = () => {
-      cleanup();
-      resolve();
-    };
-    const failed = () => {
-      cleanup();
-      const mediaError = audio.error;
-      reject(new Error(mediaError?.message || `O WebView2 não reconheceu o áudio do Edge TTS (código ${mediaError?.code ?? 0}).`));
-    };
-    const cleanup = () => {
-      audio.removeEventListener("canplay", ready);
-      audio.removeEventListener("error", failed);
-    };
-    audio.addEventListener("canplay", ready, { once: true });
-    audio.addEventListener("error", failed, { once: true });
-    audio.load();
-  }).catch((error) => {
-    release();
-    throw error;
-  });
-  await audio.play().catch((error) => {
-    release();
-    throw new Error(`Não foi possível iniciar a voz do Aurora: ${error instanceof Error ? error.message : String(error)}`);
-  });
-  return audio;
-}
-
-function AssistantPanel({ services, username, accountId, instance, requestToolAdvice, onClose }: {
-  services: FirebaseServices;
-  username: string;
-  accountId?: string;
-  instance?: { id: string; name: string };
-  requestToolAdvice?: AiToolAdviceRequest;
-  onClose: () => void;
-}) {
-  const [draft, setDraft] = useState("");
-  const [messages, setMessages] = useState<OverlayMessage[]>([]);
-  const [notice, setNotice] = useState("Pronto para ajudar");
-  const [busy, setBusy] = useState(false);
-  const [listening, setListening] = useState(false);
-  const [muted, setMuted] = useState(false);
-  const [includeInstance, setIncludeInstance] = useState(false);
-  const [toolResult, setToolResult] = useState<{ instanceId: string; context: AiToolContext; advice: AiToolAdvice }>();
-  const requestGeneration = useRef(0);
-  const pendingRequest = useRef<AbortController | undefined>(undefined);
-  const requestInputs = useRef({ instanceId: instance?.id, accountId, requestToolAdvice });
-  requestInputs.current = { instanceId: instance?.id, accountId, requestToolAdvice };
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const messageEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    messageEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, busy]);
-  useEffect(() => () => {
-    recognitionRef.current?.stop();
-    audioRef.current?.pause();
-    requestGeneration.current += 1;
-    pendingRequest.current?.abort();
-  }, []);
-  useEffect(() => {
-    requestGeneration.current += 1;
-    pendingRequest.current?.abort(); pendingRequest.current = undefined;
-    setBusy(false); setIncludeInstance(false); setToolResult(undefined);
-    if (!instance?.id) return;
-    let disposed = false;
-    const stops: Array<() => void> = [];
-    for (const name of ["aurora-doctor-run", "aurora-ai-tool-changed", "aurora-recovery-changed"]) {
-      void listen<{ instanceId: string }>(name, (event) => {
-        if (disposed || event.payload.instanceId !== instance.id) return;
-        requestGeneration.current += 1;
-        pendingRequest.current?.abort(); pendingRequest.current = undefined;
-        setBusy(false); setToolResult(undefined);
-        setNotice("Os dados da instância mudaram. Consulte novamente para usar o estado atual.");
-      }).then((stop) => { if (disposed) stop(); else stops.push(stop); }).catch(() => undefined);
-    }
-    return () => { disposed = true; stops.forEach((stop) => stop()); };
-  }, [instance?.id, accountId, requestToolAdvice]);
-
-  async function speak(text: string) {
-    if (muted) return;
-    audioRef.current?.pause();
-    try {
-      audioRef.current = await playAuroraSpeech(text);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Não foi possível reproduzir a voz do Aurora");
-    }
-  }
-  function toggleListening() {
-    if (muted) {
-      setNotice("Ative o áudio para usar o microfone");
-      return;
-    }
-    if (listening) {
-      recognitionRef.current?.stop();
-      setListening(false);
-      setNotice("Microfone pausado");
-      return;
-    }
-    const SpeechRecognition = (window as SpeechWindow).SpeechRecognition ?? (window as SpeechWindow).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setNotice("O microfone por voz não está disponível neste computador");
-      return;
-    }
-    const recognition = new SpeechRecognition();
-    recognition.lang = "pt-BR";
-    recognition.interimResults = false;
-    recognition.onresult = (event) => {
-      setDraft(event.results[0]?.[0]?.transcript ?? "");
-      setNotice("Mensagem transcrita");
-    };
-    recognition.onerror = () => {
-      setListening(false);
-      setNotice("Não consegui compreender o áudio");
-    };
-    recognition.onend = () => setListening(false);
-    recognitionRef.current = recognition;
-    recognition.start();
-    setListening(true);
-    setNotice("Ouvindo você…");
-  }
-  function toggleMuted() {
-    const next = !muted;
-    setMuted(next);
-    if (next) {
-      recognitionRef.current?.stop();
-      audioRef.current?.pause();
-      setListening(false);
-      setNotice("Áudio mutado");
-    } else {
-      setNotice("Áudio ativado");
-    }
-  }
-  async function send(event: FormEvent) {
-    event.preventDefault();
-    if (!draft.trim() || busy || pendingRequest.current) return;
-    const question = draft.trim();
-    const controller = new AbortController();
-    const request = ++requestGeneration.current;
-    pendingRequest.current = controller;
-    const scopedInstance = includeInstance && requestToolAdvice ? instance : undefined;
-    const stillCurrent = () => requestGeneration.current === request && !controller.signal.aborted
-      && requestInputs.current.instanceId === instance?.id && requestInputs.current.accountId === accountId
-      && requestInputs.current.requestToolAdvice === requestToolAdvice;
-    setDraft("");
-    setToolResult(undefined);
-    setMessages((current) => [...current, { role: "user", text: question }]);
-    setBusy(true);
-    setNotice("Pensando…");
-    let stage: "native" | "provider" = "provider";
-    try {
-      let answer: string;
-      let historyWarning = false;
-      if (scopedInstance && requestToolAdvice) {
-        stage = "native";
-        const context = await invoke<AiToolContext>("ai_tools_context", { id: scopedInstance.id });
-        if (!stillCurrent()) return;
-        stage = "provider";
-        const advice = await requestToolAdvice(context, question, controller.signal);
-        if (!stillCurrent()) return;
-        try {
-          await invoke("ai_record_advice", { id: scopedInstance.id, contextId: context.contextId, advice: { summary: advice.summary, proposals: advice.proposals } });
-        } catch { historyWarning = true; }
-        if (!stillCurrent()) return;
-        setToolResult({ instanceId: scopedInstance.id, context, advice });
-        answer = advice.summary;
-      } else answer = await askAuroraAssistant(services, question, controller.signal);
-      if (!stillCurrent()) return;
-      if (!answer.trim()) throw new Error("Empty assistant response");
-      setMessages((current) => [...current, { role: "assistant", text: answer }]);
-      setNotice(historyWarning ? "Resposta pronta; não foi possível salvar a sugestão no histórico local." : "Resposta pronta");
-      void speak(answer);
-    } catch (error) {
-      if (stillCurrent()) setNotice(stage === "native" ? nativeToolError(error) : publicAiError(error));
-    } finally {
-      if (pendingRequest.current === controller) { pendingRequest.current = undefined; setBusy(false); }
-    }
-  }
-  function cancelRequest() {
-    requestGeneration.current += 1;
-    pendingRequest.current?.abort(); pendingRequest.current = undefined;
-    setBusy(false);
-    setNotice("Consulta cancelada. Nenhuma alteração foi aplicada.");
-  }
-  return (
-    <aside aria-label="Assistente Aurora" className="assistant-panel">
-      <header className="assistant-heading">
-        <div className="assistant-identity"><span className="assistant-avatar">✦</span><span><strong>Aurora</strong><small>{busy ? "Pensando…" : listening ? "Ouvindo…" : "Online"}</small></span></div>
-        <div className="assistant-header-actions">
-          <button aria-label={muted ? "Ativar áudio" : "Mutar áudio"} className={muted ? "assistant-icon muted" : "assistant-icon"} onClick={toggleMuted} title={muted ? "Ativar áudio" : "Mutar áudio"} type="button">{muted ? "🔇" : "🔊"}</button>
-          <button aria-label="Fechar Assistente" className="assistant-icon" onClick={onClose} type="button">×</button>
-        </div>
-      </header>
-      {instance && requestToolAdvice && <div className="assistant-instance-context">
-        <label><input type="checkbox" checked={includeInstance} disabled={busy} onChange={(event) => { setIncludeInstance(event.target.checked); setToolResult(undefined); }} />Incluir lista de mods e configurações de “{instance.name}”</label>
-        <small>Ao enviar, o Gemini recebe a lista, configurações permitidas e histórico resumido. Arquivos e logs não são enviados. Alterações sempre pedem prévia e confirmação.</small>
-      </div>}
-      <div className="assistant-messages">
-        {messages.length === 0 && (
-          <div className="assistant-welcome">
-            <span className="assistant-welcome-mark">✦</span>
-            <h2>Olá, {username}.</h2>
-            <p>Posso ajudar com Minecraft, mods, desempenho ou erros da sua instância.</p>
-            <div className="assistant-suggestions">
-              <button onClick={() => setDraft("Como melhorar o FPS da minha instância?")} type="button">Melhorar meu FPS</button>
-              <button onClick={() => setDraft("Analise um erro de inicialização para mim")} type="button">Entender um erro</button>
-            </div>
-          </div>
-        )}
-        {messages.map((message, index) => (
-          <div className={`assistant-message ${message.role}`} key={`${message.role}-${index}`}>
-            {message.role === "assistant" && <span className="message-avatar">✦</span>}
-            <p>{message.text}</p>
-          </div>
-        ))}
-        {busy && <div className="assistant-message assistant"><span className="message-avatar">✦</span><p className="typing-dots"><i /><i /><i /></p></div>}
-        {includeInstance && instance && <AiToolProposalList key={`${instance.id}:${toolResult?.context.contextId ?? "history"}`} instanceId={instance.id} context={toolResult?.instanceId === instance.id ? toolResult.context : undefined} proposals={toolResult?.instanceId === instance.id ? toolResult.advice.proposals : undefined} disabled={busy} />}
-        <div ref={messageEndRef} />
-      </div>
-      {listening && <div className="mic-live" aria-live="polite"><span className="mic-waves" aria-hidden="true">{[0, 1, 2, 3, 4, 5, 6].map((bar) => <i key={bar} />)}</span><strong>Ouvindo…</strong></div>}
-      <form className="assistant-composer" onSubmit={send}>
-        <button aria-label={listening ? "Parar microfone" : "Usar microfone"} className={listening ? "mic-button listening" : "mic-button"} disabled={muted} onClick={toggleListening} title="Microfone" type="button">●</button>
-        <textarea aria-label="Mensagem para o Assistente" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="Mensagem para o Aurora…" maxLength={2_000} rows={1} />
-        <button aria-label="Enviar mensagem" className="send-button" disabled={busy || !draft.trim()} type="submit">↑</button>
-      </form>
-      <footer className="assistant-footer"><span>{notice}</span>{busy ? <button className="text-button" onClick={cancelRequest} type="button">Cancelar consulta</button> : <span>Enter para enviar · Shift + Enter para quebrar linha</span>}</footer>
-    </aside>
-  );
 }
 
 function AuthScreen({
@@ -930,7 +659,7 @@ function AuthScreen({
               required
             />
           </label>
-          {message && <p className="form-error">{message}</p>}
+          {message && <><p className="form-error">{message}</p><SupportContextButton source="Launcher" context={mode === "login" ? "Falha ao entrar na conta Aurora." : "Falha ao criar a conta Aurora."} log={message} /></>}
           <button disabled={busy} type="submit">
             {busy
               ? "Aguarde…"
@@ -970,11 +699,16 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const themes = useThemes();
   const [themesOpen, setThemesOpen] = useState(false);
   const [manualConnectRequested, setManualConnectRequested] = useState(false);
-  const [profile, setProfileState] = useState<AuroraUserProfile>();
-  const explainDoctorReport = useCallback((report: DoctorReport, signal: AbortSignal) =>
-    requestDoctorAdvice(services, report, signal), [services, profile?.uid]);
-  const requestInstanceAdvice = useCallback<AiToolAdviceRequest>((context, question, signal, report) =>
-    requestAiToolAdvice(services, context, question, signal, report), [services, profile?.uid]);
+  const [accountProfile, setProfileState] = useState<AuroraUserProfile>();
+  const workerUrl = services.config.workerUrl || PUBLIC_SKIN_WORKER;
+  const retiredProfileSkin = isRetiredSkinSource(accountProfile?.skinUrl, workerUrl);
+  const profile = useMemo(() => {
+    if (!accountProfile) return undefined;
+    const retiredAvatar = isRetiredSkinSource(accountProfile.avatarUrl, workerUrl);
+    if (!retiredProfileSkin && !retiredAvatar) return accountProfile;
+    return { ...accountProfile, skinUrl: retiredProfileSkin ? null : accountProfile.skinUrl,
+      avatarUrl: retiredAvatar ? null : accountProfile.avatarUrl };
+  }, [accountProfile, retiredProfileSkin, workerUrl]);
   function setProfile(next: AuroraUserProfile | undefined) {
     setProfileState((current) => guardSessionProfile(current, next, services.auth.currentUser?.uid));
   }
@@ -1056,6 +790,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [availableJavaMajors, setAvailableJavaMajors] = useState(FALLBACK_JAVA_MAJORS);
   const [javaLtsMajors, setJavaLtsMajors] = useState([8, 11, 17, 21, 25]);
   const [notice, setNotice] = useState("Preparando o núcleo Aurora…");
+  const [supportNotice, setSupportNotice] = useState<{ owner: string; text: string }>();
   const [noticeHovered, setNoticeHovered] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>();
   const [coreConnection, setCoreConnection] = useState<CoreConnection>();
@@ -1065,6 +800,8 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [favoriteName, setFavoriteName] = useState("");
   const [favoriteSearch, setFavoriteSearch] = useState("");
   const [skinAddMode, setSkinAddMode] = useState<SkinAddMode>("file");
+  const [importSkinName, setImportSkinName] = useState("");
+  const [importSkinUrl, setImportSkinUrl] = useState("");
   const [localSkins, setLocalSkins] = useState<LocalSkinView[]>([]);
   const [selectedLocalSkinId, setSelectedSkinIdState] = useState("");
   const selectedSkinIdRef = useRef("");
@@ -1132,6 +869,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     signOutPending.current = true;
     socialConnectOwner.current?.invalidate();
     setSigningOut(true);
+    setSupportNotice(undefined);
     try {
       await withVoiceAnnouncementLogout(voice, async () => {
         if (isTauri()) await stopConnectForAccountTransition(invoke);
@@ -1151,7 +889,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   }
   const [catalogSource, setCatalogSource] = useState<CatalogSource>("modrinth");
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [assistantOpen, setAssistantOpen] = useState(false);
   const [instanceLog, setInstanceLog] = useState<{ id: string; log: InstanceLog }>();
   const [runningInstances, setRunningInstances] = useState<RunningInstance[]>([]);
   const [renameDraft, setRenameDraft] = useState("");
@@ -1277,7 +1014,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   async function refreshLocalSkinLibrary(ownerId: string, selectId?: string) {
     if (!isCurrentSkinOwner(ownerId)) return [];
     const generation = ++libraryLoadGeneration.current;
-    const records = await listLocalSkins(ownerId);
+    const records = await listLocalSkins(ownerId, services.config?.workerUrl);
     const views = records.map((skin) => {
       const previewUrl = skin.image ? URL.createObjectURL(skin.image) : skin.sourceUrl ?? "";
       return { ...skin, previewUrl };
@@ -1424,14 +1161,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     return () => window.clearTimeout(timer);
   }, [notice, noticeHovered, busy]);
   useEffect(() => {
-    if (!services.authScope.persistent) return;
-    register("Ctrl+Alt+/", (event) => {
-      if (event.state === "Pressed") {
-        setAssistantOpen((current) => !current);
-      }
-    }).catch(() => setNotice("Atalho Ctrl+Alt+/ indisponível neste computador."));
-  }, [services]);
-  useEffect(() => {
     const controller = startSessionStartup({
       observe: (next, error) => observeAuroraSession(services, next, error),
       currentUser: () => services.auth.currentUser,
@@ -1449,14 +1178,20 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   useEffect(() => {
     if (!profile || !services) return;
     void syncAuroraPublicProfile(services, profile).catch(() => undefined);
+  }, [services, profile]);
+  const accountId = profile?.uid;
+  useEffect(() => {
+    if (!accountId) return;
+    let active = true;
     refresh()
       .then(() => {
-        setNotice("Núcleo pronto. Crie uma instância para começar.");
+        if (active) setNotice("Núcleo pronto.");
       })
-      .catch((error: unknown) =>
-        setNotice(`Não foi possível iniciar o Aurora: ${String(error)}`),
-      );
-  }, [profile]);
+      .catch((error: unknown) => {
+        if (active) setNotice(`Não foi possível iniciar o Aurora: ${String(error)}`);
+      });
+    return () => { active = false; };
+  }, [accountId]);
   useEffect(() => {
     if (!profile?.skinUrl || profile.avatarUrl === profile.skinUrl || !services || busy || wardrobeLoading || wardrobeReadyOwner !== profile.uid) return;
     const migrationKey = `${profile.uid}:${profile.skinUrl}`;
@@ -1523,15 +1258,18 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     setFavoriteSearch("");
     setWardrobeView("explore");
     setSkinAddMode("file");
+    setImportSkinName("");
+    setImportSkinUrl("");
     if (!profile) { setWardrobeLoading(false); return; }
     const ownerId = profile.uid;
     let cancelled = false;
     setWardrobeLoading(true);
     void (async () => {
-      let stored = await listLocalSkins(ownerId);
+      let stored = await listLocalSkins(ownerId, workerUrl);
       if (cancelled || !isCurrentSkinOwner(ownerId)) return;
       const knownUrls = new Set(stored.map((skin) => skin.sourceUrl).filter(Boolean));
       for (const favorite of profile.skinFavorites) {
+        if (isRetiredSkinSource(favorite.skinUrl, workerUrl)) continue;
         if (!knownUrls.has(favorite.skinUrl)) {
           await saveLocalSkin({
             id: favorite.id,
@@ -1543,11 +1281,18 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           knownUrls.add(favorite.skinUrl);
         }
       }
-      stored = await listLocalSkins(ownerId);
+      stored = await listLocalSkins(ownerId, workerUrl);
       if (cancelled || !isCurrentSkinOwner(ownerId)) return;
       await refreshLocalSkinLibrary(ownerId);
-      const selection = parseEquippedSkinSelection(window.localStorage.getItem(`aurora.equippedSkin.${ownerId}`));
+      let selection = parseEquippedSkinSelection(window.localStorage.getItem(`aurora.equippedSkin.${ownerId}`));
       let path = window.localStorage.getItem(`aurora.localSkinPath.${ownerId}`) ?? "";
+      if (selection ? await isRetiredLocalSkin(ownerId, selection.id, workerUrl) : retiredProfileSkin) {
+        if (cancelled || !isCurrentSkinOwner(ownerId)) return;
+        window.localStorage.removeItem(`aurora.equippedSkin.${ownerId}`);
+        window.localStorage.removeItem(`aurora.localSkinPath.${ownerId}`);
+        selection = undefined;
+        path = "";
+      }
       let equipped: LocalSkin | undefined;
       let png = "";
       if (path || selection) {
@@ -1603,7 +1348,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         if (!cancelled && isCurrentSkinOwner(ownerId)) setProfileState((current) => current?.uid === ownerId ? { ...current, skinFavorites: [] } : current);
       }
       // Migrate URL-only entries in the background, with bounded concurrency.
-      const pending = (await listLocalSkins(ownerId)).filter((skin) => !skin.image && skin.sourceUrl);
+      const pending = (await listLocalSkins(ownerId, workerUrl)).filter((skin) => !skin.image && skin.sourceUrl);
       await Promise.all([0, 1].map(async () => {
         while (pending.length && !cancelled && isCurrentSkinOwner(ownerId)) {
           const skin = pending.shift()!;
@@ -3212,7 +2957,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       setBusy(false);
     }
   }
-  async function selectOnlineSkin(skin: { name: string; skinUrl: string; model: "classic" | "slim" }) {
+  async function selectOnlineSkin(skin: { name: string; skinUrl: string; model: "classic" | "slim"; contentHash: string }) {
     if (!profile || busy || wardrobeLoading) return;
     const ownerId = profile.uid;
     setBusy(true);
@@ -3220,8 +2965,10 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     try {
       const loaded = await invoke<AppearanceImage>("load_appearance_url", { url: skin.skinUrl, kind: "skin" });
       const image = await appearanceBlob(loaded.dataBase64);
+      if (await skinSha256(image) !== skin.contentHash) throw new Error("A skin mudou. Pesquise novamente para obter o PNG atual.");
       if (!isCurrentSkinOwner(ownerId)) return;
-      const local = await saveLocalSkin({ ownerId, name: skin.name, skinModel: skin.model, sourceUrl: loaded.url, image });
+      const publicCatalogUrl = publicCatalogSource(skin.skinUrl, skin.contentHash);
+      const local = await saveLocalSkin({ ownerId, name: skin.name, skinModel: skin.model, sourceUrl: loaded.url, publicCatalogUrl, image });
       if (!isCurrentSkinOwner(ownerId)) return;
       selectedSkinIdRef.current = local.id;
       setSelectedLocalSkinId(local.id);
@@ -3260,23 +3007,31 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       equippedLocally = true;
       if (!isCurrentSkinOwner(ownerId)) return;
       rememberEquippedSkin(ownerId, selected, skinModel, png, equippedLocalPath);
+      if (selected.skinModel !== skinModel) await saveLocalSkin({ ...selected, skinModel });
       await refreshLocalSkinLibrary(ownerId, selected.id);
       if (!isCurrentSkinOwner(ownerId)) return;
       let equippedSkinUrl = profile.skinUrl ?? "";
       let equippedAvatarUrl = profile.avatarUrl ?? "";
-      let onlineWarning = "";
       try {
         // Let an already dispatched legacy migration finish before the explicit
         // equip writes the new profile, so older metadata cannot win the race.
         await appearanceMigrationPending.current;
         if (!isCurrentSkinOwner(ownerId)) return;
-        const onlineSkinUrl = await uploadAppearanceImage("skin", file);
+        let onlineSkinUrl: string | undefined;
+        try {
+          onlineSkinUrl = await uploadAppearanceImage("skin", file);
+        } catch {
+          if (!isCurrentSkinOwner(ownerId)) return;
+          onlineSkinUrl = await verifyPublicCatalogSkin(selected.publicCatalogUrl, file);
+        }
         if (!isCurrentSkinOwner(ownerId)) return;
+        if (!onlineSkinUrl) throw new Error("Sincronização indisponível.");
         await updateLocalSkinSource(ownerId, selected.id, onlineSkinUrl);
         equippedSkinUrl = onlineSkinUrl;
         equippedAvatarUrl = onlineSkinUrl;
       } catch (error) {
-        onlineWarning = error instanceof Error ? error.message : String(error);
+        if (isCurrentSkinOwner(ownerId)) setNotice("Skin equipada neste computador. Clique em Aplicar skin para tentar a sincronização online novamente.");
+        return;
       }
       const equippedCapeUrl = capeUrl
         ? await invoke<string>("validate_appearance_url", { url: capeUrl, kind: "cape" })
@@ -3288,13 +3043,11 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         capeUrl: equippedCapeUrl || null,
         skinModel,
       });
-      setProfile(next);
       if (isCurrentSkinOwner(ownerId)) {
+        setProfile(next);
         await refreshLocalSkinLibrary(ownerId, selected.id);
         if (!isCurrentSkinOwner(ownerId)) return;
-        setNotice(onlineWarning
-          ? `Skin equipada localmente, mas a sincronização online falhou: ${onlineWarning}`
-          : "Skin equipada, guardada neste computador e sincronizada online.");
+        setNotice("Skin equipada, guardada neste computador e sincronizada online.");
       }
     } catch (error) {
       if (isCurrentSkinOwner(ownerId)) setNotice(equippedLocally
@@ -3326,7 +3079,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       if (kind === "skin") {
         const local = await saveLocalSkin({
           ownerId: profile.uid,
-          name: favoriteName.trim() || file.name.replace(/\.png$/i, "") || "Minha skin",
+          name: importSkinName.trim() || file.name.replace(/\.png$/i, "") || "Minha skin",
           skinModel,
           image: file,
         });
@@ -3334,7 +3087,8 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         await refreshLocalSkinLibrary(profile.uid, local.id);
         if (!isCurrentSkinOwner(profile.uid)) return;
         setWardrobeView("library");
-        setFavoriteName("");
+        setImportSkinName("");
+        setFavoriteName(local.name);
         setNotice("Skin adicionada à biblioteca local. Clique em Aplicar skin para aplicá-la.");
       } else {
         const url = await uploadAppearanceImage(kind, file);
@@ -3348,28 +3102,28 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       setBusy(false);
     }
   }
-  async function favoriteCurrentSkin() {
-    if (!profile) return;
-    if (selectedLocalSkinId) {
-      setNotice("Essa skin já está na biblioteca local.");
-      return;
-    }
+  async function importLinkedSkin() {
+    if (!profile || !importSkinUrl.trim() || busy || wardrobeLoading) return;
     setBusy(true);
     try {
-      const loaded = await invoke<AppearanceImage>("load_appearance_url", { url: skinUrl, kind: "skin" });
+      if (isRetiredSkinSource(importSkinUrl.trim(), workerUrl)) throw new Error("Esta skin foi retirada do catálogo.");
+      const loaded = await invoke<AppearanceImage>("load_appearance_url", { url: importSkinUrl.trim(), kind: "skin" });
       const image = await appearanceBlob(loaded.dataBase64);
       if (!isCurrentSkinOwner(profile.uid)) return;
       const local = await saveLocalSkin({
         ownerId: profile.uid,
-        name: favoriteName.trim() || "Minha skin",
+        name: importSkinName.trim() || "Minha skin",
         skinModel,
         sourceUrl: loaded.url,
         image,
       });
       await refreshLocalSkinLibrary(profile.uid, local.id);
       if (!isCurrentSkinOwner(profile.uid)) return;
-      setFavoriteName("");
-      setNotice("Skin guardada somente neste computador.");
+      setFavoriteName(local.name);
+      setImportSkinName("");
+      setImportSkinUrl("");
+      setWardrobeView("library");
+      setNotice("Skin adicionada à biblioteca. Clique em Aplicar skin para usá-la no jogo.");
     } catch (error) {
       if (isCurrentSkinOwner(profile.uid)) setNotice(`Não foi possível guardar a skin: ${String(error)}`);
     } finally {
@@ -3660,7 +3414,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <button className={assistantOpen ? "compact sidebar-action" : "secondary compact sidebar-action"} onClick={() => setAssistantOpen((current) => !current)} type="button">Assistente</button>
+          <SupportContextButton className="secondary compact sidebar-action" label="Ajuda com IA" />
           <button className="text-button sidebar-action" disabled={signingOut} onClick={() => void signOutWithConnectCleanup()} type="button">{signingOut ? "Encerrando conexão…" : "Sair da conta"}</button>
           <ExitLauncherButton disabled={signingOut || updatesApplying || recoveryBusy} />
         </div>
@@ -3802,23 +3556,20 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
             </select>
             <select value={minecraftVersion} onChange={(event) => {
               setMinecraftVersion(event.target.value);
+              if (event.target.value === "1.12.2") setLoaderChoice("forge");
             }} aria-label="Versão Minecraft">
-              <option value="1.12.2">1.12.2</option>
-              <option value="1.16.5">1.16.5</option>
-              <option value="1.19.2">1.19.2</option>
-              <option value="1.20.1">1.20.1</option>
-              <option value="1.21.1">1.21.1</option>
+              {INSTALLABLE_VERSIONS.map((version) => <option key={version} value={version}>{version}</option>)}
             </select>
             <select value={loaderChoice} onChange={(event) => setLoaderChoice(event.target.value as LoaderChoice)} aria-label="Tipo da instância">
-              <option value="fabric">Fabric</option>
+              <option value="fabric" disabled={minecraftVersion === "1.12.2"}>Fabric</option>
               <option value="forge">Forge</option>
             </select>
             <button disabled={busy || !targetInstance || (loaderChoice === "forge" && !DEFAULT_FORGE_VERSION[minecraftVersion])} type="submit">
               Instalar {loaderChoice === "fabric" ? "Fabric" : "Forge"}
             </button>
           </form>
-          {!AURORA_MODS_SUPPORTED.has(minecraftVersion) && (
-            <p className="muted">Aurora Core e Skins ainda não oferecem suporte a esta versão.</p>
+          {!integratedTarget(minecraftVersion, loaderChoice) && (
+            <p className="muted">Esta combinação usa os mods compatíveis do catálogo. O menu Aurora e as skins do launcher estão disponíveis nas combinações com Aurora Core e Skins.</p>
           )}
           <p className="muted version-note">Esta versão mostra apenas releases estáveis. Snapshots, betas e NeoForge serão liberados quando a engine oferecer instalação verificável.</p>
             </section>
@@ -3840,7 +3591,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
             <button disabled={busy} type="submit">Buscar</button>
           </form>
           <div className="content-filter-bar modpack-filter-bar">
-            <label>Versão<select value={modpackVersionFilter} onChange={(event) => { setModpackVersionFilter(event.target.value); if (!event.target.value) setModpackLoaderFilter(""); }}><option value="">Todas</option>{[...new Set([minecraftVersion, "1.21.1", "1.20.1", "1.19.2", "1.16.5", "1.12.2"].filter(Boolean))].map((version) => <option key={version} value={version}>{version}</option>)}</select></label>
+            <label>Versão<select value={modpackVersionFilter} onChange={(event) => { setModpackVersionFilter(event.target.value); if (!event.target.value) setModpackLoaderFilter(""); }}><option value="">Todas</option>{[...new Set([minecraftVersion, ...INSTALLABLE_VERSIONS].filter(Boolean))].map((version) => <option key={version} value={version}>{version}</option>)}</select></label>
             <label>Loader<select disabled={!modpackVersionFilter} value={modpackLoaderFilter} onChange={(event) => setModpackLoaderFilter(event.target.value as "" | LoaderChoice)}><option value="">Forge e Fabric</option><option value="fabric">Fabric</option><option value="forge">Forge</option></select></label>
             <label title={catalogCategoryErrors[modpackCategoryKey]}>Categoria<select value={modpackCategoryFilter} onChange={(event) => setModpackCategoryFilter(event.target.value)}><option value="">Todas</option>{!Object.hasOwn(catalogCategories, modpackCategoryKey) && !catalogCategoryErrors[modpackCategoryKey] && <option disabled value="__loading">Carregando categorias…</option>}{catalogCategoryErrors[modpackCategoryKey] && <option disabled value="__error">Categorias indisponíveis</option>}{modpackCategoryGroups.map(({ group, options }) => <optgroup key={group} label={group}>{options.map((category) => <option key={category.value} value={category.value}>{catalogCategoryLabel(category.name)}</option>)}</optgroup>)}</select></label>
             <label>Ordenar<select value={modpackSort} onChange={(event) => setModpackSort(event.target.value as ContentSort)}><option value="popular">Mais baixados</option><option value="relevance">Relevância</option><option value="updated">Atualizados</option></select></label>
@@ -3913,8 +3664,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                     instanceId={editingInstance}
                     javaExecutable={javaPath}
                     key={`${editingInstance}:${doctorRunId ?? "current"}`}
-                    onExplain={explainDoctorReport}
-                    onSuggest={requestInstanceAdvice}
                     onSelectRun={setDoctorRunId}
                     onRecovery={(pointId) => { setDoctorRecoveryPointId(pointId); activateEditorView("recovery"); }}
                     onDiagnosticLab={() => activateEditorView("diagnostic-lab")}
@@ -3941,7 +3690,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                     onChanged={refreshAfterRecovery}
                     onOperationChange={setRecoveryOperation}
                     onLaunch={launchMinecraft}
-                    onExplain={explainDoctorReport}
                     onRecovery={(id, pointId) => { void openEditor(id, "recovery").then(() => { if (activeInstanceRef.current.editingInstance === id) setDoctorRecoveryPointId(pointId); }); }}
                   />
                 ) : editorView === "installed" ? (
@@ -4018,7 +3766,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                       <button disabled={busy} type="submit">Pesquisar</button>
                     </form>
                     <div className="content-filter-bar">
-                      <label>Versão<select value={contentVersionFilter} onChange={(event) => { setContentVersionFilter(event.target.value); if (!event.target.value) setContentLoaderFilter(""); }}><option value="">Todas</option>{[...new Set([installedMinecraftVersion, minecraftVersion, "1.21.1", "1.20.1", "1.19.2", "1.16.5", "1.12.2"].filter(Boolean))].map((version) => <option key={version} value={version}>{version}</option>)}</select></label>
+                      <label>Versão<select value={contentVersionFilter} onChange={(event) => { setContentVersionFilter(event.target.value); if (!event.target.value) setContentLoaderFilter(""); }}><option value="">Todas</option>{[...new Set([installedMinecraftVersion, minecraftVersion, ...INSTALLABLE_VERSIONS].filter(Boolean))].map((version) => <option key={version} value={version}>{version}</option>)}</select></label>
                       {contentType === "mod" && <label>Loader<select disabled={!contentVersionFilter} value={contentLoaderFilter} onChange={(event) => setContentLoaderFilter(event.target.value as "" | LoaderChoice)}><option value="">Todos</option><option value="fabric">Fabric</option><option value="forge">Forge</option></select></label>}
                       <label title={catalogCategoryErrors[contentCategoryKey]}>Categoria<select value={contentCategoryFilter} onChange={(event) => setContentCategoryFilter(event.target.value)}><option value="">Todas</option>{!Object.hasOwn(catalogCategories, contentCategoryKey) && !catalogCategoryErrors[contentCategoryKey] && <option disabled value="__loading">Carregando categorias…</option>}{catalogCategoryErrors[contentCategoryKey] && <option disabled value="__error">Categorias indisponíveis</option>}{contentCategoryGroups.map(({ group, options }) => <optgroup key={group} label={group}>{options.map((category) => <option key={category.value} value={category.value}>{catalogCategoryLabel(category.name)}</option>)}</optgroup>)}</select></label>
                       <label>Ordenar<select value={contentSort} onChange={(event) => setContentSort(event.target.value as ContentSort)}><option value="popular">Mais baixados</option><option value="relevance">Relevância</option><option value="updated">Atualizados</option></select></label>
@@ -4069,7 +3817,9 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
               </header>
               <div className="project-detail-scroll">
                 {projectDetail.gallery[0] && <img className="project-hero" src={projectDetail.gallery[0]} alt={`Destaque de ${projectDetail.title}`} />}
-                <ProjectDescription services={services} summary={projectDetail.summary} body={projectDetail.body} bodyFormat={projectDetail.bodyFormat} loading={detailLoading} />
+                <Suspense fallback={<p role="status">Carregando descrição…</p>}>
+                  <ProjectDescription services={services} summary={projectDetail.summary} body={projectDetail.body} bodyFormat={projectDetail.bodyFormat} loading={detailLoading} />
+                </Suspense>
               </div>
               <footer className="project-detail-actions">
                 {projectDetail.websiteUrl && <a href={projectDetail.websiteUrl} rel="noreferrer" target="_blank">Abrir site oficial</a>}
@@ -4087,6 +3837,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                 <div><p className="eyebrow">CONSOLE DA INSTÂNCIA</p><h2>{instanceLog.id} · {instanceLog.log.filename}</h2></div>
                 <button className="secondary compact" onClick={() => setInstanceLog(undefined)} type="button">Fechar console</button>
               </div>
+              {instanceLog.log.lines.length > 0 && <SupportContextButton key={instanceLog.id} source="Minecraft" log={instanceLog.log.lines.join("\n")} />}
               {instanceLog.log.lines.length === 0 ? <p className="muted">Nenhuma linha de log foi gerada ainda.</p> : (
                 <pre aria-label="Últimas linhas do log" className="log-viewer">
                   {instanceLog.log.lines.map((line, index) => <code className={/\b(error|exception|failed|fatal)\b/i.test(line) ? "log-error" : /\b(warn|warning)\b/i.test(line) ? "log-warning" : /\b(joined|loaded|starting|done)\b/i.test(line) ? "log-success" : ""} key={`${index}-${line.slice(0, 24)}`}>{line}{"\n"}</code>)}
@@ -4145,12 +3896,12 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
               <div className="wardrobe-controls">
                 {wardrobeLoading && <p className="muted" role="status">Recuperando sua biblioteca e a skin equipada…</p>}
                 {wardrobeView === "explore" && (
-                  <OnlineSkinSearch disabled={busy || wardrobeLoading} workerUrl={services.config.workerUrl || "https://aurora-api.aurora-edge-proxy.workers.dev"} onSelect={(skin) => void selectOnlineSkin(skin)} />
+                  <OnlineSkinSearch disabled={busy || wardrobeLoading} workerUrl={workerUrl} onSelect={(skin) => void selectOnlineSkin(skin)} />
                 )}
                 {wardrobeView === "equipped" && <section className="equipped-skin-panel" aria-label="Skin equipada no jogo">
                   <h2>Skin equipada</h2>
                   {equippedSkin ? <>
-                    <SkinThumbnail src={equippedSkin.previewUrl} name={equippedSkin.name} className="equipped-skin-thumbnail" />
+                    <SkinThumbnail src={equippedSkin.previewUrl} model={equippedSkin.skinModel} name={equippedSkin.name} className="equipped-skin-thumbnail" />
                     <h3>{equippedSkin.name}</h3>
                     <p className="muted">Modelo {equippedSkin.skinModel === "slim" ? "Slim" : "Clássico"} · Salva neste computador</p>
                   </> : <>
@@ -4164,10 +3915,10 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                     <button aria-pressed={skinAddMode === "file"} className={skinAddMode === "file" ? "compact" : "secondary compact"} onClick={() => setSkinAddMode("file")} type="button">Arquivo PNG</button>
                     <button aria-pressed={skinAddMode === "url"} className={skinAddMode === "url" ? "compact" : "secondary compact"} onClick={() => setSkinAddMode("url")} type="button">URL da imagem</button>
                   </div>
-                  <label>Nome da skin<input value={favoriteName} onChange={(event) => setFavoriteName(event.target.value)} maxLength={32} placeholder="Minha skin" /></label>
+                  <label>Nome da skin (opcional)<input value={importSkinName} disabled={busy || wardrobeLoading} onChange={(event) => setImportSkinName(event.target.value)} maxLength={32} placeholder="Minha skin" /></label>
                   {skinAddMode === "file" ? <label className="file-input">Escolher arquivo PNG<input accept="image/png" disabled={busy || wardrobeLoading} onChange={(event) => void uploadAppearance("skin", event.target.files?.[0])} type="file" /></label> : <>
-                    <label>Link do PNG<input type="url" value={selectedLocalSkinId ? "" : skinUrl} disabled={busy || wardrobeLoading} onChange={(event) => { setSkinUrl(event.target.value); setSelectedLocalSkinId(""); }} placeholder="https://…" /></label>
-                    <button className="secondary compact" disabled={busy || wardrobeLoading || !skinUrl.trim() || Boolean(selectedLocalSkinId)} onClick={() => void favoriteCurrentSkin()} type="button">Guardar localmente</button>
+                    <label>Link do PNG<input type="url" value={importSkinUrl} disabled={busy || wardrobeLoading} onChange={(event) => setImportSkinUrl(event.target.value)} placeholder="https://…" /></label>
+                    <button className="secondary compact" disabled={busy || wardrobeLoading || !importSkinUrl.trim()} onClick={() => void importLinkedSkin()} type="button">Adicionar à biblioteca</button>
                   </>}
                 </section>}
                 {wardrobeView === "library" && <section className="wardrobe-saved" aria-label="Biblioteca de skins">
@@ -4177,7 +3928,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                     {filteredSkins.map((skin) => (
                       <div className={selectedLocalSkinId === skin.id ? "skin-card active" : "skin-card"} key={skin.id}>
                         <button className="secondary wardrobe-select" aria-pressed={selectedLocalSkinId === skin.id} disabled={busy || wardrobeLoading} onClick={() => void useFavoriteSkin(skin)} type="button">
-                          <SkinThumbnail src={skin.previewUrl} name={skin.name} /><strong>{skin.name}</strong><small>{skin.skinModel === "slim" ? "Slim" : "Clássico"}{equippedSkin?.id === skin.id ? " · Equipada" : ""}</small>
+                          <SkinThumbnail src={skin.previewUrl} name={skin.name} model={skin.skinModel} /><strong>{skin.name}</strong><small>{skin.skinModel === "slim" ? "Slim" : "Clássico"}{equippedSkin?.id === skin.id ? " · Equipada" : ""}</small>
                         </button>
                         <button className="secondary compact wardrobe-remove" aria-label={`Remover ${skin.name}`} disabled={busy || wardrobeLoading || equippedSkin?.id === skin.id} onClick={() => void removeFavoriteSkin(skin.id)} type="button">Remover</button>
                       </div>
@@ -4188,7 +3939,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
               </div>
               <div className="skin-preview-stage">
                 <h2>Prévia</h2>
-                <SkinPreviewCanvas skinModel={skinModel} skinUrl={skinUrl} />
+                <SkinPreview skinModel={skinModel} skinUrl={skinUrl} />
                 {skinUrl && <strong>{favoriteName || localSkins.find(skin => skin.id === selectedLocalSkinId)?.name || profile.username}</strong>}
                 <label className="model-row">Modelo<select value={skinModel} disabled={busy || wardrobeLoading || wardrobeView === "equipped"} onChange={(event) => setSkinModel(event.target.value as "classic" | "slim")}><option value="classic">Clássico</option><option value="slim">Slim</option></select></label>
                 <button className="compact theme-surface-action" disabled={busy || wardrobeLoading || !skinUrl.trim()} onClick={() => void saveAppearance({ preventDefault() {} } as FormEvent)} type="button">Aplicar skin</button>
@@ -4249,6 +4000,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           )}
         </aside>
       )}
+      {supportNotice?.owner === profile.uid && <SupportDialog source="Launcher" log={supportNotice.text} close={() => setSupportNotice(undefined)} />}
       {notice && (
         <aside
           className="notice-toast"
@@ -4257,12 +4009,12 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           aria-live="polite"
         >
           <span>{notice}</span>
+          {/erro|falh|inválid|não foi possível|incompatível|indisponível/i.test(notice) && <button className="secondary compact" type="button" onClick={() => setSupportNotice({ owner: profile.uid, text: notice })}>Preparar para IA</button>}
           <button aria-label="Fechar mensagem" onClick={() => setNotice("")} type="button">×</button>
         </aside>
       )}
     </main>
     </div>
-    {assistantOpen && <AssistantPanel key={profile.uid} services={services} username={profile.username} accountId={profile.uid} instance={targetInstance ? { id: targetInstance, name: instances.find((item) => item.id === targetInstance)?.displayName || targetInstance } : undefined} requestToolAdvice={requestInstanceAdvice} onClose={() => setAssistantOpen(false)} />}
     </>
   );
 }

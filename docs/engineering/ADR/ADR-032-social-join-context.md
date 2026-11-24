@@ -1,6 +1,6 @@
 # ADR-032 — Resolução autenticada do contexto para Entrar
 
-25/10/2026. Estado: **PROTÓTIPO**, implementado e testado localmente conforme [tarefa88C](../../task-aur-r4-connect-social-88c.md), que preserva também a primeira falha de cleanup e suas limitações. Complementa ADR-030/031 e R4-005/008, sem publicar serviço ou habilitar o botão gráfico por inferência.
+25/10/2026. Estado: **PROTÓTIPO**, implementado e testado localmente conforme [tarefa88C](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-aur-r4-connect-social-88c.md), que preserva também a primeira falha de cleanup e suas limitações. Complementa ADR-030/031 e R4-005/008, sem publicar serviço ou habilitar o botão gráfico por inferência.
 
 ## Problema e recorte
 

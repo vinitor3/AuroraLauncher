@@ -2,8 +2,10 @@ plugins {
     id "java"
     id "com.gradleup.shadow" version "8.3.6"
 }
+
+apply from: rootProject.file("../../../../../scripts/aurora-mod-versions.gradle")
 group = "com.aurora.core"
-version = "1.1.5"
+version = rootProject.auroraVersions.core
 repositories {
     mavenCentral()
     maven { url "https://maven.minecraftforge.net/" }
@@ -19,7 +21,7 @@ sourceSets.main.java.srcDir "../../../runtime/src/main/java"
 dependencies {
     compileOnly "net.minecraftforge:forge:1.12.2-14.23.5.2860:universal"
     implementation "com.google.code.gson:gson:2.10.1"
-    implementation "org.java-websocket:Java-WebSocket:1.5.6"
+    implementation "org.java-websocket:Java-WebSocket:1.6.0"
     implementation "org.slf4j:slf4j-api:1.7.36"
     implementation "org.slf4j:slf4j-nop:1.7.36"
 }
@@ -39,3 +41,7 @@ shadowJar {
     exclude "META-INF/versions/**", "module-info.class"
 }
 tasks.build.dependsOn tasks.shadowJar
+
+processResources {
+    from(rootProject.file("../../../licenses")) { into "META-INF/licenses/aurora-core" }
+}

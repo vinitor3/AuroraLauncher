@@ -24,4 +24,4 @@ Arquivos e manifestos locais são validados, incluindo caminhos, links, identida
 
 O incremento seguinte são pontos automáticos antes de atualizações, sujeito a política de retenção, espaço e confirmação apropriadas. Não está implementado por esta decisão. Restauração por IA, diagnóstico em cópia temporária, mundos e nuvem também permanecem fora do escopo.
 
-Contrato concreto, formato e limitações: [Recuperação de instâncias](../../instance-recovery.md). Evidências executadas e pendências: [AUR-1166](../../task-aur-1166-instance-recovery.md).
+Contrato concreto, formato e limitações: [Recuperação de instâncias](../../instance-recovery.md). Evidências executadas e pendências: [AUR-1166](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-aur-1166-instance-recovery.md).

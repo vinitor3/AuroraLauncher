@@ -13,7 +13,7 @@
   "aurora_skins.unfavorite": "Desfavoritar",
   "aurora_skins.catalog_loading": "Buscando no catálogo Aurora...",
   "aurora_skins.catalog_online": "Catálogo Aurora online e sincronizado.",
-  "aurora_skins.catalog_offline": "Catálogo Aurora pronto no modo offline.",
+  "aurora_skins.catalog_offline": "Catálogo offline. A biblioteca contém suas skins salvas.",
   "aurora_skins.catalog_empty": "Nenhuma skin encontrada para esta pesquisa.",
   "aurora_skins.catalog_error": "Não foi possível abrir o catálogo Aurora.",
   "aurora_skins.downloading": "Preparando a skin com verificação de segurança...",

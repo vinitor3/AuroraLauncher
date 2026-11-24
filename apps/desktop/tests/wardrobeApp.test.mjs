@@ -200,6 +200,11 @@ function equipSetup(migration) {
     appearanceMigrationPending: { current: migration },
     File,
     cacheSkin: async (skin) => skin,
+    saveLocalSkin: async (skin) => {
+      assert.equal(skin.id, "selected");
+      assert.equal(skin.skinModel, "slim");
+      return skin;
+    },
     validateAppearanceFile: async () => undefined,
     fileAsDataUrl: async () => "data:image/png;base64,cG5n",
     invoke: async (command) => {
@@ -210,6 +215,7 @@ function equipSetup(migration) {
     rememberEquippedSkin: (_owner, _skin, model) => actions.push(["equipped locally", model]),
     refreshLocalSkinLibrary: async () => undefined,
     uploadAppearanceImage: async () => { actions.push(["upload"]); return "https://example/new.png"; },
+    verifyPublicCatalogSkin: async () => undefined,
     updateLocalSkinSource: async () => undefined,
     saveAuroraAppearance: async (_services, _profile, appearance) => {
       actions.push(["save remote", appearance]);
@@ -251,4 +257,51 @@ test("logout while waiting for legacy migration prevents any manual upload or pr
   await pending;
   assert.deepEqual(run.actions, [["native PNG"], ["equipped locally", "slim"]]);
   assert.deepEqual(run.busy, [true, false]);
+});
+
+test("a failed upload leaves the remote appearance intact and keeps the new PNG equipped locally", async () => {
+  const run = equipSetup(Promise.resolve());
+  run.context.uploadAppearanceImage = async () => { throw new Error("offline"); };
+  await run.context.saveAppearance({ preventDefault() {} });
+  assert.ok(run.actions.some(([step]) => step === "equipped locally"));
+  assert.ok(!run.actions.some(([step]) => step === "save remote"));
+  assert.match(run.actions.at(-1)[1], /tentar a sincronização/);
+});
+
+test("a verified public skin can be equipped on the online profile during a storage outage", async () => {
+  const run = equipSetup(Promise.resolve());
+  const reference = "https://aurora-api.aurora-edge-proxy.workers.dev/v1/skins/player-texture/example";
+  run.context.localSkins[0].publicCatalogUrl = reference;
+  run.context.uploadAppearanceImage = async () => { throw new Error("storage unavailable"); };
+  run.context.verifyPublicCatalogSkin = async (source, file) => {
+    assert.equal(source, reference);
+    assert.equal(await file.text(), "PNG");
+    return source;
+  };
+  await run.context.saveAppearance({ preventDefault() {} });
+  const appearance = run.actions.find(([step]) => step === "save remote")[1];
+  assert.equal(appearance.skinUrl, reference);
+  assert.equal(appearance.avatarUrl, reference);
+  assert.equal(appearance.skinModel, "slim");
+});
+
+test("switching accounts during public skin verification stops the profile write", async () => {
+  const run = equipSetup(Promise.resolve());
+  run.context.uploadAppearanceImage = async () => { throw new Error("offline"); };
+  run.context.verifyPublicCatalogSkin = async () => {
+    run.context.services.auth.currentUser = { uid: "new-account" };
+    return "https://example/recovered.png";
+  };
+  await run.context.saveAppearance({ preventDefault() {} });
+  assert.ok(!run.actions.some(([step]) => step === "save remote"));
+});
+
+test("an account switch during the profile write cannot restore the previous user's profile", async () => {
+  const run = equipSetup(Promise.resolve());
+  run.context.saveAuroraAppearance = async () => {
+    run.context.services.auth.currentUser = { uid: "new-account" };
+    return { uid: "current" };
+  };
+  await run.context.saveAppearance({ preventDefault() {} });
+  assert.ok(!run.actions.some(([step]) => step === "profile"));
 });

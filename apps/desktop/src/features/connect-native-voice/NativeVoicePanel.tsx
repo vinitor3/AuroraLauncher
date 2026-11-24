@@ -1,3 +1,4 @@
+import { SupportContextButton } from "../support/SupportContextButton";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { nativeVoiceError, nativeVoiceSnapshotFrom, nativeVoiceUdpLabel, nativeVoiceEulaLabel, voicePhase, voiceReviewDeadline, voiceReviewDetails, type VoiceReviewDeadline, type NativeVoiceSnapshot, type VoiceProfile, voiceRuntimes, type VoiceRuntime } from "./types";
@@ -166,5 +167,6 @@ export function NativeVoicePanel({ disabled = false, revealRequest = 0, revealRe
     {pending && <p role="status">A operação continua sob responsabilidade nativa, inclusive se esta tela for fechada.</p>}
     {error && <p role="alert">{error}</p>}
     {snapshot.errorCode && !error && <p role="alert">{nativeVoiceError(snapshot.errorCode)}</p>}
+    {(snapshot.errorCode || error) && <SupportContextButton source="Servidor" context={snapshot.errorCode ? nativeVoiceError(snapshot.errorCode) : error} />}
   </details>;
 }

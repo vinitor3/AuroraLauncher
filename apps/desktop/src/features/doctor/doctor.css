@@ -69,18 +69,6 @@
 .doctor-share-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
 .doctor-share-body > details, .doctor-share .doctor-share-message { grid-column: 1 / -1; }
 .doctor-share textarea { margin-top: .6rem; min-height: 230px; color: #bfb5cd; }
-.doctor-gemini { padding: .8rem .9rem; border: 1px solid #c7aaff2b; border-radius: 10px; background: #b391ff08; }
-.doctor-gemini-heading { display: flex; align-items: center; justify-content: space-between; gap: .8rem; }
-.doctor-gemini-heading > div:first-child { min-width: 0; max-width: 530px; }
-.doctor-gemini-heading strong { color: #e5d4ff; font-size: .82rem; }
-.doctor-gemini-heading p { margin: .3rem 0 0; color: #a99fb7; font-size: .71rem; line-height: 1.5; }
-.doctor-gemini-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: .4rem; }
-.doctor-gemini-status { margin: .7rem 0 0; color: #c5b8d8; font-size: .77rem; line-height: 1.5; }
-.doctor-gemini-result { display: grid; gap: .7rem; margin-top: .8rem; padding-top: .7rem; border-top: 1px solid #c7aaff24; }
-.doctor-gemini-result h3 { margin: 0 0 .25rem; color: #e5d4ff; font-size: .76rem; }
-.doctor-gemini-result p, .doctor-gemini-result ol { margin: 0; color: #c1b8ce; font-size: .79rem; line-height: 1.55; overflow-wrap: anywhere; }
-.doctor-gemini-result ol { display: grid; gap: .35rem; padding-left: 1.2rem; }
-.doctor-gemini-result small, .doctor-gemini-result .doctor-gemini-disclaimer { color: #a99fb7; font-size: .68rem; }
 .doctor-failure-banner { display: flex; align-items: center; flex-wrap: wrap; gap: .65rem; margin-top: .85rem; padding: .65rem .8rem; border: 1px solid #f2d18433; border-radius: 9px; background: #f2d18409; }
 .doctor-failure-banner > span { min-width: 160px; flex: 1; overflow-wrap: anywhere; color: #e5d5ae; font-size: .77rem; line-height: 1.5; }
 @keyframes doctor-spin { to { transform: rotate(360deg); } }
@@ -88,7 +76,6 @@
   .doctor-heading { flex-direction: column; }
   .doctor-context { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .doctor-share-body { grid-template-columns: minmax(0, 1fr); }
-  .doctor-gemini-heading { align-items: flex-start; flex-direction: column; }
   .doctor-issue summary { flex-wrap: wrap; }
   .doctor-issue summary > strong { flex-basis: calc(100% - 6rem); }
   .doctor-issue-kind { margin-left: auto; }

@@ -11,11 +11,14 @@ use thiserror::Error;
 
 use super::{Instance, InstanceError};
 
-const MANIFEST_JSON: &str =
-    include_str!("../../../../../apps/aurora-core/compatibility-manifest-1.1.5.json");
-const TRUSTED_KEY_ID: &str = "aurora-core-1.1.5-release";
-const TRUSTED_PUBLIC_KEY: &str =
-    include_str!("../../../../../apps/aurora-core/trusted-public-key-1.1.5.txt");
+use super::embedded_modules::{
+    core as embedded_artifact, CORE_KEY_ID as TRUSTED_KEY_ID, CORE_MANIFEST as MANIFEST_JSON,
+    CORE_PUBLIC_KEY as TRUSTED_PUBLIC_KEY,
+};
+
+pub fn has_embedded_modules(minecraft: &str, loader: &str) -> bool {
+    embedded_artifact(minecraft, loader).is_some()
+}
 
 #[derive(Debug, Error)]
 pub enum AuroraCoreError {
@@ -161,39 +164,6 @@ fn verify_artifact(
         .map_err(|_| AuroraCoreError::Signature)
 }
 
-fn embedded_artifact(minecraft: &str, loader: &str) -> Option<&'static [u8]> {
-    Some(match (minecraft, loader) {
-        ("1.12.2", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.5/1.12.2/forge/aurora-core-forge-1.12.2-1.1.5.jar"
-        ),
-        ("1.16.5", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.5/1.16.5/fabric/aurora-core-fabric-1.16.5-1.1.5.jar"
-        ),
-        ("1.16.5", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.5/1.16.5/forge/aurora-core-forge-1.16.5-1.1.5.jar"
-        ),
-        ("1.19.2", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.5/1.19.2/fabric/aurora-core-fabric-1.19.2-1.1.5.jar"
-        ),
-        ("1.19.2", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.5/1.19.2/forge/aurora-core-forge-1.19.2-1.1.5.jar"
-        ),
-        ("1.20.1", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.5/1.20.1/fabric/aurora-core-fabric-1.20.1-1.1.5.jar"
-        ),
-        ("1.20.1", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.5/1.20.1/forge/aurora-core-forge-1.20.1-1.1.5.jar"
-        ),
-        ("1.21.1", "fabric") => include_bytes!(
-            "../../../../../releases/core/1.1.5/1.21.1/fabric/aurora-core-fabric-1.21.1-1.1.5.jar"
-        ),
-        ("1.21.1", "forge") => include_bytes!(
-            "../../../../../releases/core/1.1.5/1.21.1/forge/aurora-core-forge-1.21.1-1.1.5.jar"
-        ),
-        _ => return None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,7 +178,15 @@ mod tests {
             std::env::temp_dir().join(format!("aurora-core-test-{}", std::process::id()));
         let layout = InstanceLayout::new(&test_root);
         let manifest = aurora_core_manifest().expect("manifesto válido");
-        assert_eq!(manifest.builds.len(), 9);
+        let matrix: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../scripts/active-mod-matrix.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            manifest.builds.len(),
+            matrix["targets"].as_array().unwrap().len()
+        );
+        assert!(!has_embedded_modules("other", "fabric"));
         for build in manifest.builds {
             let id = InstanceId::parse(format!(
                 "core-{}-{}",
@@ -234,12 +212,7 @@ mod tests {
                 "metadado ausente: {metadata}"
             );
 
-            let expected_major = match build.java_runtime {
-                8 => 52,
-                17 => 61,
-                21 => 65,
-                other => panic!("Java inesperado no manifesto: {other}"),
-            };
+            let expected_major = 44 + build.java_runtime;
             for index in 0..archive.len() {
                 let mut entry = archive.by_index(index).expect("entrada do JAR");
                 let entry_name = entry.name().replace('\\', "/");
@@ -261,7 +234,7 @@ mod tests {
                 assert_eq!(&header[0..4], &[0xCA, 0xFE, 0xBA, 0xBE]);
                 let major = u16::from_be_bytes([header[6], header[7]]);
                 assert!(
-                    major <= expected_major,
+                    u32::from(major) <= expected_major,
                     "{} contém bytecode {major}, acima de Java {}",
                     build.aurora_core_build,
                     build.java_runtime

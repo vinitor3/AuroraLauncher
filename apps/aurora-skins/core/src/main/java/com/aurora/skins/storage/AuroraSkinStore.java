@@ -67,7 +67,7 @@ public final class AuroraSkinStore {
 
     public synchronized SkinEntry cacheCatalogSkin(Path source, SkinEntry catalogEntry)
             throws IOException, SkinValidationException {
-        if (catalogEntry == null) throw new SkinValidationException("Item de catálogo inválido.");
+        if (catalogEntry == null || catalogEntry.isRetiredCatalogSkin()) throw new SkinValidationException("Item de catálogo inválido.");
         validate(source);
         String hash = sha256(source);
         if (!hash.equals(catalogEntry.contentHash())) {
@@ -89,7 +89,7 @@ public final class AuroraSkinStore {
     /** Reuses validated disk content without creating library metadata. */
     public synchronized SkinEntry cachedCatalogSkin(SkinEntry entry)
             throws IOException, SkinValidationException {
-        if (entry == null || !entry.contentHash().matches("[0-9a-f]{64}")) return null;
+        if (entry == null || entry.isRetiredCatalogSkin() || !entry.contentHash().matches("[0-9a-f]{64}")) return null;
         Path candidate = cache.resolve(entry.contentHash() + ".png");
         return Files.isRegularFile(candidate) ? cacheCatalogSkin(candidate, entry) : null;
     }
@@ -192,10 +192,11 @@ public final class AuroraSkinStore {
         if (!hash.matches("[0-9a-f]{64}")) return null;
         Properties properties = readProperties(metadata.resolve(hash + ".properties"));
         if (properties.isEmpty()) return null;
-        return new SkinEntry(properties.getProperty("id", hash), properties.getProperty("name", "Skin"),
+        SkinEntry entry = new SkinEntry(properties.getProperty("id", hash), properties.getProperty("name", "Skin"),
             properties.getProperty("author", ""), SkinModel.fromId(properties.getProperty("model")),
             properties.getProperty("provider", "local"), properties.getProperty("source", ""), hash,
             cache.resolve(hash + ".png"), tags(properties.getProperty("tags", "")));
+        return entry.isRetiredCatalogSkin() ? null : entry;
     }
 
     private static List<String> tags(String value) {

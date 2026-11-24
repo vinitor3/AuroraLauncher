@@ -1,0 +1,16 @@
+.skin-thumbnail {
+  background: radial-gradient(ellipse at center bottom, color-mix(in srgb, var(--theme-accent, #bd95f6) 18%, transparent), transparent 80%), var(--theme-background, #100c1c);
+}
+.skin-thumbnail canvas {
+  position: absolute;
+  inset: 5% 0;
+  margin: auto;
+  height: 90%;
+  width: auto;
+  image-rendering: pixelated;
+}
+.skin-thumbnail img { position: absolute; inset: 0; opacity: 0; pointer-events: none; }
+.skin-preview-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .35rem; }
+.skin-preview-controls button { width: auto; min-height: 1.9rem; margin: 0; padding: .2rem .45rem; font-size: .76rem; }
+.skin-viewer-shell .skin-preview-flat { position: absolute; inset: 0; height: 100%; }
+.skin-viewer-shell .skin-preview-flat canvas { height: 78%; }

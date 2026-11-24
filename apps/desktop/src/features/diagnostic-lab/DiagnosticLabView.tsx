@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { DoctorView } from "../doctor/DoctorView";
 import type { DoctorRecoveryOverview } from "../doctor/DoctorRecovery";
-import type { DoctorExplanation, DoctorRun } from "../doctor/types";
+import type { DoctorRun } from "../doctor/types";
 import { RecoveryReviewDialog } from "../recovery/RecoveryView";
 import { recoveryBytes, recoveryDate, type RecoveryPreview, type RecoveryResult } from "../recovery/types";
 import { labError, type LabDetails, type LabEnvironment, type LabProgress, type LabSetting } from "./types";
@@ -15,13 +15,12 @@ type Props = {
   instanceId: string; busy: boolean; runningIds: string[]; javaExecutable: string;
   onOperationChange: (active: boolean) => void; onChanged: () => Promise<void>;
   onLaunch: (id: string) => Promise<void>; onRecovery: (id: string, pointId?: string) => void;
-  onExplain?: DoctorExplanation;
 };
 type Operation = "list" | "create" | "details" | "mods" | "setting" | "preview" | "apply" | "delete" | "launch";
 const operationText: Record<Operation, string> = { list: "Verificando cópias e operações interrompidas…", create: "Copiando e verificando os arquivos…", details: "Lendo o estado da cópia…", mods: "Alterando os mods selecionados na cópia…", setting: "Salvando a configuração na cópia…", preview: "Comparando mudanças selecionadas com a origem…", apply: "Protegendo a origem e aplicando as mudanças…", delete: "Excluindo a cópia de teste…", launch: "Preparando a execução da cópia…" };
 const outcomes: Record<DoctorRun["outcome"], string> = { preparing: "Preparando", running: "Em execução", success: "Encerramento normal observado", failed: "Falha observada", cancelled: "Cancelada", unknown: "Resultado não confirmado" };
 
-export function DiagnosticLabView({ instanceId, busy, runningIds, javaExecutable, onOperationChange, onChanged, onLaunch, onRecovery, onExplain }: Props) {
+export function DiagnosticLabView({ instanceId, busy, runningIds, javaExecutable, onOperationChange, onChanged, onLaunch, onRecovery }: Props) {
   const voice = useVoiceAnnouncement();
   const [environments, setEnvironments] = useState<LabEnvironment[]>();
   const [selectedId, setSelectedId] = useState("");
@@ -234,7 +233,7 @@ export function DiagnosticLabView({ instanceId, busy, runningIds, javaExecutable
         {history?.context === historyContext && !currentHistory && <p>Histórico das tentativas indisponível. A última observação acima permanece limitada ao registro da execução.</p>}
       </section>
       <section className="lab-changes"><h3>Alterações testadas e disponíveis para aplicar</h3><p>Selecione somente o que deseja transferir. Mundos, logs, caches, credenciais e identidade ficam fora da transferência.</p>{currentDetails.changes.length ? currentDetails.changes.map((change) => <label className="lab-change" key={change.id}><input aria-label={`Aplicar mudança ${change.path}`} type="checkbox" checked={selectedChanges.includes(change.id)} disabled={mutationDisabled} onChange={(event) => { invalidatePreview(); setSelectedChanges((current) => event.target.checked ? [...current, change.id] : current.filter((id) => id !== change.id)); }} /><span><code>{change.path}</code><small>{change.before ?? "Não definido"} → {change.after ?? "Não definido"}</small></span></label>) : <p>Nenhuma mudança suportada em relação ao estado usado na criação.</p>}<button disabled={mutationDisabled || !selectedChanges.length} onClick={reviewChanges} type="button">Revisar alterações para aplicar à instância original</button></section>
-      {doctorOpen && <DoctorView key={`${selectedId}:${runId ?? "current"}`} instanceId={selectedId} javaExecutable={javaExecutable} runId={runId} busy={disabled} onSelectRun={setRunId} onExplain={onExplain} onRecovery={(pointId) => onRecovery(selectedId, pointId)} />}
+      {doctorOpen && <DoctorView key={`${selectedId}:${runId ?? "current"}`} instanceId={selectedId} javaExecutable={javaExecutable} runId={runId} busy={disabled} onSelectRun={setRunId} onRecovery={(pointId) => onRecovery(selectedId, pointId)} />}
     </div>}
     {preview && <RecoveryReviewDialog key={preview.id} review={{ kind: "apply", preview }} blocked={busy || selectedRunning} busy={operation === "apply"} onCancel={() => setPreview(undefined)} onConfirm={applyChanges} />}
     {deleting && <div className="recovery-review-overlay"><section role="alertdialog" aria-modal="true" aria-labelledby="lab-delete-title" className="recovery-review"><header><h2 id="lab-delete-title">Excluir cópia de teste?</h2></header><div className="recovery-review-body"><p>A cópia criada em {recoveryDate(deleting.createdAt)}, seus mundos descartáveis, alterações e logs serão excluídos. A instância original permanece intacta.</p>{runningIds.includes(deleting.id) && <p>Encerre o Minecraft desta cópia antes de excluir.</p>}</div><footer><div><button autoFocus className="secondary" disabled={!!operation} onClick={() => setDeleting(undefined)} type="button">Cancelar</button><button className="danger" disabled={disabled || runningIds.includes(deleting.id)} onClick={deleteEnvironment} type="button">Confirmar exclusão da cópia</button></div></footer></section></div>}

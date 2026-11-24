@@ -438,6 +438,19 @@ export const THEME_EXAMPLES: AuroraTheme[] = [
   { ...DEFAULT_THEME, id: "aurora-boreal", name: "Aurora boreal", colors: { background: "#080f19", panel: "#101d2b", text: "#edf8ff", muted: "#a5bbca", accent: "#83e9c4", accentText: "#09281e", border: "#2a4856" }, effects: { ...DEFAULT_THEME.effects, background: "aurora", intensity: 0.65, speed: 0.65, glass: 10 }, icons: { ...DEFAULT_THEME.icons, instances: "gamepad", discover: "sparkles", appearance: "star", java: "default" } },
   { ...DEFAULT_THEME, id: "jardim-sakura", name: "Jardim de cerejeiras", colors: { background: "#171322", panel: "#251d30", text: "#fff1f7", muted: "#c9b1c0", accent: "#f1adcd", accentText: "#361629", border: "#574050" }, typography: { font: "rounded", scale: 1 }, effects: { ...DEFAULT_THEME.effects, background: "sakura", intensity: 0.7, speed: 0.55, glass: 8 }, icons: { ...DEFAULT_THEME.icons, instances: "gamepad", discover: "leaf", appearance: "heart", java: "star" }, decorations: [{ type: "text", text: "Um novo mundo floresce a cada aventura.", asset: null, align: "center", x: 50, y: 50, width: 100, height: 64, fontSize: 20 }] },
   { ...DEFAULT_THEME, id: "lago-de-vidro", name: "Lago de vidro", colors: { background: "#071520", panel: "#102938", text: "#ecf9ff", muted: "#a2c3d2", accent: "#84d8f4", accentText: "#072b3a", border: "#315569" }, layout: { ...DEFAULT_THEME.layout, sidebar: "right", navOrder: ["instances", "appearance", "discover", "java", "connect", "social"], radius: 18 }, effects: { ...DEFAULT_THEME.effects, background: "water", intensity: 0.6, speed: 0.45, glass: 14 }, icons: { ...DEFAULT_THEME.icons, instances: "gamepad", discover: "moon", appearance: "sparkles", java: "default" } },
+  {
+    ...DEFAULT_THEME, id: "alto-contraste", name: "Alto contraste",
+    colors: { background: "#080808", panel: "#161616", text: "#ffffff", muted: "#e0e0e0", accent: "#ffe66b", accentText: "#141100", border: "#ababab" },
+    typography: { font: "system", scale: 1.1 },
+    window: { ...DEFAULT_THEME.window, titlebarColor: "#080808", titlebarText: "#ffffff", frameColor: "#ababab" },
+    effects: { ...DEFAULT_THEME.effects, transition: "none" },
+  },
+  {
+    ...DEFAULT_THEME, id: "ambar-compacto", name: "Âmbar compacto",
+    colors: { background: "#19130f", panel: "#30231b", text: "#fff4e8", muted: "#d8c1a9", accent: "#f8b578", accentText: "#321904", border: "#76604b" },
+    layout: { ...DEFAULT_THEME.layout, density: "compact", radius: 6, sidebarWidth: 194 },
+    window: { ...DEFAULT_THEME.window, titlebarColor: "#251b15", titlebarText: "#fff4e8", frameColor: "#76604b" },
+  },
 ];
 
 export function themeVariables(theme: AuroraTheme): Record<string, string> {

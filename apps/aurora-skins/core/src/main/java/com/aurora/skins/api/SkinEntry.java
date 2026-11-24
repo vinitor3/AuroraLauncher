@@ -1,11 +1,15 @@
 package com.aurora.skins.api;
 
+import java.net.URI;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
 public final class SkinEntry {
+    private static final List<String> RETIRED_CATALOG_IDS = Arrays.asList("aurora-voyager", "solar-ninja",
+        "ki-guardian", "forest-ranger", "cyber-violet", "crimson-mage");
     private final String id;
     private final String name;
     private final String author;
@@ -40,6 +44,17 @@ public final class SkinEntry {
     public String contentHash() { return contentHash; }
     public Path file() { return file; }
     public List<String> tags() { return tags; }
+
+    /** Old catalog metadata has a dedicated provider or a reserved ID and texture route. */
+    public boolean isRetiredCatalogSkin() {
+        if ("aurora-builtin".equals(providerId)) return true;
+        if (!"aurora-online".equals(providerId) || !RETIRED_CATALOG_IDS.contains(id)) return false;
+        try {
+            return ("/v1/skins/catalog/" + id + ".png").equals(URI.create(source).getPath());
+        } catch (IllegalArgumentException invalidSource) {
+            return false;
+        }
+    }
 
     private static String required(String value, String name) {
         String trimmed = value == null ? "" : value.trim();

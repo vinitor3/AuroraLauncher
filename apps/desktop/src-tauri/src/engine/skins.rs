@@ -36,24 +36,12 @@ pub(super) fn embedded_skins_artifact(
     minecraft_version: &str,
     loader: &str,
 ) -> Result<&'static [u8], SkinsError> {
-    let contents = match (minecraft_version, loader) {
-        ("1.12.2", "forge") => include_bytes!("../../../../../releases/skins/0.3.1/1.12.2/forge/aurora-skins-forge-1.12.2-0.3.1.jar").as_slice(),
-        ("1.16.5", "fabric") => include_bytes!("../../../../../releases/skins/0.3.1/1.16.5/fabric/aurora-skins-fabric-1.16.5-0.3.1.jar").as_slice(),
-        ("1.16.5", "forge") => include_bytes!("../../../../../releases/skins/0.3.1/1.16.5/forge/aurora-skins-forge-1.16.5-0.3.1.jar").as_slice(),
-        ("1.19.2", "fabric") => include_bytes!("../../../../../releases/skins/0.3.1/1.19.2/fabric/aurora-skins-fabric-1.19.2-0.3.1.jar").as_slice(),
-        ("1.19.2", "forge") => include_bytes!("../../../../../releases/skins/0.3.1/1.19.2/forge/aurora-skins-forge-1.19.2-0.3.1.jar").as_slice(),
-        ("1.20.1", "fabric") => include_bytes!("../../../../../releases/skins/0.3.1/1.20.1/fabric/aurora-skins-fabric-1.20.1-0.3.1.jar").as_slice(),
-        ("1.20.1", "forge") => include_bytes!("../../../../../releases/skins/0.3.1/1.20.1/forge/aurora-skins-forge-1.20.1-0.3.1.jar").as_slice(),
-        ("1.21.1", "fabric") => include_bytes!("../../../../../releases/skins/0.3.1/1.21.1/fabric/aurora-skins-fabric-1.21.1-0.3.1.jar").as_slice(),
-        ("1.21.1", "forge") => include_bytes!("../../../../../releases/skins/0.3.1/1.21.1/forge/aurora-skins-forge-1.21.1-0.3.1.jar").as_slice(),
-        _ => {
-            return Err(SkinsError::Unsupported {
-                minecraft_version: minecraft_version.to_owned(),
-                loader: loader.to_owned(),
-            });
+    super::embedded_modules::skins(minecraft_version, loader).ok_or_else(|| {
+        SkinsError::Unsupported {
+            minecraft_version: minecraft_version.to_owned(),
+            loader: loader.to_owned(),
         }
-    };
-    Ok(contents)
+    })
 }
 
 #[cfg(test)]
@@ -396,27 +384,20 @@ mod tests {
         let root = std::env::temp_dir().join(format!("aurora-skins-test-{}", uuid::Uuid::new_v4()));
         let layout = InstanceLayout::new(&root);
         let mut failures = Vec::new();
-        for minecraft in ["1.12.2", "1.16.5", "1.19.2", "1.20.1", "1.21.1"] {
-            for loader in ["fabric", "forge"] {
-                if minecraft == "1.12.2" && loader == "fabric" {
-                    continue;
-                }
-                let id =
-                    InstanceId::parse(format!("skins-{}-{loader}", minecraft.replace('.', "-")))
-                        .unwrap();
-                let path = install_embedded_skins(&layout.open(id), minecraft, loader).unwrap();
-                let major = match minecraft {
-                    "1.12.2" | "1.16.5" => 52,
-                    "1.21.1" => 65,
-                    _ => 61,
-                };
-                let result = payload(&fs::read(path).unwrap(), loader, major).and_then(|jars| {
-                    validate(&jars, minecraft, loader)?;
-                    validate_active_features(&jars, minecraft)
-                });
-                if let Err(error) = result {
-                    failures.push(format!("{minecraft}/{loader}: {error}"));
-                }
+        let manifest = crate::engine::aurora_core_manifest().unwrap();
+        for target in manifest.builds {
+            let minecraft = &target.minecraft;
+            let loader = &target.loader;
+            let id = InstanceId::parse(format!("skins-{}-{loader}", minecraft.replace('.', "-")))
+                .unwrap();
+            let path = install_embedded_skins(&layout.open(id), minecraft, loader).unwrap();
+            let class_major = (44 + target.java_runtime) as u16;
+            let result = payload(&fs::read(path).unwrap(), loader, class_major).and_then(|jars| {
+                validate(&jars, minecraft, loader)?;
+                validate_active_features(&jars, minecraft)
+            });
+            if let Err(error) = result {
+                failures.push(format!("{minecraft}/{loader}: {error}"));
             }
         }
         fs::remove_dir_all(root).unwrap();

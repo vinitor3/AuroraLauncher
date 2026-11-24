@@ -108,4 +108,4 @@ do perfil.
 - A página ainda pode exigir interação humana. A instalação completa pela
   página real/WebView2 e dentro do Minecraft continua **PRECISA DE TESTE**.
 
-Evidências e comandos: [tarefa de downloads externos](task-external-downloads.md).
+Evidências e comandos: [tarefa de downloads externos](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-external-downloads.md).

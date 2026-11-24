@@ -2,9 +2,11 @@ plugins {
     id "base"
 }
 
+apply from: rootProject.file("../../scripts/aurora-mod-versions.gradle")
+
 allprojects {
     group = "com.aurora.core"
-    version = "1.1.5"
+    version = rootProject.auroraVersions.core
 
     repositories {
         mavenCentral()

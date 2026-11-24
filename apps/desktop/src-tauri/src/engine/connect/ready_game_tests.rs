@@ -396,8 +396,8 @@ async fn ready_game_review_projects_the_verified_fabric1201_runtime() {
     assert_eq!(review.loader, "fabric");
     assert_eq!(review.loader_version, "0.16.14");
     assert_eq!(review.java_major, 17);
-    assert_eq!(review.core_version, "1.1.5");
-    assert_eq!(review.skins_version, "0.3.1");
+    assert_eq!(review.core_version, "1.1.7");
+    assert_eq!(review.skins_version, "0.3.3");
     assert_eq!(backend.spawns.load(Ordering::SeqCst), 0);
     pair.close().await;
 }

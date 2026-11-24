@@ -33,6 +33,9 @@ pub mod recovery;
 mod companion_migration;
 mod content_updates;
 mod core;
+mod embedded_modules {
+    include!(concat!(env!("OUT_DIR"), "/aurora_modules.rs"));
+}
 mod curseforge;
 mod doctor;
 mod download;
@@ -47,7 +50,6 @@ mod modpacks;
 mod process;
 mod runtime_requirements;
 mod skins;
-mod tts;
 mod version;
 
 pub use companion_migration::{companion_migration_required, migrate_managed_companion};
@@ -61,8 +63,8 @@ pub use content_updates::{
     RestoredContentUpdate,
 };
 pub use core::{
-    aurora_core_manifest, install_embedded_core, AuroraCoreBuild, AuroraCoreError,
-    AuroraCoreManifest,
+    aurora_core_manifest, has_embedded_modules, install_embedded_core, AuroraCoreBuild,
+    AuroraCoreError, AuroraCoreManifest,
 };
 pub use curseforge::{
     curseforge_archive_path, install_curseforge_modpack_with_progress,
@@ -100,5 +102,4 @@ pub use modpacks::{
 };
 pub use runtime_requirements::required_java_major_for_instance;
 pub use skins::{install_embedded_skins, SkinsError};
-pub use tts::{synthesize_speech, SpeechBoundary, SpeechResult, TtsError};
 pub use version::{resolve_launch_spec, VersionResolveError};

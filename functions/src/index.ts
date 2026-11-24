@@ -3,7 +3,6 @@ import { defineSecret } from "firebase-functions/params";
 import { logger } from "firebase-functions";
 
 const curseForgeApiKey = defineSecret("CURSEFORGE_API_KEY");
-const geminiApiKey = defineSecret("GEMINI_API_KEY");
 const curseForgeApiBase = "https://api.curseforge.com/v1";
 const minecraftGameId = 432;
 const modpackClassId = 4471;
@@ -81,51 +80,5 @@ export const curseforgeCatalog = onCall(
       default:
         throw new HttpsError("invalid-argument", "Ação de catálogo não permitida.");
     }
-  },
-);
-
-/**
- * Conversa curta do overlay. A chave Gemini nunca sai desta função e só perfis
- * Aurora autenticados podem chamar o endpoint.
- */
-export const auroraAssistant = onCall(
-  { cors: false, secrets: [geminiApiKey], timeoutSeconds: 30 },
-  async (request) => {
-    if (!request.auth) {
-      throw new HttpsError("unauthenticated", "Entre na sua conta Aurora para usar o Assistente.");
-    }
-    const message = boundedText(request.data?.message, "Mensagem", 2_000);
-    const response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": geminiApiKey.value(),
-        },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{
-              text: "Você é o Assistente Aurora dentro do Minecraft. Responda em português, de forma curta, segura e útil. Não peça senhas, tokens ou dados privados.",
-            }],
-          },
-          contents: [{ role: "user", parts: [{ text: message }] }],
-          generationConfig: { maxOutputTokens: 400 },
-        }),
-      },
-    );
-    if (!response.ok) {
-      logger.warn("Gemini recusou a consulta", { status: response.status });
-      throw new HttpsError("unavailable", "O Assistente Aurora não está disponível agora.");
-    }
-    const payload = await response.json() as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    };
-    const text = payload.candidates?.[0]?.content?.parts
-      ?.map((part) => part.text ?? "")
-      .join("")
-      .trim();
-    if (!text) throw new HttpsError("unavailable", "O Assistente não retornou uma resposta.");
-    return { text: text.slice(0, 8_000) };
   },
 );

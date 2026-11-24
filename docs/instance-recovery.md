@@ -1,6 +1,6 @@
 # Recuperação de instâncias
 
-Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Pontos manuais registram o estado protegido de uma instância. A restauração tem prévia, confirmação e proteção do estado anterior para desfazer. Não demonstra que um mod ou configuração causou uma falha e não promete corrigir um diagnóstico do Doctor. Evidências: [AUR-1166](task-aur-1166-instance-recovery.md).
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Pontos manuais registram o estado protegido de uma instância. A restauração tem prévia, confirmação e proteção do estado anterior para desfazer. Não demonstra que um mod ou configuração causou uma falha e não promete corrigir um diagnóstico do Doctor. Evidências: [AUR-1166](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-aur-1166-instance-recovery.md).
 
 ## Uso pelo jogador
 

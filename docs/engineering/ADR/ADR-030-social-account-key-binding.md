@@ -1,6 +1,6 @@
 # ADR-030 — Prova limitada entre conta Aurora e chave do Connect
 
-Data: 25/10/2026. Estado: **PROTÓTIPO**, implementação e ensaio integrado locais em [88A](../../task-aur-r4-connect-social-88a.md). Complementa a ADR-029 e os IDs R4-005/008. Não altera a matriz, prioridades ou gates.
+Data: 25/10/2026. Estado: **PROTÓTIPO**, implementação e ensaio integrado locais em [88A](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-aur-r4-connect-social-88a.md). Complementa a ADR-029 e os IDs R4-005/008. Não altera a matriz, prioridades ou gates.
 
 ## Problema e decisão
 

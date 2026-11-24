@@ -8,6 +8,8 @@ plugins {
     id "dev.architectury.loom" version "1.17.491" apply false
 }
 
+apply from: rootProject.file("../../../../scripts/aurora-mod-versions.gradle")
+
 def normalizeNestedJar = { File archive ->
     File normalized = new File(archive.parentFile, archive.name + ".normalized")
     byte[] buffer = new byte[8192]
@@ -37,7 +39,7 @@ def normalizeNestedJar = { File archive ->
 
 allprojects {
     apply plugin: "java-library"
-    version = rootProject.mod_version
+    version = rootProject.auroraVersions.core
     group = rootProject.maven_group
     repositories { mavenCentral() }
     base { archivesName = rootProject.archives_base_name }
@@ -60,5 +62,11 @@ allprojects {
                 .files.sort { left, right -> left.name <=> right.name }
                 .each(normalizeNestedJar)
         }
+    }
+}
+
+configure(subprojects.findAll { it.name in ["forge", "fabric"] }) {
+    tasks.withType(ProcessResources).configureEach {
+        from(rootProject.file("../../licenses")) { into "META-INF/licenses/aurora-core" }
     }
 }

@@ -1,8 +1,9 @@
 # Select the Gradle runner JVM independently from project compiler toolchains.
 function Resolve-AuroraJdk {
-    param([Parameter(Mandatory = $true)][ValidateSet(17, 21)][int]$Major)
+    param([Parameter(Mandatory = $true)][ValidateSet(17, 21, 25)][int]$Major)
 
     $candidates = @($env:JAVA_HOME, [Environment]::GetEnvironmentVariable("JAVA_HOME_${Major}_X64", 'Process'))
+    $candidates += Join-Path (Split-Path -Parent $PSScriptRoot) ".aurora/toolchain/jdk-$Major"
     $candidates += @(Get-ItemProperty -Path 'HKLM:\SOFTWARE\JavaSoft\JDK\*' -ErrorAction SilentlyContinue |
         ForEach-Object { if ($_.PSObject.Properties['JavaHome']) { $_.JavaHome } })
     $candidates += @(Get-ItemProperty -Path 'HKLM:\SOFTWARE\Eclipse Adoptium\JDK\*\hotspot\MSI' -ErrorAction SilentlyContinue |
@@ -34,7 +35,7 @@ function Resolve-AuroraJdk {
 
 function Invoke-AuroraGradleWithJava {
     param(
-        [Parameter(Mandatory = $true)][ValidateSet(17, 21)][int]$JavaVersion,
+        [Parameter(Mandatory = $true)][ValidateSet(17, 21, 25)][int]$JavaVersion,
         [Parameter(Mandatory = $true)][string]$Executable,
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )

@@ -37,5 +37,5 @@ O comando Tauri `launch_instance` já chama `LauncherEngine::prepare_launch` e d
 O próximo hardening deste módulo é limitar HTTP/IPC e tornar a substituição de arquivos realmente transacional. Hoje os downloads validam hashes e usam staging, mas a remoção do destino anterior antes do rename cria uma janela de perda se o commit falhar.
 
 A retirada do mod, o mapa de consumidores e os limites da migração estão em
-[task-remove-companion](task-remove-companion.md). O Assistente desktop, sua
+[task-remove-companion](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-remove-companion.md). O Assistente desktop, sua
 API/Gemini, voz e dados permanecem independentes do processo Minecraft.

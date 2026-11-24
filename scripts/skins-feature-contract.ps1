@@ -13,6 +13,9 @@ function Read-AuroraSkinsFeatureEntry {
 
 function Read-AuroraSkinsFeatureResources {
     param([IO.Compression.ZipArchive]$Archive, [hashtable]$Resources)
+    if ($null -ne $Archive.GetEntry("com/aurora/skins/catalog/BuiltinSkinCatalog.class")) {
+        throw "O JAR contém o antigo catálogo de skins Aurora Studio."
+    }
     foreach ($requirement in $AuroraSkinsFeatureContract.requirements) {
         $entry = $Archive.GetEntry($requirement.resource)
         if ($null -ne $entry -and -not $Resources.ContainsKey($requirement.resource)) {

@@ -5,11 +5,11 @@ dependencies {
     include(modImplementation('net.fabricmc.fabric-api:fabric-api-base:0.4.0+3cc0f0907d'))
     include(modImplementation('net.fabricmc.fabric-api:fabric-lifecycle-events-v1:1.2.2+3cc0f0907d'))
     include(modImplementation('net.fabricmc.fabric-api:fabric-networking-api-v1:1.0.5+3cc0f0907d'))
-    compileOnly files(rootProject.file("../../core/build/libs/aurora-skins-core-0.3.1.jar"))
+    compileOnly files(rootProject.file("../../core/build/libs/aurora-skins-core-${rootProject.auroraVersions.skins}.jar"))
     modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
     common(project(path: ":common", configuration: "namedElements")) { transitive false }
     shadowCommon(project(path: ":common", configuration: "transformProductionFabric")) { transitive false }
-    shadowCommon files(rootProject.file("../../core/build/libs/aurora-skins-core-0.3.1.jar"))
+    shadowCommon files(rootProject.file("../../core/build/libs/aurora-skins-core-${rootProject.auroraVersions.skins}.jar"))
 }
 processResources { inputs.properties "version": project.version; filesMatching("fabric.mod.json") { expand "version": project.version } }
 shadowJar {

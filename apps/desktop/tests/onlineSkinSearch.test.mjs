@@ -123,7 +123,7 @@ test("a page jump fetches just the requested page and a jump past the end keeps 
 test("desktop filters Studio results from the deployed mixed catalog and preserves page metadata", async (t) => {
   const common = { hash: "a".repeat(64), model: "classic", tags: [] };
   const studio = { ...common, id: "aurora-voyager", name: "Viajante", author: "Aurora Studio", source: "/v1/skins/catalog/aurora-voyager.png" };
-  const community = { ...common, id: "mcstat-1", name: "Aurora Studio fan", author: "Mika", source: "/v1/skins/catalog/mcstat/1.png" };
+  const community = { ...common, id: "mcstat-1", name: "Aurora Studio fan", author: "Aurora Studio", source: "/v1/skins/catalog/mcstat/1.png" };
   t.mock.method(globalThis, "fetch", async () => Response.json({ entries: [studio, community], page: 2, hasMore: true, sources: ["aurora", "mcstat"] }));
   const result = await new PlayerSkinsClient("https://aurora.test").getCatalog("", 2);
   assert.deepEqual(result.entries, [community]);

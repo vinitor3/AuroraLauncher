@@ -1,5 +1,7 @@
 # ADR-014 — Entitlement oficial antes de distribuição pública
 
+A [ADR-036](ADR-036-beta-diagnostics.md) atualiza o cronograma de distribuição da beta.
+
 ## Contexto
 
 Aurora usa nick/senha próprios e identidade offline determinística. Isso não comprova posse de Minecraft e pode ser percebido como launcher “cracked”. EULA/Usage Guidelines proíbem redistribuir o jogo e exigem evitar aparência oficial.

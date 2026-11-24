@@ -20,4 +20,4 @@ Limitar corpos de erro a 8 KiB e um segundo; cancelar imediatamente corpos de st
 
 O fallback pode recuperar indisponibilidade transitória, mas não garante disponibilidade ou equivalência entre Flash e Lite. Quotas por projeto e recusas de autorização exigem correção própria. O limite temporal pode encerrar uma consulta antes de usar todas as chaves. Respostas válidas continuam passando pelos mesmos validadores e ações pelo popup de confirmação existente.
 
-A alteração é somente do Worker, compatível com alpha.13. Não muda Core/Skins, arquivos de instâncias ou a matriz Minecraft. Provas pontuais de preview não homologam estabilidade em produção. Evidências e publicação: [task-gemini-failover.md](../../task-gemini-failover.md).
+A alteração é somente do Worker, compatível com alpha.13. Não muda Core/Skins, arquivos de instâncias ou a matriz Minecraft. Provas pontuais de preview não homologam estabilidade em produção. Evidências e publicação: [task-gemini-failover.md](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-gemini-failover.md).

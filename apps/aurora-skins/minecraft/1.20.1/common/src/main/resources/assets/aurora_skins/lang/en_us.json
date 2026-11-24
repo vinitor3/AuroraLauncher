@@ -13,7 +13,7 @@
   "aurora_skins.unfavorite": "Unfavorite",
   "aurora_skins.catalog_loading": "Searching the Aurora catalog...",
   "aurora_skins.catalog_online": "Aurora catalog is online and synchronized.",
-  "aurora_skins.catalog_offline": "Aurora catalog is ready in offline mode.",
+  "aurora_skins.catalog_offline": "Catalog offline. Your saved skins are in the library.",
   "aurora_skins.catalog_empty": "No skins matched this search.",
   "aurora_skins.catalog_error": "The Aurora catalog could not be opened.",
   "aurora_skins.downloading": "Preparing and verifying this skin...",

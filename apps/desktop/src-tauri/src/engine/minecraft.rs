@@ -462,11 +462,15 @@ impl MinecraftInstaller {
                     ));
                 }
                 let loaders: Value = self.get_json(&format!(
-                    "https://meta.fabricmc.net/v2/versions/loader/{minecraft_version}/stable"
+                    "https://meta.fabricmc.net/v2/versions/loader/{minecraft_version}"
                 ))?;
                 let latest = loaders
                     .as_array()
-                    .and_then(|entries| entries.first())
+                    .and_then(|entries| {
+                        entries.iter().find(|entry| {
+                            entry.pointer("/loader/stable").and_then(Value::as_bool) == Some(true)
+                        })
+                    })
                     .and_then(|entry| entry.pointer("/loader/version"))
                     .and_then(Value::as_str)
                     .ok_or_else(|| {
@@ -766,11 +770,7 @@ fn valid_loader_version(version: &str) -> bool {
 }
 
 fn fabric_loader_meets_minimum(minecraft_version: &str, version: &str) -> bool {
-    let minimum = if minecraft_version.starts_with("1.21") {
-        [0, 16, 10]
-    } else {
-        [0, 14, 0]
-    };
+    let minimum = super::embedded_modules::fabric_minimum(minecraft_version);
     loader_version_components(version).is_some_and(|components| components >= minimum)
 }
 
@@ -857,15 +857,19 @@ fn metadata_error(error: serde_json::Error) -> InstallError {
 }
 
 pub fn required_java_major(minecraft_version: &str) -> u32 {
-    if minecraft_version.starts_with("1.21") {
-        21
-    } else if minecraft_version.starts_with("1.18")
-        || minecraft_version.starts_with("1.19")
-        || minecraft_version.starts_with("1.20")
-    {
-        17
-    } else {
-        8
+    let mut parts = minecraft_version.split('.');
+    let mut next = || {
+        parts
+            .next()
+            .and_then(|part| part.parse::<u32>().ok())
+            .unwrap_or(0)
+    };
+    match (next(), next(), next()) {
+        (26.., _, _) => 25,
+        (1, 21.., _) | (1, 20, 5..) => 21,
+        (1, 18..=20, _) => 17,
+        (1, 17, _) => 16,
+        _ => 8,
     }
 }
 
@@ -970,7 +974,12 @@ mod tests {
     fn selects_java_generation_for_forge() {
         assert_eq!(required_java_major("1.12.2"), 8);
         assert_eq!(required_java_major("1.20.1"), 17);
+        assert_eq!(required_java_major("1.17.1"), 16);
+        assert_eq!(required_java_major("1.20.4"), 17);
+        assert_eq!(required_java_major("1.20.5"), 21);
         assert_eq!(required_java_major("1.21.1"), 21);
+        assert_eq!(required_java_major("1.21.11"), 21);
+        assert_eq!(required_java_major("26.3"), 25);
     }
 
     #[test]
@@ -1013,7 +1022,10 @@ mod tests {
 
     #[test]
     fn upgrades_fabric_loaders_below_the_aurora_modules_minimum() {
-        assert!(!fabric_loader_meets_minimum("1.16.5", "0.13.3"));
+        assert!(!fabric_loader_meets_minimum("1.16.5", "0.13.2"));
+        assert!(fabric_loader_meets_minimum("1.16.5", "0.13.3"));
+        assert!(!fabric_loader_meets_minimum("26.3", "0.20.0"));
+        assert!(fabric_loader_meets_minimum("26.3", "0.20.1"));
         assert!(fabric_loader_meets_minimum("1.16.5", "0.14.0"));
         assert!(!fabric_loader_meets_minimum("1.21.1", "0.16.9"));
         assert!(fabric_loader_meets_minimum("1.21.1", "0.16.10"));

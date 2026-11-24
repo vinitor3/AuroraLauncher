@@ -8,10 +8,10 @@ dependencies {
     forge "net.minecraftforge:forge:${rootProject.forge_version}"
     common(project(path: ":common", configuration: "namedElements")) { transitive false }
     shadowCommon(project(path: ":common", configuration: "transformProductionForge")) { transitive false }
-    shadowCommon files(rootProject.file("../../api/build/libs/aurora-core-api-1.1.5.jar"))
-    shadowCommon files(rootProject.file("../../runtime/build/libs/aurora-core-runtime-1.1.5.jar"))
+    shadowCommon files(rootProject.file("../../api/build/libs/aurora-core-api-${rootProject.auroraVersions.core}.jar"))
+    shadowCommon files(rootProject.file("../../runtime/build/libs/aurora-core-runtime-${rootProject.auroraVersions.core}.jar"))
     shadowCommon "com.google.code.gson:gson:2.10.1"
-    shadowCommon "org.java-websocket:Java-WebSocket:1.5.6"
+    shadowCommon "org.java-websocket:Java-WebSocket:1.6.0"
 }
 
 processResources {

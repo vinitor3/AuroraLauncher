@@ -28,12 +28,11 @@ import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 
-/** HTTPS catalog provider with bounded I/O, metadata cache, and an original offline fallback. */
+/** HTTPS catalog provider with bounded I/O and a cache of community results. */
 public final class AuroraCatalogProvider implements SkinProvider {
     public static final String DEFAULT_ENDPOINT =
         "https://aurora-api.aurora-edge-proxy.workers.dev/v1/skins/catalog";
@@ -51,9 +50,13 @@ public final class AuroraCatalogProvider implements SkinProvider {
     });
 
     private final AuroraSkinStore store;
-    private final BuiltinSkinCatalog fallback;
     private final URI endpoint;
-    private final Map<String, CacheEntry> cache = new ConcurrentHashMap<String, CacheEntry>();
+    private final Map<String, CacheEntry> cache = Collections.synchronizedMap(
+        new LinkedHashMap<String, CacheEntry>(128, .75F, true) {
+            @Override protected boolean removeEldestEntry(Map.Entry<String, CacheEntry> eldest) {
+                return size() > 128;
+            }
+        });
     private final Map<String, CompletableFuture<SkinEntry>> previews = new LinkedHashMap<String, CompletableFuture<SkinEntry>>();
     private final Map<String, CompletableFuture<SkinEntry>> downloads = new LinkedHashMap<String, CompletableFuture<SkinEntry>>();
     private final Map<String, PreviewCacheEntry> previewCache = new LinkedHashMap<String, PreviewCacheEntry>(96, .75F, true);
@@ -67,7 +70,6 @@ public final class AuroraCatalogProvider implements SkinProvider {
 
     AuroraCatalogProvider(AuroraSkinStore store, String endpoint) {
         this.store = store;
-        this.fallback = new BuiltinSkinCatalog(store);
         this.endpoint = validateEndpoint(endpoint);
     }
 
@@ -140,13 +142,11 @@ public final class AuroraCatalogProvider implements SkinProvider {
             CacheEntry cached = cache.get(key);
             long now = System.currentTimeMillis();
             if (cached != null && now - cached.createdAt < CACHE_MILLIS) {
-                online = true;
                 return cached.page;
             }
             if (now >= unavailableUntil) {
                 try {
                     SkinPage result = fetchPage(safeQuery, current, size);
-                    if (cache.size() >= 128) cache.clear();
                     cache.put(key, new CacheEntry(result, now));
                     online = true;
                     return result;
@@ -157,11 +157,7 @@ public final class AuroraCatalogProvider implements SkinProvider {
                         + (error instanceof HttpStatusException ? error.getMessage() : error.getClass().getSimpleName()));
                 }
             }
-            try {
-                return fallback.search(safeQuery, current, size);
-            } catch (IOException error) {
-                throw new CompletionException(new IOException("Não foi possível abrir o catálogo Aurora.", error));
-            }
+            return cached == null ? new SkinPage(Collections.<SkinEntry>emptyList(), current, false) : cached.page;
         }, EXECUTOR);
     }
 
@@ -173,7 +169,7 @@ public final class AuroraCatalogProvider implements SkinProvider {
     }
 
     public CompletableFuture<SkinEntry> preview(final SkinEntry entry) {
-        if (entry == null) return failedPreview();
+        if (entry == null || entry.isRetiredCatalogSkin()) return failedPreview();
         final String key = entry.providerId() + "\n" + entry.id() + "\n" + entry.source() + "\n"
             + entry.contentHash() + "\n" + entry.model().id() + "\n" + entry.file();
         synchronized (previews) {
@@ -320,8 +316,10 @@ public final class AuroraCatalogProvider implements SkinProvider {
         int page = parseInteger(pagination[1], 0, 100000);
         boolean hasMore = "1".equals(pagination[3]);
         List<SkinEntry> entries = new ArrayList<SkinEntry>();
+        int count = 0;
         for (int index = 2; index < lines.length; index++) {
             if (lines[index].trim().isEmpty()) continue;
+            if (++count > 24) throw new IOException("Catálogo excedeu o limite de itens.");
             String[] fields = lines[index].split("\t", -1);
             if (fields.length != 7 || !fields[0].matches("[a-z0-9_-]{1,64}")
                     || !fields[4].matches("[0-9a-f]{64}")) throw new IOException("Item de catálogo inválido.");
@@ -333,9 +331,9 @@ public final class AuroraCatalogProvider implements SkinProvider {
             String tagsValue = decode(fields[6], 512);
             List<String> tags = tagsValue.isEmpty() ? Collections.<String>emptyList()
                 : Arrays.asList(tagsValue.split(","));
-            entries.add(new SkinEntry(fields[0], decode(fields[1], 96), decode(fields[2], 96),
-                SkinModel.fromId(fields[3]), "aurora-online", sourceUri.toString(), fields[4], null, tags));
-            if (entries.size() > 24) throw new IOException("Catálogo excedeu o limite de itens.");
+            SkinEntry entry = new SkinEntry(fields[0], decode(fields[1], 96), decode(fields[2], 96),
+                SkinModel.fromId(fields[3]), "aurora-online", sourceUri.toString(), fields[4], null, tags);
+            if (!entry.isRetiredCatalogSkin()) entries.add(entry);
         }
         return new SkinPage(entries, page, hasMore);
     }
@@ -350,7 +348,7 @@ public final class AuroraCatalogProvider implements SkinProvider {
         connection.setRequestMethod("GET");
         // Some CDN edges reject the default Java/<version> agent with HTTP 403.
         // Identify this client honestly, for catalog, profile and PNG requests alike.
-        connection.setRequestProperty("User-Agent", "AuroraSkins/0.3.1");
+        connection.setRequestProperty("User-Agent", "AuroraSkins/0.3.3");
         return connection;
     }
 

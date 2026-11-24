@@ -3,8 +3,8 @@
 Revisão documental: 29/09/2026, alpha.14 (`6a107b8`). IDs e achados históricos
 são preservados. Os estados abaixo distinguem evidências registradas nas entregas
 de verificações atuais; esta revisão não consultou produção nem repetiu testes
-runtime. [Recuperação](../instance-recovery.md), [Tools](../aurora-ai-tools.md),
-[cópias de diagnóstico](../diagnostic-lab.md) e [validação alpha.14](../task-aur-1167-doctor-lab.md).
+runtime. [Recuperação](../instance-recovery.md), [Tools](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/aurora-ai-tools.md),
+[cópias de diagnóstico](../diagnostic-lab.md) e [validação alpha.14](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-aur-1167-doctor-lab.md).
 
 | ID | Prioridade | Risco | Evidência / estado | Mitigação e gate |
 | --- | --- | --- | --- | --- |

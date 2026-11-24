@@ -36,10 +36,5 @@
 .ai-tool-diff span { color: #a497b5; font-size: .68rem; }
 .ai-tool-diff p { margin: .35rem 0 0; font-size: .77rem; overflow-wrap: anywhere; white-space: pre-wrap; }
 .ai-tool-warnings { display: grid; gap: .45rem; margin: .8rem 0 0; padding-left: 1.2rem; color: #e4cd94; font-size: .76rem; line-height: 1.5; }
-.assistant-instance-context { margin: .5rem .8rem 0; padding: .65rem; border: 1px solid #c7aaff24; border-radius: 9px; }
-.assistant-instance-context label { display: flex; gap: .5rem; align-items: flex-start; color: #d0bcdf; font-size: .73rem; line-height: 1.5; }
-.assistant-instance-context input { width: auto; min-height: auto; margin-top: .2rem; }
-.assistant-instance-context small { display: block; margin-top: .35rem; color: #a99fb7; font-size: .68rem; line-height: 1.5; }
-.assistant-messages > .ai-tools { flex: 0 0 auto; }
 .ai-tool-history > summary:focus-visible { outline: 2px solid #c8a6ff; outline-offset: 3px; border-radius: 4px; }
 @media (max-width: 540px) { .ai-tool-diff article { grid-template-columns: 1fr; } .ai-tool-review footer { flex-wrap: wrap; } }

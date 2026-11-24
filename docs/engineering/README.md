@@ -1,33 +1,13 @@
-# Engenharia Aurora
+# Engenharia
 
-Documentação canônica de **[Aurora Connect V2](AURORA_CONNECT_REVIEW.md)**, reconciliada em 29/09/2026 com launcher alpha.14 e os dois pacotes anteriores. [Rastreabilidade e IDs](AURORA_CONNECT_TRACEABILITY.md); [execução local, estado e testes](../task-aur-r4-connect.md). Inclui roadmap, contrato TCP/UDP/voz, decisão de laboratório, backlog/matriz, zero-spend e prompt único. Produto/voz/redes não são homologados por laboratório; recovery/Doctor/Tools/cópias permanecem. Estados anteriores abaixo são registros datados, não validação repetida.
+Use o [guia rápido](../README.md) para localizar uma área do launcher. Para desenvolver ou verificar um recurso, consulte os contratos abaixo.
 
-Escopo vigente em 21/09/2026: **O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados.** Consulte o [mapa de consumidores e validação](../task-remove-companion.md), a [ADR-018](ADR/ADR-018-remove-companion-keep-desktop-assistant.md) e o [IPC do Core](../core-ipc.md). Auditorias de agosto/setembro conservam resultados históricos; não são autorização para restaurar o mod.
+| Área | Referência |
+| --- | --- |
+| Versões e testes dentro do jogo | [Compatibilidade](COMPATIBILITY_MATRIX.md) e [matriz embarcada](../../scripts/active-mod-matrix.json) |
+| Serviços, armazenamento e IPC | [Decisões de arquitetura](ADR/README.md) e [protocolo local](../core-ipc.md) |
+| Multiplayer | [Especificação Connect](AURORA_CONNECT_SPEC.md) e [amigos e comunidade](../aurora-connect-social-experience.md) |
+| UI, temas e recuperação | [Integração visual](../theme-integration.md) e [recuperação](../instance-recovery.md) |
+| Testes e publicação | [Estratégia de testes](TEST_STRATEGY.md) e [release](../release-workflow.md) |
 
-## Evidência histórica de segurança da revisão inicial
-
-O registro da revisão inicial documentou regras Firestore locais bloqueando autoatribuição de `ADMIN` e payloads iniciais incoerentes, com 7/7 testes da suíte [`../../firebase/tests/firestore.rules.test.mjs`](../../firebase/tests/firestore.rules.test.mjs) no Emulator. A preparação documental Connect V2 não repetiu esses testes nem consultou o estado de produção; os novos testes do laboratório de transporte também não revalidam Firestore. O gate continua exigindo evidência de auditoria dos perfis existentes e implantação das regras; não presumir conclusão por esse resultado histórico.
-
-## Ordem de leitura
-
-1. [Resumo executivo](EXECUTIVE_SUMMARY.md)
-2. [Pesquisa externa](RESEARCH_REPORT.md)
-3. [Revisão de arquitetura](ARCHITECTURE_REVIEW.md)
-4. [Roadmap mestre](MASTER_ROADMAP.md)
-5. [Grafo de dependências](DEPENDENCY_GRAPH.md)
-6. [Registro de riscos](RISK_REGISTER.md)
-7. [Estratégia de testes](TEST_STRATEGY.md)
-8. [Estratégia de releases](RELEASE_STRATEGY.md)
-9. [Matriz de compatibilidade](COMPATIBILITY_MATRIX.md)
-10. [Dossiê histórico do Aurora Companion](COMPANION_AUDIT.md)
-11. [Plano paralelo Codex](CODEX_PARALLEL_PLAN.md)
-12. [Plano de integração](CODEX_INTEGRATION_PLAN.md)
-13. [Decisões do responsável](DECISIONS_REQUIRED.md)
-14. [ADRs](ADR/README.md)
-15. [Tarefas Codex](CODEX_TASKS/README.md)
-16. [Prompts Codex](CODEX_PROMPTS/README.md)
-
-O registro específico da Fase 1.3 está em
-[`../task-content-updates.md`](../task-content-updates.md).
-
-O contexto permanente de agentes está em [`../../AGENTS.md`](../../AGENTS.md). O threat model normativo permanece no [`../../SECURITY.md`](../../SECURITY.md).
+Os [relatórios até a alpha.15](https://github.com/vinitor3/AuroraLauncher/tree/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs) podem ser consultados pelo commit da última entrega antes da beta.

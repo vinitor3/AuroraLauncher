@@ -1,3 +1,4 @@
+import { png as testSkinPng } from "../tests/skinPng.ts";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { McApiClient, rankPlayers } from "./skins/McApiClient.ts";
@@ -140,7 +141,7 @@ test("rotas QA: cliente desktop recebe hash e asset same-origin; TSV preserva o 
     assert.equal(new Headers(init?.headers).get("X-API-Key"), null);
     return new Response(png, { headers: { "Content-Type": "image/png" } });
   }, { MC_API_KEY: "qa-mcapi-key" });
-  png = new Uint8Array(await (await h.request("/v1/skins/catalog/solar-ninja.png")).arrayBuffer());
+  png = testSkinPng();
   const result = await h.client.getPlayerProfile(uuid);
   const asset = await h.request(result.skinUrl);
   assert.equal(asset.status, 200);
@@ -171,7 +172,7 @@ test("rotas QA: jogador fora dos índices usa Mojang e entrega PNG verificado ao
     assert.equal(url.href, texture);
     return new Response(png, { headers: { "Content-Type": "image/png" } });
   }, { MCSTAT_API_KEY: "qa-mcstat-key" });
-  png = new Uint8Array(await (await h.request("/v1/skins/catalog/solar-ninja.png")).arrayBuffer());
+  png = testSkinPng();
   const result = await h.client.getPlayerProfile("Notch");
   assert.equal(result.source, "mojang");
   assert.equal(result.name, "Notch");
@@ -209,7 +210,7 @@ test("QA-PLAYER-QUOTA: proxy de texturas deve respeitar SKIN_API_REQUESTS_PER_MI
     assert.equal(new Headers(init?.headers).get("X-API-Key"), "qa-mcapi-key");
     return new Response(png, { headers: { "Content-Type": "image/png" } });
   }, { MC_API_KEY: "qa-mcapi-key", SKIN_API_REQUESTS_PER_MINUTE: "2" });
-  png = new Uint8Array(await (await h.request("/v1/skins/catalog/solar-ninja.png")).arrayBuffer());
+  png = testSkinPng();
   const statuses: number[] = [];
   for (let index = 0; index < 3; index++) {
     const source = Buffer.from(`https://mc-api.bisai.dev/v1/skin/Quota${index}`).toString("base64url");
@@ -228,7 +229,7 @@ test("QA-PLAYER-ASSET: textura primária indisponível deve usar renders.skin_pn
     assert.equal(url.href, alternate);
     return new Response(png, { headers: { "Content-Type": "image/png" } });
   });
-  png = new Uint8Array(await (await h.request("/v1/skins/catalog/solar-ninja.png")).arrayBuffer());
+  png = testSkinPng();
   const response = await h.request(`/v1/skins/profile/${uuid}`);
   assert.equal(response.status, 200, "An unavailable primary URL must not prevent trying the supplied alternate PNG");
   const result = await response.json() as { skinUrl: string };
@@ -312,7 +313,7 @@ test("rotas QA: deadline global cancela hidratação antes de dez segundos", asy
     assert.equal(url.hostname, "mcstat.org");
     return new Response(png, { headers: { "Content-Type": "image/png" } });
   }, { mcstat_API_KEY: "qa-mcstat-key" });
-  png = new Uint8Array(await (await h.request("/v1/skins/catalog/solar-ninja.png")).arrayBuffer());
+  png = testSkinPng();
   const started = performance.now();
   const response = await h.request("/v1/skins/catalog?query=qa-budget&page=1&pageSize=13");
   const elapsed = performance.now() - started;
@@ -336,7 +337,7 @@ test("rotas QA: JSON e PNG compartilham cota, cache e recuperação com chave ou
       assert.equal(url.href, source, "A third distinct download must be blocked before fetch");
       return new Response(png, { headers: { "Content-Type": "image/png" } });
     }, { MC_API_KEY: key, SKIN_API_REQUESTS_PER_MINUTE: "2" });
-    png = new Uint8Array(await (await h.request("/v1/skins/catalog/solar-ninja.png")).arrayBuffer());
+    png = testSkinPng();
     const response = await h.request(`/v1/skins/profile/${uuid}`);
     assert.equal(response.status, 200);
     const result = await response.json() as { skinUrl: string };

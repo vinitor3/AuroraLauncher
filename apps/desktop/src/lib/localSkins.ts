@@ -1,9 +1,12 @@
+import { isRetiredSkinSource } from "./skinCatalogSources.ts";
+
 export type LocalSkin = {
   id: string;
   ownerId: string;
   name: string;
   skinModel: "classic" | "slim";
   sourceUrl?: string;
+  publicCatalogUrl?: string;
   image?: Blob;
   createdAt: number;
 };
@@ -97,10 +100,19 @@ function readLocalSkin(record: StoredLocalSkin): LocalSkin {
   return { ...skin, ...(persistentUrl ? { sourceUrl: persistentUrl } : {}) };
 }
 
-export async function listLocalSkins(ownerId: string) {
+export async function listLocalSkins(ownerId: string, workerUrl?: string) {
   return transactionRequest<LocalSkin[]>("readonly", (store, result, fail) => {
     observeRequest(store.index("ownerId").getAll(ownerId), (records: StoredLocalSkin[]) => {
-      result(records.map(readLocalSkin).sort((left, right) => right.createdAt - left.createdAt));
+      result(records.filter((skin) => !isRetiredSkinSource(skin.sourceUrl, workerUrl))
+        .map(readLocalSkin).sort((left, right) => right.createdAt - left.createdAt));
+    }, fail);
+  });
+}
+
+export async function isRetiredLocalSkin(ownerId: string, id: string, workerUrl?: string) {
+  return transactionRequest<boolean>("readonly", (store, result, fail) => {
+    observeRequest(store.get(`${ownerId}:${id}`), (skin: StoredLocalSkin | undefined) => {
+      result(isRetiredSkinSource(skin?.sourceUrl, workerUrl));
     }, fail);
   });
 }
@@ -114,6 +126,7 @@ export async function saveLocalSkin(input: Omit<LocalSkin, "id" | "createdAt"> &
     observeRequest(store.get(key), (stored: StoredLocalSkin | undefined) => {
       const existing = stored ? readLocalSkin(stored) : undefined;
       const sourceUrl = persistentSourceUrl(input.sourceUrl) ?? existing?.sourceUrl;
+      const publicCatalogUrl = input.publicCatalogUrl ?? existing?.publicCatalogUrl;
       const image = input.image?.size ? input.image : existing?.image;
       const skin: LocalSkin = {
         id,
@@ -122,6 +135,7 @@ export async function saveLocalSkin(input: Omit<LocalSkin, "id" | "createdAt"> &
         skinModel: input.skinModel,
         createdAt: existing?.createdAt ?? Date.now(),
         ...(sourceUrl ? { sourceUrl } : {}),
+        ...(publicCatalogUrl ? { publicCatalogUrl } : {}),
         ...(image ? { image } : {}),
       };
       observeRequest(store.put({ ...skin, key }), () => result(skin), fail);

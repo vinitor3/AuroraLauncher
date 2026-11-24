@@ -714,7 +714,7 @@ for (const schemaVersion of [4, 5]) test(`schema ${schemaVersion} signed runtime
 
 test("schema four runtime table matches the active matrix and the independent Rust canonical vector", async () => {
   const matrix = JSON.parse(await readFile(new URL("../../../scripts/active-mod-matrix.json", import.meta.url), "utf8"));
-  assert.deepEqual(Object.keys(SOCIAL_RUNTIME_PROFILES).sort(), matrix.targets.map((target: { loader: string; loaderVersion: string; minecraft: string }) =>
+  assert.deepEqual(Object.keys(SOCIAL_RUNTIME_PROFILES).sort(), matrix.targets.filter((target: { connectReady?: boolean }) => target.connectReady !== false).map((target: { loader: string; loaderVersion: string; minecraft: string }) =>
     target.loader === "fabric" ? `fabric-loader-${target.loaderVersion}-${target.minecraft}` : `${target.minecraft}-forge-${target.loaderVersion}`).sort());
   const body = { schemaVersion: 4, purpose: "hostSocialSession", issuerInstance: "11".repeat(32), policyId: "22".repeat(32), accountId: "host",
     operationId: "11111111-2222-4333-8444-555555555555", generation: 7, publicKey: "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",

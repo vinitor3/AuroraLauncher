@@ -1,185 +1,30 @@
-<p align="center">
-  <img src="docs/assets/aurora-banner.svg" alt="Aurora Smart Launcher" width="100%" />
-</p>
+<p align="center"><img src="docs/assets/aurora-banner.svg" alt="Aurora Smart Launcher" width="100%"></p>
 
-<p align="center">
-  <strong>Seu universo Minecraft, organizado em um launcher rápido, inteligente e feito para ser seu.</strong>
-</p>
+# Aurora Smart Launcher
 
-<p align="center">
-  <img alt="Status" src="https://img.shields.io/badge/status-alpha-9b7cff?style=for-the-badge" />
-  <img alt="Plataforma" src="https://img.shields.io/badge/plataforma-Windows-6c63ff?style=for-the-badge&logo=windows11&logoColor=white" />
-  <img alt="Tauri" src="https://img.shields.io/badge/Tauri-v2-8b5cf6?style=for-the-badge&logo=tauri&logoColor=white" />
-  <img alt="React" src="https://img.shields.io/badge/React-19-c084fc?style=for-the-badge&logo=react&logoColor=white" />
-  <img alt="Rust" src="https://img.shields.io/badge/Rust-core-a855f7?style=for-the-badge&logo=rust&logoColor=white" />
-</p>
+Launcher independente para Minecraft Java Edition no Windows x64. Organize modpacks em instâncias separadas, escolha skins e compartilhe mundos abertos para LAN.
 
-<p align="center">
-  <a href="https://github.com/vinitor3/AuroraLauncher/releases/download/v0.1.0-alpha/Aurora-Smart-Launcher_0.1.0_x64-setup.exe"><img alt="Baixar Aurora" src="https://img.shields.io/badge/BAIXAR-v0.1.0_ALPHA-e38cff?style=for-the-badge&logo=github&logoColor=white" /></a>
-</p>
+**[Baixar o instalador da beta para Windows](https://github.com/vinitor3/AuroraLauncher/releases/download/v0.2.0-beta.1/Aurora-Smart-Launcher_0.2.0-beta.1_x64-setup.exe)** · [Notas, manifesto e SHA-256](https://github.com/vinitor3/AuroraLauncher/releases/tag/v0.2.0-beta.1)
 
-> [!IMPORTANT]
-> O Aurora está em **alpha experimental de desenvolvimento privado**. O launcher já instala e executa instâncias, mas ainda não possui autenticação Microsoft/Minecraft de produção, updater assinado nem homologação completa da matriz Core/Skins. Não use a build atual como substituta de um launcher oficial nem distribua uma versão pública sem entitlement válido. Consulte o [status técnico](docs/phase-0-status.md) e a [auditoria de engenharia](docs/engineering/README.md).
+A beta é experimental. A conta Aurora identifica seu perfil e suas amizades. A autenticação Microsoft e a verificação de posse do Minecraft estão previstas para o final do projeto. O instalador distribui o launcher e os módulos Aurora. Minecraft é adquirido separadamente.
 
-## ✦ O que é o Aurora?
+## Primeiros passos
 
-O **Aurora Smart Launcher** é um launcher independente para Minecraft Java Edition. Ele reúne instâncias isoladas, descoberta de modpacks, gerenciamento de conteúdo, skins, runtimes Java e um assistente integrado em uma experiência desktop única.
+1. Execute o instalador e entre na sua conta Aurora.
+2. Crie uma instância na biblioteca ou escolha um modpack em **Descobrir**.
+3. Abra **Editar** para ajustar o conteúdo ou a memória da instância. O padrão para todas fica em **Java & engine**.
 
-O projeto combina uma interface em **React**, um aplicativo **Tauri v2**, um núcleo de lançamento em **Rust**, serviços protegidos na edge, o **Aurora Core** modular dentro do Minecraft e o **Aurora Skins** para aparência. **O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados.**
+Consulte o [guia rápido](docs/README.md) para skins, temas, mods, amigos e diagnóstico. A [página da beta](docs/beta.md) resume o que mudou e os limites dos testes.
 
-## Uma experiência completa
+## Desenvolvimento
 
-| Instâncias | Descoberta de modpacks |
-|:--:|:--:|
-| ![Biblioteca de instâncias](docs/assets/screenshots/instances.png) | ![Catálogo Modrinth](docs/assets/screenshots/discover.png) |
-| Instâncias isoladas, seleção rápida e acesso à configuração. | Catálogos Modrinth e CurseForge dentro do próprio launcher. |
-
-| Guarda-roupa | Java & engine |
-|:--:|:--:|
-| ![Guarda-roupa com prévia 3D](docs/assets/screenshots/wardrobe.png) | ![Gerenciamento do runtime Java](docs/assets/screenshots/java-engine.png) |
-| Biblioteca local, busca por nick, favoritos e prévia 3D interativa. | Detecção, validação e provisionamento de Java por versão. |
-
-## Recursos disponíveis
-
-- **Contas Aurora:** cadastro e login por nick com Firebase Auth e perfis no Firestore.
-- **Instâncias isoladas:** criação, edição, exclusão e inicialização sem misturar mundos, mods ou configurações.
-- **Minecraft e loaders:** criação de instâncias Fabric e Forge com resolução automática de dependências.
-- **Java gerenciado:** detecção de runtimes compatíveis e download de um Java isolado quando necessário.
-- **Modpacks e conteúdo:** pesquisa e instalação por Modrinth e CurseForge, com filtros, imagens, páginas de detalhes e dependências obrigatórias.
-- **Gerenciador de downloads:** até oito transferências concorrentes, retomada, tentativas e hashes; a troca de destino ainda precisa do gate transacional descrito no roadmap.
-- **Conteúdo por instância:** mods, shaders e resource packs com seleção múltipla, ativação, desativação e remoção.
-- **Atualizações de conteúdo:** detecção compatível, revisão antes da troca, integridade, snapshot e rollback para mods, shaders e resource packs; atualização transacional de modpacks Modrinth e detecção segura de modpacks CurseForge.
-- **Guarda-roupa:** skins locais, favoritos, busca por nick, modelo Classic/Slim, capa e visualização 3D.
-- **Aurora Skins:** módulo independente para Forge 1.12.2 e Fabric/Forge 1.16.5, 1.19.2, 1.20.1 e 1.21.1, com biblioteca, catálogo e aplicação de aparência. A matriz completa ainda precisa de homologação em execução real.
-- **Aurora Core:** menu modular no jogo, avatar 3D, sessão pública, eventos, configuração versionada e instalação assinada nos mesmos nove alvos.
-- **Assistente desktop:** painel/chat, conversa autenticada com Gemini, entrada por texto/voz, controles de microfone e reprodução por Edge TTS. O botão e `Ctrl+Alt+/` abrem o painel, sem exigir Minecraft ou mods instalados.
-- **IPC seguro:** comunicação local via WebSocket em `127.0.0.1`, porta efêmera e nonce renovado a cada execução.
-
-## Roadmap
-
-| Etapa | Estado | Entrega |
-| --- | :---: | --- |
-| Fundação e identidade | ✅ | Tauri + React, núcleo Rust, autenticação, instâncias e instalador Windows |
-| Launcher 1.1 | 🟣 | Downloads concorrentes, seleção múltipla, fluxo CurseForge e estabilização |
-| Assistente desktop | 🟡 | Painel, Gemini, microfone e TTS preservados; serviços online e runtime desktop exigem validação própria |
-| Aurora Core 1.0 | 🟡 | Fundação modular e menu nativo compilados em 9/9; homologação runtime pendente |
-| Atualizações de conteúdo | 🟡 | Fluxo compatível e reversível implementado; homologação em instâncias reais pendente |
-| Cosméticos e emotes | 🔭 | Expandir o guarda-roupa e o módulo Aurora Skins |
-| Distribuição estável | 🔭 | Atualizador do launcher, releases assinadas e canal público estável |
-
-O detalhamento e as evidências de validação ficam em [`docs/phase-0-status.md`](docs/phase-0-status.md), [`docs/ROADMAP.md`](docs/ROADMAP.md) e no [plano de engenharia auditado](docs/engineering/README.md).
-
-## Arquitetura
-
-```mermaid
-flowchart LR
-    UI[React UI] -->|Tauri commands| CORE[Rust Launcher Core]
-    CORE --> GAME[Minecraft + Loader]
-    GAME --> AURORA[Aurora Core in-game]
-    CORE <-->|IPC local autenticado único| AURORA
-    SKINS[Aurora Skins] --> AURORA
-    ASSISTANT[Assistente desktop] --> EDGE
-    ASSISTANT -->|síntese de fala| CORE
-    UI --> FIREBASE[Firebase Auth / Firestore]
-    UI --> EDGE[Cloudflare Worker]
-    EDGE --> MODS[Modrinth / CurseForge]
-    EDGE --> AI[Gemini / Supabase]
-```
-
-```text
-AuroraLauncher/
-├── apps/
-│   ├── desktop/        # React + Tauri + núcleo Rust
-│   ├── aurora-core/    # APIs, runtime e adaptadores in-game
-│   ├── aurora-skins/   # Aparência Fabric e Forge
-│   └── edge-proxy/     # API protegida na Cloudflare
-├── firebase/           # Regras de Firestore e Storage
-├── functions/          # Funções Firebase
-├── releases/           # Instalador e JARs embarcados
-├── scripts/            # Smoke tests e validações
-└── docs/               # Arquitetura, integrações e homologação
-```
-
-## Desenvolvimento local
-
-### Pré-requisitos
-
-- Windows 10/11;
-- Node.js 22+ e npm para o desktop/Edge (Functions mantém runtime Node 20);
-- Rust estável com Cargo;
-- WebView2;
-- JDKs 17 e 21 para executar os builds Core/Skins; toolchains e runtime Java 8/17/21 permanecem específicos de cada geração.
-
-### Launcher desktop
+No Windows, instale Node.js 24, Rust estável com MSVC, Windows SDK, WebView2 e os JDKs exigidos pela matriz. Abra um terminal na raiz do repositório.
 
 ```powershell
-cd apps/desktop
-npm install
-npm run tauri dev
+npm ci --prefix apps/desktop
+npm run desktop:dev
 ```
 
-O aplicativo já inclui a configuração pública do projeto Firebase Aurora e a
-URL pública do Worker, portanto clones e instaladores novos abrem direto no
-login. Para apontar um build de desenvolvimento para outro projeto, copie
-`.env.example` para `.env.local` e preencha as variáveis `VITE_*`.
+[Compilar o instalador](docs/release-workflow.md) · [Matriz dos módulos](scripts/active-mod-matrix.json) · [Contribuir](CONTRIBUTING.md) · [Segurança](SECURITY.md) · [Licenças](THIRD_PARTY_NOTICES.md)
 
-Chaves privadas de Gemini, CurseForge e Supabase pertencem aos secrets do
-backend e **não** devem entrar no aplicativo.
-
-### Verificações
-
-```powershell
-npm --prefix apps/desktop run build
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
-npm --prefix apps/edge-proxy run check
-npm --prefix functions run lint
-```
-
-Para gerar e verificar as matrizes versionadas dos módulos:
-
-```powershell
-npm run core:build
-npm run skins:build
-```
-
-O instalador oficial executa o comparador dos 18 JARs Core/Skins antes do bundle. Execute somente quando uma nova release for solicitada; a retirada do mod não gera instalador automaticamente:
-
-```powershell
-npm run desktop:build
-```
-
-Não copie manualmente um resultado sobre JAR versionado em `releases`; o
-preflight usa staging e bloqueia divergências. Consulte o
-[fluxo de release](docs/release-workflow.md).
-
-## Segurança e privacidade
-
-- Tokens Firebase e nonces de sessão nunca são registrados pelo núcleo.
-- Segredos de serviços permanecem no Worker/Functions, nunca no bundle desktop.
-- O Aurora Core mantém o único socket do jogo, somente no loopback local, com sessão pública sem credenciais.
-- Dados do Assistente desktop e preferências de voz são preservados na migração. A antiga captura in-game foi retirada com o mod.
-- Vulnerabilidades devem seguir o processo descrito em [`SECURITY.md`](SECURITY.md).
-
-## Documentação
-
-- [Status e homologação](docs/phase-0-status.md)
-- [Auditoria, arquitetura e execução Codex](docs/engineering/README.md)
-- [Roadmap do produto](docs/ROADMAP.md)
-- [Launcher Core](docs/module-a.md)
-- [IPC compartilhado do Core](docs/core-ipc.md)
-- [Retirada do mod e preservação do Assistente desktop](docs/task-remove-companion.md)
-- [Dossiê histórico do Companion](docs/engineering/COMPANION_AUDIT.md)
-- [Aurora Core](docs/aurora-core.md)
-- [Backend CurseForge](docs/curseforge-backend.md)
-- [Fase 1.3 — atualizações de conteúdo](docs/task-content-updates.md)
-- [Configuração do Firebase](docs/firebase-setup.md)
-- [Armazenamento de aparências](docs/supabase-storage.md)
-- [Avisos de terceiros](THIRD_PARTY_NOTICES.md)
-
-## Aviso legal
-
-Aurora Smart Launcher é um projeto não oficial, independente e não aprovado nem afiliado à Mojang Studios, Microsoft, Modrinth, CurseForge ou Google. Minecraft e suas marcas pertencem aos respectivos titulares. A distribuição deve respeitar as licenças e os termos dos jogos, loaders, mods e serviços integrados.
-
-<p align="center">
-  <sub>Feito com Rust, React e uma boa dose de luz roxa. ✦</sub>
-</p>
+Projeto independente, sem afiliação com Mojang ou Microsoft.

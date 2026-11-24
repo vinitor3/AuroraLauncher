@@ -24,4 +24,4 @@ O contexto reduzido favorece privacidade e previsibilidade, mas impede uma inves
 
 A funcionalidade depende de uma rota Worker implantada e de acesso autorizado ao serviço para funcionamento online. Testes com respostas sintéticas comprovam contratos e falhas controladas, não a qualidade de respostas reais nem disponibilidade da implantação.
 
-Ferramentas de recuperação, correções automáticas, CAS, modo seguro e backups gerais permanecem fora deste incremento. Evidências: [registro da entrega](../../task-doctor-gemini.md).
+Ferramentas de recuperação, correções automáticas, CAS, modo seguro e backups gerais permanecem fora deste incremento. Evidências: [registro da entrega](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-doctor-gemini.md).

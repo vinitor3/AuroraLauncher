@@ -14,6 +14,6 @@ Expor rotas Aurora públicas limitadas, JSON para desktop e TSV V1 para compatib
 
 ## Consequências
 
-Uma implementação atende nove combinações. Não há HttpClient Java 11, Jackson/Gson ou SLF4J adicional nos JARs. Disponibilidade depende do Worker; biblioteca local e catálogo original permanecem utilizáveis sem rede. Cache em memória e rate limit por isolate não são uma cota distribuída global; considerar Durable Object/KV se o volume exigir coordenação entre regiões.
+Os adaptadores compartilham uma implementação compatível com Java 8. A descoberta online depende do Worker. A biblioteca local funciona sem rede. O cache em memória e os limites de requisições operam por isolate. Uma cota global exigiria coordenação entre regiões.
 
 Versionar novos JARs como 0.2.2; preservar 0.2.1 e instalador alpha.5. Mudanças de outras worktrees não são descartadas nem incluídas silenciosamente em um instalador.

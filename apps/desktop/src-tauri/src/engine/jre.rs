@@ -408,15 +408,15 @@ pub fn discover_java_executables() -> Vec<PathBuf> {
     }
 
     #[cfg(target_os = "windows")]
-    for base in [
-        PathBuf::from(r"C:\Program Files\Java"),
-        PathBuf::from(r"C:\Program Files\Eclipse Adoptium"),
-        PathBuf::from(r"C:\Program Files\Microsoft"),
-        PathBuf::from(r"C:\Program Files\Zulu"),
-    ] {
-        if let Ok(entries) = std::fs::read_dir(base) {
-            for entry in entries.flatten() {
-                paths.insert(entry.path().join("bin").join(java_filename()));
+    if let Some(program_files) = std::env::var_os("ProgramW6432")
+        .or_else(|| std::env::var_os("ProgramFiles"))
+        .map(PathBuf::from)
+    {
+        for vendor in ["Java", "Eclipse Adoptium", "Microsoft", "Zulu"] {
+            if let Ok(entries) = std::fs::read_dir(program_files.join(vendor)) {
+                for entry in entries.flatten() {
+                    paths.insert(entry.path().join("bin").join(java_filename()));
+                }
             }
         }
     }

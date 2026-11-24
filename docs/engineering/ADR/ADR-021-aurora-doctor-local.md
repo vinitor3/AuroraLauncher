@@ -26,4 +26,4 @@ A privacidade tem custo de detalhe: o relatório omite trechos que poderiam ajud
 
 Um próximo incremento de recuperação deve definir ações estreitas, confirmação, exclusão mútua, backup/rollback e auditoria antes de qualquer mutação. CAS, modo seguro, backup geral e restauração não foram implementados aqui.
 
-Comportamento: [Aurora Doctor](../../aurora-doctor.md). Evidências: [registro da entrega](../../task-aurora-doctor.md).
+Comportamento: [Aurora Doctor](../../aurora-doctor.md). Evidências: [registro da entrega](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-aurora-doctor.md).

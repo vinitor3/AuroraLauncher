@@ -13,9 +13,7 @@ use crate::doctor_runs::{self, DoctorRuns};
 use aurora_launcher_core::engine::launch_settings::{self, LaunchSettings, LaunchSettingsOverview};
 use aurora_launcher_core::engine::{
     ai_history,
-    ai_tools::{
-        AiToolAdvice, AiToolBroker, AiToolContext, AiToolHistoryEntry, AiToolPlan, AiToolProposal,
-    },
+    ai_tools::{AiToolBroker, AiToolHistoryEntry, AiToolPlan},
 };
 use aurora_launcher_core::engine::{
     analyze_instance as analyze_doctor, canonical_launch_failure, snapshot_logs, DoctorContext,
@@ -48,7 +46,7 @@ use aurora_launcher_core::{
         JavaReleaseCatalog, JavaRuntime, LaunchIdentity, LauncherEngine, MinecraftInstaller,
         ModpackInstallSummary, ModpackProgress, ModpackUpdateApplySummary, ModpackUpdateScan,
         ModrinthCategory, ModrinthContent, ModrinthSearchPage, RemoteContentUpdate,
-        ResolvedContentArtwork, SpeechResult, TransferProgress,
+        ResolvedContentArtwork, TransferProgress,
     },
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -431,7 +429,7 @@ fn acquire_idle_recovery(
     let guard = aurora_launcher_core::engine::acquire_instance_recovery_lock(instance)
         .map_err(|error| match error {
             aurora_launcher_core::engine::ContentUpdateError::Busy =>
-                "Esta instância está em uso. Aguarde o jogo, a instalação ou a ação do Assistente terminar.".to_owned(),
+                "Esta instância está em uso. Aguarde a operação em andamento terminar.".to_owned(),
             _ => "Não foi possível bloquear a instância com segurança. Verifique suas permissões e tente novamente.".to_owned(),
         })?;
     // Close the check/acquire race for games started by another launcher.
@@ -439,7 +437,7 @@ fn acquire_idle_recovery(
     Ok(guard)
 }
 
-/// The same OS lock used by launch, installers and confirmed Assistant actions
+/// The same OS lock used by launch, installers and restoration of earlier actions
 /// guards recovery. The bypass only allows us to repair an interrupted journal;
 /// it never bypasses a live game's lock or the external JVM probe.
 async fn run_recovery<T, F>(
@@ -2604,43 +2602,6 @@ pub async fn analyze_instance(
 }
 
 #[tauri::command]
-pub async fn ai_tools_context(
-    window: tauri::WebviewWindow,
-    id: String,
-) -> Result<AiToolContext, String> {
-    let app = window.app_handle().clone();
-    let owner = window.label().to_owned();
-    tauri::async_runtime::spawn_blocking(move || {
-        let instance =
-            layout(&app)?.open(InstanceId::parse(id).map_err(|_| "Instância inválida.")?);
-        let history = ai_history::safe_for_model(&instance)?;
-        app.state::<AiToolBroker>()
-            .context(instance, &owner, history)
-    })
-    .await
-    .map_err(|_| "Não foi possível preparar o contexto local.".to_owned())?
-}
-
-#[tauri::command]
-pub async fn prepare_ai_tool(
-    window: tauri::WebviewWindow,
-    id: String,
-    context_id: String,
-    proposal: AiToolProposal,
-) -> Result<AiToolPlan, String> {
-    let app = window.app_handle().clone();
-    let owner = window.label().to_owned();
-    tauri::async_runtime::spawn_blocking(move || {
-        let instance =
-            layout(&app)?.open(InstanceId::parse(id).map_err(|_| "Instância inválida.")?);
-        app.state::<AiToolBroker>()
-            .prepare(&instance, &owner, &context_id, proposal)
-    })
-    .await
-    .map_err(|_| "Não foi possível preparar a revisão da ação.".to_owned())?
-}
-
-#[tauri::command]
 pub async fn confirm_ai_tool(
     window: tauri::WebviewWindow,
     plan_id: String,
@@ -2749,32 +2710,6 @@ pub async fn ai_tool_history(
     })
     .await
     .map_err(|_| "Não foi possível consultar o histórico local.".to_owned())?
-}
-
-#[tauri::command]
-pub async fn ai_record_advice(
-    window: tauri::WebviewWindow,
-    id: String,
-    context_id: String,
-    advice: AiToolAdvice,
-) -> Result<AiToolHistoryEntry, String> {
-    let app = window.app_handle().clone();
-    let owner = window.label().to_owned();
-    tauri::async_runtime::spawn_blocking(move || {
-        let instance =
-            layout(&app)?.open(InstanceId::parse(id).map_err(|_| "Instância inválida.")?);
-        let targets =
-            app.state::<AiToolBroker>()
-                .validate_advice(&instance, &owner, &context_id, &advice)?;
-        let entry = ai_history::record_advice(&instance, &context_id, &advice, &targets)?;
-        let _ = app.emit(
-            "aurora-ai-history-changed",
-            serde_json::json!({"instanceId":instance.id().as_str()}),
-        );
-        Ok(entry)
-    })
-    .await
-    .map_err(|_| "Não foi possível registrar a orientação local.".to_owned())?
 }
 
 #[tauri::command]
@@ -2943,10 +2878,13 @@ fn launch_instance_tracked(
         );
     spec.apply_offline_compatibility(&minecraft_version);
     let loader = loader_for_profile(&version_id);
+    let aurora_loader = loader.filter(|loader| {
+        aurora_launcher_core::engine::has_embedded_modules(&minecraft_version, loader)
+    });
     let mut ipc_server = None;
     let mut core_installed = false;
     let mut skins_installed = false;
-    if let Some(loader) = loader {
+    if let Some(loader) = aurora_loader {
         install_embedded_core(&instance, &minecraft_version, loader)
             .map_err(|error| error.to_string())?;
         core_installed = true;
@@ -2966,7 +2904,7 @@ fn launch_instance_tracked(
     if !compatible {
         return Err(format!("esta instância precisa do Java {required_java}, mas o Java {selected_java} foi selecionado"));
     }
-    if let Some(loader) = loader {
+    if let Some(loader) = aurora_loader {
         let server =
             IpcServer::start_with_session(Some(IpcSessionProfile::offline(uuid, nickname.clone())))
                 .map_err(|error| error.to_string())?;
@@ -3106,13 +3044,6 @@ pub fn poll_ipc_events(sessions: tauri::State<IpcSessions>) -> Vec<IpcSessionEve
             })
         })
         .collect()
-}
-
-#[tauri::command]
-pub async fn synthesize_speech(text: String) -> Result<SpeechResult, String> {
-    aurora_launcher_core::engine::synthesize_speech(&text)
-        .await
-        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

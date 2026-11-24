@@ -61,7 +61,7 @@ const PUBLIC_ERRORS = new Set([
   "A instância ultrapassa o limite de recuperação: 30 mil arquivos ou 8 GiB protegidos.",
   "Há uma recuperação interrompida. Abra Recuperação com o jogo fechado antes de alterar ou iniciar esta instância.",
   "A Recuperação requer a verificação de processos disponível no Windows.",
-  "Esta instância está em uso. Aguarde o jogo, a instalação ou a ação do Assistente terminar.",
+  "Esta instância está em uso. Aguarde a operação em andamento terminar.",
   "Não foi possível bloquear a instância com segurança. Verifique suas permissões e tente novamente.",
   "Identificador de instância inválido.",
   "A instância não existe mais.",

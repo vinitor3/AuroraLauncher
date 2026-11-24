@@ -1,34 +1,16 @@
-# Contribuindo com o Aurora
+# Contribuindo
 
-Obrigado por ajudar a construir o Aurora Smart Launcher. Enquanto o projeto estiver em alpha privada, combine mudanças maiores com o mantenedor antes de começar.
+Crie uma branch a partir da versão mais recente. Descreva o comportamento alterado, a forma de reproduzir e o que foi testado. Ao mudar um mod, informe as versões de Minecraft, loader e Java e se houve teste dentro do jogo.
 
-## Fluxo recomendado
-
-1. Crie uma branch curta a partir de `main`.
-2. Faça mudanças pequenas, com responsabilidade bem definida.
-3. Não inclua tokens, arquivos `.env`, dados de conta, mundos ou instâncias locais.
-4. Execute as verificações relevantes.
-5. Abra um pull request explicando comportamento, testes e riscos.
-
-## Verificações locais
+Na raiz, execute as verificações dos componentes afetados:
 
 ```powershell
 npm --prefix apps/desktop run build
+node --test "apps/desktop/tests/*.test.mjs"
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 npm --prefix apps/edge-proxy run check
+npm --prefix apps/edge-proxy test
 npm --prefix functions run lint
 ```
 
-Mudanças em Core/Skins devem indicar exatamente quais versões e loaders foram compilados e quais foram testados dentro do Minecraft. O Assistente desktop é validado também sem jogo aberto; Companion permanece retirado. Compilação não equivale a homologação em jogo.
-
-## Commits
-
-Prefira mensagens diretas, por exemplo:
-
-- `feat: adiciona filtro de loaders no catálogo`
-- `fix: preserva hash ao retomar download`
-- `docs: atualiza matriz de Core e Skins`
-
-## Pull requests
-
-Inclua objetivo, evidências redigidas, comandos de teste, versões afetadas e pendências conhecidas.
+Use dados de teste. Trate tokens, senhas, chaves de assinatura, mundos e logs pessoais como privados. [Fluxo de release](docs/release-workflow.md) · [Segurança](SECURITY.md)

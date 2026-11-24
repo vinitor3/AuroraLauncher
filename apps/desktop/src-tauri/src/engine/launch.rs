@@ -290,7 +290,7 @@ impl LauncherEngine {
         args.push(format!("-Djava.library.path={}", natives.display()));
         if let Some(port) = spec.aurora_ipc_port {
             args.push(format!("-Daurora.ipc.port={port}"));
-            args.push(format!("-Daurora.minecraft.version={}", spec.version_name));
+            // Each embedded adapter reports its exact Minecraft target. The profile ID includes the loader.
         }
         if let Some(nonce) = &spec.aurora_session_nonce {
             args.push(format!("-Daurora.session.nonce={nonce}"));

@@ -1,6 +1,6 @@
 # Doctor e cópias de teste
 
-Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Resultados executados e limitações em [AUR-1167](task-aur-1167-doctor-lab.md). Decisão: [ADR-028](engineering/ADR/ADR-028-doctor-recovery-lab.md).
+Estado: **IMPLEMENTADO MAS NÃO HOMOLOGADO**. Resultados executados e limitações em [AUR-1167](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-aur-1167-doctor-lab.md). Decisão: [ADR-028](engineering/ADR/ADR-028-doctor-recovery-lab.md).
 
 ## Recuperação pelo Doctor
 

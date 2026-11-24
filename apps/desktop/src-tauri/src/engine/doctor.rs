@@ -403,8 +403,10 @@ pub fn analyze_instance(
 
 fn safe_minecraft_version(value: &str) -> String {
     if (3..=24).contains(&value.len())
-        && value.starts_with("1.")
-        && value.chars().all(|c| c.is_ascii_digit() || c == '.')
+        && (value.starts_with("1.") || value.starts_with("26."))
+        && value
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|c| c.is_ascii_digit()))
     {
         value.into()
     } else {
@@ -908,6 +910,7 @@ mod tests {
             "Falha de preparação sem causa identificada."
         );
         assert_eq!(safe_minecraft_version("1.20.1"), "1.20.1");
+        assert_eq!(safe_minecraft_version("26.3"), "26.3");
         assert_eq!(
             safe_minecraft_version("user@example.invalid"),
             "Não identificada"

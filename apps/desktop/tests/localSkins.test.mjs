@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import test from "node:test";
-import { cacheLocalSkinImage, deleteLocalSkin, listLocalSkins, saveLocalSkin, updateLocalSkinSource } from "../src/lib/localSkins.ts";
+import { cacheLocalSkinImage, deleteLocalSkin, isRetiredLocalSkin, listLocalSkins, saveLocalSkin, updateLocalSkinSource } from "../src/lib/localSkins.ts";
 
 // Minimal event-driven IndexedDB stand-in: requests succeed before transaction
 // commit, writes roll back on abort, and every open creates a closable connection.
@@ -90,6 +90,20 @@ const seed = (fixture, extra = {}) => {
   fixture.records.set(record.key, record);
   return record;
 };
+
+test("old Studio selections stay hidden offline and players can import similarly named skins", async () => {
+  const fixture = databaseFixture();
+  try {
+    const path = "/v1/skins/catalog/solar-ninja.png";
+    seed(fixture, { sourceUrl: "https://aurora-api.aurora-edge-proxy.workers.dev" + path });
+    seed(fixture, { key: "player:imported", id: "imported", sourceUrl: undefined, name: "Ninja Solar" });
+    seed(fixture, { key: "player:remote", id: "remote", sourceUrl: "https://skins.example" + path, name: "Aurora Studio" });
+    assert.deepEqual((await listLocalSkins("player")).map((skin) => skin.id).sort(), ["imported", "remote"]);
+    assert.equal(await isRetiredLocalSkin("player", "skin"), true);
+    assert.equal(await isRetiredLocalSkin("player", "imported"), false);
+    assert.equal(await isRetiredLocalSkin("other-player", "skin"), false);
+  } finally { fixture.restore(); }
+});
 
 test("same-id recovery preserves the PNG, custom name and original date", async () => {
   const fixture = databaseFixture();

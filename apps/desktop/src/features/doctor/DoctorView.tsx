@@ -1,12 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
-import type { DoctorExplanation, DoctorIssue, DoctorReport, DoctorRun } from "./types";
-import { GeminiAdvice } from "./GeminiAdvice";
+import type { DoctorIssue, DoctorReport, DoctorRun } from "./types";
+import { SupportContextButton } from "../support/SupportContextButton";
+import { formatDoctorContext } from "../support/diagnosticContext";
 import { DoctorRecovery } from "./DoctorRecovery";
-import { AiToolSuggestions } from "../ai-tools/AiToolSuggestions";
-import { AiToolProposalList } from "../ai-tools/AiToolProposalList";
-import type { AiToolAdviceRequest } from "../ai-tools/types";
+import { InstanceHistory } from "../ai-tools/AiToolProposalList";
 import "./doctor.css";
 
 type Props = {
@@ -14,8 +13,6 @@ type Props = {
   javaExecutable: string;
   runId?: string;
   busy: boolean;
-  onExplain?: DoctorExplanation;
-  onSuggest?: AiToolAdviceRequest;
   onSelectRun: (runId?: string) => void;
   onRecovery?: (pointId?: string) => void;
   onDiagnosticLab?: () => void;
@@ -70,7 +67,7 @@ function IssueDetails({ issue }: { issue: DoctorIssue }) {
   );
 }
 
-export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRun, onExplain, onSuggest, onRecovery, onDiagnosticLab }: Props) {
+export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRun, onRecovery, onDiagnosticLab }: Props) {
   // Reports are tied to the exact inputs as well as a request generation. Changing
   // instance, Java or run never makes an earlier response visible in a new context.
   const context = JSON.stringify([instanceId, javaExecutable, runId ?? null]);
@@ -204,8 +201,7 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
             </div>
             {report.status === "no_issues" && <small>Limitado às verificações e aos dados disponíveis.</small>}
           </div>
-          {onExplain && <GeminiAdvice instanceId={instanceId} report={report} explain={onExplain} busy={busy} />}
-          {onSuggest && <AiToolSuggestions instanceId={instanceId} report={report} requestAdvice={onSuggest} busy={busy} />}
+          <SupportContextButton source="Minecraft" context={formatDoctorContext(report)} />
           {report.issues.length > 0 && <details className="doctor-details">
             <summary>Evidências e detalhes ({report.issues.length})</summary>
             <div aria-label="Problemas identificados" className="doctor-issues">{report.issues.map((issue) => <IssueDetails issue={issue} key={issue.id} />)}</div>
@@ -237,7 +233,7 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
             </div>
           </details>
         </>}
-      {!report && onSuggest && <AiToolProposalList instanceId={instanceId} disabled={busy || loading} />}
+      <InstanceHistory instanceId={instanceId} disabled={busy || loading} />
     </section>
   );
 }

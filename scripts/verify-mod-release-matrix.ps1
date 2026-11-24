@@ -140,6 +140,12 @@ function Compare-AuroraMatrix {
                     }
                 }
             }
+            if ($Module -eq "core") {
+                foreach ($license in @("Gson", "Java-WebSocket", "SLF4J")) {
+                    $licensePath = "META-INF/licenses/aurora-core/$license-LICENSE.txt"
+                    if ($entryNames -notcontains $licensePath) { throw "Licenca ausente em ${relative}: $licensePath" }
+                }
+            }
         }
         finally {
             $archive.Dispose()
@@ -156,5 +162,7 @@ foreach ($module in $Matrix.modules) {
 }
 & node (Join-Path $PSScriptRoot "verify-core-release-signatures.mjs")
 if ($LASTEXITCODE -ne 0) { throw "As assinaturas do Aurora Core falharam." }
+& node (Join-Path $PSScriptRoot "skins-release-manifest.mjs")
+if ($LASTEXITCODE -ne 0) { throw "O manifesto do Aurora Skins falhou." }
 $total = @($Matrix.modules).Count * @($Matrix.targets).Count
 Write-Host "[Aurora release matrix] Matriz ativa: $total/$total JARs."

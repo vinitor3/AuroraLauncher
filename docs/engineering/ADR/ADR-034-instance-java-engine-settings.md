@@ -19,4 +19,4 @@ JVM-01/OPEN-07 documentam RAM fixa no launch apesar da fórmula existente. O usu
 
 RAM total não mede disponibilidade no momento do spawn; a reserva é uma heurística. O inventário físico é Windows; modo automático em outros sistemas precisa de implementação posterior. Flags permitidas podem não existir na JVM escolhida. Inicialização real, interface nativa e compatibilidade por Minecraft/loader ainda exigem prova. Sem hooks ou comandos pré/pós-jogo porque não há especificação para eles. Sem instalador, release ou mudança em Core/Skins.
 
-Detalhes, limites e testes: [Java/engine](../../java-engine.md) e [tarefa](../../task-java-engine.md).
+Detalhes, limites e testes: [Java/engine](../../java-engine.md) e [tarefa](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-java-engine.md).

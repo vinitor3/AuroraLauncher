@@ -1,91 +1,44 @@
-const targets = await (await fetch("http://127.0.0.1:9222/json")).json();
-const target = targets.find((item) => item.title === "Aurora Smart Launcher");
-if (!target?.webSocketDebuggerUrl) throw new Error("WebView Aurora não encontrado");
+// Optional integration check. Use a Firebase ID token for a dedicated test
+// account. Uploading a new skin exercises the real appearance storage.
+import assert from "node:assert/strict";
+import { deflateSync } from "node:zlib";
 
-const socket = new WebSocket(target.webSocketDebuggerUrl);
-const pending = new Map();
-let sequence = 0;
-socket.onmessage = (event) => {
-  const message = JSON.parse(event.data);
-  const operation = pending.get(message.id);
-  if (!operation) return;
-  pending.delete(message.id);
-  message.error ? operation.reject(new Error(message.error.message)) : operation.resolve(message.result);
-};
-await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
-function call(method, params = {}) {
-  return new Promise((resolve, reject) => {
-    const id = ++sequence;
-    pending.set(id, { resolve, reject });
-    socket.send(JSON.stringify({ id, method, params }));
-  });
+const token = process.env.AURORA_SMOKE_FIREBASE_ID_TOKEN;
+if (!token) throw new Error("Forneça AURORA_SMOKE_FIREBASE_ID_TOKEN de uma conta de teste.");
+// Never forward a test identity to an endpoint selected through untrusted data.
+const endpoint = "https://aurora-api.aurora-edge-proxy.workers.dev/v1/appearance";
+const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+function chunk(type, data) {
+  const payload = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  let crc = 0xffffffff;
+  for (const byte of payload) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+  }
+  const length = Buffer.alloc(4);
+  const checksum = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  checksum.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
+  return Buffer.concat([length, payload, checksum]);
 }
 
-await call("Runtime.enable");
-const result = await call("Runtime.evaluate", {
-  awaitPromise: true,
-  returnByValue: true,
-  expression: `
-    (async () => {
-      const originalFetch = window.fetch.bind(window);
-      let capturedAuthorization = '';
-      window.fetch = (input, init) => {
-        const url = typeof input === 'string' ? input : input.url;
-        if (url.includes('/v1/assistant')) {
-          capturedAuthorization = new Headers(init?.headers).get('Authorization') ?? '';
-        }
-        return originalFetch(input, init);
-      };
-      let assistantButton;
-      const readyAt = Date.now();
-      while (!assistantButton && Date.now() - readyAt < 15000) {
-        assistantButton = [...document.querySelectorAll('button')]
-          .find((button) => button.textContent?.trim() === 'Assistente');
-        if (!assistantButton) await new Promise((resolve) => setTimeout(resolve, 200));
-      }
-      if (!assistantButton) throw new Error('Sessão Aurora autenticada não ficou pronta');
-      if (!document.querySelector('[aria-label="Assistente Aurora"]')) assistantButton.click();
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      const input = document.querySelector('textarea[aria-label="Mensagem para o Assistente"]');
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-      setter.call(input, 'Responda apenas: ok');
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.form.requestSubmit();
-      const authAt = Date.now();
-      while (!capturedAuthorization && Date.now() - authAt < 10000) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      window.fetch = originalFetch;
-      if (!capturedAuthorization) throw new Error('Token autenticado não foi encaminhado pelo launcher');
-      const canvas = document.createElement('canvas');
-      canvas.width = 64;
-      canvas.height = 64;
-      const context = canvas.getContext('2d');
-      context.fillStyle = '#4c5fd7';
-      context.fillRect(0, 0, 64, 64);
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
-      const form = new FormData();
-      form.set('kind', 'skin');
-      form.set('file', blob, 'skin.png');
-      const response = await originalFetch('https://aurora-api.aurora-edge-proxy.workers.dev/v1/appearance', {
-        method: 'POST',
-        headers: { Authorization: capturedAuthorization },
-        body: form,
-      });
-      const payload = await response.json();
-      if (!response.ok) return { uploadStatus: response.status, payload };
-      const publicResponse = await originalFetch(payload.url, { cache: 'no-store' });
-      const bytes = new Uint8Array(await publicResponse.arrayBuffer());
-      return {
-        uploadStatus: response.status,
-        publicStatus: publicResponse.status,
-        contentType: publicResponse.headers.get('content-type'),
-        pngSignature: [...bytes.slice(0, 8)].map((value) => value.toString(16).padStart(2, '0')).join(''),
-        url: payload.url,
-      };
-    })()
-  `,
+const header = Buffer.from([0, 0, 0, 64, 0, 0, 0, 64, 8, 6, 0, 0, 0]);
+const pixels = Buffer.alloc(64 * 4 + 1);
+for (let position = 1; position < pixels.length; position += 4) pixels.writeUInt32BE(0x4c5fd7ff, position);
+const png = Buffer.concat([signature, chunk("IHDR", header), chunk("IDAT", deflateSync(Buffer.concat(Array(64).fill(pixels)))), chunk("IEND", Buffer.alloc(0))]);
+const form = new FormData();
+form.set("kind", "skin");
+form.set("file", new Blob([png], { type: "image/png" }), "aurora-smoke.png");
+const upload = await fetch(endpoint, {
+  method: "POST", redirect: "error", headers: { Authorization: "Bearer " + token },
+  body: form, signal: AbortSignal.timeout(30000),
 });
-socket.close();
-if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? "Falha no WebView");
-console.log(JSON.stringify(result.result?.value, null, 2));
+assert.ok(upload.ok, "Falha de upload HTTP " + upload.status);
+const { url } = await upload.json();
+assert.equal(new URL(url).protocol, "https:");
+const stored = await fetch(url, { signal: AbortSignal.timeout(30000) });
+assert.ok(stored.ok, "Falha ao recuperar a imagem HTTP " + stored.status);
+assert.match(stored.headers.get("content-type") ?? "", /^image\/png/i);
+assert.deepEqual(Buffer.from(await stored.arrayBuffer()), png);
+console.log("PASS · upload autenticado e leitura de PNG público");

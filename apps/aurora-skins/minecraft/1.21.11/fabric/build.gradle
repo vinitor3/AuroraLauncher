@@ -1,0 +1,27 @@
+dependencies {
+    compileOnly project(":api")
+    implementation project(":skins-core")
+    include project(":skins-core")
+    // Pin the three modules used by this adapter instead of bundling the full Fabric API.
+    ["fabric-api-base:1.0.5+4ebb5c083e", "fabric-networking-api-v1:5.1.6+6b6d71a53e",
+     "fabric-lifecycle-events-v1:2.6.15+4ebb5c083e"].each { module ->
+        include modImplementation("net.fabricmc.fabric-api:${module}")
+    }
+}
+
+tasks.named("compileJava") {
+    source(fileTree("../../1.20.1/common/src/main/java") {
+        include "**/AuroraSkinsBootstrap.java", "**/AuroraSkinsModule.java", "**/SkinSyncClientBridge.java"
+    })
+    source(fileTree("../../1.21.1/fabric/src/main/java") {
+        include "**/AuroraSkinsFabric.java", "**/AuroraSkinsFabricCommon.java", "**/SkinSyncFabricClient.java"
+    })
+}
+processResources {
+    from("../../1.20.1/common/src/main/resources") { include "META-INF/services/**", "assets/**" }
+}
+
+// Game-independent adapter code shared with the adjacent Fabric generation.
+tasks.named("compileJava") {
+    source(fileTree("../../26.3/fabric/src/main/java") { include "**/AuroraSkinManager.java", "**/SkinSyncPayload.java", "**/AbstractClientPlayerMixin.java", "**/PlayerInfoMixin.java", "**/SkinManagerMixin.java" })
+}

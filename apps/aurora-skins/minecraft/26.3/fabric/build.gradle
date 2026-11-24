@@ -1,0 +1,22 @@
+dependencies {
+    compileOnly project(":api")
+    implementation project(":skins-core")
+    include project(":skins-core")
+    // Pin the three modules used by this adapter instead of bundling the full Fabric API.
+    ["fabric-api-base:2.0.7+fcdff87f5d", "fabric-networking-api-v1:6.4.2+c58129785d",
+     "fabric-lifecycle-events-v1:4.1.10+ffef5f675d"].each { module ->
+        include implementation("net.fabricmc.fabric-api:${module}")
+    }
+}
+
+tasks.named("compileJava") {
+    source(fileTree("../../1.20.1/common/src/main/java") {
+        include "**/AuroraSkinsBootstrap.java", "**/AuroraSkinsModule.java", "**/SkinSyncClientBridge.java"
+    })
+    source(fileTree("../../1.21.1/fabric/src/main/java") {
+        include "**/AuroraSkinsFabric.java", "**/AuroraSkinsFabricCommon.java", "**/SkinSyncFabricClient.java"
+    })
+}
+processResources {
+    from("../../1.20.1/common/src/main/resources") { include "META-INF/services/**", "assets/**" }
+}

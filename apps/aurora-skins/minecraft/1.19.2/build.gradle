@@ -3,6 +3,8 @@ plugins {
     id "dev.architectury.loom" version "1.3.385" apply false
     id "com.github.johnrengelman.shadow" version "7.1.2" apply false
 }
+
+apply from: rootProject.file("../../../../scripts/aurora-mod-versions.gradle")
 architectury { minecraft = rootProject.minecraft_version }
 subprojects {
     apply plugin: "dev.architectury.loom"
@@ -15,7 +17,7 @@ subprojects {
 allprojects {
     apply plugin: "java"
     apply plugin: "architectury-plugin"
-    version = rootProject.mod_version
+    version = rootProject.auroraVersions.skins
     group = rootProject.maven_group
     base { archivesName = rootProject.archives_base_name }
     java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }

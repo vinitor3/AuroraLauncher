@@ -3,15 +3,18 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
+import { drawSkinPortrait } from "../src/lib/skinFace.ts";
 
 // Exercise effects and image callbacks without requiring a GPU or a new DOM dependency.
 function setup({ constructorFails = false, textureFails = false, thumbnail = false } = {}) {
   const slots = [], effects = [], images = [], viewers = [], timers = new Map();
+  const document = Object.assign(new EventTarget(), { hidden: false });
+  const drawing = { canvas: {}, clearRect() {}, drawImage() {} };
   let cursor = 0, timerId = 0;
   const hooks = {
     useRef(value) {
       const slot = cursor++;
-      return slots[slot] ??= { current: slot === 0 ? {} : value };
+      return slots[slot] ??= { current: slot === 0 ? { getContext: () => drawing } : value };
     },
     useState(value) {
       const slot = cursor++;
@@ -34,7 +37,7 @@ function setup({ constructorFails = false, textureFails = false, thumbnail = fal
     constructor() { images.push(this); }
   }
   class SkinViewer {
-    controls = {};
+    controls = new EventTarget();
     loaded = [];
     visible = false;
     constructor() {
@@ -42,6 +45,7 @@ function setup({ constructorFails = false, textureFails = false, thumbnail = fal
       viewers.push(this);
     }
     resetSkin() { this.visible = false; }
+    render() { this.rendered = true; }
     loadSkin(image, options) {
       if (textureFails) throw new Error("Invalid texture");
       this.loaded.push({ image, options });
@@ -56,9 +60,10 @@ function setup({ constructorFails = false, textureFails = false, thumbnail = fal
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   vm.runInNewContext(code, {
-    exports, Image,
+    exports, Image, document,
     window: { setTimeout: (fn) => { timers.set(++timerId, fn); return timerId; }, clearTimeout: (id) => timers.delete(id) },
-    require: (name) => name === "react" ? hooks : name === "react/jsx-runtime" ? runtime : { SkinViewer, IdleAnimation: class {} },
+    require: (name) => name === "react" ? hooks : name === "react/jsx-runtime" ? runtime
+      : name === "skinview3d" ? { SkinViewer, WalkingAnimation: class {} } : { drawSkinPortrait, SkinThumbnail: "SkinThumbnail" },
   });
   const render = (props, flush = true) => {
     cursor = 0;
@@ -67,13 +72,34 @@ function setup({ constructorFails = false, textureFails = false, thumbnail = fal
     if (flush) while (effects.length) effects.shift()();
     return result;
   };
-  return { render, images, viewers, timers, unmount: () => slots.forEach((slot) => slot?.cleanup?.()) };
+  return { render, images, viewers, timers, document, unmount: () => slots.forEach((slot) => slot?.cleanup?.()) };
 }
 
 const first = { skinUrl: "blob:first", skinModel: "classic" };
 const second = { skinUrl: "blob:second", skinModel: "slim" };
-const canvas = (tree) => tree.props.children[0];
-const placeholder = (tree) => tree.props.children[1];
+const canvas = (tree) => tree.props.children[0].props.children[0];
+const placeholder = (tree) => tree.props.children[0].props.children[1];
+
+test("preview renders on demand until motion is requested and pauses in a hidden window", () => {
+  const run = setup();
+  run.render(first);
+  run.images[0].onload();
+  const tree = run.render(first);
+  const viewer = run.viewers[0];
+  assert.equal(viewer.renderPaused, true);
+  assert.equal(viewer.rendered, true);
+  tree.props.children[1].props.children[1].props.onClick();
+  run.render(first);
+  assert.ok(viewer.animation);
+  assert.equal(viewer.renderPaused, false);
+  run.document.hidden = true;
+  run.document.dispatchEvent(new Event("visibilitychange"));
+  assert.equal(viewer.renderPaused, true);
+  run.document.hidden = false;
+  run.document.dispatchEvent(new Event("visibilitychange"));
+  assert.equal(viewer.renderPaused, false);
+  run.unmount();
+});
 
 test("3D preview stays hidden until a valid skin loads and hides immediately on selection change", () => {
   const run = setup();
@@ -139,7 +165,11 @@ test("WebGL initialization and texture decoding failures stay inside the preview
     const run = setup(options);
     run.render(first);
     run.images[0]?.onload();
-    assert.match(placeholder(run.render(first)).props.className, /error/);
+    const fallback = placeholder(run.render(first));
+    if (options.constructorFails) {
+      assert.equal(fallback.type, "SkinThumbnail");
+      assert.equal(fallback.props.src, first.skinUrl);
+    } else assert.match(fallback.props.className, /error/);
     run.unmount();
   }
 });
@@ -148,14 +178,14 @@ test("thumbnail hides failed/invalid images and shows a named fallback", () => {
   const run = setup({ thumbnail: true });
   const props = { src: "blob:skin", name: "Link" };
   let tree = run.render(props);
-  const image = tree.props.children[0];
-  assert.equal(image.props.style.visibility, "hidden");
+  const image = tree.props.children[1];
+  assert.equal(tree.props.children[0].props.style.visibility, "hidden");
   image.props.onLoad({ currentTarget: { naturalWidth: 64, naturalHeight: 64 } });
   assert.equal(run.render(props).props.children[0].props.style.visibility, "visible");
   image.props.onError();
   tree = run.render(props);
   assert.equal(tree.props.children[0].props.style.visibility, "hidden");
-  assert.match(tree.props.children[1].props["aria-label"], /Link/);
+  assert.match(tree.props.children[2].props["aria-label"], /Link/);
   image.props.onLoad({ currentTarget: { naturalWidth: 32, naturalHeight: 32 } });
   assert.equal(run.render(props).props.children[0].props.style.visibility, "hidden");
 });

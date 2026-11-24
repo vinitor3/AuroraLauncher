@@ -7,7 +7,7 @@ import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLServerStoppedEvent;
 import net.minecraftforge.fml.common.Loader;
 
-@Mod(modid = "aurora_skins", name = "Aurora Skins", version = "0.3.1",
+@Mod(modid = "aurora_skins", name = "Aurora Skins", version = "0.3.3",
     acceptableRemoteVersions = "*", dependencies = "after:aurora_core@[1.1.3,)")
 public final class AuroraSkinsForgeLegacy {
     @Mod.EventHandler public void initialize(FMLPreInitializationEvent event) {

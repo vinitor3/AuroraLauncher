@@ -76,8 +76,8 @@ impl ReadyProfile {
             loader,
             loader_version,
             java_major,
-            core_version: "1.1.5",
-            skins_version: "0.3.1",
+            core_version: "1.1.7",
+            skins_version: "0.3.3",
         }
     }
     #[cfg(feature = "connect-lab")]
@@ -194,7 +194,12 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(
-            matrix["targets"].as_array().unwrap().len(),
+            matrix["targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|target| target["connectReady"] != false)
+                .count(),
             ReadyProfile::ALL.len()
         );
         for profile in ReadyProfile::ALL {

@@ -20,4 +20,4 @@ Registrar histórico local limitado de diagnóstico, orientação e ação. O te
 
 O alcance inicial é reduzido a mods identificados e opções JSON conhecidas. Alterar arquivos, janela, execução ou contexto pode invalidar uma proposta. Backups locais permanecem até manutenção explícita, sem coleta ou upload. O mecanismo não é CAS nem backup integral. Uma resposta correta em mocks ou uma única chamada real não homologa disponibilidade online, qualidade causal ou operação nativa completa.
 
-Evidências e limitações correntes: [task-ai-tools](../../task-ai-tools.md). Contratos e operação: [Aurora AI Tools](../../aurora-ai-tools.md). A matriz de Core/Skins e as versões publicadas permanecem inalteradas.
+Evidências e limitações correntes: [task-ai-tools](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-ai-tools.md). Contratos e operação: [Aurora AI Tools](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/aurora-ai-tools.md). A matriz de Core/Skins e as versões publicadas permanecem inalteradas.

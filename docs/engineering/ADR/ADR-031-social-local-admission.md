@@ -1,6 +1,6 @@
 # ADR-031 — Admissão social local com consentimento e acompanhamento
 
-25/10/2026. Estado: **PROTÓTIPO LOCAL TESTADO**, conforme [execução88B](../../task-aur-r4-connect-social-88b.md). Complementa ADR-029/030, R4-005/008, sem ampliar matriz ou liberar funcionalidades ao público. O contrato abaixo não implica que todos os critérios de liberação tenham sido executados; o relatório separa cada prova.
+25/10/2026. Estado: **PROTÓTIPO LOCAL TESTADO**, conforme [execução88B](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-aur-r4-connect-social-88b.md). Complementa ADR-029/030, R4-005/008, sem ampliar matriz ou liberar funcionalidades ao público. O contrato abaixo não implica que todos os critérios de liberação tenham sido executados; o relatório separa cada prova.
 
 ## Recorte
 

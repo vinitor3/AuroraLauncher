@@ -82,7 +82,12 @@ fn exact_status_targets_match_active_matrix() {
         "../../../../../scripts/active-mod-matrix.json"
     ))
     .unwrap();
-    let targets = matrix["targets"].as_array().unwrap();
+    let targets: Vec<_> = matrix["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|target| target["connectReady"] != false)
+        .collect();
     assert_eq!(targets.len(), TARGETS.len());
     for (minecraft, loader, version, _) in TARGETS {
         assert!(targets.iter().any(|t| t["minecraft"] == minecraft

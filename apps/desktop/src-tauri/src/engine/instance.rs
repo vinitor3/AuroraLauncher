@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -124,6 +125,21 @@ impl Instance {
         let destination = self.mods_dir().join(filename);
         let temporary = destination.with_extension("aurora-writing");
         let backup = destination.with_extension("aurora-backup");
+        // Normal launches already have both packaged JARs. Compare the actual
+        // bytes before replacing them, even when a modified JAR is the same size.
+        if !temporary.exists()
+            && !backup.exists()
+            && fs::symlink_metadata(&destination)
+                .is_ok_and(|info| info.is_file() && info.len() == contents.len() as u64)
+        {
+            let mut installed = Vec::with_capacity(contents.len());
+            fs::File::open(&destination)?
+                .take(contents.len() as u64 + 1)
+                .read_to_end(&mut installed)?;
+            if installed == contents {
+                return Ok(destination);
+            }
+        }
         fs::write(&temporary, contents)?;
         if backup.exists() {
             fs::remove_file(&backup)?;
@@ -176,6 +192,17 @@ mod tests {
             .unwrap();
 
         assert_eq!(fs::read(&installed).unwrap(), b"new");
+        let probe = fs::File::options().write(true).open(&installed).unwrap();
+        let old_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        probe.set_modified(old_time).unwrap();
+        drop(probe);
+        instance
+            .install_aurora_artifact_bytes("aurora-core-test.jar", b"new")
+            .unwrap();
+        assert_eq!(
+            fs::metadata(&installed).unwrap().modified().unwrap(),
+            old_time
+        );
         assert!(!installed.with_extension("aurora-writing").exists());
         assert!(!installed.with_extension("aurora-backup").exists());
         fs::remove_dir_all(root).unwrap();

@@ -26,6 +26,8 @@ Object.defineProperty(window.HTMLTextAreaElement.prototype, "defaultValue", {
   configurable: true, get() { return this.textContent; }, set(value) { this.textContent = value; },
 });
 Object.assign(globalThis, { window, document, HTMLElement: window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+window.HTMLElement.prototype.showModal = function () { this.open = true; };
+window.HTMLElement.prototype.close = function () { this.open = false; };
 let copied = [];
 let clipboardFails = false;
 Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
@@ -412,8 +414,9 @@ test("discovery rejects a native target changed between review and STATUS", asyn
 test("discovery runtime projections cover exactly the nine active pairs with matching protocols", async () => {
   const matrix = JSON.parse(await readFile(new URL("../../../../../scripts/active-mod-matrix.json", import.meta.url), "utf8"));
   const protocols = { "1.12.2": 340, "1.16.5": 754, "1.19.2": 760, "1.20.1": 763, "1.21.1": 767 };
-  assert.equal(matrix.targets.length, 9);
-  for (const target of matrix.targets) {
+  const connectTargets = matrix.targets.filter(target => target.connectReady !== false);
+  assert.equal(connectTargets.length, 9);
+  for (const target of connectTargets) {
     const runtime = { minecraftVersion: target.minecraft, loader: target.loader, loaderVersion: target.loaderVersion,
       statusProtocol: protocols[target.minecraft], evidence: "nativeLaunchProfile" };
     assert.deepEqual(discoveryTypes.inventoryFrom({ ...discoveryInventory, runtime }).runtime, runtime);
@@ -2277,8 +2280,10 @@ test("group confirmation refuses valid-shaped response that switches another par
   assert.equal(count("connect_confirm_session_group_host"), 1); assert.equal(count("connect_export_session_group_invitation"), 0);
 });
 
+const activeMatrix = JSON.parse(await readFile(new URL("../../../../../scripts/active-mod-matrix.json", import.meta.url), "utf8"));
+const moduleVersion = name => activeMatrix.modules.find(module => module.name === name).version;
 const readyGameCapability = { schemaVersion: 1, instanceScope: "diagnosticCopy", maxPlanSeconds: 60, minecraftVersion: "1.21.1",
-  loader: "fabric", loaderVersion: "0.16.14", javaMajor: 21, coreVersion: "1.1.5", skinsVersion: "0.3.1" };
+  loader: "fabric", loaderVersion: "0.16.14", javaMajor: 21, coreVersion: moduleVersion("core"), skinsVersion: moduleVersion("skins") };
 test("ready game integration is a separate optional capability and never silently enables launch", async () => {
   assert.deepEqual(types.capabilitiesFrom({ ...caps, readyGameLaunch: readyGameCapability }).readyGameLaunch, readyGameCapability);
   for (const value of [{ ...caps, available: false, readyGameLaunch: readyGameCapability },
@@ -3276,9 +3281,17 @@ for (const phase of ["closed", "failed"]) test(`online compact mode preserves te
   if (phase === "failed") assert.match(container.textContent, /Não foi possível confirmar a continuidade da sessão a tempo/);
   assert.equal(container.querySelector("form.connect-form"), null);
   assert.equal(container.querySelectorAll("#connect-social-title").length, 1);
-  assert.deepEqual([...container.querySelectorAll("button")].map(element => element.textContent), ["Atualizar estado"]);
-  assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot"]);
+  assert.deepEqual([...container.querySelectorAll("button")].map(element => element.textContent), phase === "failed" ? ["Preparar para IA", "Atualizar estado"] : ["Atualizar estado"]);
   assert.deepEqual(copied, []);
+  if (phase === "failed") {
+    await click("Preparar para IA");
+    const dialog = document.querySelector("dialog");
+    const copyButton = [...dialog.querySelectorAll("button")].find(item => item.textContent === "Copiar para minha IA");
+    await act(async () => copyButton.click());
+    assert.match(copied.at(-1), /servidor de Minecraft Java[\s\S]*continuidade da sessão a tempo/);
+    assert.doesNotMatch(copied.at(-1), /11111111|127\.0\.0\.1|connect_social_continuity_lost/);
+  }
+  assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot"]);
 });
 for (const role of ["host", "guest"]) test(`the Connect client page presents the existing ${role} Social failure without new queries`, async () => {
   socialReadyFixture();

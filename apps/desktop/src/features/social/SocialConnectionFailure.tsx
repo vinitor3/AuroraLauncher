@@ -1,3 +1,4 @@
+import { SupportContextButton } from "../support/SupportContextButton";
 import { socialConnectError, socialFailureGateText, socialFailureStageText, type SocialConnectProjection } from "./connect-types";
 
 /** Presents the existing native observation without requesting or inferring new evidence. */
@@ -13,6 +14,7 @@ export function SocialConnectionFailure({ errorCode, social, className = "social
       {social?.failureStage && <><strong>{socialFailureStageText[social.failureStage]}.</strong>{" "}</>}
       {socialConnectError(errorCode)}
     </p>
+    <SupportContextButton source="Servidor" context={[social?.failureStage && socialFailureStageText[social.failureStage], socialConnectError(errorCode)].filter(Boolean).join(". ")} />
     {observation && <details className={className}>
       <summary>Detalhes da interrupção</summary>
       <p>Verificação interrompida: {socialFailureGateText[observation.gate]}.</p>

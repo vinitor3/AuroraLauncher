@@ -1,0 +1,14 @@
+pluginManagement {
+    repositories {
+        maven { url = "https://maven.fabricmc.net/" }
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "aurora-fabric-1.21.11"
+include("api", "runtime", "skins-core", "fabric", "skins-fabric")
+project(":api").projectDir = file("../../api")
+project(":runtime").projectDir = file("../../runtime")
+project(":skins-core").projectDir = file("../../../aurora-skins/core")
+project(":skins-fabric").projectDir = file("../../../aurora-skins/minecraft/1.21.11/fabric")

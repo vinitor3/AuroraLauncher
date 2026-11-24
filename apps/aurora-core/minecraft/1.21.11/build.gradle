@@ -1,0 +1,46 @@
+import groovy.json.JsonSlurper
+
+plugins {
+    id "net.fabricmc.fabric-loom-remap" version "1.18.4" apply false
+}
+
+def repository = file("../../../..")
+def matrix = new JsonSlurper().parse(new File(repository, "scripts/active-mod-matrix.json"))
+def versions = matrix.modules.collectEntries { [(it.name): it.version] }
+
+subprojects {
+    apply plugin: "java-library"
+    boolean adapter = name in ["fabric", "skins-fabric"]
+    boolean skins = name in ["skins-core", "skins-fabric"]
+    version = skins ? versions.skins : versions.core
+    group = skins ? "com.aurora.skins" : "com.aurora.core"
+    repositories { mavenCentral() }
+    java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = "UTF-8"
+        options.release = adapter ? 21 : 8
+    }
+    tasks.withType(Test).configureEach { useJUnitPlatform() }
+    tasks.withType(AbstractArchiveTask).configureEach {
+        preserveFileTimestamps = false
+        reproducibleFileOrder = true
+    }
+    if (adapter) {
+        apply plugin: "net.fabricmc.fabric-loom-remap"
+        base.archivesName = skins ? "aurora-skins" : "aurora-core"
+        dependencies {
+            minecraft "com.mojang:minecraft:${rootProject.minecraft_version}"
+            mappings loom.officialMojangMappings()
+            modImplementation "net.fabricmc:fabric-loader:${rootProject.loader_version}"
+        }
+        processResources {
+            inputs.property "coreVersion", versions.core
+            inputs.property "version", project.version
+            filesMatching("fabric.mod.json") { expand(version: project.version, coreVersion: versions.core) }
+            from(repository) { include "LICENSE.md"; into "META-INF" }
+        }
+    } else {
+        // Keep legacy and modern adapters independently buildable in parallel.
+        layout.buildDirectory = rootProject.layout.buildDirectory.dir("shared/${name}")
+    }
+}

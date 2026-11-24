@@ -55,4 +55,4 @@ launcher não grava argumentos de linha de comando nele. O leitor existente
 continua selecionando o log mais recente, inclusive falhas antes de latest.log.
 Outros sistemas operacionais mantêm seu comportamento de processo anterior.
 
-Provas e pendências: [tarefa](task-startup-session.md).
+Provas e pendências: [tarefa](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-startup-session.md).

@@ -34,4 +34,4 @@ Armazenamento confinado a visual-themes no diretório de dados do app, com lock 
 
 Novos tipos de componentes/efeitos exigem alteração versionada no renderer. Uma IA externa pode gerar documentos inválidos; o erro deve orientar o usuário, sem executar o conteúdo. A validação não promete funcionamento de todo codec ou desempenho constante em todo hardware. Testes sintéticos de formato, DOM, disco e relógio não substituem homologação visual do WebView, de GPU fraca, bandeja e reprodução de mídias reais.
 
-Integração e evidências: [tarefa](../../task-launcher-themes.md), [uso](../../launcher-themes.md). Não altera Worker, autenticação, Core, Skins, Minecraft ou permissões do Tauri. Não gera instalador nem versão de release nesta tarefa.
+Integração e evidências: [tarefa](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-launcher-themes.md), [uso](../../launcher-themes.md). Não altera Worker, autenticação, Core, Skins, Minecraft ou permissões do Tauri. Não gera instalador nem versão de release nesta tarefa.

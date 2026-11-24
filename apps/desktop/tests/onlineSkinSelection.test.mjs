@@ -3,11 +3,12 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
+import { publicCatalogSource, skinSha256 } from "../src/lib/skinCatalogSources.ts";
 
 const source = ts.createSourceFile("App.tsx", readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const app = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "LauncherApp");
 const handler = app.body.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "selectOnlineSkin").getText(source);
-const skin = { name: "Public Player", skinUrl: "https://example.com/skin.png", model: "slim" };
+const skin = { name: "Public Player", skinUrl: "https://example.com/skin.png", model: "slim", contentHash: await skinSha256(new Blob(["PNG"])) };
 function setup(overrides = {}) {
   const events = [];
   const context = vm.createContext({
@@ -17,6 +18,7 @@ function setup(overrides = {}) {
     setSelectedLocalSkinId: (value) => events.push(["selected", value]),
     invoke: async (command, args) => { events.push([command, args]); return { url: skin.skinUrl, dataBase64: "PNG" }; },
     appearanceBlob: async () => new Blob(["PNG"]),
+    publicCatalogSource, skinSha256,
     saveLocalSkin: async (record) => { events.push(["save", record]); return { ...record, id: "local-skin" }; },
     refreshLocalSkinLibrary: async (...args) => events.push(["refresh", args]),
     setSkinModel: (value) => events.push(["model", value]),

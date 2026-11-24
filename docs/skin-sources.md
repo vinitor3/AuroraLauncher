@@ -3,7 +3,7 @@
 ## Como usar
 
 - No launcher, **Guarda-roupa → Explorar** abre o catálogo da comunidade (MCStat). Busque por tema ou tag, como `#ninja`. Para ir direto a uma página, digite seu número no campo **Página** e pressione Enter ou **Ir**. Uma pesquisa nova começa na página 1. Se o destino estiver vazio, a página anterior continua visível.
-- O catálogo do launcher oculta as skins de autoria do Aurora Studio. **Minhas skins** conserva as que a pessoa já guardou, inclusive de catálogos anteriores. **Importar** aceita um arquivo PNG ou link. Selecione o modelo na prévia e use **Aplicar skin** para equipar a seleção neste computador.
+- **Minhas skins** guarda as importações pessoais e as skins da comunidade que você salvou. Os clientes atuais ignoram as antigas entradas do catálogo Aurora Studio. Em **Importar**, escolha um arquivo PNG ou cole um link. Selecione o modelo na prévia e use **Aplicar skin** para equipá-la neste computador.
 - Launcher: **Jogadores** aceita o nome ou UUID da conta Minecraft Java. Sugestões aparecem a partir de três caracteres; **Buscar perfil** continua disponível enquanto elas carregam. A seleção baixa e guarda o PNG; aplicar continua sendo uma ação separada.
 - Minecraft: Skins → Explorar. `@Not` sugere jogadores, `@Notch` pesquisa o nome, `@069a79f444e94726a5befca90e38aaf5` consulta UUID diretamente. Sem `@`, pesquisa catálogo; `#tag` filtra MCStat. A grade mantém 12 slots: clique numa skin pronta para selecionar e use **Usar skin** para aplicar. As setas navegam páginas inteiras; uma pesquisa nova volta à primeira página sem seleção.
 - Selecionar um resultado não altera a skin ativa. No desktop, a seleção online já guarda o PNG na biblioteca para permitir aplicar sem uma nova consulta remota. No mod, aplicar/favoritar materializa o PNG validado.
@@ -117,7 +117,7 @@ As rotas Aurora são `GET /v1/skins/players?query=Not`, `GET /v1/skins/profile/N
 - `SKIN_API_REQUESTS_PER_MINUTE` (Worker var) ajusta o orçamento das consultas de jogador, padrão 30/min, máximo 120. No código, o catálogo MCStat tem orçamento separado de 30/min em `fetchMcstatPage`; rotas de jogador têm proteção por IP de 60/min. Respeite também as cotas do seu plano externo.
 - HTTP 429 respeita `Retry-After`; não há repetição imediata em autocomplete. 401/403 entram em espera, JSON/URLs inválidas são rejeitados. Logs contêm operação/status/cache hit/miss, nunca credencial.
 - Texturas: host/path permitidos, HTTPS, sem redirect, limite 256 KiB no Worker, dimensões 64×64/64×32, CRC e dados PNG íntegros, hash conferido antes de servir/aplicar.
-- Sem rede, a biblioteca local continua disponível. O catálogo do launcher oferece nova tentativa quando o Worker perde acesso ao MCStat. O mod mantém seu catálogo original de reserva.
+- Sem rede, abra a biblioteca para usar suas skins salvas. No mod, uma página da comunidade já consultada pode continuar visível durante a sessão. O launcher oferece nova tentativa quando o catálogo fica indisponível.
 
 Correção desktop de 22/09/2026: o rosto da conta prioriza o PNG equipado local,
 inclusive quando a sincronização online falha. Miniaturas e avatar usam a mesma
@@ -158,7 +158,7 @@ checagem direta. Isso registra intermitência externa, não garantia de
 disponibilidade. Não houve alteração/deploy do Worker nesta entrega.
 
 **PARCIAL**: testes gráficos focados em quatro combinações e skin dentro de
-um mundo legado isolado. [Evidências e limites](task-skins-runtime-repair.md).
+um mundo legado isolado. [Evidências e limites](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-skins-runtime-repair.md).
 
 `npm --prefix apps/edge-proxy test`, `npm --prefix apps/edge-proxy run check`, `npm --prefix apps/desktop run build` e `npm run skins:build`.
 Execute o script de matriz com **JDK 21** em JAVA_HOME (os projetos antigos selecionam toolchain 17 e bytecode Java 8). O exemplo visual do desktop em `examples/skins.html` usa as mesmas peças de busca e não salva conta/skin.
@@ -171,4 +171,4 @@ Explorar mantém 12 slots, mesmo com resposta curta ou vazia. Apenas `hasMore` h
 
 Cada slot possui renderer/textura próprios; o preview global do Core permanece independente. A pose dos cards é fixa. `catalogProvider.preview(entry)` usa os dois workers existentes, deduplica PNGs em andamento, mantém até 96 prévias em memória e reutiliza cache validado em disco. PNG compartilhado não mistura os modelos Slim/Classic. Resize recalcula apenas geometria; sair da aba ou fechar libera as texturas. Prévia não importa nem equipa; Aplicar, Favoritar, Modelo e Importar mantêm suas ações explícitas anteriores.
 
-Evidências, comandos e limitações: [registro da grade](task-skins-grid.md).
+Evidências, comandos e limitações: [registro da grade](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-skins-grid.md).

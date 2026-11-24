@@ -14,3 +14,5 @@
 *.png binary
 *.webp binary
 
+# Preserve the exact upstream license texts embedded in the signed JARs.
+apps/aurora-core/licenses/*.txt -text whitespace=-blank-at-eof

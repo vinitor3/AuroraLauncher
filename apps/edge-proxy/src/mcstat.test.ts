@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import test, { afterEach, beforeEach, type TestContext } from "node:test";
-import { deflateSync } from "node:zlib";
+import { png, chunk } from "../tests/skinPng.ts";
 import type { Env } from "./index.ts";
 
 // Run explicitly: node --test apps/edge-proxy/src/index.test.ts apps/edge-proxy/src/mcstat.test.ts
@@ -61,46 +61,6 @@ function mockFetch(handler: (call: Call) => Response | Promise<Response>): Call[
   return calls;
 }
 
-function crc32(bytes: Uint8Array): number {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function chunk(type: string, data: Uint8Array): Buffer {
-  const typed = Buffer.concat([Buffer.from(type), data]);
-  const length = Buffer.alloc(4);
-  const checksum = Buffer.alloc(4);
-  length.writeUInt32BE(data.length);
-  checksum.writeUInt32BE(crc32(typed));
-  return Buffer.concat([length, typed, checksum]);
-}
-
-function png(seed = 1, width = 64, height = 64): Buffer {
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(width, 0);
-  header.writeUInt32BE(height, 4);
-  header[8] = 8;
-  header[9] = 6;
-  const pixels = Buffer.alloc(height * (width * 4 + 1));
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const offset = y * (width * 4 + 1) + 1 + x * 4;
-      pixels[offset] = seed & 255;
-      pixels[offset + 1] = seed >>> 8 & 255;
-      pixels[offset + 2] = (x + y) & 255;
-      pixels[offset + 3] = 255;
-    }
-  }
-  return Buffer.concat([
-    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
-    chunk("IHDR", header), chunk("IDAT", deflateSync(pixels)), chunk("IEND", Buffer.alloc(0)),
-  ]);
-}
-
 function hash(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -156,20 +116,20 @@ function assetUrl(bytes: Uint8Array, source: string): string {
   return `${origin}/v1/skins/catalog/mcstat/${hash(bytes)}/${Buffer.from(source).toString("base64url")}.png`;
 }
 
-test("pagination: crosses local/remote and upstream page boundaries for sizes 7, 12 and 24", async () => {
+test("pagination: crosses upstream page boundaries for sizes 7, 12 and 24", async () => {
   const skins = Array.from({ length: 50 }, (_, index) => skin(index));
   const calls = mockCatalog(skins);
   for (const pageSize of [7, 12, 24]) {
     const names: string[] = [];
     const ids: string[] = [];
-    for (let page = 0; page < Math.ceil(56 / pageSize); page++) {
+    for (let page = 0; page < Math.ceil(50 / pageSize); page++) {
       const result = await catalog("", page, pageSize);
-      assert.equal(result.rows.length, Math.min(pageSize, 56 - page * pageSize));
-      assert.equal(result.more, (page + 1) * pageSize < 56);
+      assert.equal(result.rows.length, Math.min(pageSize, 50 - page * pageSize));
+      assert.equal(result.more, (page + 1) * pageSize < 50);
       names.push(...result.rows.filter((row) => row[0].startsWith("mcstat-")).map((row) => decoded(row[1])));
       ids.push(...result.rows.map((row) => row[0]));
     }
-    assert.equal(new Set(ids).size, 56);
+    assert.equal(new Set(ids).size, 50);
     assert.deepEqual(names, skins.map((entry) => entry.name));
   }
   assert.deepEqual(calls.filter((call) => call.url.pathname === "/api/v1/skins")
@@ -225,7 +185,7 @@ test("cache: list TTL is five minutes and image TTL is one hour", async (t) => {
 test("QA-QUOTA-01: HTTP 429 must suppress repeated calls during Retry-After", async () => {
   const calls = mockFetch(() => new Response(null, { status: 429, headers: { "Retry-After": "60" } }));
   for (let attempt = 0; attempt < 4; attempt++) {
-    assert.equal((await catalog("qa-rate-limit")).rows.length, 0);
+    assert.equal((await worker.fetch(new Request(origin + "/v1/skins/catalog?query=qa-rate-limit"), env)).status, 503);
   }
   assert.equal(calls.length, 1, "Four immediate requests currently consume four upstream calls after 429");
 });
@@ -295,9 +255,8 @@ for (const declared of [true, false]) {
   test(`list bounds: cancels oversized ${declared ? "declared" : "chunked"} JSON before hydration`, async () => {
     let cancelled = false;
     const calls = mockFetch(() => oversizedResponse("application/json", declared, () => { cancelled = true; }));
-    const result = await catalog("qa-large-json");
-    assert.equal(result.rows.length, 0);
-    assert.equal(result.response.headers.get("X-Aurora-Catalog-Sources"), "aurora");
+    const result = await worker.fetch(new Request(origin + "/v1/skins/catalog?query=qa-large-json"), env);
+    assert.equal(result.status, 503);
     assert.equal(cancelled, true);
     assert.equal(calls.length, 1);
   });

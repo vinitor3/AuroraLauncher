@@ -101,7 +101,7 @@ try {
     $version = $versions[0]
 
     $releasePath = Join-Path "releases" "Aurora Smart Launcher_${version}_x64-setup.exe"
-    if ((Test-Path -LiteralPath $releasePath) -and -not $AllowExistingRelease) {
+    if (((Test-Path -LiteralPath $releasePath) -or (Test-Path -LiteralPath $releasePath.Replace(' ', '-'))) -and -not $AllowExistingRelease) {
         Stop-Preflight "o release imutável já existe: $releasePath. Incremente a versão antes de recompilar."
     }
 

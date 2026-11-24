@@ -1,8 +1,10 @@
-import type { AiToolAdvice, AiToolContext } from "../../../../../shared/aiTools";
-import type { DoctorReport } from "../doctor/types";
-export type { AiToolPlan, AiToolHistoryEntry } from "../../../../../shared/aiTools";
-
-export type AiToolAdviceRequest = (context: AiToolContext, question: string, signal: AbortSignal, report?: DoctorReport) => Promise<AiToolAdvice>;
+export type AiToolHistoryEntry = {
+  id: string; kind: "diagnosis" | "advice" | "action"; createdAtMs: number; title: string; summary: string;
+  issueIds: string[]; actionId: string | null; status: "recorded" | "applied" | "undone" | "pending";
+  assessment: "unresolved" | "normal_exit" | "inconclusive" | null; undoAvailable: boolean;
+};
+export type AiToolPlan = { planId: string; digest: string; title: string; changes: Array<{ label: string; before: string; after: string }>;
+  warnings: string[]; expiresAtMs: number };
 
 // Native tool commands return fixed Portuguese messages. Unexpected exceptions
 // are not suitable for display (or for sending back to a model).

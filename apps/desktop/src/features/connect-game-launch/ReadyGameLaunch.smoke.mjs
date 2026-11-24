@@ -101,12 +101,12 @@ const planId = "cccccccc-1111-4111-8111-111111111111";
 const context = { sourceInstanceId: "test-source", contextKey: "synthetic-context", javaExecutable: "C:\\fixture-java\\bin\\java.exe",
   nickname: "Player_73", appearance: { skinUrl: null, skinFile: null, capeUrl: null, skinModel: "classic" } };
 const capability = { schemaVersion: 1, instanceScope: "diagnosticCopy", maxPlanSeconds: 60, minecraftVersion: "1.21.1",
-  loader: "fabric", loaderVersion: "0.16.14", javaMajor: 21, coreVersion: "1.1.5", skinsVersion: "0.3.1" };
+  loader: "fabric", loaderVersion: "0.16.14", javaMajor: 21, coreVersion: "1.1.7", skinsVersion: "0.3.3" };
 const connection = { operationId, role: "guest", phase: "guestConnected", transportState: "authenticated", cleanupState: "pending", tcpAddress: "127.0.0.1:42010" };
 const idle = () => ({ operationId, generation: 0, phase: "idle", planId: null, review: null, result: null, errorCode: null });
 const review = () => ({ operationId, planId, ...structuredClone(context), instanceId: copyId, digest: "a".repeat(64),
   expiresAtMs: Date.now() + 50_000, sessionExpiresAtMs: Date.now() + 500_000, minecraftVersion: "1.21.1", loader: "fabric", loaderVersion: "0.16.14",
-  javaMajor: 21, gameAddress: "127.0.0.1:42010", coreVersion: "1.1.5", coreSha256: "b".repeat(64), skinsVersion: "0.3.1", skinsSha256: "c".repeat(64) });
+  javaMajor: 21, gameAddress: "127.0.0.1:42010", coreVersion: "1.1.7", coreSha256: "b".repeat(64), skinsVersion: "0.3.3", skinsSha256: "c".repeat(64) });
 const reviewed = () => ({ ...idle(), generation: 2, phase: "reviewed", planId, review: review() });
 const terminal = (phase, generation = 4) => ({ ...idle(), planId, generation, phase, ...(phase === "started" ? { result: {
   runId: "dddddddd-1111-4111-8111-111111111111", processId: 7310, instanceId: copyId, worldState: "notVerified",
@@ -265,7 +265,7 @@ test("a reviewed official runtime copy supplies its own Java on a fresh launcher
   assert.equal(button("Iniciar cópia e tentar entrar").disabled, true);
 });
 
-const profile1211 = { minecraftVersion: "1.21.1", loader: "fabric", loaderVersion: "0.16.14", javaMajor: 21, coreVersion: "1.1.5", skinsVersion: "0.3.1" };
+const profile1211 = { minecraftVersion: "1.21.1", loader: "fabric", loaderVersion: "0.16.14", javaMajor: 21, coreVersion: "1.1.7", skinsVersion: "0.3.3" };
 const profile1201 = { ...profile1211, minecraftVersion: "1.20.1", javaMajor: 17 };
 const capability93 = { schemaVersion: 2, instanceScope: "diagnosticCopy", maxPlanSeconds: 60, runtimes: [profile1211, profile1201] };
 
@@ -335,9 +335,9 @@ test("losing schema2 authorization disables a Fabric1201 review while keeping ca
 
 test("a Forge Java 8 review needs matrix capability and renewed consent after capability loss", async () => {
   const matrix = JSON.parse(await readFile(new URL("../../../../../scripts/active-mod-matrix.json", import.meta.url), "utf8"));
-  const runtimes = matrix.targets.map(target => ({
+  const runtimes = matrix.targets.filter(target => target.connectReady !== false).map(target => ({
     minecraftVersion: target.minecraft, loader: target.loader, loaderVersion: target.loaderVersion,
-    javaMajor: target.javaRuntime, coreVersion: "1.1.5", skinsVersion: "0.3.1",
+    javaMajor: target.javaRuntime, coreVersion: "1.1.7", skinsVersion: "0.3.3",
   }));
   const full = { ...capability93, schemaVersion: 3, runtimes };
   const initial = reviewed();

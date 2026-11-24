@@ -1,29 +1,13 @@
-# Supabase Storage para skins e capas
+# Armazenamento de skins e capas
 
-Projeto: `https://pgbzkinjfwbncifurirb.supabase.co`.
+O launcher salva a skin e o modelo no computador antes de sincronizar. Para usar uma skin localmente, abra **Guarda-roupa → Importar**, selecione o PNG e clique em **Aplicar skin**. O Aurora Skins recebe a cópia local ao iniciar o jogo.
 
-O desktop nunca acessa o Supabase com uma chave privilegiada. Ele envia o PNG
-e o Firebase ID token ao endpoint `/v1/appearance` do Worker. O Worker valida a
-assinatura, o usuário, o limite de 5 MB e as dimensões antes de gravar no bucket
-público `aurora-appearance`. O nome do objeto usa SHA-256 para não sobrescrever
-o cache de uma imagem anterior.
+O Worker recebe o PNG e o token Firebase em `POST /v1/appearance`, valida a conta e a imagem e envia o arquivo ao bucket público `aurora-appearance` do Supabase. A chave privilegiada fica no secret `SUPABASE_API_KEY_SERVICE_ROLE` do Worker. Se o envio falhar, o launcher tenta o Firebase Storage.
 
-Configure `SUPABASE_API_KEY` no Cloudflare com uma **Secret key** atual ou a
-chave legada **service_role**. Uma chave publishable/anon não serve: a criação
-do bucket e o upload serão corretamente bloqueados por RLS. A chave privilegiada
-deve permanecer apenas no secret do Worker.
+Quando ambos os armazenamentos falham, uma skin selecionada em **Explorar** pode usar o endereço público da imagem no perfil. O launcher confere a origem e o SHA-256 da cópia equipada e do PNG servido pelo Worker. Arquivos pessoais e links colados manualmente continuam equipados no computador. **Aplicar skin** repete a sincronização.
 
-O Worker usa `SUPABASE_API_KEY_SERVICE_ROLE` para criar/verificar o bucket e
-fazer uploads. `SUPABASE_API_KEY` permanece somente como fallback de migração.
-O launcher tenta Supabase primeiro e preserva uma cópia local da skin para que
-uma indisponibilidade temporária não impeça o jogo de iniciar.
+## Situação observada em 24 de novembro de 2026
 
-O armazenamento e seus consumidores desktop/Aurora Skins são preservados; a retirada do mod não altera chaves, autorização ou deploy.
+O `/health/storage` respondeu HTTP 503. O DNS público retornou `NXDOMAIN` para `pgbzkinjfwbncifurirb.supabase.co`. A API do Google Cloud Storage informou que o bucket alternativo `auroralauncher.firebasestorage.app` não existe. O catálogo público de skins usa um serviço independente.
 
-## Estado histórico verificado em 28 de agosto de 2026
-
-O endpoint `/health/storage` confirmou o bucket público `aurora-appearance` e o
-secret `SUPABASE_API_KEY_SERVICE_ROLE`. O Worker publicado prioriza essa chave
-para operações privilegiadas. A skin selecionada é salva localmente e enviada
-ao Supabase; se a sincronização falhar, a cópia local continua utilizável no
-Companion 1.20.1 naquele teste histórico. Atualmente a aparência no jogo pertence ao Aurora Skins; Companion foi retirado.
+O responsável pelo projeto pode conferir a referência e o estado do projeto no painel do Supabase. Após restabelecer o serviço, consulte `/health/storage` e execute `node scripts/supabase-appearance-smoke.mjs` com `AURORA_SMOKE_FIREBASE_ID_TOKEN` de uma conta de teste. O teste verifica o upload autenticado e compara o PNG baixado com o original. [Diagnóstico de NXDOMAIN no Supabase](https://supabase.com/kb/troubleshooting/nxdomain-error-connecting-to-a-supabase-project)

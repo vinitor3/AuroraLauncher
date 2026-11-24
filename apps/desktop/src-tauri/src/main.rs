@@ -98,7 +98,6 @@ fn create_launcher_tray(app: &tauri::App) -> tauri::Result<()> {
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             // Only the isolated debug social profile accepts its parent's public
             // authority pin. It is never read from WebView state or an IPC call.
@@ -315,16 +314,12 @@ fn main() {
             commands::cancel_instance_launch,
             commands::read_latest_doctor_run,
             commands::analyze_instance,
-            commands::ai_tools_context,
-            commands::prepare_ai_tool,
             commands::confirm_ai_tool,
             commands::revoke_ai_tool_plan,
             commands::prepare_ai_tool_undo,
             commands::ai_tool_history,
-            commands::ai_record_advice,
             commands::list_running_instances,
             commands::poll_ipc_events,
-            commands::synthesize_speech,
             commands::validate_appearance_url,
             commands::load_appearance_url,
             commands::load_local_appearance,

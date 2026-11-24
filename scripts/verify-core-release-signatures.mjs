@@ -16,6 +16,8 @@ for (const target of matrix.targets) {
   assert.equal(builds.length, 1, `Core target ${target.minecraft}/${target.loader}`);
   const build = builds[0];
   assert.equal(build.auroraCoreVersion, version);
+  assert.equal(build.loaderVersion, target.loaderVersion);
+  assert.equal(build.loaderVersionRange, target.loaderVersionRange);
   assert.equal(build.javaRuntime, target.javaRuntime);
   assert.equal(build.buildJdk, target.buildJdk);
   const filename = `aurora-core-${target.loader}-${target.minecraft}-${version}.jar`;

@@ -2,9 +2,6 @@ import { SkinService } from "./skins/SkinService.ts";
 import { SkinApiError } from "./skins/http.ts";
 import { skinImageUrl, type PlayerSkinEnv } from "./skins/models.ts";
 import { handleProjectTranslation } from "./translation.ts";
-import { handleDoctorAdvice } from "./doctor.ts";
-import { handleAssistant } from "./assistant.ts";
-import { handleAiTools } from "./aiTools.ts";
 import { aiFailureResponse, GeminiFailure } from "./gemini.ts";
 import { readDoctorJson, withDoctorAbort } from "../../../shared/doctorTransport.ts";
 
@@ -51,7 +48,7 @@ const curseForgeApiBase = "https://api.curseforge.com/v1";
 const mcstatApiBase = "https://mcstat.org/api/v1";
 const supabaseBase = "https://pgbzkinjfwbncifurirb.supabase.co";
 const appearanceBucket = "aurora-appearance";
-const auroraApiRevision = "2026-09-29-gemini-key-failover-v1";
+const auroraApiRevision = "beta-0.2.0-1-community-skins";
 const minecraftGameId = 432;
 const curseForgeClassIds = { mod: 6, modpack: 4471, resourcepack: 12, shader: 6552 } as const;
 const curseForgeLoaderIds = { forge: 1, fabric: 4 } as const;
@@ -1533,18 +1530,6 @@ async function curseForgeCatalog(request: Request, env: Env, userId: string): Pr
   return json(payload);
 }
 
-type CatalogSkin = {
-  id: string;
-  name: string;
-  model: "classic" | "slim";
-  skin: number;
-  hair: number;
-  primary: number;
-  accent: number;
-  dark: number;
-  tags: string[];
-};
-
 type McstatSkin = {
   name: string;
   model: "classic" | "slim";
@@ -1586,16 +1571,6 @@ function playerSkinService(env: Env): SkinService {
   return service;
 }
 
-const catalogSkins: CatalogSkin[] = [
-  { id: "aurora-voyager", name: "Viajante Aurora", model: "slim", skin: 0xdcc1a0, hair: 0x241739, primary: 0x7652b8, accent: 0xb78cff, dark: 0x181125, tags: ["aurora", "cosmos", "espaço", "neon", "roxo"] },
-  { id: "solar-ninja", name: "Ninja Solar", model: "slim", skin: 0xe7b78e, hair: 0x19151b, primary: 0xe86f22, accent: 0xffc34a, dark: 0x202027, tags: ["anime", "ninja", "naruto", "shinobi", "laranja"] },
-  { id: "ki-guardian", name: "Guardião do Ki", model: "classic", skin: 0xe5b186, hair: 0x171b36, primary: 0x3159ae, accent: 0xf18b2a, dark: 0x18213b, tags: ["anime", "dragon ball", "ki", "guerreiro", "azul"] },
-  { id: "forest-ranger", name: "Guardiã da Floresta", model: "slim", skin: 0xd6a47f, hair: 0x3b2a20, primary: 0x355e3b, accent: 0x79a85b, dark: 0x25362a, tags: ["floresta", "ranger", "natureza", "verde", "aventura"] },
-  { id: "cyber-violet", name: "Cyber Violeta", model: "slim", skin: 0xc99d83, hair: 0x16131f, primary: 0x4d2c78, accent: 0x33d6c6, dark: 0x191426, tags: ["cyber", "futurista", "neon", "violeta", "tecnologia"] },
-  { id: "crimson-mage", name: "Maga Carmesim", model: "classic", skin: 0xdba37f, hair: 0x2a1721, primary: 0x741f35, accent: 0xe05268, dark: 0x25151b, tags: ["maga", "fantasia", "carmesim", "vermelho", "aventura"] },
-];
-
-const generatedSkinPngs = new Map<string, Uint8Array>();
 const crcTable = (() => {
   const table = new Uint32Array(256);
   for (let index = 0; index < 256; index++) {
@@ -1605,59 +1580,6 @@ const crcTable = (() => {
   }
   return table;
 })();
-
-function normalizeCatalogText(value: string): string {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR").trim();
-}
-
-function fillSkinRect(pixels: Uint8Array, x: number, y: number, width: number, height: number, color: number): void {
-  const red = color >>> 16 & 0xff;
-  const green = color >>> 8 & 0xff;
-  const blue = color & 0xff;
-  for (let row = y; row < y + height; row++) for (let column = x; column < x + width; column++) {
-    const offset = (row * 64 + column) * 4;
-    pixels[offset] = red;
-    pixels[offset + 1] = green;
-    pixels[offset + 2] = blue;
-    pixels[offset + 3] = 0xff;
-  }
-}
-
-function setSkinPixel(pixels: Uint8Array, x: number, y: number, color: number): void {
-  fillSkinRect(pixels, x, y, 1, 1, color);
-}
-
-function skinPixels(value: CatalogSkin): Uint8Array {
-  const pixels = new Uint8Array(64 * 64 * 4);
-  fillSkinRect(pixels, 0, 0, 32, 16, value.skin);
-  fillSkinRect(pixels, 0, 8, 8, 8, value.hair);
-  fillSkinRect(pixels, 8, 0, 8, 8, value.hair);
-  fillSkinRect(pixels, 16, 8, 16, 8, value.hair);
-  fillSkinRect(pixels, 8, 8, 8, 2, value.hair);
-  setSkinPixel(pixels, 10, 11, value.accent);
-  setSkinPixel(pixels, 13, 11, value.accent);
-  setSkinPixel(pixels, 11, 14, 0x7b4a42);
-  setSkinPixel(pixels, 12, 14, 0x7b4a42);
-  fillSkinRect(pixels, 16, 16, 24, 16, value.primary);
-  fillSkinRect(pixels, 20, 20, 8, 12, value.primary);
-  fillSkinRect(pixels, 23, 20, 2, 12, value.accent);
-  fillSkinRect(pixels, 20, 29, 8, 3, value.dark);
-  fillSkinRect(pixels, 40, 16, 16, 16, value.primary);
-  fillSkinRect(pixels, 44, 24, 4, 8, value.skin);
-  fillSkinRect(pixels, 44, 24, 4, 2, value.accent);
-  fillSkinRect(pixels, 32, 48, 16, 16, value.primary);
-  fillSkinRect(pixels, 36, 56, 4, 8, value.skin);
-  fillSkinRect(pixels, 36, 56, 4, 2, value.accent);
-  fillSkinRect(pixels, 0, 16, 16, 16, value.dark);
-  fillSkinRect(pixels, 4, 29, 4, 3, value.accent);
-  fillSkinRect(pixels, 16, 48, 16, 16, value.dark);
-  fillSkinRect(pixels, 20, 61, 4, 3, value.accent);
-  return pixels;
-}
-
-function uint32(value: number): Uint8Array {
-  return new Uint8Array([value >>> 24 & 0xff, value >>> 16 & 0xff, value >>> 8 & 0xff, value & 0xff]);
-}
 
 function concatBytes(...parts: Uint8Array[]): Uint8Array {
   const result = new Uint8Array(parts.reduce((size, part) => size + part.length, 0));
@@ -1670,41 +1592,6 @@ function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
   for (const value of bytes) crc = crcTable[(crc ^ value) & 0xff] ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
-}
-
-function adler32(bytes: Uint8Array): number {
-  let first = 1;
-  let second = 0;
-  for (const value of bytes) { first = (first + value) % 65521; second = (second + first) % 65521; }
-  return ((second << 16) | first) >>> 0;
-}
-
-function pngChunk(name: string, data: Uint8Array): Uint8Array {
-  const type = textEncoder.encode(name);
-  return concatBytes(uint32(data.length), type, data, uint32(crc32(concatBytes(type, data))));
-}
-
-function catalogSkinPng(value: CatalogSkin): Uint8Array {
-  const cached = generatedSkinPngs.get(value.id);
-  if (cached) return cached;
-  const pixels = skinPixels(value);
-  const scanlines = new Uint8Array((64 * 4 + 1) * 64);
-  for (let row = 0; row < 64; row++) scanlines.set(pixels.subarray(row * 64 * 4, (row + 1) * 64 * 4), row * (64 * 4 + 1) + 1);
-  const length = scanlines.length;
-  const deflate = concatBytes(
-    new Uint8Array([0x78, 0x01, 0x01, length & 0xff, length >>> 8 & 0xff, ~length & 0xff, ~length >>> 8 & 0xff]),
-    scanlines,
-    uint32(adler32(scanlines)),
-  );
-  const header = concatBytes(uint32(64), uint32(64), new Uint8Array([8, 6, 0, 0, 0]));
-  const png = concatBytes(
-    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    pngChunk("IHDR", header),
-    pngChunk("IDAT", deflate),
-    pngChunk("IEND", new Uint8Array()),
-  );
-  generatedSkinPngs.set(value.id, png);
-  return png;
 }
 
 function catalogBase64(value: string): string {
@@ -1979,19 +1866,6 @@ async function mcstatCatalogSkin(skin: McstatSkin, deadline: AbortSignal): Promi
   };
 }
 
-async function builtinCatalogSkin(skin: CatalogSkin): Promise<CatalogProtocolSkin> {
-  const bytes = catalogSkinPng(skin);
-  return {
-    id: skin.id,
-    name: skin.name,
-    author: "Aurora Studio",
-    model: skin.model,
-    hash: await sha256Hex(bytes),
-    source: `/v1/skins/catalog/${skin.id}.png`,
-    tags: skin.tags,
-  };
-}
-
 function catalogLine(skin: CatalogProtocolSkin): string {
   return [
     skin.id,
@@ -2014,32 +1888,17 @@ async function skinCatalogResponse(request: Request, env: Env): Promise<Response
     return error("Paginação inválida.");
   }
   const rawQuery = boundedUtf8((url.searchParams.get("query") ?? "").slice(0, 80), 80);
-  const query = normalizeCatalogText(rawQuery.replace(/^#/, ""));
-  const localMatches = catalogSkins.filter((skin) => !query
-    || normalizeCatalogText(`${skin.name} ${skin.tags.join(" ")}`).includes(query));
   const start = page * pageSize;
   const end = start + pageSize;
-  const selectedLocal = localMatches.slice(start, Math.min(end, localMatches.length));
-  const remoteStart = Math.max(0, start - localMatches.length);
-  const remoteCount = Math.max(0, end - localMatches.length) - remoteStart;
-  let remoteTotal = 0;
-  let remoteSkins: McstatSkin[] = [];
-  let mcstatOnline = false;
-  if (mcstatApiKey(env) && (remoteCount > 0 || end >= localMatches.length)) {
-    try {
-      const remote = await fetchMcstatRange(env, rawQuery, remoteStart, Math.max(1, remoteCount), deadline);
-      remoteTotal = remote.total;
-      remoteSkins = remote.skins.slice(0, remoteCount);
-      mcstatOnline = true;
-    } catch (cause) {
-      console.error("MCStat skin catalog fallback", {
-        reason: cause instanceof Error ? cause.message.slice(0, 120) : "falha desconhecida",
-      });
-    }
+  if (!mcstatApiKey(env)) return error("Catálogo de skins temporariamente indisponível.", 503);
+  let remote: { skins: McstatSkin[]; total: number };
+  try {
+    remote = await fetchMcstatRange(env, rawQuery, start, pageSize, deadline);
+  } catch {
+    return error("Não foi possível consultar o catálogo de skins agora.", 503);
   }
   const entries: CatalogProtocolSkin[] = [];
-  for (const skin of selectedLocal) entries.push(await builtinCatalogSkin(skin));
-  const hydrated = await mapWithConcurrency(remoteSkins, Math.min(12, remoteSkins.length), async (skin) => {
+  const hydrated = await mapWithConcurrency(remote.skins, Math.min(12, remote.skins.length), async (skin) => {
     try {
       return await mcstatCatalogSkin(skin, deadline);
     } catch (cause) {
@@ -2049,16 +1908,16 @@ async function skinCatalogResponse(request: Request, env: Env): Promise<Response
       return undefined;
     }
   });
-  const hashes = new Set(entries.map((entry) => entry.hash));
+  const hashes = new Set<string>();
   for (const entry of hydrated) {
     if (entry && !hashes.has(entry.hash)) {
       hashes.add(entry.hash);
       entries.push(entry);
     }
   }
-  const total = localMatches.length + (mcstatOnline ? remoteTotal : 0);
+  const total = remote.total;
   if (url.searchParams.get("format") === "json") {
-    return json({ entries, page, hasMore: end < total, sources: mcstatOnline ? ["aurora", "mcstat"] : ["aurora"] });
+    return json({ entries, page, hasMore: end < total, sources: ["mcstat"] });
   }
   const lines = ["AURORA_SKINS_CATALOG_V1", `page\t${page}\tmore\t${end < total ? 1 : 0}`];
   lines.push(...entries.map(catalogLine));
@@ -2068,7 +1927,7 @@ async function skinCatalogResponse(request: Request, env: Env): Promise<Response
       "Content-Type": "text/tab-separated-values; charset=utf-8",
       "Access-Control-Allow-Origin": "*",
       "Cache-Control": "public, max-age=300",
-      "X-Aurora-Catalog-Sources": mcstatOnline ? "aurora, mcstat" : "aurora",
+      "X-Aurora-Catalog-Sources": "mcstat",
     },
   });
 }
@@ -2170,22 +2029,6 @@ async function playerSkinRoute(request: Request, env: Env): Promise<Response> {
   }
 }
 
-function skinCatalogAsset(pathname: string): Response {
-  const match = pathname.match(/^\/v1\/skins\/catalog\/([a-z0-9_-]{1,64})\.png$/);
-  const skin = match ? catalogSkins.find((item) => item.id === match[1]) : undefined;
-  if (!skin) return error("Skin não encontrada.", 404);
-  return new Response(catalogSkinPng(skin), {
-    status: 200,
-    headers: {
-      "Content-Type": "image/png",
-      "Content-Length": String(catalogSkinPng(skin).length),
-      "Access-Control-Allow-Origin": "*",
-      "Cache-Control": "public, max-age=86400, immutable",
-      "X-Content-Type-Options": "nosniff",
-    },
-  });
-}
-
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method === "OPTIONS") {
@@ -2222,41 +2065,36 @@ export default {
     if (request.method === "GET" && url.pathname.startsWith("/v1/skins/catalog/mcstat/")) {
       return await mcstatSkinAsset(url.pathname);
     }
-    if (request.method === "GET" && url.pathname.startsWith("/v1/skins/catalog/")) return skinCatalogAsset(url.pathname);
     if (request.method !== "POST") return error("Rota não encontrada.", 404);
-    const doctorDeadline = ["/v1/doctor/advice", "/v1/assistant", "/v1/ai/tools", "/v1/translate"].includes(url.pathname)
+    if (!["/v1/curseforge", "/v1/appearance", "/v1/translate"].includes(url.pathname)) return error("Rota não encontrada.", 404);
+    const translationDeadline = url.pathname === "/v1/translate"
       ? AbortSignal.any([request.signal, AbortSignal.timeout(35_000)]) : undefined;
     try {
-      if (doctorDeadline && (request.headers.get("Authorization")?.length ?? 0) > 16_384) {
+      if (translationDeadline && (request.headers.get("Authorization")?.length ?? 0) > 16_384) {
         return error("A sessão Aurora não é válida.", 401);
       }
-      const claims = doctorDeadline
-        ? await withDoctorAbort(verifyFirebaseToken(request, env, doctorDeadline), doctorDeadline)
+      const claims = translationDeadline
+        ? await withDoctorAbort(verifyFirebaseToken(request, env, translationDeadline), translationDeadline)
         : await verifyFirebaseToken(request, env);
       const userId = claims.user_id ?? claims.sub;
       if (url.pathname === "/v1/curseforge") {
         // CurseForge update scans are deliberately split into <=4 projects so
         // every Worker invocation stays under the subrequest limit. Give that
-        // authenticated route its own bounded budget; assistant/appearance
+        // authenticated route its own bounded budget; appearance requests
         // keep the stricter shared budget below.
         enforceRateLimit(`curseforge:${userId}`, 48);
-      } else if (url.pathname === "/v1/doctor/advice" || url.pathname === "/v1/ai/tools") {
-        enforceRateLimit(`doctor:${userId}`, 6);
       } else if (url.pathname === "/v1/translate") {
         enforceRateLimit(`translation:${userId}`, 24);
       } else {
         enforceRateLimit(userId);
       }
-      if (url.pathname === "/v1/doctor/advice") return await handleDoctorAdvice(request, env, doctorDeadline);
-      if (url.pathname === "/v1/ai/tools") return await handleAiTools(request, env, doctorDeadline!);
-      if (url.pathname === "/v1/translate") return await handleProjectTranslation(request, env, doctorDeadline);
-      if (url.pathname === "/v1/assistant") return await handleAssistant(request, env, doctorDeadline!);
+      if (url.pathname === "/v1/translate") return await handleProjectTranslation(request, env, translationDeadline);
       if (url.pathname === "/v1/curseforge") return await curseForgeCatalog(request, env, userId);
       if (url.pathname === "/v1/appearance") return await uploadAppearance(request, env, userId);
       return error("Rota não encontrada.", 404);
     } catch (cause) {
-      if (doctorDeadline) {
-        if (doctorDeadline.aborted) return aiFailureResponse(new GeminiFailure("timeout", 504));
+      if (translationDeadline) {
+        if (translationDeadline.aborted) return aiFailureResponse(new GeminiFailure("timeout", 504));
         if (cause instanceof PublicError && cause.status === 429) return aiFailureResponse(new GeminiFailure("quota", 429));
         return aiFailureResponse(new GeminiFailure("session", 401));
       }

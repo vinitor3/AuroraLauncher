@@ -1,0 +1,18 @@
+dependencies {
+    implementation project(":api")
+    implementation project(":runtime")
+    include project(":api")
+    include project(":runtime")
+    include implementation("org.java-websocket:Java-WebSocket:1.6.0")
+    // This module exposes mod language resources to vanilla without a separate Fabric API install.
+    include implementation("net.fabricmc.fabric-api:fabric-resource-loader-v1:3.1.1+5af7744b5d")
+}
+
+tasks.named("compileJava") {
+    source(fileTree("../../1.21.1/common/src/main/java") { include "**/AuroraCoreMod.java" })
+    source(fileTree("../../1.21.1/fabric/src/main/java") { include "**/AuroraCoreFabric.java" })
+}
+processResources {
+    from("../../1.21.1/common/src/main/resources") { include "assets/**" }
+    from("../../../licenses") { include "*-LICENSE.txt"; into "META-INF/licenses/aurora-core" }
+}

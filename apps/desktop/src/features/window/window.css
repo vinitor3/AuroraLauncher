@@ -69,7 +69,6 @@
 /* Keep the reserved titlebar outside each screen's viewport and modal bounds. */
 .desktop-window .auth-shell,
 .desktop-window .startup-shell { min-height: calc(100dvh - var(--window-titlebar-height)); }
-.desktop-window .assistant-panel { top: calc(var(--window-titlebar-height) + 1rem); }
 .desktop-window .create-modal,
 .desktop-window .update-review-dialog { top: calc(50% + var(--window-titlebar-height) / 2); max-height: min(680px, calc(100dvh - var(--window-titlebar-height) - 2rem)); }
 .desktop-window .editor-panel { top: calc(50% + var(--window-titlebar-height) / 2); height: min(720px, calc(100dvh - var(--window-titlebar-height) - 2.5rem)); }

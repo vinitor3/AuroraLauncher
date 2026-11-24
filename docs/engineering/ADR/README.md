@@ -1,6 +1,8 @@
-# Architecture Decision Records
+# Decisões de arquitetura
 
-Decisão experimental no caminho existente: [Aurora Connect V2](PROPOSAL-aurora-connect.md), Iroh 1.3.0 em laboratório independente com endereços diretos manuais. Produto/relay permanecem **HIPÓTESE**, sem homologação. A política permite relay gratuito verificado, prefere direto e veda gasto obrigatório/automático. ADR-010 conserva o registro histórico. [Reconciliação das propostas](../AURORA_CONNECT_REVIEW.md); conferir numeração/ownership antes de criar ADR de integração/distribuição.
+Vigente na beta: [036 — distribuição experimental e diagnóstico local](ADR-036-beta-diagnostics.md). As decisões abaixo registram o estado na data de cada proposta.
+
+Decisão experimental no caminho existente: [Aurora Connect V2](PROPOSAL-aurora-connect.md), Iroh 1.3.0 em laboratório independente com endereços diretos manuais. Produto/relay permanecem **HIPÓTESE**, sem homologação. A política permite relay gratuito verificado, prefere direto e veda gasto obrigatório/automático. ADR-010 conserva o registro histórico. [Reconciliação das propostas](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/engineering/AURORA_CONNECT_REVIEW.md); conferir numeração/ownership antes de criar ADR de integração/distribuição.
 
 | ADR | Decisão | Estado |
 | --- | --- | --- |

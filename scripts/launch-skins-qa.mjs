@@ -74,14 +74,16 @@ const replacements = {
   library_directory: join(base, 'libraries'), classpath_separator: ';',
   classpath: [...libraries.values(), client].join(';'), resolution_width: resolution[1], resolution_height: resolution[2],
 };
-function substitute(value) {
+function substitute(value, scope) {
   return value.replace(/\$\{([^}]+)\}/g, (_, key) => {
+    // Forge JVM ignoreList must name the physical client JAR inherited from vanilla.
+    if (scope === "jvm" && key === "version_name") return mc;
     if (!(key in replacements)) throw new Error(`Unsupported launch placeholder: ${key}`);
     return replacements[key];
   });
 }
-function argumentsFor(values = []) {
-  return values.flatMap(value => typeof value === 'string' ? [value] : allowed(value.rules) ? [value.value].flat() : []).map(substitute);
+function argumentsFor(values = [], scope = "game") {
+  return values.flatMap(value => typeof value === 'string' ? [value] : allowed(value.rules) ? [value.value].flat() : []).map(value => substitute(value, scope));
 }
 const jvm = ['-Xmx3G', `-Djava.library.path=${join(base, 'natives')}`, `-Daurora.skins.root=${join(target, '.aurora', 'skins')}`];
 if (process.env.AURORA_QA_CATALOG_URL) {
@@ -89,8 +91,8 @@ if (process.env.AURORA_QA_CATALOG_URL) {
   if (fixture.protocol !== 'http:' || fixture.hostname !== '127.0.0.1') throw new Error('QA catalog must be local');
   jvm.push(`-Daurora.skins.catalogUrl=${fixture}`);
 }
-jvm.push(...argumentsFor(parent.arguments?.jvm));
-if (child !== parent) jvm.push(...argumentsFor(child.arguments?.jvm));
+jvm.push(...argumentsFor(parent.arguments?.jvm, "jvm"));
+if (child !== parent) jvm.push(...argumentsFor(child.arguments?.jvm, "jvm"));
 if (!jvm.includes('-cp') && !jvm.includes('-classpath')) jvm.push('-cp', replacements.classpath);
 const gameArgs = parent.arguments?.game
   ? [...argumentsFor(parent.arguments.game), ...argumentsFor(child === parent ? [] : child.arguments?.game)]

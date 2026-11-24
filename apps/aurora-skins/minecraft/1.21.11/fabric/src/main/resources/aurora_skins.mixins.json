@@ -1,0 +1,16 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "com.aurora.skins.minecraft.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "GuiRendererMixin",
+    "AbstractClientPlayerMixin",
+    "PlayerInfoMixin",
+    "SkinManagerMixin",
+    "TitleScreenMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}

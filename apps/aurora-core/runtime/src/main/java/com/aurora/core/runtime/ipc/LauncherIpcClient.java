@@ -57,6 +57,9 @@ public final class LauncherIpcClient implements AuroraIpc, AutoCloseable {
         }
         try {
             Client created = new Client(new URI("ws://127.0.0.1:" + port + "/aurora"), nonce);
+            // The game owns the process lifetime. A launcher connection must
+            // never keep the JVM alive once Minecraft has closed its window.
+            created.setDaemon(true);
             client = created;
             created.connect();
         } catch (URISyntaxException error) {

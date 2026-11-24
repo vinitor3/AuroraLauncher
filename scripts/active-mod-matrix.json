@@ -1,18 +1,24 @@
 {
   "schemaVersion": 1,
   "modules": [
-    { "name": "core", "version": "1.1.5", "buildScript": "build-aurora-core.ps1", "forbiddenEntryPrefixes": ["org/slf4j/", "net/minecraft/", "com/aurora/mod/"] },
-    { "name": "skins", "version": "0.3.1", "buildScript": "build-aurora-skins.ps1", "forbiddenEntryPrefixes": ["com/aurora/mod/"] }
+    { "name": "core", "version": "1.1.7", "buildScript": "build-aurora-core.ps1", "forbiddenEntryPrefixes": ["org/slf4j/", "net/minecraft/", "com/aurora/mod/"] },
+    { "name": "skins", "version": "0.3.3", "buildScript": "build-aurora-skins.ps1", "forbiddenEntryPrefixes": ["com/aurora/mod/"] }
   ],
   "targets": [
     { "minecraft": "1.12.2", "loader": "forge", "loaderVersion": "14.23.5.2860", "loaderVersionRange": "[14.23.5,15)", "javaRuntime": 8, "buildJdk": 17 },
-    { "minecraft": "1.16.5", "loader": "fabric", "loaderVersion": "0.13.3", "loaderVersionRange": ">=0.13.3", "javaRuntime": 8, "buildJdk": 17 },
+    { "minecraft": "1.16.5", "loader": "fabric", "loaderVersion": "0.13.3", "buildLoaderVersion": "0.16.14", "loaderVersionRange": ">=0.13.3", "javaRuntime": 8, "buildJdk": 17 },
     { "minecraft": "1.16.5", "loader": "forge", "loaderVersion": "36.2.42", "loaderVersionRange": "[36,)", "javaRuntime": 8, "buildJdk": 17 },
     { "minecraft": "1.19.2", "loader": "fabric", "loaderVersion": "0.16.14", "loaderVersionRange": ">=0.14.0", "javaRuntime": 17, "buildJdk": 17 },
     { "minecraft": "1.19.2", "loader": "forge", "loaderVersion": "43.4.16", "loaderVersionRange": "[43,)", "javaRuntime": 17, "buildJdk": 17 },
     { "minecraft": "1.20.1", "loader": "fabric", "loaderVersion": "0.16.14", "loaderVersionRange": ">=0.14.0", "javaRuntime": 17, "buildJdk": 17 },
-    { "minecraft": "1.20.1", "loader": "forge", "loaderVersion": "47.4.23", "loaderVersionRange": "[47,)", "javaRuntime": 17, "buildJdk": 17 },
+    { "minecraft": "1.20.1", "loader": "forge", "loaderVersion": "47.4.23", "defaultInstallLoaderVersion": "47.4.28", "loaderVersionRange": "[47,)", "javaRuntime": 17, "buildJdk": 17 },
     { "minecraft": "1.21.1", "loader": "fabric", "loaderVersion": "0.16.14", "loaderVersionRange": ">=0.16.10", "javaRuntime": 21, "buildJdk": 21 },
-    { "minecraft": "1.21.1", "loader": "forge", "loaderVersion": "52.1.12", "loaderVersionRange": "[52,)", "javaRuntime": 21, "buildJdk": 21 }
+    { "minecraft": "1.21.1", "loader": "forge", "loaderVersion": "52.1.12", "loaderVersionRange": "[52,)", "javaRuntime": 21, "buildJdk": 21 },
+    { "minecraft": "1.21.11", "loader": "fabric", "loaderVersion": "0.20.1", "loaderVersionRange": ">=0.20.1", "javaRuntime": 21, "buildJdk": 25, "connectReady": false, "skinsCoreMinimum": "1.1.7",
+      "buildProject": "apps/aurora-core/minecraft/1.21.11", "gradleWrapper": "apps/aurora-core/minecraft/1.21.1/gradlew.bat",
+      "buildTasks": { "core": ":fabric:build", "skins": ":skins-fabric:build" } },
+    { "minecraft": "26.3", "loader": "fabric", "loaderVersion": "0.20.1", "loaderVersionRange": ">=0.20.1", "javaRuntime": 25, "buildJdk": 25, "connectReady": false, "skinsCoreMinimum": "1.1.7",
+      "buildProject": "apps/aurora-core/minecraft/26.3", "gradleWrapper": "apps/aurora-core/minecraft/1.21.1/gradlew.bat",
+      "buildTasks": { "core": ":fabric:build", "skins": ":skins-fabric:build" } }
   ]
 }

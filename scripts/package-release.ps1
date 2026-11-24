@@ -62,7 +62,8 @@ try {
     $productName = [string]$config.productName
     if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') { throw 'Versao de release invalida.' }
     if ($productName.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0) { throw 'Nome do produto invalido para artefato.' }
-    $artifactName = "${productName}_${version}_x64-setup.exe"
+    $bundleName = "${productName}_${version}_x64-setup.exe"
+    $artifactName = $bundleName.Replace(' ', '-')
     $releaseDirectory = Join-Path $repositoryRoot 'releases'
     $outputNames = @($artifactName, "$artifactName.sha256", "$artifactName.manifest.json")
     foreach ($name in $outputNames) {
@@ -101,7 +102,7 @@ try {
             ForEach-Object { Join-Path $_.FullName 'release/bundle/nsis' })
     }
     $installers = @($bundleRoots | Select-Object -Unique | ForEach-Object {
-        $candidate = Join-Path $_ $artifactName
+        $candidate = Join-Path $_ $bundleName
         if (Test-Path -LiteralPath $candidate -PathType Leaf) {
             $item = Get-Item -LiteralPath $candidate
             if ($item.LastWriteTimeUtc -ge $buildStartedUtc) { $item }

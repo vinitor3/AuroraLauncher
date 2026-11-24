@@ -27,6 +27,6 @@ O JAR confirmado sai de `mods` por movimentação para `.aurora/removed-companio
 
 ## Validação e consequências
 
-A retirada intencional do mod é mudança de produto. Perder o Assistente desktop ou qualquer consumidor compartilhado é regressão. Builds e contratos verificam fontes/artefatos; não homologam Minecraft ou serviços online. O [registro da tarefa](../../task-remove-companion.md) reúne o mapa de consumidores, testes realmente executados e pendências; a [matriz](../COMPATIBILITY_MATRIX.md) separa estado atual e evidência histórica.
+A retirada intencional do mod é mudança de produto. Perder o Assistente desktop ou qualquer consumidor compartilhado é regressão. Builds e contratos verificam fontes/artefatos; não homologam Minecraft ou serviços online. O [registro da tarefa](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-remove-companion.md) reúne o mapa de consumidores, testes realmente executados e pendências; a [matriz](../COMPATIBILITY_MATRIX.md) separa estado atual e evidência histórica.
 
 Alterações do Worker exigem implantação posterior autorizada; esta tarefa não faz deploy, revoga chaves, lê valores de secrets ou gera instalador. A expansão multiversão permanece posterior à retirada. A política de colaboração, qualidade, segurança e imutabilidade de releases continua válida.

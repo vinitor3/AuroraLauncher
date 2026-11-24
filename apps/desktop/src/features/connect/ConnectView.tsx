@@ -6,6 +6,7 @@ import {
   type ConnectRole, type ConnectSnapshot,
 } from "./types";
 import "./connect.css";
+import { SupportContextButton } from "../support/SupportContextButton";
 import { DiscoveryPicker, type DiscoveredTarget } from "./DiscoveryPicker";
 import { FragmentedFields, FragmentedReviewFields, FragmentedStatusFields } from "./FragmentedFields";
 import { FRAGMENTED_PROFILE, SESSION_FRAGMENTED_PROFILE, fragmentedGuestUdpFrom, isDirectIpv4Address, isFragmentedLifetime, isLoopbackUdpTarget } from "./fragmented-types";
@@ -463,10 +464,12 @@ export function ConnectView({ launchContext, onInitialReadReady, onChooseSource,
 
   const manualAfterSocial = !!snapshot?.social && ["closed", "failed"].includes(snapshot.phase) && snapshot.cleanupState === "complete"
     && capabilities?.available === true && !loading && !warning && !busy && !active;
+  const support = (snapshot?.errorCode || error) && <SupportContextButton source="Servidor" context={snapshot?.errorCode ? connectError(snapshot.errorCode) : error} />;
   const socialPanel = snapshot?.social ? <section className={manualAfterSocial ? "connect-card theme-protected" : "connect-view theme-protected"} aria-labelledby="connect-social-title">
     <header className="connect-heading"><div>{manualAfterSocial ? <h3 id="connect-social-title">Sessão Social anterior</h3> : <h2 id="connect-social-title">Aurora Connect</h2>}<p>{snapshot.phase === "closing" ? "Desconectando…" : socialStageText[snapshot.social.stage]}</p></div>{!manualAfterSocial && <span className="connect-badge">Experimental</span>}</header>
     <p>Esta sessão foi preparada em Amigos e comunidade. Volte àquela página para acompanhar a entrada ou revisar o compartilhamento.</p>
     <p>Jogo e voz ainda não verificados. A conexão social utiliza o mesmo controle de encerramento do launcher.</p>
+    {error && !snapshot.errorCode && support}
     <SocialConnectionFailure errorCode={snapshot.errorCode} social={snapshot.social} className="connect-error" />
     {error && <p className="connect-error" role="alert">{error}</p>}
     {warning && <p className="connect-warning" role="status">{warning}</p>}
@@ -484,6 +487,7 @@ export function ConnectView({ launchContext, onInitialReadReady, onChooseSource,
   // visibility and stop controls for any operation that is already running.
   if (!manualControls && !activeOperation) return <section className="connect-view theme-protected" aria-label="Seu jogo multiplayer">
     <header className="connect-heading"><div><h2>Seu jogo multiplayer</h2><p>Escolha Entrar em uma sessão de amigos ou da comunidade. Para hospedar, use Abrir meu mundo.</p></div></header>
+    {support}
     {loading && <p role="status">Verificando disponibilidade…</p>}
     {error && <p role="alert">{error}</p>}{warning && <p role="status">{warning}</p>}
     <ConnectGameLaunchPanel capability={capabilities?.readyGameLaunch} session={snapshot} launchContext={launchContext} onChooseSource={onChooseSource}
@@ -496,6 +500,7 @@ export function ConnectView({ launchContext, onInitialReadReady, onChooseSource,
     {loading && <p role="status">Verificando disponibilidade…</p>}
     {error && <p className="connect-error" role="alert">{error}</p>}
     {warning && <p className="connect-warning" role="status">{warning}</p>}
+    {!socialPanel && support}
     {message && <p className="connect-message" role="status">{message}</p>}
     {!loading && capabilities && !capabilities.available && <p className="connect-warning">Este recurso está desligado nesta versão do launcher.</p>}
     {(capabilities?.available || snapshot) && <>

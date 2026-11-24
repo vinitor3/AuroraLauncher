@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { isRetiredSkinSource } from "./skinCatalogSources.ts";
 
 export type PlayerSuggestion = { name: string; uuid?: string; source: string; metadata: Record<string, unknown> };
 export type SkinResult = { name: string; uuid: string; model: "classic" | "slim"; skinUrl: string;
@@ -89,7 +90,7 @@ export class PlayerSkinsClient {
       || result.entries.some((entry) => !entry || typeof entry.name !== "string" || typeof entry.author !== "string"
         || typeof entry.id !== "string" || !/^[0-9a-f]{64}$/.test(entry.hash) || !["classic", "slim"].includes(entry.model)
         || !this.validAsset(entry.source))) throw new Error("Catálogo de skins inválido.");
-    return { ...result, entries: result.entries.filter((entry) => entry.author.trim().toLowerCase() !== "aurora studio") };
+    return { ...result, entries: result.entries.filter((entry) => !isRetiredSkinSource(entry.source, this.base)) };
   }
   resolveCatalogUrl(entry: CatalogEntry): string {
     const url = new URL(entry.source, this.base);

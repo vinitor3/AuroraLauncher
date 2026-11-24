@@ -50,10 +50,10 @@ Doctor, Tools ou CAS; sua aprovação não encerra os gates anteriores nem liber
 
 - **IMPLEMENTADO MAS NÃO HOMOLOGADO:** Doctor local somente leitura, orientação
   Gemini opcional e Tools estreitas `remove_mod`/`set_setting` com prévia,
-  confirmação, histórico e restauração; [contrato](../aurora-ai-tools.md).
+  confirmação, histórico e restauração; [contrato](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/aurora-ai-tools.md).
 - **IMPLEMENTADO MAS NÃO HOMOLOGADO:** pontos manuais, CAS SHA-256/SQLite limitado,
   restore/desfazer e cópias de diagnóstico com aplicação seletiva; [recuperação](../instance-recovery.md),
-  [cópias](../diagnostic-lab.md), [evidências alpha.14](../task-aur-1167-doctor-lab.md).
+  [cópias](../diagnostic-lab.md), [evidências alpha.14](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-aur-1167-doctor-lab.md).
 - **NÃO IMPLEMENTADO:** pontos automáticos gerais antes de updates, GC seguro do
   CAS e sua adoção geral pelo downloader; não confundir com o CAS já entregue.
 - **NÃO IMPLEMENTADO** na inspeção limitada: Aurora Connect; contratos TCP/UDP,

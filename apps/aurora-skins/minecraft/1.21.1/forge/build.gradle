@@ -8,7 +8,7 @@ dependencies {
     forge "net.minecraftforge:forge:${rootProject.forge_version}"
     implementation project(":skins-core")
     include project(":skins-core")
-    compileOnly files(rootProject.file("../../../aurora-core/api/build/libs/aurora-core-api-1.1.5.jar"))
+    compileOnly files(rootProject.file("../../../aurora-core/api/build/libs/aurora-core-api-${rootProject.auroraVersions.core}.jar"))
 }
 processResources {
     inputs.property "version", project.version

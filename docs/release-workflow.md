@@ -1,37 +1,11 @@
-# Um instalador para as entregas do Aurora
+# Gerar o instalador no Windows
 
-Use uma tarefa coordenadora no Codex com este pedido curto:
+A raiz do projeto pode ficar em qualquer unidade. Depois de mover uma cópia principal que possui worktrees, execute `git worktree repair` nessa raiz. Confira o resultado com `npm run release:status`.
 
-> Integre entregas prontas de todos os chats Aurora e gere um único instalador.
+1. Instale Node.js 24, Rust estável, ferramentas C++ MSVC, Windows SDK, WebView2 e JDKs 17, 21 e 25. Configure o ambiente de compilação x64. O Gradle busca os JDKs no Windows ou em `JAVA_HOME_17_X64`, `JAVA_HOME_21_X64` e `JAVA_HOME_25_X64`.
+2. Rode `npm ci --prefix apps/desktop` e `cargo fetch --locked --manifest-path apps/desktop/src-tauri/Cargo.toml`. As compilações Gradle também precisam de seus artefatos em cache para as etapas offline.
+3. Integre os commits das worktrees, sincronize a nova versão no projeto, desktop, Cargo, Tauri e lockfiles. Faça commit em uma branch de integração limpa.
+4. Na raiz, execute `npm run release:package`. O comando confere pendências, recompila e compara os módulos, valida as assinaturas do Core e executa o build Tauri/NSIS. O log fica em `.aurora/release-runs`.
+5. Confira o SHA-256, o manifesto e o instalador em `releases/`. Crie uma tag para a fonte que gerou o executável e anexe os três arquivos à nova release no GitHub. Use **pre-release** para a beta.
 
-O coordenador consulta as tarefas do Aurora disponíveis no contexto do aplicativo, identifica as entregas e integra os commits prontos em uma worktree própria. Trabalho ainda em andamento precisa terminar antes de entrar na release. Os scripts abaixo não acordam chats, não enviam mensagens e não fazem merge, reset, push ou deploy automaticamente.
-
-Na raiz da worktree de integração:
-
-```powershell
-npm run release:status
-npm run release:package
-```
-
-`release:status` apenas lê o estado local. Mostra branch, versão, quantidade de mudanças sem commit e se o HEAD de cada worktree já é ancestral do HEAD atual. `dirty` inclui todos os arquivos; `produto` usa os diretórios de produto verificados pelo preflight. “INTEGRADO” descreve o histórico Git e não significa que alterações sem commit estejam incluídas. O relatório não substitui o preflight.
-
-Antes de empacotar, conclua a integração, sincronize a versão em `package.json`, `apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json` e `apps/desktop/src-tauri/Cargo.toml`, incluindo os lockfiles afetados, e faça commit. Use uma versão ainda não publicada. O preflight existente exige branch própria, checkout limpo e worktrees sem entregas de produto pendentes; nenhuma dessas verificações é desativada pelo wrapper.
-
-`release:package` roda o preflight antes do trabalho caro. Em seguida executa o único build oficial, `npm run desktop:build`, com a validação da matriz dos 18 JARs Core/Skins e o empacotamento Tauri. Também verifica o estado Git novamente ao final. O Cargo informa o diretório de saída, respeitando `CARGO_TARGET_DIR` e sua configuração; o wrapper aceita somente um instalador novo com nome, produto e versão esperados.
-
-Instale os JDKs 17 e 21 antes do build. Os scripts selecionam a JVM por etapa: JDK 17 para o wrapper compartilhado Gradle 8.4; JDK 21 para Core/Skins 1.21.1 com Gradle 9.7.1 e Loom. A versão do compilador declarada nas toolchains permanece independente. A seleção procura `JAVA_HOME`, `JAVA_HOME_17_X64` ou `JAVA_HOME_21_X64`, registros de JDK/Adoptium e instalações Java/Adoptium em Program Files; valida a versão no arquivo `release` e a presença de `java.exe` e `javac.exe`. Cada chamada restaura `JAVA_HOME` ao terminar, inclusive quando falha, sem mudar o `PATH` ou a configuração global. Se faltar algum JDK, o build informa a variável a configurar e não baixa Java automaticamente.
-
-O Assistente desktop, sua API/Gemini e voz continuam no aplicativo e fora da contagem de JARs. Companion não é selecionado ou embarcado em novas saídas; seus artefatos antigos permanecem evidência histórica/migração. A retirada do mod prepara fontes e candidatos, sem executar empacotamento ou deploy automaticamente.
-
-O resultado fica em `releases/`:
-
-- `Aurora Smart Launcher_<versão>_x64-setup.exe`
-- O arquivo `.exe.sha256` correspondente.
-- O arquivo `.exe.manifest.json` com commit, branch, versão, tamanho, SHA-256 e versões/hashes dos JARs publicados que passaram pela comparação da matriz.
-
-Os arquivos são criados sem sobrescrever releases anteriores. Uma falha durante a cópia final pode deixar uma publicação parcial; preserve esses arquivos e o diretório da execução para diagnóstico antes de qualquer recuperação. O manifesto é copiado por último. Ele não declara homologação em Minecraft nem assinatura digital: o estado de runtime permanece `NÃO VERIFICADO` até testes reais.
-
-Para reduzir tokens, o build guarda sua saída em `.aurora/release-runs/<execução>/build.log`, ignorada pelo Git. A conversa recebe apenas as etapas e o resultado, ou as últimas 45 linhas quando um comando de build falha. Consulte o trecho necessário do log ao investigar uma falha; não cole o arquivo inteiro nem credenciais. A economia vem de coordenar uma única integração e um único build, mantendo as verificações obrigatórias.
-
-
-O wrapper Gradle 8.4 compartilhado fica em `tools/gradle/8.4`; a geração 1.21.1 preserva o wrapper 9.7.1 próprio do Core, usado também pelo Skins. Execute builds sequencialmente para evitar concorrência no cache Loom.
+Cada versão tem seu próprio nome. O hash identifica o arquivo publicado. A assinatura Authenticode e a homologação dentro do jogo são verificações separadas.

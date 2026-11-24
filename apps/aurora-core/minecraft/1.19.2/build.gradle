@@ -4,6 +4,8 @@ plugins {
     id "com.github.johnrengelman.shadow" version "7.1.2" apply false
 }
 
+apply from: rootProject.file("../../../../scripts/aurora-mod-versions.gradle")
+
 architectury { minecraft = rootProject.minecraft_version }
 
 subprojects {
@@ -18,7 +20,7 @@ subprojects {
 allprojects {
     apply plugin: "java"
     apply plugin: "architectury-plugin"
-    version = rootProject.mod_version
+    version = rootProject.auroraVersions.core
     group = rootProject.maven_group
     base { archivesName = rootProject.archives_base_name }
     java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
@@ -29,5 +31,11 @@ allprojects {
     tasks.withType(AbstractArchiveTask).configureEach {
         preserveFileTimestamps = false
         reproducibleFileOrder = true
+    }
+}
+
+configure(subprojects.findAll { it.name in ["forge", "fabric"] }) {
+    tasks.withType(ProcessResources).configureEach {
+        from(rootProject.file("../../licenses")) { into "META-INF/licenses/aurora-core" }
     }
 }

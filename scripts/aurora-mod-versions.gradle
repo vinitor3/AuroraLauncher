@@ -1,0 +1,4 @@
+import groovy.json.JsonSlurper
+
+def matrix = new JsonSlurper().parse(new File(buildscript.sourceFile.parentFile, "active-mod-matrix.json"))
+rootProject.ext.auroraVersions = matrix.modules.collectEntries { [(it.name): it.version] }

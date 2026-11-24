@@ -3,11 +3,11 @@ architectury { platformSetupLoomIde(); forge() }
 loom { forge { convertAccessWideners = true } }
 configurations { common; shadowCommon; compileClasspath.extendsFrom common; runtimeClasspath.extendsFrom common; developmentForge.extendsFrom common }
 dependencies {
-    compileOnly files(rootProject.file("../../core/build/libs/aurora-skins-core-0.3.1.jar"))
+    compileOnly files(rootProject.file("../../core/build/libs/aurora-skins-core-${rootProject.auroraVersions.skins}.jar"))
     forge "net.minecraftforge:forge:${rootProject.forge_version}"
     common(project(path: ":common", configuration: "namedElements")) { transitive false }
     shadowCommon(project(path: ":common", configuration: "transformProductionForge")) { transitive false }
-    shadowCommon files(rootProject.file("../../core/build/libs/aurora-skins-core-0.3.1.jar"))
+    shadowCommon files(rootProject.file("../../core/build/libs/aurora-skins-core-${rootProject.auroraVersions.skins}.jar"))
 }
 processResources { inputs.properties "version": project.version; filesMatching("META-INF/mods.toml") { expand "version": project.version } }
 shadowJar {

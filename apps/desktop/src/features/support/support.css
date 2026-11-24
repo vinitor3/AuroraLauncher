@@ -1,0 +1,13 @@
+.support-dialog {
+  max-width: min(38rem, calc(100vw - 2rem)); width: 100%; max-height: calc(100vh - 3rem); overflow: auto;
+  margin: auto; padding: 1.2rem; box-sizing: border-box; border: 1px solid #817491; border-radius: 12px;
+  background: var(--surface, #201a2c); color: var(--text, #f4eef9);
+}
+.support-dialog::backdrop { background: #08060dc9; }
+.support-dialog header, .support-dialog footer { display: flex; gap: .7rem; align-items: center; flex-wrap: wrap; }
+.support-dialog header { justify-content: space-between; }
+.support-dialog h2 { margin: 0; font-size: 1.2rem; }
+.support-dialog p, .support-dialog footer span { font-size: .84rem; line-height: 1.45; }
+.support-dialog label { display: grid; gap: .35rem; margin: .8rem 0; }
+.support-dialog textarea { width: 100%; resize: vertical; box-sizing: border-box; padding: .65rem; font: inherit; }
+.support-dialog footer { margin-top: .8rem; }
