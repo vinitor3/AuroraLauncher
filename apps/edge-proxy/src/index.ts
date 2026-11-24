@@ -49,7 +49,7 @@ const curseForgeApiBase = "https://api.curseforge.com/v1";
 const mcstatApiBase = "https://mcstat.org/api/v1";
 const legacySupabaseRef = "pgbzkinjfwbncifurirb";
 const appearanceBucket = "aurora-appearance";
-const auroraApiRevision = "beta-0.2.0-1-storage-config";
+const auroraApiRevision = "beta-0.2.0-1-storage-runtime";
 const minecraftGameId = 432;
 const curseForgeClassIds = { mod: 6, modpack: 4471, resourcepack: 12, shader: 6552 } as const;
 const curseForgeLoaderIds = { forge: 1, fabric: 4 } as const;
@@ -543,11 +543,22 @@ function appearanceStorage(env: Env, requestSignal: AbortSignal): AppearanceStor
 async function storageRequest(storage: AppearanceStorage, path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   for (const [name, value] of Object.entries(storage.headers)) headers.set(name, value);
+  const stage = path === "bucket" ? "bucket_create" : path.startsWith("object/") ? "object_write" : "bucket_read";
+  let response: Response;
   try {
-    return await fetch(`${storage.base}/${path}`, { ...init, headers, redirect: "error", signal: storage.signal });
-  } catch {
+    // Workers support manual/follow. Inspect manual redirects before any second request.
+    response = await fetch(`${storage.base}/${path}`, { ...init, headers, redirect: "manual", signal: storage.signal });
+  } catch (cause) {
+    const name = cause instanceof Error && ["TypeError", "AbortError", "TimeoutError", "NetworkError"].includes(cause.name) ? cause.name : "Error";
+    console.error("Supabase request failed", { stage, name, code: storage.signal.aborted ? "aborted" : "fetch_failed" });
     throw new PublicError("O armazenamento de aparências não está disponível.", 503);
   }
+  if (response.status >= 300 && response.status < 400) {
+    console.error("Supabase request failed", { stage, name: "Redirect", code: response.status });
+    await response.body?.cancel().catch(() => undefined);
+    throw new PublicError("O armazenamento de aparências não está disponível.", 503);
+  }
+  return response;
 }
 
 let appearanceBucketReadyAt: string | undefined;

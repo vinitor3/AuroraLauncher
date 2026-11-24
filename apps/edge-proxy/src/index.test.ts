@@ -229,7 +229,7 @@ test("storage resolves trusted project refs and sends each key in its supported 
       const headers = new Headers(init?.headers);
       assert.equal(headers.get("apikey"), key);
       assert.equal(headers.get("Authorization"), key === opaqueStorageKey ? null : `Bearer ${key}`);
-      assert.equal(init?.redirect, "error");
+      assert.equal(init?.redirect, "manual");
       assert.ok(init?.signal instanceof AbortSignal);
       return Response.json(bucket);
     };
@@ -261,6 +261,12 @@ test("storage health reports private or unavailable buckets and honors cancellat
   const config = { ...env, SUPABASE_API_KEY: opaqueStorageKey, SUPABASE_PROJECT_REF: storageRefA };
   globalThis.fetch = async () => Response.json({ ...bucket, public: false });
   assert.equal((await worker.fetch(new Request("https://aurora.test/health/storage"), config)).status, 503);
+  const destinations: string[] = [];
+  globalThis.fetch = async (url) => { destinations.push(String(url)); return Response.redirect("https://private.example/unknown?secret=test", 307); };
+  const redirected = await worker.fetch(new Request("https://aurora.test/health/storage"), config);
+  assert.equal(redirected.status, 503);
+  assert.doesNotMatch(await redirected.text(), /private.example|secret=test/);
+  assert.deepEqual(destinations, [`https://${storageRefA}.supabase.co/storage/v1/bucket/${bucket.id}`]);
   const controller = new AbortController();
   controller.abort();
   let sawCancelledRequest = false;
@@ -299,7 +305,7 @@ test("authenticated image upload rechecks each project and returns that project'
   globalThis.fetch = async (input, init) => {
     if (String(input).includes("securetoken@system.gserviceaccount.com")) return Response.json({ keys: [publicJwk] });
     const url = new URL(String(input));
-    assert.equal(init?.redirect, "error");
+    assert.equal(init?.redirect, "manual");
     assert.equal(new Headers(init?.headers).get("apikey"), opaqueStorageKey);
     assert.ok(init?.signal instanceof AbortSignal);
     if (url.pathname === `/storage/v1/bucket/${bucket.id}`) {
