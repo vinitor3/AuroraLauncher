@@ -41,6 +41,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            apps/edge-proxy/package-lock.json
+      - name: Dependências do cliente usado nos testes de integração
+        run: npm ci --prefix apps/desktop
       - name: Validar Edge Proxy
         run: |
           npm ci --prefix apps/edge-proxy
