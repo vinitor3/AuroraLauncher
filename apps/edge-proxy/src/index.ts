@@ -17,6 +17,7 @@ export interface Env extends PlayerSkinEnv {
   MCSTAT_API_KEY?: string;
   SUPABASE_API_KEY?: string;
   SUPABASE_API_KEY_SERVICE_ROLE?: string;
+  SUPABASE_PROJECT_REF?: string;
 }
 
 type FirebaseClaims = {
@@ -46,9 +47,9 @@ const firebaseJwksUrl =
   "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 const curseForgeApiBase = "https://api.curseforge.com/v1";
 const mcstatApiBase = "https://mcstat.org/api/v1";
-const supabaseBase = "https://pgbzkinjfwbncifurirb.supabase.co";
+const legacySupabaseRef = "pgbzkinjfwbncifurirb";
 const appearanceBucket = "aurora-appearance";
-const auroraApiRevision = "beta-0.2.0-1-community-skins";
+const auroraApiRevision = "beta-0.2.0-1-storage-config";
 const minecraftGameId = 432;
 const curseForgeClassIds = { mod: 6, modpack: 4471, resourcepack: 12, shader: 6552 } as const;
 const curseForgeLoaderIds = { forge: 1, fabric: 4 } as const;
@@ -505,33 +506,63 @@ function pngDimensions(bytes: Uint8Array): { width: number; height: number } {
   return { width: view.getUint32(16), height: view.getUint32(20) };
 }
 
-function supabaseServiceKey(env: Env): string {
-  return env.SUPABASE_API_KEY_SERVICE_ROLE?.trim() || env.SUPABASE_API_KEY?.trim() || "";
+type AppearanceStorage = { base: string; headers: Record<string, string>; signal: AbortSignal };
+
+function appearanceStorage(env: Env, requestSignal: AbortSignal): AppearanceStorage {
+  const key = env.SUPABASE_API_KEY_SERVICE_ROLE?.trim() || env.SUPABASE_API_KEY?.trim();
+  if (!key) throw new PublicError("A chave de serviço do armazenamento não está configurada.", 503);
+  const configured = env.SUPABASE_PROJECT_REF?.trim();
+  const validRef = /^[a-z0-9]{20}$/;
+  if (configured && !validRef.test(configured)) throw new PublicError("A referência do projeto de armazenamento é inválida.", 503);
+  const headers: Record<string, string> = { apikey: key };
+  let ref = configured || legacySupabaseRef;
+  if (!/^sb_secret_[A-Za-z0-9_-]+$/.test(key)) {
+    let jwtRef: unknown;
+    try {
+      const parts = key.split(".");
+      if (parts.length !== 3 || parts.some(part => !/^[A-Za-z0-9_-]+$/.test(part))) throw new Error();
+      const header = parseJsonSegment<JwtHeader>(parts[0]);
+      const claims = parseJsonSegment<{ role?: string; iss?: string; ref?: unknown }>(parts[1]);
+      if (header.alg !== "HS256" || claims.role !== "service_role" || claims.iss !== "supabase") throw new Error();
+      jwtRef = claims.ref;
+      if (jwtRef !== undefined && (typeof jwtRef !== "string" || !validRef.test(jwtRef))) throw new Error();
+    } catch {
+      throw new PublicError("A chave de serviço do armazenamento é inválida.", 503);
+    }
+    // Only the administrator-provided secret is decoded. Supabase authenticates it.
+    if (typeof jwtRef === "string") {
+      if (configured && configured !== jwtRef) throw new PublicError("A chave e o projeto de armazenamento não correspondem.", 503);
+      ref = jwtRef;
+    }
+    headers.Authorization = `Bearer ${key}`;
+  }
+  return { base: `https://${ref}.supabase.co/storage/v1`, headers,
+    signal: AbortSignal.any([requestSignal, AbortSignal.timeout(15_000)]) };
 }
 
-function supabaseHeaders(env: Env): Record<string, string> {
-  const key = supabaseServiceKey(env);
-  return {
-    apikey: key,
-    Authorization: `Bearer ${key}`,
-  };
+async function storageRequest(storage: AppearanceStorage, path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  for (const [name, value] of Object.entries(storage.headers)) headers.set(name, value);
+  try {
+    return await fetch(`${storage.base}/${path}`, { ...init, headers, redirect: "error", signal: storage.signal });
+  } catch {
+    throw new PublicError("O armazenamento de aparências não está disponível.", 503);
+  }
 }
 
-let appearanceBucketReady = false;
+let appearanceBucketReadyAt: string | undefined;
 
-async function ensureAppearanceBucket(env: Env): Promise<void> {
-  if (appearanceBucketReady) return;
-  if (!supabaseServiceKey(env)) throw new Error("O armazenamento de aparências ainda não foi configurado.");
-  const headers = supabaseHeaders(env);
-  const current = await fetch(`${supabaseBase}/storage/v1/bucket/${appearanceBucket}`, { headers });
+async function ensureAppearanceBucket(storage: AppearanceStorage): Promise<void> {
+  if (appearanceBucketReadyAt === storage.base) return;
+  const current = await storageRequest(storage, `bucket/${appearanceBucket}`);
   const lookupFailure = !current.ok
     ? await current.json().catch(() => null) as { error?: string; message?: string } | null
     : null;
   const lookupMessage = `${lookupFailure?.error ?? ""} ${lookupFailure?.message ?? ""}`.trim();
   if (current.status === 404 || (current.status === 400 && /bucket not found/i.test(lookupMessage))) {
-    const created = await fetch(`${supabaseBase}/storage/v1/bucket`, {
+    const created = await storageRequest(storage, "bucket", {
       method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         id: appearanceBucket,
         name: appearanceBucket,
@@ -541,46 +572,35 @@ async function ensureAppearanceBucket(env: Env): Promise<void> {
       }),
     });
     if (!created.ok && created.status !== 409) {
-      const failure = await created.json().catch(() => null) as { error?: string; message?: string } | null;
-      console.error("Supabase bucket creation failed", {
-        status: created.status,
-        message: `${failure?.error ?? ""} ${failure?.message ?? ""}`.trim().slice(0, 200),
-      });
-      throw new Error("Não foi possível preparar o armazenamento de aparências.");
+      console.error("Supabase bucket creation failed", { status: created.status });
+      throw new PublicError("Não foi possível preparar o armazenamento de aparências.", 503);
     }
+    if (created.status === 409) await checkPublicBucket(await storageRequest(storage, `bucket/${appearanceBucket}`));
   } else if (!current.ok) {
-    console.error("Supabase bucket lookup failed", {
-      status: current.status,
-      message: lookupMessage.slice(0, 200),
-    });
-    throw new Error("O armazenamento de aparências não está disponível agora.");
-  }
-  appearanceBucketReady = true;
+    console.error("Supabase bucket lookup failed", { status: current.status });
+    throw new PublicError("O armazenamento de aparências não está disponível agora.", 503);
+  } else await checkPublicBucket(current);
+  appearanceBucketReadyAt = storage.base;
 }
 
-async function appearanceStorageHealth(env: Env): Promise<Response> {
-  if (!supabaseServiceKey(env)) {
-    return error("A chave de serviço do armazenamento não está configurada.", 503);
-  }
-  const response = await fetch(`${supabaseBase}/storage/v1/bucket/${appearanceBucket}`, {
-    headers: supabaseHeaders(env),
-  });
+async function checkPublicBucket(response: Response): Promise<void> {
   if (!response.ok) {
-    const failure = await response.json().catch(() => null) as { error?: string; message?: string } | null;
-    console.error("Supabase storage health failed", {
-      status: response.status,
-      message: `${failure?.error ?? ""} ${failure?.message ?? ""}`.trim().slice(0, 200),
-    });
-    return error("O armazenamento de aparências não está disponível.", 503);
+    console.error("Supabase bucket read failed", { status: response.status });
+    throw new PublicError("O armazenamento de aparências não está disponível.", 503);
   }
   const bucket = await response.json().catch(() => null) as { id?: string; public?: boolean } | null;
-  return json({
-    status: "ok",
-    service: "aurora-appearance",
-    bucket: bucket?.id ?? appearanceBucket,
-    public: bucket?.public === true,
-    serviceRoleConfigured: Boolean(env.SUPABASE_API_KEY_SERVICE_ROLE?.trim()),
-  });
+  if (bucket?.id !== appearanceBucket || bucket.public !== true) throw new PublicError("O bucket público de aparências está indisponível.", 503);
+}
+
+async function appearanceStorageHealth(request: Request, env: Env): Promise<Response> {
+  try {
+    const storage = appearanceStorage(env, request.signal);
+    await checkPublicBucket(await storageRequest(storage, `bucket/${appearanceBucket}`));
+    return json({ status: "ok", service: "aurora-appearance", bucket: appearanceBucket, public: true,
+      serviceRoleConfigured: Boolean(env.SUPABASE_API_KEY_SERVICE_ROLE?.trim()) });
+  } catch (cause) {
+    return error(cause instanceof PublicError ? cause.message : "O armazenamento de aparências não está disponível.", 503);
+  }
 }
 
 async function uploadAppearance(request: Request, env: Env, userId: string): Promise<Response> {
@@ -602,17 +622,17 @@ async function uploadAppearance(request: Request, env: Env, userId: string): Pro
     return error(`Dimensões de capa inválidas: ${width}x${height}.`);
   }
 
-  await ensureAppearanceBucket(env);
+  const storage = appearanceStorage(env, request.signal);
+  await ensureAppearanceBucket(storage);
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   const hash = Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join("");
   const safeUserId = userId.replace(/[^A-Za-z0-9_-]/g, "");
   const objectPath = `profiles/${safeUserId}/${kind}-${hash}.png`;
-  const uploaded = await fetch(
-    `${supabaseBase}/storage/v1/object/${appearanceBucket}/${objectPath}`,
+  const uploaded = await storageRequest(storage,
+    `object/${appearanceBucket}/${objectPath}`,
     {
       method: "POST",
       headers: {
-        ...supabaseHeaders(env),
         "Content-Type": "image/png",
         "Cache-Control": "31536000",
         "x-upsert": "false",
@@ -625,11 +645,12 @@ async function uploadAppearance(request: Request, env: Env, userId: string): Pro
     const duplicate = (uploaded.status === 400 || uploaded.status === 409)
       && /duplicate|already exists/i.test(`${failure?.error ?? ""} ${failure?.message ?? ""}`);
     if (!duplicate) {
+      if (appearanceBucketReadyAt === storage.base) appearanceBucketReadyAt = undefined;
       console.error("Supabase appearance upload failed", { status: uploaded.status });
       return error("Não foi possível guardar a imagem agora.", 503);
     }
   }
-  const publicUrl = `${supabaseBase}/storage/v1/object/public/${appearanceBucket}/${objectPath}`;
+  const publicUrl = `${storage.base}/object/public/${appearanceBucket}/${objectPath}`;
   return json({ url: publicUrl });
 }
 
@@ -2046,7 +2067,7 @@ export default {
     if (request.method === "GET" && url.pathname === "/health") {
       return json({ status: "ok", service: "aurora-api", revision: auroraApiRevision });
     }
-    if (request.method === "GET" && url.pathname === "/health/storage") return await appearanceStorageHealth(env);
+    if (request.method === "GET" && url.pathname === "/health/storage") return await appearanceStorageHealth(request, env);
     if (request.method === "GET" && url.pathname === "/health/curseforge") {
       try {
         enforceRateLimit(`curseforge-health:${request.headers.get("CF-Connecting-IP") ?? "unknown"}`);

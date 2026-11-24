@@ -206,6 +206,126 @@ async function firebaseIdentity(userId: string) {
   return { publicJwk, token: `${header}.${claims}.${signature}` };
 }
 
+const storageRefA = "abcdefghijklmnopqrst";
+const storageRefB = "zyxwvutsrqponmlkjihg";
+const historicalRef = "pgbzkinjfwbncifurirb";
+const opaqueStorageKey = "sb_secret_fixture";
+const bucket = { id: "aurora-appearance", public: true };
+
+function legacyStorageKey(ref: string | undefined, role = "service_role") {
+  const encode = (data: unknown) => Buffer.from(JSON.stringify(data)).toString("base64url");
+  return `${encode({ alg: "HS256" })}.${encode({ iss: "supabase", ref, role })}.c2ln`;
+}
+
+test("storage resolves trusted project refs and sends each key in its supported headers", async () => {
+  for (const [key, configured, expected] of [
+    [opaqueStorageKey, storageRefA, storageRefA], [opaqueStorageKey, undefined, historicalRef],
+    [legacyStorageKey(storageRefB), undefined, storageRefB], [legacyStorageKey(storageRefA), storageRefA, storageRefA],
+    [legacyStorageKey(undefined), undefined, historicalRef],
+  ]) {
+    const calls: string[] = [];
+    globalThis.fetch = async (input, init) => {
+      calls.push(String(input));
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("apikey"), key);
+      assert.equal(headers.get("Authorization"), key === opaqueStorageKey ? null : `Bearer ${key}`);
+      assert.equal(init?.redirect, "error");
+      assert.ok(init?.signal instanceof AbortSignal);
+      return Response.json(bucket);
+    };
+    const response = await worker.fetch(new Request("https://aurora.test/health/storage?SUPABASE_PROJECT_REF=fromrequest", {
+      headers: { "X-Supabase-Project-Ref": "ignored", Authorization: "Bearer ignored" },
+    }), { ...env, SUPABASE_API_KEY: key, SUPABASE_PROJECT_REF: configured });
+    assert.equal(response.status, 200);
+    assert.deepEqual(calls, [`https://${expected}.supabase.co/storage/v1/bucket/${bucket.id}`]);
+    assert.ok(!(await response.text()).includes(key));
+  }
+});
+
+test("storage refuses invalid refs, non-service keys and JWT mismatches before forwarding credentials", async () => {
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return Response.json(bucket); };
+  for (const [key, ref] of [[opaqueStorageKey, "https://example.invalid"], [opaqueStorageKey, `${storageRefA}.example.com`],
+    [legacyStorageKey(storageRefA), storageRefB], [legacyStorageKey("invalid.ref"), undefined],
+    [legacyStorageKey(storageRefB, "anon"), storageRefB], ["sb_publishable_fixture", storageRefA], ["broken.jwt.value", storageRefB]]) {
+    const response = await worker.fetch(new Request("https://aurora.test/health/storage"), {
+      ...env, SUPABASE_API_KEY_SERVICE_ROLE: key, SUPABASE_PROJECT_REF: ref,
+    });
+    assert.equal(response.status, 503);
+    assert.ok(!(await response.text()).includes(key));
+  }
+  assert.equal(calls, 0);
+});
+
+test("storage health reports private or unavailable buckets and honors cancellation and timeout", async (t) => {
+  const config = { ...env, SUPABASE_API_KEY: opaqueStorageKey, SUPABASE_PROJECT_REF: storageRefA };
+  globalThis.fetch = async () => Response.json({ ...bucket, public: false });
+  assert.equal((await worker.fetch(new Request("https://aurora.test/health/storage"), config)).status, 503);
+  const controller = new AbortController();
+  controller.abort();
+  let sawCancelledRequest = false;
+  globalThis.fetch = async (_input, init) => {
+    sawCancelledRequest = init?.signal?.aborted === true;
+    throw new TypeError("private upstream details");
+  };
+  const response = await worker.fetch(new Request("https://aurora.test/health/storage", { signal: controller.signal }), config);
+  assert.equal(response.status, 503);
+  assert.ok(sawCancelledRequest);
+  assert.doesNotMatch(await response.text(), /private upstream details/);
+  const deadline = new AbortController();
+  let observedTimeout = 0;
+  let deadlineReachedUpstream = false;
+  t.mock.method(AbortSignal, "timeout", (ms: number) => {
+    observedTimeout = ms;
+    return deadline.signal;
+  });
+  globalThis.fetch = async (_input, init) => {
+    deadline.abort(new DOMException("timeout", "TimeoutError"));
+    deadlineReachedUpstream = init?.signal?.aborted === true;
+    init?.signal?.throwIfAborted();
+    throw new Error("storage request was not bound to the deadline");
+  };
+  assert.equal((await worker.fetch(new Request("https://aurora.test/health/storage"), config)).status, 503);
+  assert.equal(observedTimeout, 15_000);
+  assert.ok(deadlineReachedUpstream);
+});
+
+test("authenticated image upload rechecks each project and returns that project's public URL", async () => {
+  const { publicJwk, token } = await firebaseIdentity("qa-storage");
+  const bytes = png();
+  const hash = Buffer.from(await crypto.subtle.digest("SHA-256", bytes)).toString("hex");
+  const reads: string[] = [];
+  const writes: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    if (String(input).includes("securetoken@system.gserviceaccount.com")) return Response.json({ keys: [publicJwk] });
+    const url = new URL(String(input));
+    assert.equal(init?.redirect, "error");
+    assert.equal(new Headers(init?.headers).get("apikey"), opaqueStorageKey);
+    assert.ok(init?.signal instanceof AbortSignal);
+    if (url.pathname === `/storage/v1/bucket/${bucket.id}`) {
+      reads.push(url.host);
+      return Response.json(bucket);
+    }
+    assert.equal(url.pathname, `/storage/v1/object/${bucket.id}/profiles/qa-storage/skin-${hash}.png`);
+    assert.equal(init?.method, "POST");
+    assert.deepEqual(Buffer.from(init?.body as Uint8Array), bytes);
+    writes.push(url.host);
+    return Response.json({});
+  };
+  for (const ref of [storageRefA, storageRefA, storageRefB]) {
+    const form = new FormData();
+    form.set("kind", "skin");
+    form.set("file", new Blob([bytes], { type: "image/png" }), "fixture.png");
+    const response = await worker.fetch(new Request("https://aurora.test/v1/appearance", {
+      method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form,
+    }), { ...env, SUPABASE_API_KEY_SERVICE_ROLE: opaqueStorageKey, SUPABASE_PROJECT_REF: ref });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { url: `https://${ref}.supabase.co/storage/v1/object/public/${bucket.id}/profiles/qa-storage/skin-${hash}.png` });
+  }
+  assert.deepEqual(reads, [storageRefA, storageRefB].map(ref => `${ref}.supabase.co`));
+  assert.deepEqual(writes, [storageRefA, storageRefA, storageRefB].map(ref => `${ref}.supabase.co`));
+});
+
 test("rejeita tickets de download inválidos e expirados", async () => {
   const invalid = await worker.fetch(downloadRequest("invalid"), env);
   assert.equal(invalid.status, 403);
