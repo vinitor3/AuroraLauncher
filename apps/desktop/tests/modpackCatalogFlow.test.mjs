@@ -59,3 +59,28 @@ test("failed pagination removes obsolete results and counts, leaving search avai
   assert.equal(state.loading, false);
   assert.match(state.error, /Modrinth.*offline/);
 });
+test("o catálogo instala no identificador reservado pelo motor, mesmo que outro launcher tenha criado o nome inicial", async () => {
+  const create = launcher.body.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "createAndInstallModrinth");
+  const compiled = ts.transpileModule(create.getText(source), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const installs = [], selections = [];
+  const context = vm.createContext({
+    minecraftVersion: "1.20.1", packVersions: { pack: "1.21.1" }, safeInstanceId: s => s,
+    targetInstance: "mundo-existente", setBusy() {}, setNotice() {}, setDownloadProgress() {},
+    invoke: async (command, args) => {
+      assert.equal(command, "create_instance");
+      assert.equal(args.unique, true);
+      assert.equal(args.id, "pack-1.21.1");
+      return { id: "pack-1.21.1-2" };
+    },
+    installPackIntoInstance: async (pack, id) => {
+      installs.push(id);
+      return { name: pack.title, minecraft: { versionId: "fabric" }, minecraftVersion: "1.21.1", loader: "fabric" };
+    },
+    setTargetInstance: id => selections.push(id), setInstalledVersionId() {}, setInstalledMinecraftVersion() {},
+    setMinecraftVersion() {}, completeInstanceInstall() {},
+  });
+  vm.runInContext(compiled, context);
+  await context.createAndInstallModrinth({ projectId: "pack", slug: "pack", title: "Pack" });
+  assert.deepEqual(installs, ["pack-1.21.1-2"]);
+  assert.deepEqual(selections, installs);
+});

@@ -44,6 +44,7 @@
   align-items: center;
   gap: 6px;
   margin-left: auto;
+  flex-wrap: wrap;
 }
 .km-legend i {
   width: 0.65em;
@@ -116,6 +117,26 @@
   top: 1px;
   right: 3px;
   font-size: 0.65rem;
+}
+.km-panel button.km-key[data-held] {
+  transform: translateY(2px);
+  box-shadow: inset 0 0 0 2px var(--theme-text, #eef8f8);
+}
+.km-legend .km-held-sample {
+  background: transparent;
+  border: 2px solid var(--theme-text, #eef8f8);
+}
+.km-capture-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .45rem .85rem;
+  flex: 0 0 100%;
+}
+.km-capture-row small { flex: 1 1 15rem; }
+.km-capture:focus-visible, .km-capture:focus {
+  outline: 2px solid var(--theme-accent, #74c8c2);
+  outline-offset: 2px;
 }
 .km-key:focus-visible,
 .km-panel .km-current,

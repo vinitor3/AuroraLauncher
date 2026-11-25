@@ -748,7 +748,7 @@ dialog.project-detail-modal:not([open]) { display: none; }
 .project-detail-modal .project-detail-identity h2 { white-space: normal; overflow-wrap: anywhere; line-height: 1.2; }
 .project-detail-modal .modpack-install-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(6.5rem, 8rem) minmax(7rem, 17rem) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(6.5rem, 8rem) auto;
   align-items: end;
 }
 .modpack-install-actions > span { display: none; }
@@ -760,6 +760,94 @@ dialog.project-detail-modal:not([open]) { display: none; }
 @media (max-width: 650px) {
   .project-detail-modal .modpack-install-actions { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
   .modpack-install-actions .detail-version-select { grid-row: 1; grid-column: 1; }
-  .modpack-install-actions .detail-destination-select { grid-row: 1; grid-column: 2; }
+  .modpack-install-actions > a { grid-row: 2; grid-column: 1 / -1; }
   .modpack-install-actions > button { grid-column: 2; }
+}
+
+.instance-grid .instance {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: 1fr auto;
+  gap: .7rem .25rem;
+  min-width: 0;
+  min-height: auto;
+  align-items: start;
+  cursor: default;
+}
+.instance .instance-select, .instance .instance-delete {
+  color: inherit;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.instance .instance-select {
+  display: flex;
+  min-width: 0;
+  gap: .65rem;
+  padding: 0;
+  align-items: center;
+  text-align: left;
+}
+.instance .instance-select:hover, .instance .instance-delete:hover { transform: none; box-shadow: none; }
+.instance-select .instance-copy { min-width: 0; margin: 0; }
+.instance-copy strong { display: block; color: var(--theme-text, #f5f1fb); line-height: 1.3; overflow-wrap: anywhere; }
+.instance-select .orb { display: grid; margin: 0; color: white; }
+.instance-select .instance-copy > span { font-weight: 400; line-height: 1.35; }
+.instance .instance-delete {
+  display: grid;
+  width: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  place-items: center;
+  border-radius: .45rem;
+  color: #aca3b9;
+}
+.instance .instance-delete:is(:hover, :focus-visible) { color: #ffb6c9; background: #f37b9520; }
+.instance-grid .instance-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: .35rem; width: auto; }
+.instance .instance-actions button { min-height: 2rem; }
+.editor-panel.theme-protected { grid-template-rows: auto minmax(0, 1fr); width: min(1140px, calc(100vw - 2rem)); }
+.instance-editor-layout { display: grid; grid-template-columns: clamp(9rem, 18vw, 12.5rem) minmax(0, 1fr); min-height: 0; }
+.editor-nav { overflow: auto; padding: .25rem .55rem 1rem; border-right: 1px solid #ffffff1c; background: #ffffff04; }
+.editor-nav-group > p { margin: 1rem .55rem .3rem; font-size: .7rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #b8abc9; }
+.editor-nav-group button {
+  display: flex; align-items: center; justify-content: space-between; gap: .3rem;
+  width: 100%; min-height: 2.25rem; padding: .36rem .62rem; border: 1px solid transparent;
+  background: transparent; color: #d2c9dd; box-shadow: none; text-align: left; font-size: .87rem; font-weight: 550;
+}
+.editor-nav-group button:hover:not(:disabled) { transform: none; background: #ffffff0c; box-shadow: none; }
+.editor-nav-group button[aria-selected="true"] { border-color: #c29aff45; color: #f2e7ff; background: #ac83f329; }
+.editor-update-count { padding: .05rem .35rem; border-radius: .4rem; background: #ad80ee33; font-size: .75rem; }
+.instance-editor-layout .editor-body { padding: 1rem clamp(.7rem, 2vw, 1.45rem) 1.4rem; scrollbar-gutter: stable; }
+.editor-content-heading { margin: 0 0 .8rem; color: #f4eefb; font-size: 1.2rem; }
+.instance-editor-layout .content-tabs { padding: 0 0 .85rem; }
+.instance-editor-layout .editor-toolbar { align-items: center; flex-direction: row; flex-wrap: wrap; }
+.instance-editor-layout .editor-filter { flex: 1 1 12rem; }
+.instance-editor-layout .content-file-details strong { font-size: .88rem; }
+.instance-editor-layout .content-file-details small { font-size: .75rem; color: #b6adc4; }
+.editor-options { position: relative; }
+.editor-options > summary { cursor: pointer; padding: .45rem .65rem; color: #ded3e8; border-radius: .45rem; font-size: .85rem; }
+.editor-options > summary:hover { background: #ffffff0e; }
+.editor-options-menu { position: absolute; right: 0; z-index: 3; display: grid; gap: .85rem; width: min(18rem, 62vw); padding: .85rem; border: 1px solid #736481; border-radius: .6rem; background: #211a2b; box-shadow: 0 .65rem 2rem #0008; }
+.editor-options .editor-name-form, .editor-options .editor-name-form label { display: grid; gap: .35rem; min-width: 0; font-size: .82rem; }
+.editor-options input { width: 100%; min-width: 0; }
+.instance-log-controls, .instance-log-controls > div { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; }
+.instance-log-controls { justify-content: flex-start; margin-bottom: .8rem; }
+.instance-logs { min-width: 0; }
+.instance-logs .log-viewer { width: 100%; max-height: 55vh; white-space: pre-wrap; overflow-wrap: anywhere; }
+.log-filename { font-size: .82rem; color: #c9bed5; }
+@media (max-width: 680px) {
+  .editor-panel.theme-protected { width: calc(100vw - .6rem); }
+  .instance-editor-layout { grid-template-columns: 8.5rem minmax(0, 1fr); }
+  .editor-nav { padding-inline: .25rem; }
+}
+
+.instance-delete-dialog { width: min(26rem, 90vw); padding: 1.3rem; color: #f2eaf6; background: #1b1424; border: 1px solid #685877; border-radius: .85rem; }
+.instance-delete-dialog::backdrop { background: #080511bc; }
+.instance-delete-dialog h2 { margin: 0; font-size: 1.15rem; overflow-wrap: anywhere; }
+.instance-delete-dialog p { line-height: 1.5; }
+.instance-delete-dialog .form-actions { justify-content: flex-end; }
+
+@media (max-height: 700px) {
+  .editor-nav-group > p { margin-block: .65rem .2rem; }
+  .editor-nav-group button { min-height: 2.04rem; }
 }

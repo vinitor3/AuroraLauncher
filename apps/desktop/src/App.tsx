@@ -59,6 +59,8 @@ import { observeDownloadProgress, type DownloadProgress } from "./lib/downloadPr
 import { OnlineSkinSearch } from "./features/skins/OnlineSkinSearch";
 import { ContentUpdatesView } from "./features/content-updates/ContentUpdatesView";
 import { UpdateReviewDialog } from "./features/content-updates/UpdateReviewDialog";
+import { InstanceLogsPanel } from "./features/support/InstanceLogsPanel";
+import { WorldBackupsPanel } from "./features/world-backups/WorldBackupsPanel";
 import { SupportContextButton } from "./features/support/SupportContextButton";
 import { DoctorView } from "./features/doctor/DoctorView";
 import { RecoveryView } from "./features/recovery/RecoveryView";
@@ -140,7 +142,7 @@ type ModpackInstallSummary = {
 };
 type InstanceContentFile = { name: string; enabled: boolean };
 type InstanceContent = { mods: InstanceContentFile[]; shaderpacks: InstanceContentFile[]; resourcepacks: InstanceContentFile[] };
-type InstanceLog = { filename: string; lines: string[] };
+
 type InstanceLaunchProfile = { versionId?: string; minecraftVersion?: string };
 type ModrinthContent = {
   projectId: string;
@@ -155,7 +157,7 @@ type ModrinthContent = {
   dateModified: string;
 };
 type ContentType = "mod" | "shader" | "resourcepack";
-type EditorView = "installed" | "keymap" | "memory" | "updates" | "discover" | "doctor" | "recovery" | "diagnostic-lab";
+type EditorView = "logs" | "worlds" | "installed" | "keymap" | "memory" | "updates" | "discover" | "doctor" | "recovery" | "diagnostic-lab";
 type ContentSort = "popular" | "relevance" | "updated";
 type CatalogContent = ModrinthContent & {
   source: CatalogSource;
@@ -266,7 +268,12 @@ const DEFAULT_FORGE_VERSION: Record<string, string> = {
 const INSTALLABLE_VERSIONS = Object.keys(DEFAULT_FORGE_VERSION)
   .sort((left, right) => right.localeCompare(left, "en", { numeric: true }));
 const UPDATE_CONTENT_TYPES: ContentType[] = ["mod", "shader", "resourcepack"];
-const EDITOR_VIEWS: EditorView[] = ["installed", "keymap", "memory", "updates", "discover", "doctor", "recovery", "diagnostic-lab"];
+const EDITOR_SECTIONS = [
+  { label: "Conteúdo", views: [["installed", "Instalados"], ["discover", "Adicionar"], ["updates", "Atualizações"]] },
+  { label: "Jogo", views: [["keymap", "Teclas"], ["memory", "Memória"], ["worlds", "Backups de mundos"]] },
+  { label: "Suporte", views: [["logs", "Logs e crashes"], ["doctor", "Diagnóstico"], ["recovery", "Recuperação"], ["diagnostic-lab", "Ambiente de teste"]] },
+] as const;
+const EDITOR_VIEWS: EditorView[] = EDITOR_SECTIONS.flatMap(({ views }) => views.map(([view]) => view));
 
 function formatBytes(value?: number) {
   if (!value || value < 1) return "0 B";
@@ -688,6 +695,23 @@ function AuthScreen({
 }
 
 
+function DeleteInstanceDialog({ instance, onCancel, onConfirm, disabled }: { instance: Instance; onCancel: () => void; onConfirm: () => void; disabled: boolean }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current!;
+    dialog.showModal();
+    return () => dialog.close();
+  }, []);
+  return <dialog className="instance-delete-dialog theme-protected" ref={ref} aria-labelledby="delete-instance-title"
+    onCancel={event => { event.preventDefault(); onCancel(); }}>
+    <h2 id="delete-instance-title">Excluir {instance.displayName || instance.id}?</h2>
+    <p>A exclusão remove os arquivos desta instância, os mundos locais e seus backups.</p>
+    <div className="form-actions">
+      <button autoFocus className="secondary compact" onClick={onCancel} type="button">Cancelar</button>
+      <button className="danger compact" disabled={disabled} onClick={onConfirm} type="button">Excluir instância</button>
+    </div>
+  </dialog>;
+}
 function LauncherStartup() {
   const [services, setServices] = useState<FirebaseServices>();
   const [error, setError] = useState("");
@@ -756,7 +780,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [modrinthTotalHits, setModrinthTotalHits] = useState(0);
   const [modrinthPage, setModrinthPage] = useState(0);
   const [modrinthPageSize, setModrinthPageSize] = useState(10);
-  const [packInstallTarget, setPackInstallTarget] = useState("");
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
   const catalogRequest = useRef(0);
@@ -909,14 +932,13 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   }
   const [catalogSource, setCatalogSource] = useState<CatalogSource>("modrinth");
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [instanceLog, setInstanceLog] = useState<{ id: string; owner: string; crash: boolean; log: InstanceLog }>();
-  const logRequest = useRef(0);
-  useEffect(() => { logRequest.current++; setInstanceLog(undefined); }, [profile?.uid]);
+
   const [runningInstances, setRunningInstances] = useState<RunningInstance[]>([]);
   const inviteAccount = socialService && !socialLabBuild && !signingOut && connectAccountBarrier === "idle" ? profile?.uid : undefined;
   const revealSocial = () => { setThemesOpen(false); setActiveSection("social"); };
   const discord = useDiscordPresence(inviteAccount, runningInstances, socialConnection?.state, revealSocial);
   const publicInvite = usePublicInvite(inviteAccount, revealSocial);
+  const [deleteCandidate, setDeleteCandidate] = useState<Instance>();
   const [renameDraft, setRenameDraft] = useState("");
   const [launcherBusy, setBusy] = useState(false);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
@@ -926,6 +948,16 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const localAvatarMigrationRef = useRef("");
   const appearanceMigrationPending = useRef<Promise<void>>(Promise.resolve());
   const activeInstanceRef = useRef({ editingInstance, targetInstance });
+  const editorPanelRef = useRef<HTMLElement>(null);
+  const editorOpener = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!editingInstance) return;
+    const panel = editorPanelRef.current;
+    panel?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus({ preventScroll: true });
+    return () => {
+      if (editorOpener.current?.isConnected) editorOpener.current.focus({ preventScroll: true });
+    };
+  }, [editingInstance]);
   const editorOpenRequestRef = useRef({ generation: 0, id: "" });
   const lastArtworkMigrationRef = useRef<{ id: string; migrations: ContentArtworkMigration[] } | null>(null);
   const updateScanRequestRef = useRef({ generation: 0, id: "" });
@@ -994,7 +1026,14 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   useEffect(() => {
     if (!editingInstance) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || updatesApplying || updateReview || projectDetail) return;
+      if (event.defaultPrevented || event.key !== "Escape" || updatesApplying || updateReview || projectDetail || document.querySelector("dialog:modal")) return;
+      const options = editorPanelRef.current?.querySelector<HTMLDetailsElement>("details.editor-options[open]");
+      if (options) {
+        options.open = false;
+        options.querySelector("summary")?.focus();
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
       if (!busy) closeInstanceEditor();
     };
@@ -1702,38 +1741,13 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     return result;
   }
 
-  async function installModrinth(pack: CatalogPack, destination: string) {
-    if (!destination) {
-      setNotice("Escolha uma instância antes de instalar o modpack.");
-      return;
-    }
-    if (editingInstance === destination) invalidateContentUpdatePlan();
-    setBusy(true);
-    setNotice(`Preparando “${pack.title}”. O Aurora vai baixar e verificar todos os arquivos do modpack…`);
-    try {
-      const result = await installPackIntoInstance(pack, destination);
-      setInstalledVersionId(result.minecraft.versionId);
-      setInstalledMinecraftVersion(result.minecraftVersion);
-      await completeInstanceInstall(destination, `“${result.name}” instalado! Abra sua instância “${destination}” para jogar (${result.minecraftVersion}, ${result.loader}).`);
-    } catch (error) {
-      setDownloadProgress(undefined);
-      setNotice(`Não foi possível instalar “${pack.title}”: ${String(error)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
   async function createAndInstallModrinth(pack: CatalogPack) {
     const selectedMinecraftVersion = packVersions[pack.projectId] ?? preferredPackVersion(pack, minecraftVersion);
-    const preferred = safeInstanceId(`${pack.slug || pack.title}-${selectedMinecraftVersion}`);
-    let id = preferred;
-    let counter = 2;
-    while (instances.some((instance) => instance.id === id)) {
-      id = `${preferred.slice(0, 58)}-${counter++}`;
-    }
+    const id = safeInstanceId(`${pack.slug || pack.title}-${selectedMinecraftVersion}`);
     setBusy(true);
     setNotice(`Criando a instância de “${pack.title}” e baixando os arquivos verificados…`);
     try {
-      const instance = await invoke<Instance>("create_instance", { id });
+      const instance = await invoke<Instance>("create_instance", { id, unique: true });
       const result = await installPackIntoInstance(pack, instance.id);
       setTargetInstance(instance.id);
       setInstalledVersionId(result.minecraft.versionId);
@@ -1804,6 +1818,8 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     invalidateContentUpdatePlan();
     setActiveSection("instances");
     activeInstanceRef.current = { ...activeInstanceRef.current, editingInstance: id };
+    if (!editingInstance && document.activeElement instanceof HTMLElement) editorOpener.current = document.activeElement;
+    setInstanceContent({ mods: [], shaderpacks: [], resourcepacks: [] });
     setEditingInstance(id);
     setRenameDraft(id);
     setEditorView(initialView);
@@ -1834,24 +1850,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       await rehydrateContentArtwork(id, current, savedArtwork, editorIsCurrent);
     } catch (error) {
       if (editorIsCurrent()) setNotice(`Não foi possível abrir o conteúdo da instância: ${String(error)}`);
-    }
-  }
-  async function openInstanceLog(id: string, crash = false) {
-    const owner = profile?.uid;
-    if (!owner) return;
-    const request = ++logRequest.current;
-    setActiveSection("instances");
-    await selectInstance(id);
-    setBusy(true);
-    try {
-      const log = await invoke<InstanceLog>("read_instance_log", { id, crash });
-      if (request !== logRequest.current) return;
-      setInstanceLog({ id, owner, crash, log });
-      setNotice(log.lines.length ? `Exibindo ${log.filename}.` : crash ? "Esta instância ainda não tem um relatório de crash." : "Ainda não há logs nesta instância.");
-    } catch (error) {
-      if (request === logRequest.current) setNotice(`Não foi possível abrir o log: ${String(error)}`);
-    } finally {
-      setBusy(false);
     }
   }
   async function setContentEnabled(file: InstanceContentFile, enabled: boolean) {
@@ -2275,14 +2273,14 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   }
   function handleEditorViewKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, view: EditorView) {
     if (recoveryBusyRef.current || voice?.isBlocking()) return;
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const currentIndex = EDITOR_VIEWS.indexOf(view);
     const nextIndex = event.key === "Home"
       ? 0
       : event.key === "End"
         ? EDITOR_VIEWS.length - 1
-        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + EDITOR_VIEWS.length) % EDITOR_VIEWS.length;
+        : (currentIndex + (event.key === "ArrowDown" ? 1 : -1) + EDITOR_VIEWS.length) % EDITOR_VIEWS.length;
     const nextView = EDITOR_VIEWS[nextIndex];
     activateEditorView(nextView);
     window.requestAnimationFrame(() => document.getElementById(`editor-view-tab-${nextView}`)?.focus());
@@ -3198,7 +3196,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       setEditingInstance(renamed.id);
       setRenameDraft(renamed.id);
       setTargetInstance(renamed.id);
-      setInstanceLog((current) => current?.id === oldId ? { ...current, id: renamed.id } : current);
       await refresh();
       await selectInstance(renamed.id);
       setNotice(`Instância renomeada para “${renamed.id}”.`);
@@ -3209,7 +3206,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     }
   }
   async function deleteInstance(id: string) {
-    if (!window.confirm(`Excluir a instância “${id}” e todos os arquivos dela? Esta ação não pode ser desfeita.`)) return;
+    setDeleteCandidate(undefined);
     setBusy(true);
     try {
       await invoke("delete_instance", { id });
@@ -3350,7 +3347,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const visibleInstalledContent = selectedContentFiles.filter((file) =>
     file.name.toLocaleLowerCase().includes(installedContentFilter.trim().toLocaleLowerCase()),
   );
-  const enabledContentCount = selectedContentFiles.filter((file) => file.enabled).length;
   const selectedInstalledCount = selectedContentFiles.filter((file) => selectedContentNames.includes(file.name)).length;
   const selectedVisibleCount = visibleInstalledContent.filter((file) => selectedContentNames.includes(file.name)).length;
   const editingInstanceSummary = instances.find((instance) => instance.id === editingInstance);
@@ -3491,57 +3487,32 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
               {filteredInstances.map((instance) => {
                 const isRunning = runningInstances.some((running) => running.instanceId === instance.id);
                 return (
-                <div
-                  aria-current={targetInstance === instance.id ? "true" : undefined}
-                  className={`instance${targetInstance === instance.id ? " selected" : ""}${isRunning ? " running" : ""}`}
-                  key={instance.id}
-                  onClick={() => void selectInstance(instance.id)}
-                  onKeyDown={(event) => {
-                    if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
-                      event.preventDefault();
-                      void selectInstance(instance.id);
-                    }
-                  }}
-                  role="button"
-                  tabIndex={0}
-                >
-                  {instance.iconUrl ? <img className="instance-artwork" alt={`Imagem de ${instance.displayName || instance.id}`} src={instance.iconUrl} /> : <div className="orb">✦</div>}
-                  <div className="instance-copy">
-                    <strong>{instance.displayName || instance.id}</strong>
-                    {instance.displayName && instance.displayName !== instance.id && <small>{instance.id}</small>}
-                    <span>
-                      {isRunning
-                        ? "Rodando agora"
-                        : instance.hasModsDirectory
-                        ? instance.hasInstalledVersion
-                          ? "Minecraft instalado"
-                          : "Somente pastas — instale uma versão"
-                        : "Verificação necessária"}
+                <article className={`instance${targetInstance === instance.id ? " selected" : ""}${isRunning ? " running" : ""}`} key={instance.id}>
+                  <button aria-pressed={targetInstance === instance.id} className="instance-select text-button" onClick={() => void selectInstance(instance.id)} type="button">
+                    {instance.iconUrl ? <img className="instance-artwork" alt="" src={instance.iconUrl} /> : <span aria-hidden="true" className="orb">✦</span>}
+                    <span className="instance-copy">
+                      <strong>{instance.displayName || instance.id}</strong>
+                      <span>{isRunning ? "Rodando agora" : instance.hasModsDirectory
+                        ? instance.hasInstalledVersion ? "Minecraft instalado" : "Aguardando instalação"
+                        : "Verificação necessária"}</span>
                     </span>
-                  </div>
+                  </button>
+                  <button className="instance-delete text-button" aria-label={`Excluir ${instance.displayName || instance.id}`} title="Excluir instância" disabled={busy || isRunning} onClick={() => setDeleteCandidate(instance)} type="button">
+                    <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7m4-7v7" /></svg>
+                  </button>
                   <div className="instance-actions">
-                    <button
-                      className="compact"
-                      disabled={busy || !capeWardrobe.ready || wardrobeLoading || wardrobeReadyOwner !== profile.uid || !instance.hasInstalledVersion || isRunning}
+                    <button className="compact" disabled={busy || !capeWardrobe.ready || wardrobeLoading || wardrobeReadyOwner !== profile.uid || !instance.hasInstalledVersion || isRunning}
                       title={wardrobeLoading || wardrobeReadyOwner !== profile.uid ? "Recuperando sua skin…" : undefined}
-                      onClick={(event) => { event.stopPropagation(); void launchMinecraft(instance.id); }}
-                      type="button"
-                    >
-                      {isRunning ? "● Rodando" : "▶ Iniciar"}
-                    </button>
-                    <button className="secondary compact" onClick={(event) => { event.stopPropagation(); void openEditor(instance.id); }} type="button">
-                      Editar
-                    </button>
-                    <button className="secondary compact" aria-label={`Mapa de teclas de ${instance.displayName || instance.id}`} onClick={(event) => { event.stopPropagation(); void openEditor(instance.id, "keymap"); }} type="button">Teclas</button>
-                    <button className="secondary compact" disabled={busy} onClick={(event) => { event.stopPropagation(); void openInstanceLog(instance.id); }} type="button">Logs</button>
-                    <button className="danger compact" disabled={busy || isRunning} onClick={(event) => { event.stopPropagation(); void deleteInstance(instance.id); }} type="button">
-                      Excluir
-                    </button>
+                      onClick={() => void launchMinecraft(instance.id)} type="button">{isRunning ? "● Rodando" : "▶ Iniciar"}</button>
+                    <button aria-haspopup="dialog" className="secondary compact" onClick={() => void openEditor(instance.id)} type="button">Gerenciar</button>
+                    <button aria-haspopup="dialog" className="secondary compact" aria-label={`Mapa de teclas de ${instance.displayName || instance.id}`} onClick={() => void openEditor(instance.id, "keymap")} type="button">Teclas</button>
                   </div>
-                </div>
+                </article>
               );})}
             </div>
           )}
+          {deleteCandidate && <DeleteInstanceDialog instance={deleteCandidate} onCancel={() => setDeleteCandidate(undefined)}
+            onConfirm={() => void deleteInstance(deleteCandidate.id)} disabled={busy || runningInstances.some(game => game.instanceId === deleteCandidate.id)} />}
           {showCreateModal && (
             <section aria-label="Criar uma instância" className="create-modal" role="dialog" aria-modal="true">
               <div className="modal-heading">
@@ -3620,7 +3591,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
             {modrinthPacks.length > 0 ? (
               <ul className="pack-compact-list" key={`${catalogSource}-${modrinthPage}`} aria-label="Resultados de modpacks">
                 {modrinthPacks.map((pack) => <li key={pack.projectId}>
-                  <button aria-haspopup="dialog" className="pack-row" disabled={catalogLoading} onClick={() => { setPackInstallTarget(targetInstance); void openModpackDetail(pack); }} type="button">
+                  <button aria-haspopup="dialog" className="pack-row" disabled={catalogLoading} onClick={() => void openModpackDetail(pack)} type="button">
                     {pack.iconUrl ? <img className="pack-icon" src={pack.iconUrl} alt="" decoding="async" loading="lazy" /> : <span aria-hidden="true" className="orb">◈</span>}
                     <span className="pack-row-copy"><strong>{pack.title}</strong>
                       <small>{[pack.author, pack.loaders.join(" · "), `${pack.downloads.toLocaleString("pt-BR")} downloads`].filter(Boolean).join(" · ")}</small>
@@ -3642,41 +3613,61 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           </nav>
         </article>
         {editingInstance && (
-            <section aria-label={`Editor da instância ${editingInstance}`} aria-modal="true" className="editor-panel theme-protected" role="dialog">
+            <section aria-label={`Editor da instância ${editingInstance}`} aria-modal="true" className="editor-panel theme-protected" role="dialog" ref={editorPanelRef}
+              onKeyDown={event => {
+                if (event.key !== "Tab" || event.defaultPrevented || projectDetail || updateReview || !event.currentTarget.contains(event.target as Node)) return;
+                const focusable = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), summary, a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]')]
+                  .filter(el => el.tabIndex >= 0 && !el.closest("[inert]") && el.checkVisibility());
+                const first = focusable[0], last = focusable[focusable.length - 1];
+                if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+                if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+              }}>
               <div className="editor-heading">
                 <div className="editor-title">
                   {editingInstanceSummary?.iconUrl ? <img className="editor-instance-artwork" alt="" src={editingInstanceSummary.iconUrl} /> : <span className="editor-instance-icon">◈</span>}
                   <div>
-                  <p className="eyebrow">EDITANDO INSTÂNCIA</p>
-                  <form className="editor-name-form" onSubmit={renameEditingInstance}>
-                    <input aria-label="Nome da instância" disabled={busy || updatesScanning || updatesApplying || runningInstances.some((running) => running.instanceId === editingInstance)} maxLength={64} onChange={(event) => setRenameDraft(event.target.value)} value={renameDraft} />
-                    <button className="secondary compact" disabled={busy || updatesScanning || updatesApplying || !renameDraft.trim() || renameDraft.trim() === editingInstance || runningInstances.some((running) => running.instanceId === editingInstance)} type="submit">Salvar nome</button>
-                  </form>
-                    <span>{enabledContentCount} ativos · {selectedContentFiles.length} nesta categoria{totalAvailableUpdates > 0 ? ` · ${totalAvailableUpdates} ${totalAvailableUpdates === 1 ? "atualização" : "atualizações"}` : ""}</span>
+                    <p className="eyebrow">INSTÂNCIA</p>
+                    <h2 title={editingInstanceSummary?.displayName || editingInstance}>{editingInstanceSummary?.displayName || editingInstance}</h2>
                   </div>
                 </div>
                 <div className="editor-heading-actions">
-                  <button className="secondary compact" disabled={busy || updatesApplying} onClick={() => void openInstanceFolder(editingInstance)} type="button">Abrir pasta</button>
+                  <details className="editor-options" key={editingInstance}>
+                    <summary>Opções</summary>
+                    <div className="editor-options-menu">
+                      <button className="secondary compact" disabled={busy || updatesApplying || recoveryBusy} onClick={() => void openInstanceFolder(editingInstance)} type="button">Abrir pasta da instância</button>
+                      <form className="editor-name-form" onSubmit={renameEditingInstance}>
+                        <label>Identificador da pasta<input disabled={busy || updatesScanning || updatesApplying || recoveryBusy || editingInstanceIsRunning} maxLength={64} onChange={(event) => setRenameDraft(event.target.value)} value={renameDraft} /></label>
+                        <button className="secondary compact" disabled={busy || updatesScanning || updatesApplying || recoveryBusy || !renameDraft.trim() || renameDraft.trim() === editingInstance || editingInstanceIsRunning} type="submit">Renomear pasta</button>
+                      </form>
+                    </div>
+                  </details>
                   <button aria-label="Fechar editor" className="editor-close" disabled={updatesApplying || recoveryBusy} onClick={closeInstanceEditor} type="button">×</button>
                 </div>
               </div>
-              <div className="content-tabs" inert={recoveryBusy}>
-                <button aria-label={`Mods: ${instanceContent.mods.length} instalados, ${updateCountFor("mod")} atualizações`} className={contentType === "mod" ? "selected compact" : "secondary compact"} onClick={() => selectContentType("mod")} type="button">Mods <span>{instanceContent.mods.length}</span>{updateCountFor("mod") > 0 && <em>{updateCountFor("mod")} ↑</em>}</button>
-                <button aria-label={`Shaders: ${instanceContent.shaderpacks.length} instalados, ${updateCountFor("shader")} atualizações`} className={contentType === "shader" ? "selected compact" : "secondary compact"} onClick={() => selectContentType("shader")} type="button">Shaders <span>{instanceContent.shaderpacks.length}</span>{updateCountFor("shader") > 0 && <em>{updateCountFor("shader")} ↑</em>}</button>
-                <button aria-label={`Pacotes de recursos: ${instanceContent.resourcepacks.length} instalados, ${updateCountFor("resourcepack")} atualizações`} className={contentType === "resourcepack" ? "selected compact" : "secondary compact"} onClick={() => selectContentType("resourcepack")} type="button">Pacotes de recursos <span>{instanceContent.resourcepacks.length}</span>{updateCountFor("resourcepack") > 0 && <em>{updateCountFor("resourcepack")} ↑</em>}</button>
-              </div>
-              <div className="editor-view-tabs" role="tablist" aria-label="Conteúdo da instância" inert={recoveryBusy}>
-                <button aria-controls="editor-view-panel" aria-selected={editorView === "installed"} className={editorView === "installed" ? "active" : ""} id="editor-view-tab-installed" onClick={() => activateEditorView("installed")} onKeyDown={(event) => handleEditorViewKeyDown(event, "installed")} role="tab" tabIndex={editorView === "installed" ? 0 : -1} type="button">Instalados</button>
-                <button aria-controls="editor-view-panel" aria-selected={editorView === "keymap"} className={editorView === "keymap" ? "active" : ""} id="editor-view-tab-keymap" onClick={() => activateEditorView("keymap")} onKeyDown={(event) => handleEditorViewKeyDown(event, "keymap")} role="tab" tabIndex={editorView === "keymap" ? 0 : -1} type="button">Teclas</button>
-                <button aria-controls="editor-view-panel" aria-selected={editorView === "memory"} className={editorView === "memory" ? "active" : ""} id="editor-view-tab-memory" onClick={() => activateEditorView("memory")} onKeyDown={(event) => handleEditorViewKeyDown(event, "memory")} role="tab" tabIndex={editorView === "memory" ? 0 : -1} type="button">Memória</button>
-                <button aria-controls="editor-view-panel" aria-label={updateTabLabel} aria-selected={editorView === "updates"} className={editorView === "updates" ? "active" : ""} id="editor-view-tab-updates" onClick={() => activateEditorView("updates")} onKeyDown={(event) => handleEditorViewKeyDown(event, "updates")} role="tab" tabIndex={editorView === "updates" ? 0 : -1} type="button">Atualizações{updateTabBadge && <span aria-hidden="true" className={`tab-count ${updatesScanning ? "scanning" : updateScanIssueCount > 0 || (totalAvailableUpdates === 0 && totalUpdateAttention > 0) ? "attention" : ""}`}>{updateTabBadge}</span>}</button>
-                <button aria-controls="editor-view-panel" aria-selected={editorView === "discover"} className={editorView === "discover" ? "active" : ""} id="editor-view-tab-discover" onClick={() => activateEditorView("discover")} onKeyDown={(event) => handleEditorViewKeyDown(event, "discover")} role="tab" tabIndex={editorView === "discover" ? 0 : -1} type="button">＋ Adicionar</button>
-                <button aria-controls="editor-view-panel" aria-selected={editorView === "doctor"} className={editorView === "doctor" ? "active" : ""} id="editor-view-tab-doctor" onClick={() => activateEditorView("doctor")} onKeyDown={(event) => handleEditorViewKeyDown(event, "doctor")} role="tab" tabIndex={editorView === "doctor" ? 0 : -1} type="button">Diagnóstico</button>
-                <button aria-controls="editor-view-panel" aria-selected={editorView === "recovery"} className={editorView === "recovery" ? "active" : ""} id="editor-view-tab-recovery" onClick={() => activateEditorView("recovery")} onKeyDown={(event) => handleEditorViewKeyDown(event, "recovery")} role="tab" tabIndex={editorView === "recovery" ? 0 : -1} type="button">Recuperação</button>
-                <button aria-controls="editor-view-panel" aria-selected={editorView === "diagnostic-lab"} className={editorView === "diagnostic-lab" ? "active" : ""} id="editor-view-tab-diagnostic-lab" onClick={() => activateEditorView("diagnostic-lab")} onKeyDown={(event) => handleEditorViewKeyDown(event, "diagnostic-lab")} role="tab" tabIndex={editorView === "diagnostic-lab" ? 0 : -1} type="button">Ambiente de teste</button>
-              </div>
-              <div aria-labelledby={`editor-view-tab-${editorView}`} className="editor-body" id="editor-view-panel" role="tabpanel" tabIndex={0}>
-                {editorView === "keymap" ? (
+              <div className="instance-editor-layout">
+                <div className="editor-nav" role="tablist" aria-label="Seções da instância" aria-orientation="vertical" inert={recoveryBusy}>
+                  {EDITOR_SECTIONS.map(section => <div className="editor-nav-group" key={section.label} role="presentation">
+                    <p aria-hidden="true">{section.label}</p>
+                    {section.views.map(([view, label]) => <button key={view} aria-controls="editor-view-panel" aria-selected={editorView === view}
+                      aria-label={view === "updates" ? updateTabLabel : undefined} id={`editor-view-tab-${view}`}
+                      onClick={() => activateEditorView(view)} onKeyDown={event => handleEditorViewKeyDown(event, view)}
+                      role="tab" tabIndex={editorView === view ? 0 : -1} type="button">
+                      {label}{view === "updates" && updateTabBadge && <span aria-hidden="true" className="editor-update-count">{updateTabBadge}</span>}
+                    </button>)}
+                  </div>)}
+                </div>
+                <div aria-labelledby={`editor-view-tab-${editorView}`} className="editor-body" id="editor-view-panel" role="tabpanel" tabIndex={0} key={editingInstance + "/" + editorView}>
+                  {(editorView === "installed" || editorView === "discover" || editorView === "updates") && <>
+                    <h3 className="editor-content-heading">{editorView === "installed" ? "Conteúdo instalado" : editorView === "discover" ? "Adicionar conteúdo" : "Atualizações de conteúdo"}</h3>
+                    <div className="content-tabs" role="group" aria-label="Tipo de conteúdo" inert={recoveryBusy}>
+                      <button aria-label={`Mods: ${instanceContent.mods.length} instalados, ${updateCountFor("mod")} atualizações`} aria-pressed={contentType === "mod"} className={contentType === "mod" ? "selected compact" : "secondary compact"} onClick={() => selectContentType("mod")} type="button">Mods <span>{instanceContent.mods.length}</span>{updateCountFor("mod") > 0 && <em>{updateCountFor("mod")} ↑</em>}</button>
+                      <button aria-label={`Shaders: ${instanceContent.shaderpacks.length} instalados, ${updateCountFor("shader")} atualizações`} aria-pressed={contentType === "shader"} className={contentType === "shader" ? "selected compact" : "secondary compact"} onClick={() => selectContentType("shader")} type="button">Shaders <span>{instanceContent.shaderpacks.length}</span>{updateCountFor("shader") > 0 && <em>{updateCountFor("shader")} ↑</em>}</button>
+                      <button aria-label={`Pacotes de recursos: ${instanceContent.resourcepacks.length} instalados, ${updateCountFor("resourcepack")} atualizações`} aria-pressed={contentType === "resourcepack"} className={contentType === "resourcepack" ? "selected compact" : "secondary compact"} onClick={() => selectContentType("resourcepack")} type="button">Pacotes de recursos <span>{instanceContent.resourcepacks.length}</span>{updateCountFor("resourcepack") > 0 && <em>{updateCountFor("resourcepack")} ↑</em>}</button>
+                    </div>
+                  </>}
+                {editorView === "logs" ? <InstanceLogsPanel instanceId={editingInstance} /> : editorView === "worlds" ? (
+                  <WorldBackupsPanel instanceId={editingInstance} running={editingInstanceIsRunning} />
+                ) : editorView === "keymap" ? (
                   <Suspense fallback={<p role="status">Carregando mapa de teclas…</p>}>
                     <KeymapPanel key={editingInstance} instanceId={editingInstance} running={runningInstances.some(game => game.instanceId === editingInstance)} />
                   </Suspense>
@@ -3727,9 +3718,11 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                       </label>
                       <div className="editor-bulk-actions">
                         <button className="secondary compact" disabled={busy || updatesScanning || updatesApplying || visibleInstalledContent.length === 0} onClick={() => setSelectedContentNames(selectedVisibleCount === visibleInstalledContent.length ? selectedContentNames.filter((name) => !visibleInstalledContent.some((file) => file.name === name)) : [...new Set([...selectedContentNames, ...visibleInstalledContent.map((file) => file.name)])])} type="button">{selectedVisibleCount === visibleInstalledContent.length && visibleInstalledContent.length > 0 ? "Limpar visíveis" : "Selecionar visíveis"}</button>
+                        {selectedInstalledCount > 0 && <>
                         <button className="secondary compact" disabled={busy || updatesScanning || updatesApplying || selectedInstalledCount === 0} onClick={() => void setSelectedContentEnabled(true)} type="button">Ativar selecionados</button>
                         <button className="secondary compact" disabled={busy || updatesScanning || updatesApplying || selectedInstalledCount === 0} onClick={() => void setSelectedContentEnabled(false)} type="button">Desativar selecionados</button>
                         <button className="danger compact" disabled={busy || updatesScanning || updatesApplying || selectedInstalledCount === 0} onClick={() => void removeSelectedContent()} type="button">Desinstalar ({selectedInstalledCount})</button>
+                        </>}
                       </div>
                     </div>
                     <div className="installed-content content-table">
@@ -3817,6 +3810,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                     )}
                   </div>
                 )}
+                </div>
               </div>
             </section>
           )}
@@ -3853,39 +3847,12 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                 {projectDetail.kind === "modpack" && projectDetail.pack && <label className="detail-version-select">Minecraft<select disabled={busy} value={packVersions[projectDetail.pack.projectId] ?? preferredPackVersion(projectDetail.pack, minecraftVersion)} onChange={(event) => setPackVersions((current) => ({ ...current, [projectDetail.pack!.projectId]: event.target.value }))}>{(projectDetail.pack.versions.length ? projectDetail.pack.versions : [minecraftVersion]).map((version) => <option key={version} value={version}>{version}</option>)}</select></label>}
                 <span />
                 {projectDetail.kind === "content" && projectDetail.content && <button disabled={busy} onClick={() => { closeProjectDetail(); void installContent(projectDetail.content!); }} type="button">{contentType === "mod" ? "Instalar com dependências" : "Instalar na instância"}</button>}
-                {projectDetail.kind === "modpack" && projectDetail.pack && <>
-                  <label className="detail-destination-select">Destino<select disabled={busy} value={packInstallTarget} onChange={(event) => setPackInstallTarget(event.target.value)}>
-                    <option value="">Nova instância</option>
-                    {instances.map((instance) => <option key={instance.id} value={instance.id}>{instance.displayName ? `${instance.displayName} (${instance.id})` : instance.id}</option>)}
-                  </select></label>
-                  <button disabled={busy} onClick={() => {
-                    closeProjectDetail();
-                    if (packInstallTarget) void installModrinth(projectDetail.pack!, packInstallTarget);
-                    else void createAndInstallModrinth(projectDetail.pack!);
-                  }} type="button">
-                    {packInstallTarget ? "Instalar na instância" : "Criar e instalar"}
-                  </button>
-                </>}
+                {projectDetail.kind === "modpack" && projectDetail.pack && <button disabled={busy} onClick={() => {
+                  closeProjectDetail();
+                  void createAndInstallModrinth(projectDetail.pack!);
+                }} type="button">Criar e instalar</button>}
               </footer>
             </ProjectDialog>
-          )}
-          {instanceLog?.owner === profile.uid && (
-            <section className="log-panel">
-              <div className="panel-heading">
-                <div><p className="eyebrow">CONSOLE DA INSTÂNCIA</p><h2>{instanceLog.id} · {instanceLog.log.filename}</h2></div>
-                <button className="secondary compact" onClick={() => { logRequest.current++; setInstanceLog(undefined); }} type="button">Fechar console</button>
-              </div>
-              <div className="form-actions" aria-label="Origem do registro">
-                <button type="button" className="secondary compact" disabled={busy} aria-pressed={!instanceLog.crash} onClick={() => void openInstanceLog(instanceLog.id)}>Log do jogo</button>
-                <button type="button" className="secondary compact" disabled={busy} aria-pressed={instanceLog.crash} onClick={() => void openInstanceLog(instanceLog.id, true)}>Último crash</button>
-                {instanceLog.log.lines.length > 0 && <SupportContextButton key={instanceLog.id + instanceLog.log.filename} label={instanceLog.crash ? "Copiar crash" : "Copiar log"} source="Minecraft" log={instanceLog.log.lines.join("\n")} />}
-              </div>
-              {instanceLog.log.lines.length === 0 ? <p className="muted">{instanceLog.crash ? "Esta instância ainda não tem um relatório de crash." : "Nenhuma linha de log foi gerada ainda."}</p> : (
-                <pre aria-label="Últimas linhas do log" className="log-viewer">
-                  {instanceLog.log.lines.map((line, index) => <code className={/\b(error|exception|failed|fatal)\b/i.test(line) ? "log-error" : /\b(warn|warning)\b/i.test(line) ? "log-warning" : /\b(joined|loaded|starting|done)\b/i.test(line) ? "log-success" : ""} key={`${index}-${line.slice(0, 24)}`}>{line}{"\n"}</code>)}
-                </pre>
-              )}
-            </section>
           )}
           </div>
         <aside className="side-stack">

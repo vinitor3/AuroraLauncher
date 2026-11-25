@@ -56,3 +56,56 @@ test("choose only Alt, save, inspect distinct shortcuts and remove it on the ori
     assert.equal(box.querySelector('select[aria-label="Modificador"]'),null);
   } finally { await act(async () => root.unmount()); delete globalThis.keymapInvoke; }
 });
+
+test("captura física fica no controle ativo e só grava uma combinação válida ao salvar", async () => {
+  const box = document.getElementById("root"), root = createRoot(box);
+  const calls = [];
+  const data = {source:"saved",revision:"r1",modifierSupport:"modernForge",inputBackend:"glfw",
+    bindings:[{action:"key.drop",input:"key.keyboard.c",modifier:""}]};
+  globalThis.keymapInvoke = async (command,args) => {
+    if (command === "rebind_instance_key") {
+      calls.push(args);
+      data.bindings[0].input = args.input;
+      if (args.modifier !== null) data.bindings[0].modifier = args.modifier === "NONE" ? "" : args.modifier;
+      data.revision += ".";
+    }
+    return structuredClone(data);
+  };
+  const button = name => [...box.querySelectorAll("button")].find(el=>el.textContent===name);
+  const click = async name => { const el=button(name);assert.ok(el&&!el.disabled);
+    await act(async()=>el.dispatchEvent(new window.Event("click",{bubbles:true}))); };
+  const input = async (target,type,properties) => {
+    const ev = new window.Event(type,{bubbles:true,cancelable:true});
+    Object.assign(ev,properties);
+    await act(async()=>target.dispatchEvent(ev)); return ev;
+  };
+  try {
+    await act(async()=>root.render(createElement(Panel,{instanceId:"qa",running:false})));
+    await click("Alterar");
+    const field = box.querySelector(".km-capture");
+    await input(field,"keydown",{key:"Control",code:"ControlLeft",ctrlKey:true});
+    await input(field,"keydown",{key:"v",code:"KeyV",ctrlKey:true});
+    await input(field,"keyup",{key:"Control",code:"ControlLeft"});
+    assert.match(box.querySelector(".km-edit [role=status]").textContent,/Ctrl \+ V/);
+    assert.equal(calls.length,0);
+    await click("Salvar tecla");
+    assert.deepEqual([calls[0].input,calls[0].modifier],["key.keyboard.v","CONTROL"]);
+    await click("Alterar");
+    const capture=box.querySelector(".km-capture");
+    await input(capture,"keydown",{key:"x",code:"KeyX",altKey:true,shiftKey:true});
+    assert.equal(button("Salvar tecla").disabled,true);
+    await input(capture,"mousedown",{button:4,ctrlKey:false,altKey:false,shiftKey:false});
+    assert.equal((await input(capture,"mouseup",{button:4})).defaultPrevented,true);
+    assert.equal(button("Salvar tecla").disabled,false);
+    await input(capture,"keydown",{key:"Escape",code:"Escape"});
+    assert.equal(box.querySelector(".km-edit"),null); assert.equal(calls.length,1);
+    await click("Alterar");
+    await input(box.querySelector(".km-capture"),"mousedown",{button:4,altKey:true});
+    await click("Salvar tecla");
+    assert.deepEqual([calls[1].input,calls[1].modifier],["key.mouse.5","ALT"]);
+    data.modifierSupport="unavailable";
+    await click("Recarregar"); await click("Alterar");
+    await input(box.querySelector(".km-capture"),"keydown",{key:"c",code:"KeyC",ctrlKey:true});
+    assert.equal(button("Salvar tecla").disabled,true); assert.equal(calls.length,2);
+  } finally { await act(async()=>root.unmount()); delete globalThis.keymapInvoke; }
+});

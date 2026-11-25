@@ -5,7 +5,7 @@ export type PlayerSuggestion = { name: string; uuid?: string; source: string; me
 export type SkinResult = { name: string; uuid: string; model: "classic" | "slim"; skinUrl: string;
   textureUrl: string; contentHash: string; headUrl?: string; bodyUrl?: string; source: string; stale: boolean };
 export type CatalogEntry = { id: string; name: string; author: string; model: "classic" | "slim"; hash: string; source: string; tags: string[] };
-export type CatalogPage = { entries: CatalogEntry[]; page: number; hasMore: boolean; sources: string[] };
+export type CatalogPage = { entries: CatalogEntry[]; page: number; hasMore: boolean; sources: string[]; stale?: boolean };
 // Zero-based Worker pages are accepted through index 100000.
 export const LAST_CATALOG_PAGE_NUMBER = 100001;
 
@@ -28,16 +28,22 @@ export class PlayerSkinsClient {
   }
   private async get<T>(path: string, signal?: AbortSignal): Promise<T> {
     let response: Response;
+    const timeout = AbortSignal.timeout(12000);
     try {
-      response = await fetch(this.base + path, { signal: signal
-        ? AbortSignal.any([signal, AbortSignal.timeout(12000)]) : AbortSignal.timeout(12000) });
+      response = await fetch(this.base + path, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
     } catch {
       signal?.throwIfAborted();
+      if (timeout.aborted) throw new PlayerSkinRequestError("A busca de skins demorou para responder. Tente novamente.", 504);
       throw new PlayerSkinRequestError("Não foi possível conectar à busca de skins.", 0);
     }
     const data = await response.json().catch(() => null);
-    if (!response.ok || !data) throw new PlayerSkinRequestError(response.status === 429
-      ? "Muitas consultas. Aguarde alguns instantes." : data?.error ?? "Não foi possível consultar as skins.", response.ok ? 502 : response.status);
+    if (!response.ok || !data) {
+      const seconds = Number(response.headers.get("Retry-After"));
+      const message = typeof data?.error === "string" ? data.error : "Não foi possível consultar as skins.";
+      const wait = Number.isSafeInteger(seconds) && seconds > 0 && seconds <= 86400
+        ? `Tente novamente em ${seconds < 60 ? `${seconds} s` : `${Math.ceil(seconds / 60)} min`}.` : "Aguarde alguns instantes.";
+      throw new PlayerSkinRequestError(response.status === 429 ? `Muitas consultas. ${wait}` : message, response.ok ? 502 : response.status);
+    }
     return data as T;
   }
   async autocompleteSkinNames(query: string, signal?: AbortSignal): Promise<PlayerSuggestion[]> {
@@ -58,7 +64,7 @@ export class PlayerSkinsClient {
       return result;
     } catch (error) {
       signal?.throwIfAborted();
-      if (!isTauri() || !(error instanceof PlayerSkinRequestError) || ![0, 404, 503].includes(error.status)) throw error;
+      if (!isTauri() || !(error instanceof PlayerSkinRequestError) || ![0, 404, 503, 504].includes(error.status)) throw error;
       // Official public APIs can reject Cloudflare egress. The narrow native
       // command uses the user's connection, validates the identity and PNG/hash,
       // and never receives or returns an upstream credential.

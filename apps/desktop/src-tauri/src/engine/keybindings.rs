@@ -27,6 +27,7 @@ pub struct KeyMap {
     source: &'static str,
     revision: Option<String>,
     modifier_support: ModifierSupport,
+    input_backend: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -204,6 +205,67 @@ fn revision(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
+fn profile_input_backend(root: &Path, id: &str) -> Option<&'static str> {
+    if id.is_empty()
+        || id.len() > 96
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        || id == "."
+        || id == ".."
+    {
+        return None;
+    }
+    let text = read_file(root, &format!("versions/{id}/{id}.json")).ok()??;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    if value["id"] != id || value.get("inheritsFrom").is_some() {
+        return None;
+    }
+    let libraries = value["libraries"].as_array()?;
+    let has = |prefix: &str| {
+        libraries
+            .iter()
+            .filter_map(|lib| lib["name"].as_str())
+            .any(|name| name.starts_with(prefix))
+    };
+    match (has("org.lwjgl:lwjgl-glfw:"), has("org.lwjgl:lwjgl-sdl:")) {
+        (true, false) => Some("glfw"),
+        (false, true) => Some("sdl"),
+        _ => None,
+    }
+}
+
+fn input_backend(root: &Path) -> Option<&'static str> {
+    for filename in ["aurora-modpack.json", "aurora-instance.json"] {
+        if let Some(text) = read_file(root, filename).ok()? {
+            let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+            if let Some(base) = value["minecraft"].as_str() {
+                return profile_input_backend(root, base);
+            }
+        }
+    }
+    // Imported instances may only retain the vanilla profile and a loader child.
+    let dir = root.join("versions");
+    let _pins = recovery::pin_directory(&dir).ok()?;
+    let mut backend = None;
+    for (index, entry) in fs::read_dir(&dir).ok()?.enumerate() {
+        if index >= 64 {
+            return None;
+        }
+        let entry = entry.ok()?;
+        if !entry.file_type().ok()?.is_dir() {
+            continue;
+        }
+        if let Some(found) = profile_input_backend(root, entry.file_name().to_str()?) {
+            if backend.is_some_and(|previous| previous != found) {
+                return None;
+            }
+            backend = Some(found);
+        }
+    }
+    backend
+}
+
 pub fn inspect(instance: &Instance) -> Result<KeyMap, String> {
     let root = instance.root();
     let _pinned = recovery::pin_directory(root).map_err(|e| e.to_string())?;
@@ -236,6 +298,7 @@ pub fn inspect(instance: &Instance) -> Result<KeyMap, String> {
         source,
         revision,
         modifier_support: modifier_support(root),
+        input_backend: input_backend(root),
     })
 }
 
@@ -405,6 +468,31 @@ mod tests {
             ModifierSupport::Unavailable
         )
         .is_err());
+    }
+    #[test]
+    fn input_names_follow_installed_runtime_and_ambiguous_imports_remain_unknown() {
+        let root = std::env::temp_dir().join(Uuid::new_v4().to_string());
+        let child = root.join("versions").join("fabric-test");
+        fs::create_dir_all(&child).unwrap();
+        fs::write(child.join("fabric-test.json"), r#"{"id":"fabric-test","inheritsFrom":"1.21.11","libraries":[{"name":"org.lwjgl:lwjgl-sdl:3.4.3"}]}"#).unwrap();
+        assert_eq!(input_backend(&root), None);
+        for (id, backend) in [("1.21.11", "glfw"), ("26.3", "sdl")] {
+            let directory = root.join("versions").join(id);
+            fs::create_dir_all(&directory).unwrap();
+            let profile = serde_json::json!({"id":id, "libraries":[{"name":format!("org.lwjgl:lwjgl-{backend}:3.4.3")}]});
+            fs::write(directory.join(format!("{id}.json")), profile.to_string()).unwrap();
+            assert_eq!(profile_input_backend(&root, id), Some(backend));
+        }
+        assert_eq!(input_backend(&root), None);
+        fs::write(root.join("aurora-instance.json"), r#"{"minecraft":"26.3"}"#).unwrap();
+        assert_eq!(input_backend(&root), Some("sdl"));
+        fs::write(
+            root.join("aurora-instance.json"),
+            r#"{"minecraft":"../other"}"#,
+        )
+        .unwrap();
+        assert_eq!(input_backend(&root), None);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn saved_options_override_pack_defaults_and_stale_edits_fail() {

@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "aurora-launcher-core"
-version = "0.2.0-beta.3"
+version = "0.2.0-beta.4"
 dependencies = [
  "aurora-connect-lab",
  "base64 0.22.1",

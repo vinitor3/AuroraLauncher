@@ -185,7 +185,9 @@ test("cache: list TTL is five minutes and image TTL is one hour", async (t) => {
 test("QA-QUOTA-01: HTTP 429 must suppress repeated calls during Retry-After", async () => {
   const calls = mockFetch(() => new Response(null, { status: 429, headers: { "Retry-After": "60" } }));
   for (let attempt = 0; attempt < 4; attempt++) {
-    assert.equal((await worker.fetch(new Request(origin + "/v1/skins/catalog?query=qa-rate-limit"), env)).status, 503);
+    const result = await worker.fetch(new Request(origin + "/v1/skins/catalog?query=qa-rate-limit"), env);
+    assert.equal(result.status, 429);
+    assert.equal(result.headers.get("Retry-After"), "60");
   }
   assert.equal(calls.length, 1, "Four immediate requests currently consume four upstream calls after 429");
 });
@@ -213,11 +215,10 @@ test("QA-PNG-01: a 24-byte PNG header must not become a catalog entry or downloa
   const truncated = png(1).subarray(0, 24);
   const calls = mockFetch(({ url }) => url.pathname === "/api/v1/skins"
     ? list([skin(1)]) : imageResponse(truncated));
-  const result = await catalog("qa-truncated-png");
+  const result = await worker.fetch(new Request(origin + "/v1/skins/catalog?query=qa-truncated-png"), env);
   const asset = await worker.fetch(new Request(assetUrl(truncated, skin(1).pngPath)), env);
   assert.ok(calls.length >= 2);
-  assert.deepEqual({ catalogEntries: result.rows.length, assetStatus: asset.status },
-    { catalogEntries: 0, assetStatus: 502 }, "IHDR dimensions alone do not prove PNG integrity");
+  assert.deepEqual([result.status, asset.status], [502, 502], "IHDR dimensions alone do not prove PNG integrity");
 });
 
 test("QA-PNG-02: an invalid IDAT stream with a valid chunk CRC must not be published", async () => {
@@ -226,7 +227,8 @@ test("QA-PNG-02: an invalid IDAT stream with a valid chunk CRC must not be publi
     valid.subarray(0, 33), chunk("IDAT", Buffer.from("not-a-zlib-stream")), chunk("IEND", Buffer.alloc(0)),
   ]);
   mockFetch(({ url }) => url.pathname === "/api/v1/skins" ? list([skin(1)]) : imageResponse(broken));
-  assert.equal((await catalog("qa-broken-idat")).rows.length, 0);
+  const result = await worker.fetch(new Request(origin + "/v1/skins/catalog?query=qa-broken-idat"), env);
+  assert.equal(result.status, 502);
 });
 
 function oversizedResponse(contentType: string, declared: boolean, onCancel: () => void): Response {
@@ -256,7 +258,7 @@ for (const declared of [true, false]) {
     let cancelled = false;
     const calls = mockFetch(() => oversizedResponse("application/json", declared, () => { cancelled = true; }));
     const result = await worker.fetch(new Request(origin + "/v1/skins/catalog?query=qa-large-json"), env);
-    assert.equal(result.status, 503);
+    assert.equal(result.status, 502);
     assert.equal(cancelled, true);
     assert.equal(calls.length, 1);
   });

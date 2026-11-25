@@ -43,7 +43,7 @@ const curseForgeApiBase = "https://api.curseforge.com/v1";
 const mcstatApiBase = "https://mcstat.org/api/v1";
 const legacySupabaseRef = "pgbzkinjfwbncifurirb";
 const appearanceBucket = "aurora-appearance";
-const auroraApiRevision = "beta-0.2.0-1-storage-runtime";
+const auroraApiRevision = "beta-0.2.0-4-skin-catalog";
 const minecraftGameId = 432;
 const curseForgeClassIds = { mod: 6, modpack: 4471, resourcepack: 12, shader: 6552 } as const;
 const curseForgeLoaderIds = { forge: 1, fabric: 4 } as const;
@@ -1726,7 +1726,7 @@ async function fetchMcstatPage(env: Env, query: string, page: number, deadline: 
   if (!key) throw new Error("MCStat não configurado.");
   const cacheKey = `${query}\n${page}`;
   return cachedPromise(mcstatPageCache, cacheKey, mcstatPageCacheMillis, 256, async () => {
-    if (Date.now() < mcstatCooldownUntil) throw new Error("MCStat em espera por limite de chamadas.");
+    if (Date.now() < mcstatCooldownUntil) throw new PublicError("O catálogo de skins atingiu o limite de consultas.", 429);
     enforceRateLimit("mcstat-catalog-upstream", 30);
     const url = new URL(mcstatApiBase + "/skins");
     url.searchParams.set("page", String(page));
@@ -1734,25 +1734,28 @@ async function fetchMcstatPage(env: Env, query: string, page: number, deadline: 
     url.searchParams.set("sort", "popular");
     if (query) url.searchParams.set(query.startsWith("#") ? "tag" : "search", query.replace(/^#/, ""));
     let response: Response;
+    const signal = AbortSignal.any([deadline, AbortSignal.timeout(mcstatRequestTimeoutMs)]);
     try {
       response = await fetch(url.toString(), {
         headers: { Accept: "application/json", "X-API-Key": key },
         redirect: "manual",
-        signal: AbortSignal.any([deadline, AbortSignal.timeout(mcstatRequestTimeoutMs)]),
-        cf: { cacheEverything: true, cacheTtl: 300 },
+        signal,
+        cf: { cacheEverything: true, cacheTtlByStatus: { "200": 300, "400-599": -1 } },
       });
     } catch {
-      throw new Error("MCStat não respondeu a tempo.");
+      throw signal.aborted ? new PublicError("O catálogo de skins demorou para responder.", 504)
+        : new PublicError("Não foi possível conectar ao provedor de skins.", 503);
     }
     if (!response.ok) {
       if (response.status === 429) {
         const retry = response.headers.get("Retry-After") ?? "60";
-        const duration = Number(retry) || (Date.parse(retry) - Date.now()) / 1000 || 60;
-        mcstatCooldownUntil = Date.now() + Math.max(1, Math.min(86400, duration)) * 1000;
-      } else mcstatCooldownUntil = Date.now() + 30000;
+        const seconds = /^\d+$/.test(retry) ? Number(retry) : (Date.parse(retry) - Date.now()) / 1000;
+        mcstatCooldownUntil = Date.now() + Math.max(1, Math.min(86400, Number.isFinite(seconds) ? seconds : 60)) * 1000;
+      }
       await response.body?.cancel();
       console.error("MCStat skin API unavailable", { status: response.status });
-      throw new Error("MCStat temporariamente indisponível.");
+      if (response.status === 429) throw new PublicError("O catálogo de skins atingiu o limite de consultas.", 429);
+      throw new PublicError("O provedor do catálogo de skins está indisponível.", 503);
     }
     const bytes = await readBoundedResponse(response, mcstatMaxResponseBytes);
     let payload: unknown;
@@ -1863,7 +1866,7 @@ async function fetchMcstatImage(value: string, env?: Env, deadline?: AbortSignal
         headers: { Accept: "image/png" },
         redirect: "manual",
         signal: deadline ? AbortSignal.any([deadline, AbortSignal.timeout(mcstatRequestTimeoutMs)]) : AbortSignal.timeout(mcstatRequestTimeoutMs),
-        cf: { cacheEverything: true, cacheTtl: 86_400 },
+        cf: { cacheEverything: true, cacheTtlByStatus: { "200": 86_400, "400-599": -1 } },
       });
     } catch (cause) {
       if (cause instanceof SkinApiError) throw cause;
@@ -1892,6 +1895,20 @@ async function mcstatCatalogSkin(skin: McstatSkin, deadline: AbortSignal): Promi
   };
 }
 
+type CommunityCatalogPage = { entries: CatalogProtocolSkin[]; page: number; hasMore: boolean };
+const catalogSnapshotLifetime = 24 * 60 * 60;
+
+function catalogResponse(value: CommunityCatalogPage, format: string | null, stale = false): Response {
+  const { entries, page, hasMore } = value;
+  const headers = { "Access-Control-Allow-Origin": "*", "X-Aurora-Catalog-Sources": "mcstat",
+    "Cache-Control": stale ? "no-store" : "public, max-age=300" };
+  if (format === "json") {
+    return Response.json({ entries, page, hasMore, sources: ["mcstat"], ...(stale ? { stale: true } : {}) }, { headers });
+  }
+  const lines = ["AURORA_SKINS_CATALOG_V1", `page\t${page}\tmore\t${hasMore ? 1 : 0}`, ...entries.map(catalogLine)];
+  return new Response(lines.join("\n") + "\n", { headers: { ...headers, "Content-Type": "text/tab-separated-values; charset=utf-8" } });
+}
+
 function catalogLine(skin: CatalogProtocolSkin): string {
   return [
     skin.id,
@@ -1908,20 +1925,53 @@ async function skinCatalogResponse(request: Request, env: Env): Promise<Response
   // Total upstream budget remains below the desktop/mod 12-second read timeout.
   const deadline = AbortSignal.timeout(9000);
   const url = new URL(request.url);
-  const page = Number.parseInt(url.searchParams.get("page") ?? "0", 10);
-  const pageSize = Number.parseInt(url.searchParams.get("pageSize") ?? "12", 10);
+  const readNumber = (key: string, fallback: string) => {
+    const text = url.searchParams.get(key) ?? fallback;
+    return /^\d+$/.test(text) ? Number(text) : NaN;
+  };
+  const page = readNumber("page", "0");
+  const pageSize = readNumber("pageSize", "12");
   if (!Number.isInteger(page) || page < 0 || page > 100000 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 24) {
     return error("Paginação inválida.");
   }
   const rawQuery = boundedUtf8((url.searchParams.get("query") ?? "").slice(0, 80), 80);
   const start = page * pageSize;
   const end = start + pageSize;
-  if (!mcstatApiKey(env)) return error("Catálogo de skins temporariamente indisponível.", 503);
+  const format = url.searchParams.get("format");
+  const key = new URL("/_cache/community-skins-v1", url.origin);
+  key.search = new URLSearchParams({ query: rawQuery, page: String(page), size: String(pageSize) }).toString();
+  // The public, verified page is shared between the V1 and JSON representations.
+  // Cloudflare Cache API has no native stale-if-error, so the refresh time and
+  // retention are deliberately separate. Cache failures leave live reads usable.
+  const cache = globalThis.caches?.default;
+  let previous: CommunityCatalogPage | undefined;
+  try {
+    const hit = await cache?.match(key.href);
+    if (hit) {
+      const age = Date.now() - Number(hit.headers.get("X-Aurora-Captured-At"));
+      if (age >= 0 && age < catalogSnapshotLifetime * 1000) {
+        previous = await hit.json<CommunityCatalogPage>();
+        if (age < mcstatPageCacheMillis) return catalogResponse(previous, format);
+      }
+    }
+  } catch { previous = undefined; }
+  function unavailable(cause: unknown): Response {
+    if (previous?.entries.length) return catalogResponse(previous, format, true);
+    const issue = cause instanceof PublicError ? cause : new PublicError("O provedor retornou uma resposta inválida para o catálogo de skins.", 502);
+    const response = error(issue.message, issue.status);
+    if (issue.status === 429) {
+      response.headers.set("Retry-After", String(mcstatCooldownUntil > Date.now()
+        ? Math.ceil((mcstatCooldownUntil - Date.now()) / 1000) : 60));
+      response.headers.set("Access-Control-Expose-Headers", "Retry-After");
+    }
+    return response;
+  }
+  if (!mcstatApiKey(env)) return unavailable(new PublicError("O serviço de catálogo de skins está indisponível.", 503));
   let remote: { skins: McstatSkin[]; total: number };
   try {
     remote = await fetchMcstatRange(env, rawQuery, start, pageSize, deadline);
-  } catch {
-    return error("Não foi possível consultar o catálogo de skins agora.", 503);
+  } catch (cause) {
+    return unavailable(cause);
   }
   const entries: CatalogProtocolSkin[] = [];
   const hydrated = await mapWithConcurrency(remote.skins, Math.min(12, remote.skins.length), async (skin) => {
@@ -1941,21 +1991,18 @@ async function skinCatalogResponse(request: Request, env: Env): Promise<Response
       entries.push(entry);
     }
   }
-  const total = remote.total;
-  if (url.searchParams.get("format") === "json") {
-    return json({ entries, page, hasMore: end < total, sources: ["mcstat"] });
+  if (remote.total > start && entries.length === 0) {
+    return unavailable(new PublicError("O provedor não retornou texturas válidas para esta página.", 502));
   }
-  const lines = ["AURORA_SKINS_CATALOG_V1", `page\t${page}\tmore\t${end < total ? 1 : 0}`];
-  lines.push(...entries.map(catalogLine));
-  return new Response(lines.join("\n") + "\n", {
-    status: 200,
-    headers: {
-      "Content-Type": "text/tab-separated-values; charset=utf-8",
-      "Access-Control-Allow-Origin": "*",
-      "Cache-Control": "public, max-age=300",
-      "X-Aurora-Catalog-Sources": "mcstat",
-    },
-  });
+  const result = { entries, page, hasMore: end < remote.total };
+  if (cache && !hydrated.includes(undefined)) {
+    try {
+      await cache.put(key.href, Response.json(result, { headers: {
+        "Cache-Control": `public, max-age=${catalogSnapshotLifetime}`, "X-Aurora-Captured-At": String(Date.now()),
+      } }));
+    } catch { /* A full cache must not affect the public response. */ }
+  }
+  return catalogResponse(result, format);
 }
 
 async function mcstatSkinAsset(pathname: string): Promise<Response> {

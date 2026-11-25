@@ -59,6 +59,32 @@ impl InstanceLayout {
         self.instances_dir().join(id.as_str())
     }
 
+    /// Reserve a fresh directory even when another launcher installs the same pack concurrently.
+    pub fn reserve_new(&self, preferred: InstanceId) -> Result<Instance, InstanceError> {
+        fs::create_dir_all(self.instances_dir())?;
+        let base = preferred.as_str();
+        for number in 1..=10_000 {
+            let id = if number == 1 {
+                preferred.clone()
+            } else {
+                let suffix = format!("-{number}");
+                let prefix = &base[..base.len().min(64 - suffix.len())];
+                InstanceId::parse(format!("{prefix}{suffix}"))?
+            };
+            let instance = self.open(id);
+            match fs::create_dir(instance.root()) {
+                Ok(()) => return Ok(instance),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "Não há um nome disponível para esta instância.",
+        )
+        .into())
+    }
+
     pub fn open(&self, id: InstanceId) -> Instance {
         let root = self.path_for(&id);
         Instance {
@@ -206,5 +232,30 @@ mod tests {
         assert!(!installed.with_extension("aurora-writing").exists());
         assert!(!installed.with_extension("aurora-backup").exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn simultaneous_installs_never_reuse_an_existing_instance() {
+        let scratch = std::env::temp_dir().join(format!("aurora-reserve-{}", uuid::Uuid::new_v4()));
+        let layout = InstanceLayout::new(&scratch);
+        let id = InstanceId::parse("a".repeat(64)).unwrap();
+        let original = layout.reserve_new(id.clone()).unwrap();
+        fs::write(original.root().join("keep.txt"), "original").unwrap();
+        let jobs: Vec<_> = (0..4)
+            .map(|_| {
+                let layout = layout.clone();
+                let id = id.clone();
+                std::thread::spawn(move || layout.reserve_new(id).unwrap().root().to_owned())
+            })
+            .collect();
+        let paths: std::collections::HashSet<_> =
+            jobs.into_iter().map(|job| job.join().unwrap()).collect();
+        assert_eq!(paths.len(), 4);
+        assert!(!paths.contains(original.root()));
+        assert_eq!(
+            fs::read(original.root().join("keep.txt")).unwrap(),
+            b"original"
+        );
+        fs::remove_dir_all(scratch).unwrap();
     }
 }

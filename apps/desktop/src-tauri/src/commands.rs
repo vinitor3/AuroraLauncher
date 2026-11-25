@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 #[cfg(all(windows, feature = "connect-lab"))]
 #[path = "commands_ready_game.rs"]
 pub(crate) mod ready_game;
+#[path = "commands_world_backups.rs"]
+pub(crate) mod world_backups;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -227,6 +229,7 @@ pub struct IpcSessions(Mutex<BTreeMap<u32, IpcServer>>);
 
 struct RunningInstance {
     doctor: Option<(AppHandle, String)>,
+    backup: Option<aurora_launcher_core::engine::Instance>,
     #[cfg(all(windows, feature = "connect-lab"))]
     started_at_ms: u64,
     instance_id: String,
@@ -371,15 +374,24 @@ fn summarize_instance(id: String, path: PathBuf) -> InstanceSummary {
 }
 
 fn prune_finished_processes(processes: &mut BTreeMap<u32, RunningInstance>) -> Vec<u32> {
+    reap_finished(processes, |instance, guard| {
+        tauri::async_runtime::spawn_blocking(move || world_backups::finish(&instance, &guard));
+    })
+}
+fn reap_finished(
+    processes: &mut BTreeMap<u32, RunningInstance>,
+    mut on_exit: impl FnMut(aurora_launcher_core::engine::Instance, InstanceMutationGuard),
+) -> Vec<u32> {
     let finished = processes
         .iter_mut()
         .filter_map(|(process_id, process)| {
-            let (outcome, code) = match process.child.try_wait() {
+            let (outcome, code, confirmed) = match process.child.try_wait() {
                 Ok(Some(status)) => (
                     doctor_runs::outcome_for_exit(status.code(), status.success()),
                     status.code(),
+                    true,
                 ),
-                Err(_) => ("unknown", None),
+                Err(_) => ("unknown", None, false),
                 Ok(None) => return None,
             };
             if let Some((app, run_id)) = &process.doctor {
@@ -400,13 +412,19 @@ fn prune_finished_processes(processes: &mut BTreeMap<u32, RunningInstance>) -> V
                     }
                 }
             }
-            Some(*process_id)
+            Some((*process_id, confirmed))
         })
         .collect::<Vec<_>>();
-    for process_id in &finished {
-        processes.remove(process_id);
+    for (process_id, confirmed) in &finished {
+        if let Some(process) = processes.remove(process_id) {
+            if *confirmed {
+                if let Some(instance) = process.backup {
+                    on_exit(instance, process._mutation_lock);
+                }
+            }
+        }
     }
-    finished
+    finished.into_iter().map(|(id, _)| id).collect()
 }
 
 fn instance_is_running(running: &RunningInstances, instance_id: &str) -> Result<bool, String> {
@@ -1019,7 +1037,11 @@ pub fn list_instances(app: AppHandle) -> Result<Vec<InstanceSummary>, String> {
 }
 
 #[tauri::command]
-pub fn create_instance(app: AppHandle, id: String) -> Result<InstanceSummary, String> {
+pub fn create_instance(
+    app: AppHandle,
+    id: String,
+    unique: Option<bool>,
+) -> Result<InstanceSummary, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
     if id.as_str().starts_with("aurora-test-") {
         return Err(
@@ -1027,9 +1049,15 @@ pub fn create_instance(app: AppHandle, id: String) -> Result<InstanceSummary, St
                 .into(),
         );
     }
-    let instance = layout(&app)?.open(id);
-    fs::create_dir_all(instance.root())
-        .map_err(|_| "Não foi possível criar a pasta da instância.".to_owned())?;
+    let layout = layout(&app)?;
+    let instance = if unique.unwrap_or(false) {
+        layout.reserve_new(id).map_err(|error| error.to_string())?
+    } else {
+        let instance = layout.open(id);
+        fs::create_dir_all(instance.root())
+            .map_err(|_| "Não foi possível criar a pasta da instância.".to_owned())?;
+        instance
+    };
     let _mutation_lock = acquire_idle_instance(&instance)?;
     instance
         .ensure_layout()
@@ -1163,11 +1191,13 @@ pub fn delete_instance(
     let _mutation_lock = acquire_idle_instance(&instance)?;
     #[cfg(windows)]
     ensure_no_external_instance_game(instance.root())?;
-    if diagnostic_lab::is_lab_candidate(&instance) {
-        return diagnostic_lab::delete(&instance, &_mutation_lock).map_err(|e| e.to_string());
-    }
-    fs::remove_dir_all(instance.root())
-        .map_err(|error| format!("não foi possível excluir a instância: {error}"))
+    aurora_launcher_core::engine::world_backups::remove_with_preferences(&instance, || {
+        if diagnostic_lab::is_lab_candidate(&instance) {
+            return diagnostic_lab::delete(&instance, &_mutation_lock).map_err(|e| e.to_string());
+        }
+        fs::remove_dir_all(instance.root())
+            .map_err(|error| format!("não foi possível excluir a instância: {error}"))
+    })
 }
 
 /// Baixa arquivos oficiais do Minecraft fora da thread da interface.
@@ -2784,6 +2814,7 @@ fn launch_instance_tracked(
     #[cfg(windows)]
     ensure_no_external_instance_game(instance.root())?;
     let launch_settings = launch_settings::read(&instance).map_err(|error| error.to_string())?;
+    world_backups::catch_up_before_launch(&instance, &mutation_lock);
     let java = JavaRuntime::from_executable(java_executable).map_err(|error| error.to_string())?;
     let selected_java = java.major_version().map_err(|error| error.to_string())?;
     doctor_run.java_major = Some(selected_java);
@@ -2898,6 +2929,7 @@ fn launch_instance_tracked(
         "launch",
     );
     let mut child = prepared.spawn().map_err(|error| error.to_string())?;
+    world_backups::arm(&instance);
     let process_id = child.id();
     if let Some(server) = ipc_server {
         let Ok(mut ipc_sessions) = sessions.0.lock() else {
@@ -2928,6 +2960,7 @@ fn launch_instance_tracked(
         process_id,
         RunningInstance {
             doctor: Some((app.clone(), doctor_run.run_id.clone())),
+            backup: Some(instance.clone()),
             #[cfg(all(windows, feature = "connect-lab"))]
             started_at_ms: doctor_runs::now_ms(),
             instance_id,
@@ -3581,6 +3614,7 @@ mod tests {
             process_id,
             super::RunningInstance {
                 doctor: None,
+                backup: None,
                 #[cfg(all(windows, feature = "connect-lab"))]
                 started_at_ms: 0,
                 instance_id: "locked-game".to_owned(),
@@ -3607,6 +3641,67 @@ mod tests {
         let released = super::acquire_instance_mutation_lock(&instance).unwrap();
         drop(released);
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn world_backups_wait_for_real_child_exit_and_keep_the_launch_lock() {
+        use aurora_launcher_core::engine::{world_backups as backups, InstanceId, InstanceLayout};
+        use std::{
+            io::Write,
+            os::windows::process::CommandExt,
+            process::{Command, Stdio},
+        };
+        let root =
+            std::env::temp_dir().join(format!("aurora-backup-exit-{}", uuid::Uuid::new_v4()));
+        let instance =
+            InstanceLayout::new(&root).open(InstanceId::parse("synthetic-game").unwrap());
+        instance.ensure_layout().unwrap();
+        let dir = instance.root().join("saves/Mundo");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("level.dat"), b"initial").unwrap();
+        let guard = super::acquire_instance_mutation_lock(&instance).unwrap();
+        let mut child = Command::new("cmd.exe")
+            .args(["/d", "/c", "set /p test_input="])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .creation_flags(0x0800_0000)
+            .spawn()
+            .unwrap();
+        let mut input = child.stdin.take().unwrap();
+        let pid = child.id();
+        let mut processes = std::collections::BTreeMap::new();
+        backups::arm(&instance).unwrap();
+        processes.insert(
+            pid,
+            super::RunningInstance {
+                doctor: None,
+                backup: Some(instance.clone()),
+                #[cfg(all(windows, feature = "connect-lab"))]
+                started_at_ms: 0,
+                #[cfg(all(windows, feature = "connect-lab"))]
+                status_runtime: None,
+                instance_id: "synthetic-game".into(),
+                child,
+                _mutation_lock: guard,
+            },
+        );
+        assert!(super::reap_finished(&mut processes, |_, _| panic!("child is active")).is_empty());
+        assert!(backups::overview(&instance).unwrap().versions.is_empty());
+        fs::write(dir.join("level.dat"), b"flushed on exit").unwrap();
+        input.write_all(b"close\r\n").unwrap();
+        drop(input);
+        processes.get_mut(&pid).unwrap().child.wait().unwrap();
+        let ended = super::reap_finished(&mut processes, |instance, guard| {
+            assert!(super::acquire_instance_mutation_lock(&instance).is_err());
+            backups::after_exit(&instance, &guard).unwrap();
+        });
+        assert_eq!(ended, [pid]);
+        let fresh = InstanceLayout::new(&root).open(instance.id().clone());
+        assert!(!backups::needs_resume(&fresh).unwrap());
+        assert_eq!(backups::overview(&fresh).unwrap().versions[0].bytes, 15);
+        drop(super::acquire_instance_mutation_lock(&fresh).unwrap());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

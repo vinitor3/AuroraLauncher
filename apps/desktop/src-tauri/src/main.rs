@@ -163,6 +163,7 @@ fn main() {
             #[cfg(any(feature = "connect-lab", feature = "connect-voice-lab"))]
             app.manage(ExperimentalExitState::default());
             themes::start_watchdog(app.handle().clone());
+            commands::world_backups::watch(app.handle().clone());
             if create_launcher_tray(app).is_err() {
                 // On systems without a tray, retain normal closing behavior
                 // instead of hiding the only way to reach the launcher.
@@ -339,6 +340,10 @@ fn main() {
             commands::read_latest_doctor_run,
             commands::analyze_instance,
             commands::list_running_instances,
+            commands::world_backups::world_backup_overview,
+            commands::world_backups::world_backup_configure,
+            commands::world_backups::world_backup_restore,
+            commands::world_backups::world_backup_retry,
             commands::poll_ipc_events,
             commands::validate_appearance_url,
             commands::load_appearance_url,

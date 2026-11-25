@@ -1,0 +1,8 @@
+.world-backups-panel { display: grid; gap: .85rem; min-width: 0; align-content: start; }
+.world-backups-panel header h3, .world-backups-panel p { margin: 0; }
+.world-backups-panel header p, .world-backups-panel small { color: var(--text-muted, #c6bfce); }
+.world-backups-panel label:has(select) { display: grid; gap: .35rem; }
+.world-backups-panel select { min-width: 0; max-width: 100%; }
+.world-backups-panel label:has(input) { display: flex; align-items: center; gap: .5rem; }
+.world-backups-panel button { justify-self: start; }
+.world-backups-panel [role=alert] { color: var(--error, #ffbbba); }

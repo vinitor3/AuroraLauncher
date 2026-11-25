@@ -27,6 +27,7 @@ pub mod connect_voice_desktop;
 pub mod diagnostic_lab;
 pub mod doctor_recovery;
 pub mod recovery;
+pub mod world_backups;
 
 mod companion_migration;
 mod content_updates;

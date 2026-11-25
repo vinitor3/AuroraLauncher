@@ -37,6 +37,11 @@ export function OnlineSkinSearch({ workerUrl, onSelect, disabled = false }: { wo
     selection.current?.abort();
     if (disabled) { setLoading(false); return () => controller.abort(); }
     setStatus(""); setRetry(false);
+    if (mode === "catalog" && query.trim() === "#") {
+      setStatus("Digite uma tag depois de #.");
+      setLoading(false);
+      return () => controller.abort();
+    }
     if (mode === "players" && !/^[A-Za-z0-9_]{3,16}$/.test(query.trim())) {
       setLoading(false);
       return () => controller.abort();
@@ -58,6 +63,10 @@ export function OnlineSkinSearch({ workerUrl, onSelect, disabled = false }: { wo
           }
           setCatalog(value);
           setPageInput(String(value.page + 1));
+          if (value.stale) {
+            setStatus(`Página ${value.page + 1} salva na última consulta. O catálogo online está temporariamente indisponível.`);
+            setRetry(true);
+          }
         });
       void load.catch((error) => {
         if (controller.signal.aborted) return;

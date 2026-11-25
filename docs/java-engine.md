@@ -6,7 +6,7 @@
 
 Em **Java & engine**, escolha um valor em MB ou use os atalhos em GB e clique em **Salvar padrão**. Instâncias novas e existentes que usam o padrão recebem esse limite na próxima execução. O valor inicial é 4096 MB. Marque **Incluir modpacks com memória personalizada** e clique em **Aplicar a todos** para que as configurações anteriores de RAM também passem a seguir o padrão. O coletor e os argumentos JVM de cada instância são preservados.
 
-Para mudar uma única instância, abra **Instâncias → Editar → Memória**. Escolha **Manual**, **Automático** ou **Padrão do launcher** e salve. O coletor de memória e os argumentos personalizados ficam em **Opções avançadas da JVM**.
+Para mudar uma única instância, abra **Instâncias → Gerenciar → Memória**. Escolha **Manual**, **Automático** ou **Padrão do launcher** e salve. O coletor de memória e os argumentos personalizados ficam em **Opções avançadas da JVM**.
 
 A preferência compartilhada fica em `launcher-memory.json` no diretório de dados do aplicativo. Aplicar a todos troca a revisão de memória nesse arquivo em uma única gravação atômica. O launcher lê essa revisão ao preparar o jogo e as cópias do Connect. Se outra janela aplicar a memória a todos durante uma edição individual, o editor pede a releitura dos valores antes de salvar. Alterações após a revisão de uma cópia pronta exigem revisar o preparo. A memória de jogos já em execução é mantida pelo processo Java.
 

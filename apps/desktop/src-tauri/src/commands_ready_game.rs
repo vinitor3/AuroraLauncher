@@ -502,6 +502,7 @@ impl PreparedReadyGame for DesktopPrepared {
         {
             return Err(Error::InstanceChanged);
         }
+        super::world_backups::catch_up_before_launch(&instance, &mutation_lock);
         check_server_status(self.endpoint, proof.profile, cancel)?;
         gate.check_current()?;
         if let Some(voice) = &self.voice_install {
@@ -642,6 +643,7 @@ impl PreparedReadyGame for DesktopPrepared {
                     process_id,
                     RunningInstance {
                         doctor: Some((doctor_app, run_id.clone())),
+                        backup: Some(instance.clone()),
                         started_at_ms: doctor_runs::now_ms(),
                         instance_id: result_instance.clone(),
                         child,
@@ -656,6 +658,7 @@ impl PreparedReadyGame for DesktopPrepared {
                     world_state: "notVerified",
                 })
             })?;
+            super::world_backups::arm(&instance);
             // Keep the existing RunningInstances guard while publishing the
             // Doctor running transition. A very short child cannot be pruned
             // and marked ended before this write, then resurrected by it.

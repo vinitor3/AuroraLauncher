@@ -155,8 +155,8 @@ test("ignora origem MCStat fora da allowlist e mantém o catálogo seguro", asyn
   const catalog = await worker.fetch(new Request(
     "https://aurora.test/v1/skins/catalog?query=unsafe-source&page=0&pageSize=12",
   ), envWithMcstat);
-  assert.equal(catalog.status, 200);
-  assert.equal((await catalog.text()).trimEnd().split("\n").length, 2);
+  assert.equal(catalog.status, 502);
+  assert.match(await catalog.text(), /texturas válidas/);
   const encoded = base64Url(new TextEncoder().encode("https://example.invalid/skin.png"));
   const asset = await worker.fetch(new Request(
     `https://aurora.test/v1/skins/catalog/mcstat/${"0".repeat(64)}/${encoded}.png`,
@@ -167,9 +167,9 @@ test("ignora origem MCStat fora da allowlist e mantém o catálogo seguro", asyn
 
 test("quando o provedor está indisponível não reaparecem as skins retiradas", async () => {
   globalThis.fetch = async () => jsonResponse({ error: "rate limited" }, 429);
-  for (const configuration of [env, envWithMcstat]) {
+  for (const [configuration, status] of [[env, 503], [envWithMcstat, 429]] as const) {
     const response = await worker.fetch(new Request("https://aurora.test/v1/skins/catalog?query=naruto"), configuration);
-    assert.equal(response.status, 503);
+    assert.equal(response.status, status);
     assert.doesNotMatch(await response.text(), /solar-ninja|Aurora Studio/i);
   }
 });

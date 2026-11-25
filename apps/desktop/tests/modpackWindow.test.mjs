@@ -46,7 +46,6 @@ test("o detalhe cabe nas duas janelas e devolve o foco ao cancelar pelo navegado
         <footer className="project-detail-actions modpack-install-actions">
           <a href="#projeto">Abrir projeto</a>
           <label className="detail-version-select">Minecraft<select><option>1.21.11</option></select></label>
-          <label className="detail-destination-select">Destino<select><option>Nova instância</option></select></label>
           <button id="install">Criar e instalar</button>
         </footer>
       </ProjectDialog>));

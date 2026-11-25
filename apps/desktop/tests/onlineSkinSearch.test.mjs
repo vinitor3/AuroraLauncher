@@ -146,6 +146,25 @@ test("a Studio-only provider fallback offers retry and can recover", async () =>
   run.unmount();
 });
 
+test("cached community pages remain selectable and can be refreshed", async () => {
+  const run = setup();
+  const entry = { id: "forest", name: "Forest", author: "Ana", source: "/forest.png" };
+  run.render(); run.tick();
+  run.requests[0].resolve({ entries: [entry], page: 0, hasMore: true, sources: ["mcstat"], stale: true });
+  await setImmediate();
+  const saved = run.render();
+  assert.match(status(saved), /Página 1 salva/);
+  const card = find(saved, (node) => node.props?.className?.includes("online-catalog-result"));
+  card.props.onClick();
+  assert.equal(run.selected[0].name, "Forest");
+  button(saved, "Tentar novamente").props.onClick();
+  run.render(); run.tick();
+  run.requests[1].resolve({ entries: [], page: 0, hasMore: false, sources: ["mcstat"] });
+  await setImmediate();
+  assert.equal(status(run.render()), "Nenhuma skin encontrada.");
+  run.unmount();
+});
+
 test("profile submit cancels autocomplete so a late error cannot hide a valid player skin", async () => {
   const run = setup();
   button(run.render(), "Jogadores").props.onClick();

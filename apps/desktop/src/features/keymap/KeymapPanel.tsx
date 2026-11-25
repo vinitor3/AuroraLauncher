@@ -5,6 +5,8 @@ import {
   combo,
   encoded,
   editableModifier,
+  eventKey,
+  eventMouse,
   forgeModifiers,
   modifierApplies,
   modifierChoices,
@@ -12,6 +14,7 @@ import {
   extras,
   groups,
   keyLabel,
+  keyDescription,
   physical,
   rows,
   type Binding,
@@ -49,6 +52,71 @@ export default function KeymapPanel({
   const [refresh, setRefresh] = useState(0);
   const [shownCount, setShownCount] = useState(60);
   const active = useRef(0);
+  const panel = useRef<HTMLElement>(null);
+  const heldLabel = useRef<HTMLSpanElement>(null);
+  const capture = useRef<HTMLButtonElement>(null);
+  const editTrigger = useRef<HTMLButtonElement | null>(null);
+  const pendingModifier = useRef<string | null>(null);
+  useEffect(() => {
+    pendingModifier.current = null;
+    if (editing) {
+      capture.current?.focus();
+    } else if (editTrigger.current) {
+      editTrigger.current.focus({ preventScroll: true });
+      editTrigger.current = null;
+    }
+  }, [editing]);
+  useEffect(() => {
+    const held = new Map<string, Element | null>();
+    function labelHeld() {
+      if (heldLabel.current) heldLabel.current.textContent = held.size
+        ? [...held.keys()].map((key) => keyDescription(key, layout)).join(" + ")
+        : "Pressionada";
+    }
+    function mark(id: string | undefined, down: boolean, target: EventTarget | null) {
+      if (!id) return;
+      if (!down) {
+        held.get(id)?.removeAttribute("data-held");
+        if (held.delete(id)) labelHeld();
+        return;
+      }
+      if (held.has(id) || !panel.current) return;
+      if (target instanceof HTMLElement && target !== document.body &&
+        (!panel.current.contains(target) || target.closest("input,select,textarea,[contenteditable=true]"))) return;
+      const keycap = panel.current.querySelector('[data-key="' + id + '"]');
+      keycap?.setAttribute("data-held", "");
+      held.set(id, keycap);
+      labelHeld();
+    }
+    const press = (ev: KeyboardEvent) => { if (!ev.isComposing) mark(eventKey(ev.code), true, ev.target); };
+    const release = (ev: KeyboardEvent) => mark(eventKey(ev.code), false, ev.target);
+    const pressMouse = (ev: MouseEvent) => mark(eventMouse(ev.button), true, ev.target);
+    const releaseMouse = (ev: MouseEvent) => mark(eventMouse(ev.button), false, ev.target);
+    function reset() {
+      for (const keycap of held.values()) keycap?.removeAttribute("data-held");
+      held.clear();
+      labelHeld();
+      pendingModifier.current = null;
+    }
+    const visibility = () => { if (document.hidden) reset(); };
+    window.addEventListener("keydown", press, true);
+    window.addEventListener("keyup", release, true);
+    window.addEventListener("mousedown", pressMouse, true);
+    window.addEventListener("mouseup", releaseMouse, true);
+    window.addEventListener("pointercancel", reset);
+    window.addEventListener("blur", reset);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      window.removeEventListener("keydown", press, true);
+      window.removeEventListener("keyup", release, true);
+      window.removeEventListener("mousedown", pressMouse, true);
+      window.removeEventListener("mouseup", releaseMouse, true);
+      window.removeEventListener("pointercancel", reset);
+      window.removeEventListener("blur", reset);
+      document.removeEventListener("visibilitychange", visibility);
+      reset();
+    };
+  }, [instanceId, layout, refresh]);
   useEffect(() => {
     const generation = ++active.current;
     setBusy(true);
@@ -71,40 +139,41 @@ export default function KeymapPanel({
     };
   }, [instanceId, refresh]);
   const bindings = map?.bindings;
+  const backend = map?.inputBackend;
   const analysis = useMemo(() => {
     const list = bindings ?? [];
     const conflicts = new Set(
-      [...groups(list)]
+      [...groups(list, backend)]
         .filter(([, actions]) => actions.length > 1)
         .map(([code]) => code),
     );
     const keys = new Map<string, Binding[]>();
     for (const b of list) {
-      const id = physical(b.input);
+      const id = physical(b.input, backend);
       const arr = keys.get(id) ?? [];
       arr.push(b);
       keys.set(id, arr);
     }
     return { keys, conflicts };
-  }, [bindings]);
+  }, [bindings, backend]);
   const query = filter.trim().toLocaleLowerCase();
   const visible = (bindings ?? [])
     .filter(
       (b) =>
-        (!selected || physical(b.input) === selected) &&
-        (!conflictsOnly || analysis.conflicts.has(combo(b))) &&
+        (!selected || physical(b.input, backend) === selected) &&
+        (!conflictsOnly || analysis.conflicts.has(combo(b, backend))) &&
         (!query ||
           [
             b.action,
             actionName(b.action),
-            keyLabel(physical(b.input), layout),
+            keyLabel(physical(b.input, backend), layout),
             b.modifier,
           ].some((s) => s.toLocaleLowerCase().includes(query))),
     )
     .sort(
       (a, b) =>
-        Number(analysis.conflicts.has(combo(b))) -
-          Number(analysis.conflicts.has(combo(a))) ||
+        Number(analysis.conflicts.has(combo(b, backend))) -
+          Number(analysis.conflicts.has(combo(a, backend))) ||
         actionName(a.action).localeCompare(actionName(b.action), "pt-BR"),
     );
   const mainRows = rows(layout);
@@ -132,9 +201,9 @@ export default function KeymapPanel({
   async function apply() {
     if (!editing || !candidate || !map?.revision || busy || running) return;
     const input =
-      candidate === physical(editing.input)
+      candidate === physical(editing.input, backend)
         ? editing.input
-        : encoded(candidate, editing.input);
+        : encoded(candidate, editing.input, backend);
     if (!input) return;
     const generation = active.current;
     setBusy(true);
@@ -170,26 +239,48 @@ export default function KeymapPanel({
     : (editing?.modifier ?? "");
   const changed =
     !!editing &&
-    (candidate !== physical(editing.input) || editingModifierChanged);
+    (candidate !== physical(editing.input, backend) || editingModifierChanged);
+  function recordInput(id: string | undefined, event?: Pick<KeyboardEvent, "altKey" | "ctrlKey" | "shiftKey" | "metaKey"> & { getModifierState?(name: "AltGraph"): boolean }) {
+    if (!editing || !map || running || busy) return;
+    const modifiers: ForgeModifier[] = [];
+    if (event?.altKey) modifiers.push("ALT");
+    if (event?.ctrlKey) modifiers.push("CONTROL");
+    if (event?.shiftKey) modifiers.push("SHIFT");
+    let error = "";
+    if (!id || !encoded(id, editing.input, backend)) error = "Esta entrada não tem um código confirmado para o perfil da instância.";
+    else if (event?.metaKey || event?.getModifierState?.("AltGraph") || modifiers.length > 1) error = "Escolha uma tecla simples ou uma combinação com um único modificador disponível.";
+    else if (modifiers.length && (!choices.includes(modifiers[0]) || map.modifierSupport === "brokenForgeReader")) {
+      error = "Este perfil não aceita essa combinação. Pressione uma tecla simples.";
+    }
+    setMessage(error);
+    setCandidate(error ? "" : (id ?? ""));
+    if (!error && choices.includes("NONE")) setModifier(modifiers[0] ?? "NONE");
+  }
+  function cancelEdit() {
+    setEditing(null);
+    setCandidate("");
+    setMessage("");
+  }
   function key(id: string, width = 1) {
     const assigned = analysis.keys.get(id) ?? [];
-    const clash = assigned.some((b) => analysis.conflicts.has(combo(b)));
+    const clash = assigned.some((b) => analysis.conflicts.has(combo(b, backend)));
     const chosen = editing ? candidate === id : selected === id;
     return (
       <button
         type="button"
         key={id}
+        data-key={id}
         className={
           "secondary km-key " +
           (clash ? "km-conflict" : assigned.length ? "km-used" : "") +
           (chosen ? " km-current" : "")
         }
         style={{ flexGrow: width }}
-        disabled={busy || (!!editing && !encoded(id, editing.input))}
+        disabled={busy || (!!editing && (running || !encoded(id, editing.input, backend)))}
         aria-pressed={chosen}
         onClick={() => choose(id)}
         aria-label={
-          keyLabel(id, layout) +
+          keyDescription(id, layout) +
           " · " +
           assigned.length +
           " comandos" +
@@ -207,7 +298,7 @@ export default function KeymapPanel({
       ? (analysis.keys.get(candidate) ?? []).filter(
           (b) =>
             b.action !== editing.action &&
-            combo(b) ===
+            combo(b, backend) ===
               combo({
                 ...editing,
                 input: candidate,
@@ -221,11 +312,18 @@ export default function KeymapPanel({
     (analysis.keys.get(candidate) ?? []).some(
       (b) =>
         b.action !== editing.action &&
-        combo(b) !==
+        combo(b, backend) !==
           combo({ ...editing, input: candidate, modifier: effectiveModifier }),
     );
   return (
-    <section className="km-panel" aria-label="Mapa de teclas da instância">
+    <section className="km-panel" ref={panel} aria-label="Mapa de teclas da instância"
+      onKeyDown={(event) => {
+        if (!editing || event.key !== "Escape") return;
+        event.stopPropagation();
+        if ((event.target as HTMLElement).closest("input,select,textarea") || busy) return;
+        event.preventDefault();
+        cancelEdit();
+      }}>
       <div className="km-heading">
         <div>
           <h3>Mapa de teclas</h3>
@@ -241,6 +339,7 @@ export default function KeymapPanel({
         <label>
           Teclado{" "}
           <select
+            aria-label="Layout do teclado"
             value={layout}
             onChange={(e) => {
               const v = e.target.value as KeyboardLayout;
@@ -298,7 +397,7 @@ export default function KeymapPanel({
                 : "conflitos possíveis"}
             </button>
             <span className="km-legend">
-              <i /> Em uso <b>!</b> Sobreposição
+              <i /> Em uso <b>!</b> Sobreposição <i className="km-held-sample" /> <span ref={heldLabel}>Pressionada</span>
             </span>
           </div>
           {editing && (
@@ -308,7 +407,7 @@ export default function KeymapPanel({
               aria-label="Reatribuir comando"
             >
               <strong>{actionName(editing.action)}</strong>
-              <span>
+              <span role="status">
                 {candidate
                   ? [
                       modifierLabel(effectiveModifier),
@@ -316,7 +415,7 @@ export default function KeymapPanel({
                     ]
                       .filter(Boolean)
                       .join(" + ")
-                  : "Escolha a nova tecla no teclado abaixo."}
+                  : "Escolha uma entrada."}
                 {overlaps.length > 0
                   ? " Já usada por " +
                     overlaps.map((b) => actionName(b.action)).join(", ") +
@@ -326,6 +425,47 @@ export default function KeymapPanel({
                   ? " Outra ação usa essa tecla com um modificador diferente. O contexto definido pelo mod pode permitir que as duas respondam juntas."
                   : ""}
               </span>
+              <div className="km-capture-row">
+                <button type="button" className="secondary km-capture" ref={capture} disabled={busy || running}
+                  aria-describedby="km-capture-help"
+                  onBlur={() => { pendingModifier.current = null; }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape" || event.key === "Tab" || event.nativeEvent.isComposing) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (event.repeat) return;
+                    if (/^(?:Shift|Control|Alt|Meta)(?:Left|Right)$/.test(event.code)) {
+                      if (pendingModifier.current && pendingModifier.current !== event.code && event.key !== "AltGraph") {
+                        pendingModifier.current = null;
+                        setCandidate("");
+                        setMessage("Solte os modificadores e pressione a combinação desejada.");
+                        return;
+                      }
+                      pendingModifier.current = event.code;
+                      return;
+                    }
+                    pendingModifier.current = null;
+                    recordInput(eventKey(event.code), event);
+                  }}
+                  onKeyUp={(event) => {
+                    if (event.code !== pendingModifier.current) return;
+                    pendingModifier.current = null;
+                    event.preventDefault();
+                    recordInput(eventKey(event.code));
+                  }}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    event.currentTarget.focus();
+                    pendingModifier.current = null;
+                    recordInput(eventMouse(event.button), event);
+                  }}
+                  onMouseUp={(event) => event.preventDefault()}
+                  onAuxClick={(event) => event.preventDefault()}
+                  onContextMenu={(event) => event.preventDefault()}>
+                  Capturar tecla ou botão do mouse
+                </button>
+                <small id="km-capture-help">Com a captura em foco, pressione a tecla ou clique aqui. Tab navega e Esc cancela. Para atribuir Tab ou Esc, escolha a tecla no mapa.</small>
+              </div>
               {choices.length > 0 && (
                 <label>
                   Modificador{" "}
@@ -396,10 +536,7 @@ export default function KeymapPanel({
                 type="button"
                 className="secondary compact"
                 disabled={busy}
-                onClick={() => {
-                  setEditing(null);
-                  setCandidate("");
-                }}
+                onClick={cancelEdit}
               >
                 Cancelar
               </button>
@@ -454,13 +591,13 @@ export default function KeymapPanel({
                   {modifierLabel(b.modifier)
                     ? modifierLabel(b.modifier) + " + "
                     : ""}
-                  {keyLabel(physical(b.input), layout)}
+                  {keyLabel(physical(b.input, backend), layout)}
                 </kbd>
                 <div>
                   <strong>{actionName(b.action)}</strong>
                   <small>{b.action}</small>
                 </div>
-                {analysis.conflicts.has(combo(b)) && (
+                {analysis.conflicts.has(combo(b, backend)) && (
                   <span
                     className="km-warning"
                     title="Mais de um comando usa a mesma combinação. Alguns mods só a utilizam em telas diferentes."
@@ -472,14 +609,12 @@ export default function KeymapPanel({
                   className="secondary compact"
                   type="button"
                   disabled={busy || running || !map.revision}
-                  onClick={() => {
+                  onClick={(event) => {
+                    editTrigger.current = event.currentTarget;
                     setEditing(b);
-                    setCandidate(physical(b.input));
+                    setCandidate(physical(b.input, backend));
                     setModifier(editableModifier(b) ?? "NONE");
                     setMessage("");
-                    document
-                      .querySelector(".km-edit, .km-tools")
-                      ?.scrollIntoView({ block: "nearest" });
                   }}
                 >
                   Alterar
