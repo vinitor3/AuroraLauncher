@@ -149,14 +149,10 @@ assert.match(container.querySelector(".doctor-result-summary").textContent, /Mem
 assert.equal(container.querySelector(".doctor-details").hasAttribute("open"), false);
 assert.equal(container.querySelector(".doctor-coverage").hasAttribute("open"), false);
 assert.equal(container.querySelector(".doctor-share").hasAttribute("open"), false);
-await click("Preparar para IA");
-const modal = document.querySelector("dialog");
-assert.ok(modal.open);
-const copyButton = [...modal.querySelectorAll("button")].find(item => item.textContent === "Copiar para minha IA");
-await act(async () => copyButton.click());
-assert.match(clipboard, /Minecraft Java.*Memória insuficiente/s);
+await click("Copiar diagnóstico");
+assert.match(clipboard, /Problema sintético\.[\s\S]*Memória insuficiente/);
 assert.doesNotMatch(clipboard, /synthetic-c|run-c|9ba91227/);
-assert.equal(modal.querySelectorAll("textarea")[1].value, clipboard);
+assert.equal(document.querySelector("dialog"), null);
 await act(async () => root.unmount());
 // Retain independent coverage for an unfinished native analysis at unmount.
 const nativeOnlyRoot = createRoot(container);

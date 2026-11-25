@@ -175,7 +175,7 @@ export function RecoveryView({ instanceId, busy, running, onOperationChange, onC
   useEffect(() => {
     let disposed = false;
     const stops: Array<() => void> = [];
-    for (const event of ["aurora-recovery-changed", "aurora-doctor-run", "aurora-ai-tool-changed", "aurora-diagnostic-lab-changed"]) {
+    for (const event of ["aurora-recovery-changed", "aurora-doctor-run", "aurora-diagnostic-lab-changed"]) {
       void listen<{ instanceId: string }>(event, ({ payload }) => {
         if (!disposed && payload.instanceId === instanceId) { previewEpoch.current += 1; setReview(undefined); }
       }).then((stop) => { if (disposed) stop(); else stops.push(stop); }).catch(() => undefined);

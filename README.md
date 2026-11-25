@@ -4,7 +4,7 @@
 
 Launcher independente para Minecraft Java Edition no Windows x64. Organize modpacks em instâncias separadas, escolha skins e compartilhe mundos abertos para LAN.
 
-**[Baixar o instalador da beta para Windows](https://github.com/vinitor3/AuroraLauncher/releases/download/v0.2.0-beta.2/Aurora-Smart-Launcher_0.2.0-beta.2_x64-setup.exe)** · [Notas, manifesto e SHA-256](https://github.com/vinitor3/AuroraLauncher/releases/tag/v0.2.0-beta.2)
+**[Baixar o instalador da beta para Windows](https://github.com/vinitor3/AuroraLauncher/releases/download/v0.2.0-beta.3/Aurora-Smart-Launcher_0.2.0-beta.3_x64-setup.exe)** · [Notas, manifesto e SHA-256](https://github.com/vinitor3/AuroraLauncher/releases/tag/v0.2.0-beta.3)
 
 A beta é experimental. A conta Aurora identifica seu perfil e suas amizades. A autenticação Microsoft e a verificação de posse do Minecraft estão previstas para o final do projeto. O instalador distribui o launcher e os módulos Aurora. Minecraft é adquirido separadamente.
 

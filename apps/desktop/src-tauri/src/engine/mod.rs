@@ -1,7 +1,5 @@
 //! Serviços de instância, Java e inicialização da JVM.
 
-pub mod ai_history;
-pub mod ai_tools;
 pub mod connect;
 pub mod connect_discovery;
 #[cfg(all(windows, feature = "connect-lab"))]
@@ -73,8 +71,8 @@ pub use curseforge::{
     CurseForgeManifestFile, CurseForgeManifestSummary, CurseForgeResolvedFile,
 };
 pub use doctor::{
-    analyze_instance, canonical_launch_failure, snapshot_logs, DoctorContext, DoctorLogStamp,
-    DoctorReport, DoctorRun,
+    analyze_instance, canonical_launch_failure, console_log, snapshot_logs, DoctorContext,
+    DoctorLogStamp, DoctorReport, DoctorRun,
 };
 pub use download::{TransferProgress, DEFAULT_DOWNLOAD_CONCURRENCY};
 pub use external_downloads::{

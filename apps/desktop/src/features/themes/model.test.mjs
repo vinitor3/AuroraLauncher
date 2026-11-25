@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DEFAULT_THEME, THEME_EXAMPLES, THEME_LIMITS, THEME_WINDOW_DEFAULTS, THEME_CURSOR_DEFAULTS, inspectGif, parseTheme, themeVariables, buildThemeAiPrompt, formatThemeCode } from "./model.ts";
+import { DEFAULT_THEME, THEME_EXAMPLES, THEME_LIMITS, THEME_WINDOW_DEFAULTS, THEME_CURSOR_DEFAULTS, inspectGif, parseTheme, themeVariables, formatThemeCode } from "./model.ts";
 
 const fixture = () => structuredClone(THEME_EXAMPLES[0]);
 function read(change) { const theme = fixture(); change?.(theme); return parseTheme(JSON.stringify(theme)); }
@@ -75,7 +75,6 @@ test("navegação atual preserva as seis seções e recusa formatos legados mist
     (x) => { x.icons.shell = "default"; },
   ]) assert.throws(() => read(change));
   assert.match(formatThemeCode(current), /connect e social/);
-  assert.match(buildThemeAiPrompt(current), /java, connect, social/);
 });
 
 test("cursor aceita somente estilos internos, cores sólidas, tamanhos e rastros limitados", () => {
@@ -337,7 +336,7 @@ test("vídeos grandes e o orçamento total são recusados com trabalho limitado"
   assert.throws(() => read((x) => { x.assets = { a: { mime: "video/mp4", data: half.toString("base64") }, b: { mime: "video/mp4", data: half.toString("base64") } }; }), /24 MiB/);
 });
 
-test("variáveis CSS vêm só de valores tipados e instruções exportam o contrato local", () => {
+test("variáveis CSS vêm só de valores tipados", () => {
   const variables = themeVariables(fixture());
   assert.ok(Object.keys(variables).every((key) => key.startsWith("--theme-")));
   assert.equal(variables["--theme-glass"], "10px");
@@ -345,10 +344,4 @@ test("variáveis CSS vêm só de valores tipados e instruções exportam o contr
   assert.equal(variables["--theme-titlebar-height"], "44px");
   assert.equal(variables["--theme-sidebar-width"], "240px");
   assert.equal(variables["--theme-transition-duration"], "300ms");
-  const prompt = buildThemeAiPrompt(fixture());
-  assert.match(prompt, /SOMENTE com um objeto JSON/);
-  assert.match(prompt, /não executa código/);
-  assert.match(prompt, /10 segundos/);
-  assert.match(prompt, /4\.5:1/);
-  assert.ok(prompt.includes('"schemaVersion": 1'));
 });

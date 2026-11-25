@@ -1,3 +1,4 @@
+import type { SocialPlayRequest } from "../connect-game-launch/socialPlay";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
@@ -33,7 +34,7 @@ type SourcePreparationAwaiting = {
   profile?: HostSourceProfile; baseline?: ConnectSnapshot; controlledRejectionSettled?: symbol;
 };
 
-export function ConnectView({ launchContext, onInitialReadReady, onChooseSource, gameRevealRequest = 0, gameRevealReady = true, manualControls = true }: { launchContext?: ReadyGameLaunchContext; onInitialReadReady?: (ready: boolean) => void; onChooseSource?: () => void; gameRevealRequest?: number; gameRevealReady?: boolean; manualControls?: boolean }) {
+export function ConnectView({ launchContext, onInitialReadReady, onChooseSource, gameRevealRequest = 0, gameRevealReady = true, manualControls = true, socialPlay }: { launchContext?: ReadyGameLaunchContext; onInitialReadReady?: (ready: boolean) => void; onChooseSource?: () => void; gameRevealRequest?: number; gameRevealReady?: boolean; manualControls?: boolean; socialPlay?: SocialPlayRequest }) {
   const [capabilities, setCapabilities] = useState<ConnectCapabilities>();
   const [snapshot, setSnapshot] = useState<ConnectSnapshot>();
   const [loading, setLoading] = useState(true);
@@ -476,7 +477,7 @@ export function ConnectView({ launchContext, onInitialReadReady, onChooseSource,
     <div className="connect-actions"><button className="secondary" disabled={busy} onClick={() => void perform("refresh", refresh)}>Atualizar estado</button>
       {activeOperation && <button className="danger" disabled={pending === "stop" || snapshot.phase === "closing"} onClick={stop}>Encerrar Connect</button>}</div>
     {snapshot.cleanupState === "complete" && <p role="status">Recursos da conexão liberados.</p>}
-    <ConnectGameLaunchPanel capability={snapshot.social.readyGameLaunchAvailable ? capabilities?.readyGameLaunch : undefined}
+    <ConnectGameLaunchPanel socialPlay={socialPlay} capability={snapshot.social.readyGameLaunchAvailable ? capabilities?.readyGameLaunch : undefined}
       session={snapshot} launchContext={launchContext} onChooseSource={onChooseSource} observeExisting={!capabilities && !loading}
       revealRequest={gameRevealRequest} revealReady={gameRevealReady && !loading}
       sessionStale={!snapshot.social.readyGameLaunchAvailable || Boolean(warning) || loading || pending === "stop"} />

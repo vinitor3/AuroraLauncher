@@ -10,7 +10,7 @@ import type { Env } from "./index.ts";
 const env: Env = {
   CURSEFORGE_API_KEY: "qa-placeholder-curseforge",
   FIREBASE_PROJECT_ID: "qa-placeholder-project",
-  GEMINI_API_KEY: "qa-placeholder-gemini",
+
   MCSTAT_API_KEY: "qa-placeholder-mcstat",
 };
 const origin = "https://aurora.test";

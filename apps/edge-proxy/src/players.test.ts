@@ -103,7 +103,7 @@ type QaCall = { url: URL; init?: RequestInit };
 
 async function routeHarness(t: TestContext, upstream: (call: QaCall) => Response | Promise<Response>,
   overrides: Partial<Env> = {}) {
-  const env: Env = { CURSEFORGE_API_KEY: "qa-only", FIREBASE_PROJECT_ID: "qa-only", GEMINI_API_KEY: "qa-only", ...overrides };
+  const env: Env = { CURSEFORGE_API_KEY: "qa-only", FIREBASE_PROJECT_ID: "qa-only", ...overrides };
   const calls: QaCall[] = [];
   const mockErrors: string[] = [];
   let worker: typeof import("./index.ts").default;

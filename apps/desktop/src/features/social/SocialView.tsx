@@ -1,3 +1,4 @@
+import type { SocialPlayTarget } from "../connect-game-launch/socialPlay";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import type { FriendInbox, SocialPerson, SocialService, SocialSession, SocialSessionDraft, SocialSnapshot } from "../../shared/social";
 import { validateSocialSession } from "../../shared/social";
@@ -8,11 +9,13 @@ import { SocialAvailabilityBadge, useSocialAvailability } from "./SocialAvailabi
 import "./social.css";
 import { LanWorldShare } from "./LanWorldShare";
 import { SocialPrivateInvitationsPanel } from "./SocialPrivateInvitationsPanel";
-import { DiscordInvitation, DiscordSettingsPanel } from "./DiscordPanel";
+import { DiscordInvitation, DiscordRequests, DiscordSettingsPanel, PublicInviteCode } from "./DiscordPanel";
+import { discordActivity } from "./discordModel";
+import type { PublicInviteControls } from "./usePublicInvite";
 import type { DiscordControls } from "./discordModel";
 
 type FriendTab = "friends" | "incoming" | "outgoing" | "blocked";
-type Props = { service: SocialService | null; accountId: string; nickname: string; discord?: DiscordControls; inbox?: FriendInbox; revealInboxRequest?: number; instanceNames?: Record<string, string>; currentModpack?: string; connection?: SocialConnectionControls; onOpenConnectedGame?: () => void; onPrepareDedicatedServer?: () => void; onOpenManualConnect?: () => void };
+type Props = { service: SocialService | null; accountId: string; nickname: string; discord?: DiscordControls; publicInvite?: PublicInviteControls; inbox?: FriendInbox; revealInboxRequest?: number; instanceNames?: Record<string, string>; currentModpack?: string; connection?: SocialConnectionControls; onOpenConnectedGame?: (target: SocialPlayTarget) => void; onPrepareDedicatedServer?: () => void; onOpenManualConnect?: () => void };
 const friendTabs: [FriendTab, string][] = [["friends", "Amigos"], ["incoming", "Recebidos"], ["outgoing", "Enviados"], ["blocked", "Bloqueados"]];
 const MAX_VISIBLE_SESSIONS = 100;
 const emptyDraft = (): SocialSessionDraft => ({ title: "", modpackName: "", minecraftVersion: "", loader: "Vanilla", imageUrl: null, players: 0, maxPlayers: 8, visibility: "private", joinPolicy: "open" });
@@ -62,8 +65,12 @@ export function SocialView(props: Props) {
   return <SocialAccountView key={`${props.accountId}:${props.service ? clientKeys.get(props.service) : "none"}`} {...props} />;
 }
 
-function SocialAccountView({ service, accountId, nickname, discord, inbox, revealInboxRequest, instanceNames, currentModpack, connection, onOpenConnectedGame, onPrepareDedicatedServer, onOpenManualConnect }: Props) {
+function SocialAccountView({ service, accountId, nickname, discord, publicInvite, inbox, revealInboxRequest, instanceNames, currentModpack, connection, onOpenConnectedGame, onPrepareDedicatedServer, onOpenManualConnect }: Props) {
   const [view, setView] = useState<"play" | "friends" | "share" | "invites">(inbox?.count ? "friends" : "play");
+  const [pastedSession, setPastedSession] = useState<string>();
+  const invitedSession = publicInvite?.id || discord?.sessionId || pastedSession;
+  const pasted = !!publicInvite || !discord?.sessionId && !!pastedSession;
+  const dismissInvite = () => { if (publicInvite) publicInvite.dismiss(); else if (pasted) setPastedSession(undefined); else discord?.dismiss(); };
   const [snapshot, setSnapshot] = useState<SocialSnapshot>();
   const [sessions, setSessions] = useState<SocialSession[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -228,7 +235,7 @@ function SocialAccountView({ service, accountId, nickname, discord, inbox, revea
       || social.stage !== "connected" || social.readyGameLaunchAvailable !== true || !observed.tcpAddress
       || social.expiresAtMs === null) return;
     joinNavigation.current = null;
-    onOpenConnectedGame();
+    onOpenConnectedGame({ operationId: observed.operationId, sessionId: social.sessionId });
   }, [connection, service, accountId, onOpenConnectedGame, now, joinNavigationRevision]);
 
   const waitingForApproval = (session: SocialSession) => session.joinPolicy === "approval"
@@ -306,6 +313,8 @@ function SocialAccountView({ service, accountId, nickname, discord, inbox, revea
     && connectSnapshot.role === "host" && connectSnapshot.social?.role === "host"
     && connectSnapshot.social.sessionId === snapshot.ownSession.id
     && !(["closed", "failed"].includes(connectSnapshot.phase) && connectSnapshot.cleanupState === "complete");
+  const approvalHostId = hostPublicationLocked && snapshot?.ownSession?.joinPolicy === "approval" ? snapshot.ownSession.id : null;
+  useEffect(() => { if (approvalHostId) setGroupsExpanded(true); }, [approvalHostId]);
   const publicationDisabled = disabled || hostPublicationLocked;
   const visibleSessions = (scope === "public" ? sessions : (snapshot?.friends.flatMap(friend => friend.session ? [friend.session] : []) ?? []))
     .filter(session => session.expiresAtMs > now && `${session.title} ${session.modpackName} ${session.minecraftVersion}`.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase()));
@@ -323,18 +332,19 @@ function SocialAccountView({ service, accountId, nickname, discord, inbox, revea
         Meus amigos{receivedCount > 0 && <span className="social-request-count">{receivedCount}</span>}
       </button>
       <button type="button" aria-pressed={view === "share"} onClick={() => setView("share")}>Compartilhar mundo</button>
-      {(service?.privateInvitations || discord) && <button type="button" aria-pressed={view === "invites"} onClick={() => setView("invites")}>Convites</button>}
+      {(service?.privateInvitations || service?.resolvePublicSession || discord) && <button type="button" aria-pressed={view === "invites"} onClick={() => setView("invites")}>Convites</button>}
       {available && <button type="button" className="secondary social-refresh" disabled={disabled} onClick={() => void run(async () => undefined, "Lista atualizada.")}>{loading ? "Carregando…" : pending ? "Aguarde…" : "Atualizar"}</button>}
     </nav>
-    {discord?.sessionId && service && <DiscordInvitation key={discord.sessionId} id={discord.sessionId} service={service} accountId={accountId} now={now}
-      disabled={disabled || connectionBusy} waiting={waitingForApproval} dismiss={discord.dismiss} onJoin={candidate => {
+    {discord && <DiscordRequests controls={discord} now={Date.now()} />}
+    {invitedSession && service && <DiscordInvitation key={invitedSession + (pasted ? "manual" : "discord")} id={invitedSession} service={service} accountId={accountId} now={now}
+      fromDiscord={!pasted && discord?.fromDiscord} claimActivation={discord?.claimActivation} pasted={pasted} disabled={disabled || connectionBusy} waiting={waitingForApproval} dismiss={dismissInvite} onJoin={candidate => {
         const generation = epoch.current;
         if (!connectionBusy && !disabled) void run(async () => {
           const fresh = await service.resolvePublicSession?.(candidate.id);
           if (!current(generation)) return;
           if (!fresh || fresh.id !== candidate.id || fresh.visibility !== "public" || fresh.hostUid === accountId || !(fresh.expiresAtMs > readNow())) return "Esta sessão pública está indisponível para sua conta.";
           const result = await enterSession(fresh);
-          if (current(generation) && !result) discord.dismiss();
+          if (current(generation) && !result) dismissInvite();
           return result;
         }, "", false);
       }} />}
@@ -432,12 +442,13 @@ function SocialAccountView({ service, accountId, nickname, discord, inbox, revea
           {connection && !connectionBusy && !connectSnapshot?.social && !connection.state.error && <SocialConnectionPanel connection={connection} ownSession={snapshot.ownSession} now={Date.now()} catalogNow={now} onOpenConnectedGame={onOpenConnectedGame} onPrepareDedicatedServer={onPrepareDedicatedServer} service={service} instanceNames={instanceNames} />}
         </details>}
         </div>
-        {service?.organization && <details className="social-extra" onToggle={event => { if (event.target === event.currentTarget) setGroupsExpanded(event.currentTarget.open); }}><summary>Grupos e pedidos</summary><SocialOrganizationPanel service={service.organization} accountId={accountId} friends={snapshot?.friends ?? []} expanded={groupsExpanded} /></details>}
+        {service?.organization && <details className="social-extra" open={groupsExpanded} onToggle={event => { if (event.target === event.currentTarget) setGroupsExpanded(event.currentTarget.open); }}><summary>Grupos e pedidos</summary><SocialOrganizationPanel service={service.organization} accountId={accountId} friends={snapshot?.friends ?? []} expanded={groupsExpanded} /></details>}
         <div hidden={view !== "invites"} className="social-invitations">
         {service?.privateInvitations && <details className="social-extra theme-protected" open={view === "invites"}><summary>Convites privados</summary><SocialPrivateInvitationsPanel service={service} ownSession={snapshot?.ownSession} friends={snapshot?.friends}
           joinEnabled={service.capabilities.join && connection?.state.available === true && connection.state.privateInvitations === true && !connection.state.error}
           connectionBusy={connectionBusy || disabled} onJoin={enterSession} /></details>}
-        {discord && <DiscordSettingsPanel controls={discord} />}
+        {service?.resolvePublicSession && <PublicInviteCode hostedId={discordActivity(false, connection?.state, Date.now()).party?.sessionId} onOpen={setPastedSession} />}
+        {discord && <DiscordSettingsPanel controls={discord} instances={instanceNames} />}
         </div>
         {onOpenManualConnect && <details className="social-extra"><summary>Opções avançadas e recuperação</summary>
           <p>Use estes controles para convites manuais ou para conferir uma conexão, mesmo se a comunidade estiver indisponível.</p>

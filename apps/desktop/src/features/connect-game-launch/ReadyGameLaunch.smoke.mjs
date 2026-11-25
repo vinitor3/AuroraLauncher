@@ -39,6 +39,7 @@ const { act, createElement } = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { ReadyCopyPicker, readyCopyIdsFrom } = await import(await sourceModule(new URL("./ReadyCopyPicker.tsx", import.meta.url)));
 const { ConnectGameLaunchPanel } = await import(await sourceModule(new URL("./ConnectGameLaunchPanel.tsx", import.meta.url)));
+const { socialPlayRequest } = await import(await sourceModule(new URL("./socialPlay.ts", import.meta.url)));
 const { readyGameCapabilityFrom, readyGameSnapshotFrom, validReadyGameContext } = await import(await sourceModule(new URL("./types.ts", import.meta.url)));
 const container = document.getElementById("root");
 const copyId = "aurora-test-aaaaaaaa-1111-4111-8111-111111111111";
@@ -444,6 +445,32 @@ test("expiration is rechecked on confirm even before the UI polling clock update
 
 const socialConnection = { ...connection, social: { sessionId: "11111111-2222-4333-8444-555555555555",
   role: "guest", stage: "connected", digest: null, gameTarget: null, visibility: null, expiresAtMs: null } };
+
+const quickSession = () => ({ ...socialConnection, social: {...socialConnection.social, readyGameLaunchAvailable:true, expiresAtMs:Date.now()+60000} });
+const gesture = s => socialPlayRequest({operationId, sessionId:s.social.sessionId},context.contextKey);
+test("an authenticated Social gesture reviews its sole ready copy and exactly one click confirms the displayed plan", async () => {
+  fixtures();
+  const session = quickSession(), request = gesture(session);
+  handlers.set("diagnostic_lab_list",()=>[{...copy(),originInstanceId:context.sourceInstanceId}]);
+  await panel({session,socialPlay:request});
+  assert.equal(count("diagnostic_lab_list"),1); assert.equal(count("connect_prepare_ready_game_launch"),1);
+  assert.equal(count("connect_confirm_ready_game_launch"),0);
+  await click("Jogar agora");
+  assert.equal(count("connect_confirm_ready_game_launch"),1);
+  assert.deepEqual(calls.find(c=>c.command==="connect_confirm_ready_game_launch").args, {operationId,planId,digest:"a".repeat(64)});
+  await panel({session,socialPlay:request});
+  assert.equal(count("diagnostic_lab_list"),1); assert.equal(count("connect_confirm_ready_game_launch"),1);
+});
+test("an ambiguous copy or a voice session never triggers automatic review, installation or launch", async () => {
+  fixtures(); const session = quickSession();
+  handlers.set("diagnostic_lab_list",()=>[copy(),copy(copyB)].map(c=>({...c,originInstanceId:context.sourceInstanceId})));
+  await panel({session,socialPlay:gesture(session)});
+  assert.match(container.textContent,/várias cópias/); assert.equal(count("connect_prepare_ready_game_launch"),0);
+  handlers.set("diagnostic_lab_list",()=>[{...copy(),originInstanceId:context.sourceInstanceId}]);
+  await panel({session:{...session,social:{...session.social,voiceProfile:"svc"}},socialPlay:gesture(session)});
+  assert.equal(count("connect_prepare_ready_game_launch"),0);
+  assert.equal(count("connect_install_ready_copy"),0); assert.equal(count("connect_confirm_ready_game_launch"),0);
+});
 
 test("a forward wall-clock jump after observing a Social review preserves its original consent and confirm window", async t => {
   fixtures(reviewed()); await panel({ session: socialConnection }); await consent();

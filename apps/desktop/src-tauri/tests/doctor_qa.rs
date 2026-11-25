@@ -438,3 +438,43 @@ fn real_instance_read_only_smoke() {
     assert!(!report.sanitized_json.is_empty());
     println!("Read-only Doctor smoke: {} available logs; report status={}; no launch record supplied; no causal attribution.", report.logs.len(), report.status);
 }
+
+#[test]
+fn console_opens_only_text_logs_and_returns_both_ends_of_large_crashes() {
+    use aurora_launcher_core::engine::console_log;
+    let fixture = Fixture::new();
+    let root = fixture.instance.root();
+    fs::create_dir_all(root.join("logs")).unwrap();
+    fs::write(root.join("logs/latest.log"), "loaded\nready").unwrap();
+    fs::write(root.join("logs/old.log.gz"), [0, 255]).unwrap();
+    assert_eq!(
+        console_log(&fixture.instance, false).unwrap().0,
+        "latest.log"
+    );
+    fs::create_dir_all(root.join("crash-reports")).unwrap();
+    assert!(console_log(&fixture.instance, true).unwrap().1.is_empty());
+    let path = root.join("crash-reports/crash-test.txt");
+    let data = format!(
+        "Crash Report\n{}\nCaused by: ModFailure",
+        "stack trace\n".repeat(20000)
+    );
+    fs::write(&path, data).unwrap();
+    let (_, lines) = console_log(&fixture.instance, true).unwrap();
+    assert_eq!(lines.first().unwrap(), "Crash Report");
+    assert_eq!(lines.last().unwrap(), "Caused by: ModFailure");
+    assert!(lines.iter().any(|line| line.contains("omitido")));
+    let single_line = format!(
+        "Crash Report {} Caused by: LongLineFailure",
+        "x".repeat(180_000)
+    );
+    fs::write(&path, single_line).unwrap();
+    let (_, lines) = console_log(&fixture.instance, true).unwrap();
+    assert!(lines.first().unwrap().starts_with("Crash Report "));
+    assert!(lines
+        .last()
+        .unwrap()
+        .ends_with("Caused by: LongLineFailure"));
+    assert!(lines.iter().any(|line| line.contains("omitido")));
+    fs::hard_link(path, root.join("linked.txt")).unwrap();
+    assert!(console_log(&fixture.instance, true).is_err());
+}

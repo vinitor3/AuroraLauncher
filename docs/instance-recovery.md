@@ -36,11 +36,11 @@ Core, Skins e o Companion retirado não são artefatos restauráveis por esta á
 
 ## Consistência e identidade
 
-As operações exigem o bloqueio exclusivo de mutação já usado por jogo, instalações, updates e ações confirmadas do Assistente. A camada Tauri verifica processos rastreados e processos Java externos antes e depois de adquirir o bloqueio. Minecraft reconhecido sem um `--gameDir` localizável também bloqueia a operação, porque não é possível confirmar qual instância está em uso. O fluxo de Recuperação falha de forma conservadora quando não consegue comprovar que a instância está livre; a verificação de processos da entrega desktop é Windows.
+As operações exigem o bloqueio exclusivo de mutação já usado por jogo, instalações e atualizações. A camada Tauri verifica processos rastreados e processos Java externos antes e depois de adquirir o bloqueio. Minecraft reconhecido sem um `--gameDir` localizável também bloqueia a operação, porque não é possível confirmar qual instância está em uso. O fluxo de Recuperação falha de forma conservadora quando não consegue comprovar que a instância está livre; a verificação de processos da entrega desktop é Windows.
 
 A captura verifica arquivos e inventário antes de publicar. Alteração detectada durante a leitura impede a publicação do ponto. O jogador deve manter editores, sincronizadores e outros programas sem editar a instância durante esse período. A confirmação revalida manifesto, blobs e o estado que originou a prévia; mudança relevante exige nova revisão.
 
-A associação persistente combina UUID do marcador local, identidade física do diretório e registro correspondente na tabela `instances` fora da instância. A identidade física reutiliza a verificação do Assistente: identificador do arquivo/diretório no volume e criação, não somente nome ou caminho. Renomear a instância conserva a associação. Excluir e recriar uma pasta com o mesmo nome não autoriza usar os pontos da anterior; copiar ou editar o marcador para apontar para outro UUID também não concede essa associação.
+A associação persistente combina UUID do marcador local, identidade física do diretório e registro correspondente na tabela `instances` fora da instância. A identidade física utiliza o identificador do diretório no volume e os dados de criação. Renomear a instância conserva a associação. Excluir e recriar uma pasta com o mesmo nome não autoriza usar os pontos da anterior; copiar ou editar o marcador para apontar para outro UUID também não concede essa associação.
 
 O primeiro marcador de identidade é escrito e sincronizado em arquivo temporário e só então publicado por renomeação atômica. Uma falha antes dessa publicação não deixa identidade parcial nem impede iniciar uma instância cujos arquivos protegidos não foram alterados.
 
@@ -77,6 +77,6 @@ Mensagens públicas distinguem espaço insuficiente, dados ausentes/corrompidos,
 
 ## Compatibilidade e próximos passos
 
-Doctor, Gemini, histórico, ações confirmadas e seu próprio desfazer continuam funcionando com os contratos existentes. O Doctor oferece acesso à área Recuperação, sem afirmar que um ponto resolverá uma falha. Não há migração ampla dos journals/backups anteriores para CAS. A adoção limitada e suas consequências estão na [ADR-027](engineering/ADR/ADR-027-manual-instance-recovery.md).
+O Doctor oferece acesso à área Recuperação, sem afirmar que um ponto resolverá uma falha. Não há migração ampla dos journals/backups anteriores para CAS. A adoção limitada e suas consequências estão na [ADR-027](engineering/ADR/ADR-027-manual-instance-recovery.md).
 
 Na alpha.14, [Doctor e cópias de teste](diagnostic-lab.md) reutilizam esta identidade e este executor: pontos relevantes podem ser revisados no Doctor, e mudanças selecionadas da cópia podem ser aplicadas à origem com proteção e desfazer. Essas integrações não ampliam o escopo dos pontos. Não há upload, sincronização, restauração acionada por IA ou backup/restauração de mundos. Pontos automáticos antes de atualizações continuam **NÃO IMPLEMENTADO**; sua política de retenção e espaço permanece uma etapa própria.

@@ -5,7 +5,6 @@ import type { DoctorIssue, DoctorReport, DoctorRun } from "./types";
 import { SupportContextButton } from "../support/SupportContextButton";
 import { formatDoctorContext } from "../support/diagnosticContext";
 import { DoctorRecovery } from "./DoctorRecovery";
-import { InstanceHistory } from "../ai-tools/AiToolProposalList";
 import "./doctor.css";
 
 type Props = {
@@ -103,9 +102,6 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
       if (disposed) unlisten();
       else stopListening.push(unlisten);
     }).catch(() => undefined);
-    void listen<{ instanceId: string }>("aurora-ai-tool-changed", invalidate).then((unlisten) => {
-      if (disposed) unlisten(); else stopListening.push(unlisten);
-    }).catch(() => undefined);
     void listen<{ instanceId: string }>("aurora-recovery-changed", invalidate).then((unlisten) => {
       if (disposed) unlisten(); else stopListening.push(unlisten);
     }).catch(() => undefined);
@@ -201,7 +197,7 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
             </div>
             {report.status === "no_issues" && <small>Limitado às verificações e aos dados disponíveis.</small>}
           </div>
-          <SupportContextButton source="Minecraft" context={formatDoctorContext(report)} />
+          <SupportContextButton label="Copiar diagnóstico" source="Minecraft" context={formatDoctorContext(report)} />
           {report.issues.length > 0 && <details className="doctor-details">
             <summary>Evidências e detalhes ({report.issues.length})</summary>
             <div aria-label="Problemas identificados" className="doctor-issues">{report.issues.map((issue) => <IssueDetails issue={issue} key={issue.id} />)}</div>
@@ -233,7 +229,6 @@ export function DoctorView({ instanceId, javaExecutable, runId, busy, onSelectRu
             </div>
           </details>
         </>}
-      <InstanceHistory instanceId={instanceId} disabled={busy || loading} />
     </section>
   );
 }

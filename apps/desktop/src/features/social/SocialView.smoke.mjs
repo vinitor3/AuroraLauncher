@@ -39,6 +39,8 @@ const { SocialOrganizationPanel } = await import(await sourceModule(new URL("./S
 const { socialArtwork } = await import(await sourceModule(new URL("./presentation.ts", import.meta.url)));
 const { useFriendInbox } = await import(await sourceModule(new URL("./useFriendInbox.ts", import.meta.url)));
 const { useDiscordPresence } = await import(await sourceModule(new URL("./useDiscordPresence.ts", import.meta.url)));
+const { usePublicInvite } = await import(await sourceModule(new URL("./usePublicInvite.ts", import.meta.url)));
+const { publicInviteId, publicInvitePrefix } = await import(await sourceModule(new URL("./publicInvite.ts", import.meta.url)));
 const { discordActivity, validDiscordId } = await import(await sourceModule(new URL("./discordModel.ts", import.meta.url)));
 const actualNow = Date.now;
 const fixedNow = 1_800_000_000_000;
@@ -78,7 +80,7 @@ afterEach(async () => { await act(async () => root.unmount()); Date.now = actual
 const discordId = "aaaaaaaa-1111-4111-8111-111111111111";
 test("only a live public host with a free seat announces a join reference; no identities or endpoints leave the launcher", () => {
   const social = { sessionId: discordId, role: "host", visibility: "public", stage: "waitingGuest", expiresAtMs: fixedNow + 60000, gameTarget: "127.0.0.1:27000" };
-  const snapshot = { operationId: "ignored", role: "host", cleanupState: "notStarted", phase: "listening", social };
+  const snapshot = { operationId: "ignored", role: "host", cleanupState: "pending", phase: "hostListening", social };
   const projection = (change = {}) => discordActivity(true, { available: true, snapshot: { ...snapshot, social: { ...social, ...change } } }, fixedNow);
   assert.deepEqual(projection(), { playing:true, party:{ sessionId:discordId, current:1, max:2, expiresAtMs:fixedNow+60000 } });
   for (const invalid of [{role:"guest"}, {stage:"hostReview"}, {visibility:"friends"}, {visibility:"private"}, {sessionId:"malformed"}, {expiresAtMs:fixedNow}, {stage:"connected"}, { participants: [{state:"connected",accountId:"private"}] }])
@@ -86,21 +88,19 @@ test("only a live public host with a free seat announces a join reference; no id
   assert.equal(validDiscordId("18446744073709551615"), true);
   for (const id of ["18446744073709551616", "0", "bot token", "12345678901234567.0"]) assert.equal(validDiscordId(id),false);
 });
-test("Discord consent is off by default, uses a local per-account scope and retires listeners and activity on logout", async () => {
+test("official Discord edition activates without player IDs, honors saved opt-outs and retires listeners on account change", async () => {
   const values = new Map(), listeners = new Map(), sent = [];
   let result, reveals = 0;
   globalThis.localStorage = { getItem: k => values.get(k), setItem: (k, v) => values.set(k,v) };
   globalThis.__discordListen = async (event, callback) => { listeners.set(event,callback); return () => listeners.delete(event); };
-  globalThis.__socialDiscoveryInvoke = async (command,args) => { sent.push({ command,args }); return command === "discord_default_application_id" ? null : undefined; };
-  function Hook({uid}) { result = useDiscordPresence(uid,true,undefined,() => { reveals++; }); return null; }
+  values.set("aurora.discord.v1.two", JSON.stringify({enabled:false,applicationId:""}));
+  globalThis.__socialDiscoveryInvoke = async (command,args) => { sent.push({ command,args }); return command === "discord_default_application_id" ? "100000000000000000" : undefined; };
+  function Hook({uid}) { result = useDiscordPresence(uid,[],undefined,() => { reveals++; }); return null; }
   const draw = uid => act(async () => root.render(createElement(Hook,{uid})));
   await draw("one");
-  assert.equal(result.settings.enabled,false); assert.equal(listeners.size,0);
-  await act(async () => result.configure({enabled:true,applicationId:"invalid"}));
-  assert.equal(listeners.size,0);
-  await act(async () => result.configure({enabled:true,applicationId:"100000000000000000"}));
+  assert.equal(result.settings.enabled,true);
   const set = sent.find(m => m.command === "discord_set_presence").args;
-  assert.deepEqual(set.activity,{playing:true,party:null}); assert.equal(listeners.size,2);
+  assert.deepEqual(set.activity,{playing:false,party:null}); assert.equal(listeners.size,3);
   const receive = listeners.get("aurora-discord-join");
   await act(async () => receive({payload:{scope:"retired",sessionId:discordId}}));
   await act(async () => receive({payload:{scope:set.scope,sessionId:"wrong"}}));
@@ -113,6 +113,35 @@ test("Discord consent is off by default, uses a local per-account scope and reti
   await act(async () => receive({payload:{scope:set.scope,sessionId:discordId}}));
   assert.equal(reveals,1);
   delete globalThis.localStorage; delete globalThis.__discordListen;
+});
+test("automatic presence yields to installed mod, obeys per-instance overrides, and resumes after exit", async () => {
+  const sent = [], values = new Map();
+  let result, detected = true, inspected = 0;
+  globalThis.localStorage = {getItem:k=>values.get(k), setItem:(k,v)=>values.set(k,v)};
+  globalThis.__discordListen = async () => () => {};
+  globalThis.__socialDiscoveryInvoke = async (command,args) => {
+    if (command === "discord_default_application_id") return "100000000000000000";
+    if (command === "discord_instance_has_presence_mod") { inspected++; return detected; }
+    if (command === "discord_set_presence") sent.push(args.activity);
+  };
+  function Hook({games}) { result = useDiscordPresence("owner",games,undefined,()=>{}); return null; }
+  const draw = async games => act(async () => root.render(createElement(Hook,{games})));
+  await draw([{instanceId:"pack",processId:1}]); assert.equal(inspected,1); assert.equal(sent.at(-1).hidden,true);
+  await act(async () => result.configure({enabled:true,modes:{pack:"aurora"}}));
+  assert.deepEqual(sent.at(-1),{playing:true,party:null}); assert.equal(inspected,1);
+  await act(async () => result.configure({enabled:true,modes:{pack:"modpack"}})); assert.equal(sent.at(-1).hidden,true);
+  await draw([]); assert.deepEqual(sent.at(-1),{playing:false,party:null});
+  detected = false; await draw([{instanceId:"other",processId:2}]); assert.deepEqual(sent.at(-1),{playing:true,party:null}); assert.equal(inspected,2);
+  delete globalThis.localStorage; delete globalThis.__discordListen;
+});
+test("a build awaiting its official ID never connects to another application, even with a beta 2 override", async () => {
+  globalThis.localStorage = {getItem:()=>JSON.stringify({enabled:true,applicationId:"100000000000000000"})};
+  let result;
+  globalThis.__socialDiscoveryInvoke = async name => { calls.push({name}); return null; };
+  function Hook() { result = useDiscordPresence("owner",[],undefined,()=>{}); return null; }
+  await act(async () => root.render(createElement(Hook)));
+  assert.match(result.status,/Aguardando configuração oficial/); assert.equal(count("discord_set_presence"),0);
+  delete globalThis.localStorage;
 });
 const discordFixture = () => ({ settings: { enabled: true, applicationId: "" }, defaultId: "", status: "Ativa",
   sessionId: discordId, configure() {}, dismiss() { calls.push({ name: "dismiss" }); } });
@@ -145,6 +174,81 @@ test("Discord invite preserves host approval and never exposes an inaccessible p
   await render({ discord: discordFixture() });
   assert.equal(buttons("Pedir para entrar pelo Discord").length, 0);
   assert.match(container.textContent, /indisponível para sua conta/);
+});
+test("accepting an actual Discord activation prepares an open session once, and only requests admission for an approval world", async () => {
+  let policy = "open", requests = 0;
+  service.capabilities.join = true; handlers.prepareJoin = async () => {};
+  service.resolvePublicSession = async id => ({...baseSession,id,joinPolicy:policy});
+  service.organization = {joinRequestStatus:async()=>"none",requestJoin:async()=>{requests++;}};
+  const claimed=new Set();
+  const fixture = {...discordFixture(),fromDiscord:true,claimActivation(id){if(claimed.has(id))return false;claimed.add(id);return true;}};
+  await render({discord:fixture}); await render({discord:fixture}); assert.equal(count("prepareJoin"),1);
+  policy="approval"; await render({discord:{...fixture,sessionId:"bbbbbbbb-1111-4111-8111-111111111111"}});
+  assert.equal(requests,1); assert.equal(count("prepareJoin"),1);
+});
+test("public invitations are usable independently of Discord and do not accept network addresses or private sessions", async () => {
+  service.capabilities.join = true; handlers.prepareJoin = async () => {};
+  service.resolvePublicSession = async id => ({...baseSession,id});
+  await render(); await click("Convites");
+  const input = container.querySelector('input[placeholder="Cole o link ou código Aurora"]');
+  await edit(input,"127.0.0.1:25565"); assert.equal(button("Abrir convite Aurora").disabled,true);
+  await edit(input,"aurora-v1:"+discordId); await submit('[aria-label="Convite público Aurora"] form');
+  assert.equal(count("prepareJoin"),0); await click("Entrar pelo convite Aurora"); assert.equal(count("prepareJoin"),1);
+});
+test("public link encodes only a v4 session ID at the official origin", () => {
+  assert.equal(publicInviteId(publicInvitePrefix+discordId),discordId);
+  assert.equal(publicInviteId(" aurora-v1:"+discordId+" "),discordId);
+  for(const raw of [publicInvitePrefix+discordId+"?extra=1",publicInvitePrefix+discordId+"#x",publicInvitePrefix+discordId+"/",
+    publicInvitePrefix.replace(".dev",".dev.example")+discordId,publicInvitePrefix.replace("https://","http://")+discordId,
+    publicInvitePrefix+discordId.toUpperCase(),publicInvitePrefix+"%2f"+discordId]) assert.equal(publicInviteId(raw),null);
+});
+test("external link retained until login only opens a review; authority is read again after explicit confirmation", async () => {
+  let current = {...baseSession,id:discordId};
+  service.capabilities.join=true; handlers.prepareJoin=async()=>{};
+  service.resolvePublicSession=async()=>current;
+  const external={id:discordId,dismiss(){calls.push({name:"dismiss"});}};
+  await render({publicInvite:external}); assert.equal(count("prepareJoin"),0);
+  current={...current,visibility:"friends"}; await click("Entrar pelo convite Aurora"); assert.equal(count("prepareJoin"),0);
+  current={...current,visibility:"public"}; await click("Entrar pelo convite Aurora"); assert.equal(count("prepareJoin"),1);
+});
+test("public URI listener drains after authentication, ignores event payloads, and cannot reveal a prior owner's late take", async () => {
+  let listener, queued=discordId, result, reveals=0; const commands=[];
+  globalThis.__discordListen=async(name,fn)=>{assert.equal(name,"aurora-public-invite");listener=fn;return ()=>{listener=undefined;};};
+  globalThis.__socialDiscoveryInvoke=async command=>{assert.ok(listener);commands.push(command);const value=queued;queued=null;return value;};
+  function Hook({uid}){result=usePublicInvite(uid,()=>{reveals++;});return null;}
+  const draw=uid=>act(async()=>root.render(createElement(Hook,{uid})));
+  await draw(undefined);assert.equal(commands.length,0);
+  await draw("guest");assert.equal(result.id,discordId);assert.equal(reveals,1);assert.deepEqual(commands,["take_public_invite"]);
+  await act(async()=>result.dismiss());assert.equal(result,undefined);
+  await act(async()=>listener({payload:{sessionId:discordId}}));assert.equal(result,undefined);assert.equal(reveals,1);
+  const late=deferred();queued=late.promise;
+  await act(async()=>listener({}));await draw(undefined);await act(async()=>late.resolve(discordId));assert.equal(reveals,1);
+  await draw("another");assert.equal(result,undefined);delete globalThis.__discordListen;
+});
+test("the Aurora host can approve the single requesting guest, then the Discord guest joins under that decision", async t => {
+  const submitted = [], decisions = []; let status = "none", check;
+  const original = window.setInterval;
+  t.mock.method(window,"setInterval",(fn,ms,...args)=>{
+    if(ms===15000) check=fn;
+    return original(fn,ms,...args);
+  });
+  service.capabilities.join = true; handlers.prepareJoin = async () => {};
+  service.resolvePublicSession = async id => ({...baseSession,id,joinPolicy:"approval"});
+  service.organization = {joinRequestStatus:async()=>status,requestJoin:async id=>{submitted.push(id);status="pending";}};
+  const activation = {...discordFixture(),fromDiscord:true,claimActivation:()=>true};
+  await render({discord:activation}); assert.deepEqual(submitted,[discordId]); assert.equal(count("prepareJoin"),0); assert.ok(check);
+  // A host may only decide on the exact guest/session projected by their own service.
+  const host = {now:()=>fixedNow,snapshot:async()=>({...organizationData(null),joinRequests:[{sessionId:discordId,guest:person,status}]}),
+    respondJoin:async(id,uid,answer)=>{decisions.push([id,uid,answer]);status=answer==="accept"?"accepted":"none";}};
+  const hostDiv=document.createElement("div"); document.body.appendChild(hostDiv); const hostRoot=createRoot(hostDiv);
+  try {
+    await act(async()=>hostRoot.render(createElement(SocialOrganizationPanel,{service:host,accountId:"host-uid",friends:[]})));
+    const accept=[...hostDiv.querySelectorAll("button")].find(b=>b.textContent==="Aprovar entrada");
+    assert.ok(accept); await act(async()=>accept.click());
+    assert.deepEqual(decisions,[[discordId,person.uid,"accept"]]);
+    await act(async()=>check());
+    assert.equal(count("prepareJoin"),1); assert.equal(submitted.length,1);
+  } finally { await act(async()=>hostRoot.unmount()); hostDiv.remove(); }
 });
 
 test("unavailable service performs no reads, mutations or automatic social activation", async () => {

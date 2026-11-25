@@ -1,13 +1,14 @@
-# Aurora Smart Launcher 0.2.0-beta.2
+# Aurora Smart Launcher 0.2.0-beta.3
 
-| Área | O que mudou |
+| Área | Como usar |
 | --- | --- |
-| Modpacks Modrinth | O importador respeita o lado do cliente e a prioridade de `client-overrides`. Atualizações de instalações antigas removem os arquivos exclusivos de servidor que o pacote instalou. O histórico permite reverter a atualização. |
-| Conta | Vincule um e-mail nas opções da conta e confirme o link. O mesmo perfil passa a usar o e-mail como login. Em **Esqueci minha senha**, solicite a mensagem para definir outra senha. A conta precisa ter um e-mail confirmado antes da perda da senha. |
-| Capas | Escolha um PNG no guarda-roupa, confira a prévia e aplique a capa. A seleção fica disponível localmente; alterações pendentes podem ser sincronizadas com a conta. A opção **Mostrar minha capa a outros jogadores** requer Aurora Skins compatível no servidor e nos clientes. |
-| Teclas | Abra **Teclas** na instância. O mapa ABNT2/ANSI inclui mouse, numérico e comandos do pack. Em Forge 1.12.2, 1.16.5, 1.19.2 e 1.20.1 também dá para atribuir Alt, Ctrl ou Shift. No Forge 1.21.1 da matriz, o jogo falha ao reler esse formato; no Fabric, combinações dependem do mod de controles. O editor permite alterar a tecla simples nesses perfis. |
-| Jogar junto | Nos convites Aurora, o anfitrião convida um amigo para a sessão privada. O convidado aceita pelo launcher. Para sessões públicas, as permissões e os pedidos de aprovação continuam valendo. |
-| Discord | A presença é opcional. Em **Amigos e comunidade → Convites → Presença no Discord**, use o ID público do aplicativo Discord do projeto. Uma sessão pública anunciada com vaga habilita o convite. Os participantes precisam do Discord desktop e do Aurora abertos. Esta distribuição ainda depende do cadastro de um ID oficial para que todos possam ativá-la com o mesmo aplicativo. |
+| Modpacks | Em **Descobrir**, abra o projeto para ver a descrição do autor e o destino da instalação. Use Tab para percorrer as ações e Escape para voltar ao resultado. |
+| Conta | Ao vincular o e-mail, confira o endereço na tela, abra o link recebido e volte ao Aurora para concluir. O Firebase envia a mensagem pelo domínio do projeto. |
+| Logs e crashes | No console da instância, alterne entre **Log do jogo** e **Último crash**. Para copiar um arquivo de servidor, use **Copiar log ou crash**. O tratamento do texto é local. O assistente, os prompts de tema e a tradução por Gemini foram retirados. |
+| Aurora Connect | Ao entrar em uma sessão com a instância compatível selecionada e uma única cópia pronta, o launcher localiza e verifica a cópia. **Jogar agora** abre o Minecraft. Instalações pendentes e mundos com aprovação indicam o próximo passo na tela. |
+| Discord | Em **Amigos e comunidade → Convites → Presença no Discord**, ative a integração. A escolha por instância permite usar a presença do Aurora ou a de um mod. O modo automático reconhece CraftPresence e Simple RPC. O anfitrião pode responder individualmente aos pedidos de entrada. |
+
+A presença nativa depende do Discord desktop e do ID público de aplicativo do Aurora. O instalador pode obter esse ID pela [configuração oficial da edição](../scripts/discord-application.json). Em **Copiar convite Aurora**, copie o link da sessão pública e compartilhe-o pelo Discord. Quem recebe abre o link e escolhe **Abrir convite no Aurora**. A página também oferece o código para colar em **Convite recebido**. A política do mundo determina se o anfitrião precisa aprovar a entrada.
 
 ## Minecraft e loaders
 
@@ -21,6 +22,8 @@
 | 1.21.11 | Sim | — | 21 |
 | 26.3 | Sim | — | 25 |
 
-A matriz embarca Core 1.1.7 e Skins 0.3.4. No teste de migração com Adrenaline 26.5.0 → 26.5.1, a atualização retirou dois arquivos exclusivos de servidor. A reversão restaurou os 36 arquivos ao conteúdo anterior e preservou um arquivo adicionado pelo jogador. A recuperação de senha foi exercitada com uma conta de teste nos emuladores oficiais do Firebase. A verificação de posse do Minecraft pela Microsoft permanece prevista para o final do projeto.
+A matriz distribui Core 1.1.7 e Skins 0.3.4. A autenticação Microsoft está prevista para o fim do projeto.
 
-[Guia rápido](README.md) · [Matriz exata](../scripts/active-mod-matrix.json) · [Instalador e integridade](https://github.com/vinitor3/AuroraLauncher/releases/tag/v0.2.0-beta.2) · [Histórico da beta.1](https://github.com/vinitor3/AuroraLauncher/releases/tag/v0.2.0-beta.1)
+**Desempenho observado.** No teste com o Additive 26.5.1 e Fabric 1.21.11, executado pelo motor local antes do empacotamento da beta.3, o jogo levou 21,5 s da criação do processo até a tela inicial com os caches aquecidos. Do título até um mundo novo foram mais 11,1 s. Em 30 amostras, a mediana foi 60 FPS com VSync, RX 6650 XT, janela de 854 × 480 e distância de 12 chunks. Outros modpacks, configurações e computadores podem apresentar resultados diferentes.
+
+[Guia rápido](README.md) · [Matriz exata](../scripts/active-mod-matrix.json) · [Download e integridade](https://github.com/vinitor3/AuroraLauncher/releases/tag/v0.2.0-beta.3) · [Beta anterior](https://github.com/vinitor3/AuroraLauncher/releases/tag/v0.2.0-beta.2)

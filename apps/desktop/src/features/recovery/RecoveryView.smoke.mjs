@@ -52,7 +52,9 @@ const { createRoot } = await import("react-dom/client");
 const { RecoveryView } = await import(await sourceModule(new URL("./RecoveryView.tsx", import.meta.url)));
 const { recoveryError } = await import(await sourceModule(new URL("./types.ts", import.meta.url)));
 const nativeSource = await readFile(new URL("../../../src-tauri/src/engine/recovery.rs", import.meta.url), "utf8");
-const publicNativeErrors = [...nativeSource.matchAll(/#\[error\(\s*"([^"\n]+)"\s*\)\]/g)].map((match) => match[1]);
+// The standard launcher does not compile the voice lab's separate error variants.
+const publicNativeErrors = [...nativeSource.matchAll(/(#\[cfg\(feature = "connect-voice-lab"\)\]\s*)?#\[error\(\s*"([^"\n]+)"\s*\)\]/g)]
+  .filter((match) => !match[1]).map((match) => match[2]);
 assert.ok(publicNativeErrors.length >= 13, "Verify actual native public errors, not guessed categories");
 for (const message of publicNativeErrors) assert.equal(recoveryError(message), message, `Missing reviewed native message: ${message}`);
 assert.doesNotMatch(recoveryError("SYNTHETIC_PRIVATE_EXCEPTION C:\\Secrets\\account.json password=private"), /SYNTHETIC|Secrets|password/);

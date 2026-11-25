@@ -4,7 +4,7 @@ Trabalhe numa branch curta de integração em uma worktree exclusiva. Consulte `
 
 ## Produto
 
-- Desktop React/Tauri, engine Rust, Core e Skins em Java. O Worker atende os catálogos, as aparências e a tradução. Firebase fornece identidade Aurora.
+- Desktop React/Tauri, engine Rust, Core e Skins em Java. O Worker atende os catálogos e as aparências. Firebase fornece identidade Aurora.
 - O diagnóstico é local e o usuário pode copiar um resumo para um serviço externo. A beta experimental e a integração Microsoft futura estão registradas na [ADR-036](docs/engineering/ADR/ADR-036-beta-diagnostics.md).
 - Java e loaders compatíveis com o jogo e os módulos Aurora são decisões separadas. Consulte a [matriz ativa](scripts/active-mod-matrix.json) e preserve os contratos de grade, cache, multiplayer, migração e assinaturas. 1.12.2 tem caminho legado próprio. NeoForge exige port e decisão de produto.
 - O laboratório Connect usa permissões por feature, consentimento e recibos específicos. Preserve os limites de autenticação, relay, voz e recuperação. Consulte a [especificação](docs/engineering/AURORA_CONNECT_SPEC.md) e os contratos do componente antes de alterar os fluxos. O serviço deve operar dentro do orçamento já autorizado.

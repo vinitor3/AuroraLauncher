@@ -32,7 +32,7 @@ export function DoctorRecovery({ instanceId, runId, busy, onReview }: {
     void invoke<DoctorRecoveryOverview>("doctor_recovery_overview", { id: instanceId, runId: runId ?? null })
       .then((value) => { if (!disposed) setResult({ context, value }); })
       .catch(() => { if (!disposed) setResult({ context, failed: true }); });
-    for (const event of ["aurora-doctor-run", "aurora-recovery-changed", "aurora-ai-tool-changed", "aurora-diagnostic-lab-changed"]) {
+    for (const event of ["aurora-doctor-run", "aurora-recovery-changed", "aurora-diagnostic-lab-changed"]) {
       void listen<{ instanceId: string }>(event, ({ payload }) => {
         if (!disposed && payload.instanceId === instanceId) setRevision((value) => value + 1);
       }).then((stop) => { if (disposed) stop(); else stops.push(stop); }).catch(() => undefined);

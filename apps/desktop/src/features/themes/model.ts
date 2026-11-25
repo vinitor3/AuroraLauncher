@@ -559,28 +559,3 @@ export function formatThemeCode(theme: AuroraTheme): string {
   }
   return `// Tema Aurora v1 — JSONC: comentários explicam campos, opções e unidades.\n// Edite os valores; o Aurora valida tudo antes da prévia de 10 segundos.\n${render(theme, [], 0)}\n`;
 }
-
-export function buildThemeAiPrompt(theme: AuroraTheme): string {
-  return [
-    "Crie ou ajuste um tema visual do Aurora Launcher conforme meu pedido ao final. Responda SOMENTE com um objeto JSON/JSONC válido, sem Markdown. O Aurora não executa código nem faz geração por IA: interpreta dados locais.",
-    "Preserve os campos e recursos existentes. Não acrescente HTML, CSS, JavaScript, URLs, comandos, eventos, permissões ou funções. Comentários // e /* */ são permitidos fora das strings; não são executados. Não use vírgulas finais.",
-    "",
-    "Regras do schemaVersion 1:",
-    "- id: 1–48 caracteres [a-z0-9][a-z0-9-]*, exceto aurora-default, constructor, prototype; name até 60 caracteres.",
-    "- colors: background, panel, text, muted, accent, accentText, border; somente #RRGGBB. Contraste de text/panel e accentText/accent de pelo menos 4.5:1.",
-    "- window: titlebarColor, titlebarText e frameColor #RRGGBB; contraste titlebarText/titlebarColor 4.5:1; titlebarHeight 36–64 px, borderWidth 0–3 px, outerRadius 0–24 px, contentInset 0–24 px. Os controles da janela preservam suas funções.",
-    "- cursor: style system|pixel|ring|crosshair; color #RRGGBB; size 16–40 px; trail none|sparkle. É só aparência do mouse no conteúdo do launcher; não muda cliques, atalhos ou permissões. Rastro respeita movimento reduzido e a janela oculta.",
-    "- typography: font system|rounded|serif|mono; scale 0.9–1.15. Fontes locais.",
-    "- layout: sidebar left|right; density comfortable|compact; navOrder contém instances, discover, appearance, java, connect, social uma vez cada; radius 0–24 px; sidebarWidth 180–300 px; statusSide right|left; sectionOrder contém header, decorations, content uma vez cada; decorationHeight 80–400 px.",
-    "- effects: background none|aurora|water|sakura; intensity 0–1; speed 0.25–2; glass 0–16 px; transition fade|slide|zoom|none; transitionMs 100–700 ms. Somente efeitos internos, respeitando movimento reduzido e a janela oculta.",
-    "- assets: até 4 IDs válidos, cada um com mime e data base64 puro, sem prefixo data:. PNG estático (sem APNG) image/png até 2 MiB/4096 px/8 milhões de pixels. GIF animado image/gif apenas no fundo, até 24 MiB/1920×1080/240 frames/160 milhões de pixels de canvas acumulados; até 60 segundos por ciclo somando o atraso de cada frame com mínimo de 40 ms. Somente looping padrão e comentários; sem extensões interativas ou externas. Vídeo silencioso video/mp4 ou video/webm até 20 MiB/1920×1080 (1080p)/180 segundos. Soma até 24 MiB; documento até 34 MiB. Preserve base64 existente; não invente recursos. Anexos faltantes são adicionados localmente no Aurora.",
-    "- media: background ID de PNG/GIF/vídeo ou null; logo ID de PNG ou null. GIF não pode ser logo, ícone ou decoração. Sem caminhos nem URLs.",
-    "- icons: instances, discover, appearance, java, connect, social; cada valor default|star|leaf|moon|heart|gamepad|sparkles ou asset:ID de PNG existente.",
-    "- decorations: até 6 objetos: type text|image; text até 160 caracteres literais; asset null para texto ou ID de PNG para imagem; align left|center|right; x e y 0–100% do espaço livre após descontar largura/altura; width 8–100%; height 24–160 px; fontSize 12–56 px. São elementos somente visuais.",
-    "- Documentos antigos sem os novos campos recebem padrões; use os valores completos do exemplo abaixo. O usuário confirma dentro de uma prévia de 10 segundos. Autenticação, permissões, alertas de segurança e ações do launcher permanecem protegidos.",
-    "",
-    "Tema de referência comentado (nenhum dado de conta, credencial ou caminho local é acrescentado):",
-    formatThemeCode(theme),
-    "Meu pedido de aparência: ",
-  ].join("\n");
-}

@@ -26,13 +26,63 @@ pub(crate) struct Party {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Activity {
+    #[serde(default)]
+    hidden: bool,
     playing: bool,
     party: Option<Party>,
+    #[cfg(all(windows, feature = "connect-lab"))]
+    #[serde(skip)]
+    game: Option<GameDetail>,
+}
+
+#[cfg(all(windows, feature = "connect-lab"))]
+#[derive(Clone)]
+pub(crate) struct GameDetail {
+    pub(crate) started_at_ms: u64,
+    pub(crate) profile: Option<(&'static str, &'static str)>,
 }
 
 #[tauri::command]
-pub(crate) fn discord_default_application_id() -> Option<&'static str> {
-    option_env!("AURORA_DISCORD_APPLICATION_ID").filter(|id| valid_app_id(id))
+pub(crate) async fn discord_default_application_id() -> Option<String> {
+    if let Some(id) = option_env!("AURORA_DISCORD_APPLICATION_ID").filter(|id| valid_app_id(id)) {
+        return Some(id.to_owned());
+    }
+    if let Some(id) = edition_id(include_bytes!(
+        "../../../../scripts/discord-application.json"
+    )) {
+        return Some(id);
+    }
+    // One fixed, public release source. It can supply only a Discord snowflake.
+    #[cfg(feature = "connect-online")]
+    {
+        static ID: tokio::sync::OnceCell<Option<String>> = tokio::sync::OnceCell::const_new();
+        ID.get_or_init(|| async {
+            let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(5)).build().ok()?;
+            let mut response = client.get("https://raw.githubusercontent.com/vinitor3/AuroraLauncher/main/scripts/discord-application.json")
+                .send().await.ok()?.error_for_status().ok()?;
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await.ok()? {
+                if bytes.len() + chunk.len() > 256 { return None; }
+                bytes.extend_from_slice(&chunk);
+            }
+            edition_id(&bytes)
+        }).await.clone()
+    }
+    #[cfg(not(feature = "connect-online"))]
+    None
+}
+
+fn edition_id(raw: &[u8]) -> Option<String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Edition {
+        application_id: Option<String>,
+    }
+    serde_json::from_slice::<Edition>(raw)
+        .ok()?
+        .application_id
+        .filter(|id| valid_app_id(id))
 }
 
 #[cfg(all(windows, feature = "connect-lab"))]
@@ -48,7 +98,7 @@ mod ipc {
     use tokio::{
         io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
         net::windows::named_pipe::ClientOptions,
-        sync::watch,
+        sync::{mpsc, oneshot, watch},
         time::{interval, sleep, timeout},
     };
 
@@ -58,7 +108,14 @@ mod ipc {
         scope: String,
         id: String,
         desired: watch::Sender<Activity>,
+        replies: mpsc::Sender<Reply>,
         task: tauri::async_runtime::JoinHandle<()>,
+    }
+    struct Reply {
+        session: String,
+        user: String,
+        accept: bool,
+        done: oneshot::Sender<bool>,
     }
     impl Drop for Running {
         fn drop(&mut self) {
@@ -76,8 +133,26 @@ mod ipc {
             .as_millis() as u64
     }
     fn activity(value: &Activity, now: u64) -> Value {
+        if value.hidden {
+            return Value::Null;
+        }
         let mut out =
             json!({"details": if value.playing { "Jogando Minecraft" } else { "No launcher" }});
+        if value.playing {
+            if let Some(game) = &value.game {
+                if (1000..=now).contains(&game.started_at_ms) {
+                    out["timestamps"] = json!({"start":game.started_at_ms / 1000});
+                }
+                if let Some((version, loader)) = game.profile {
+                    let loader = if loader == "fabric" {
+                        "Fabric"
+                    } else {
+                        "Forge"
+                    };
+                    out["details"] = json!(format!("Minecraft {version} · {loader}"));
+                }
+            }
+        }
         if let Some(party) = value.party.as_ref().filter(|p| {
             valid_session(&p.session_id)
                 && p.current > 0
@@ -131,12 +206,18 @@ mod ipc {
     enum Notice<'a> {
         Status(&'a str),
         Join(&'a str),
+        Request {
+            session: &'a str,
+            user: &'a str,
+            name: &'a str,
+        },
     }
 
     async fn connected<S: AsyncRead + AsyncWrite + Unpin>(
         stream: S,
         id: &str,
         desired: &mut watch::Receiver<Activity>,
+        replies: &mut mpsc::Receiver<Reply>,
         mut notify: impl FnMut(Notice<'_>),
     ) -> io::Result<()> {
         let (mut r, mut w) = tokio::io::split(stream);
@@ -152,7 +233,18 @@ mod ipc {
             &json!({"cmd":"SUBSCRIBE","evt":"ACTIVITY_JOIN","nonce":subscription,"args":{}}),
         )
         .await?;
-        let mut last_activity = Value::Null;
+        let ask = nonce();
+        write(
+            &mut w,
+            1,
+            &json!({"cmd":"SUBSCRIBE","evt":"ACTIVITY_JOIN_REQUEST","nonce":ask,"args":{}}),
+        )
+        .await?;
+        let mut asks_enabled = false;
+        let mut requests = std::collections::HashMap::<String, (String, u64)>::new();
+        let mut responders: std::collections::HashMap<String, oneshot::Sender<bool>> =
+            std::collections::HashMap::new();
+        let mut last_activity = None;
         let mut pending = String::new();
         let mut last_send = std::time::Instant::now();
         let mut subscribed = false;
@@ -164,20 +256,96 @@ mod ipc {
             tokio::pin!(next);
             let (op, frame) = loop {
                 let current = activity(&desired.borrow_and_update(), now_ms());
-                if current != last_activity {
+                let public_session = current["party"]["id"].as_str();
+                requests.retain(|_, (session, deadline)| {
+                    Some(session.as_str()) == public_session && *deadline > now_ms()
+                });
+                responders.retain(|_, response| !response.is_closed());
+                if Some(&current) != last_activity.as_ref() {
                     pending = nonce();
                     last_send = std::time::Instant::now();
                     acknowledged = false;
-                    write(&mut w, 1, &json!({"cmd":"SET_ACTIVITY","nonce":pending,"args":{"pid":std::process::id(),"activity":current}})).await?;
-                    last_activity = current;
+                    let mut args = json!({"pid":std::process::id()});
+                    if !current.is_null() {
+                        args["activity"] = current.clone();
+                    }
+                    write(
+                        &mut w,
+                        1,
+                        &json!({"cmd":"SET_ACTIVITY","nonce":pending,"args":args}),
+                    )
+                    .await?;
+                    last_activity = Some(current);
                 }
                 tokio::select! {
                     frame = &mut next => break frame?,
                     changed = desired.changed() => if changed.is_err() { return Ok(()); },
+                    reply = replies.recv() => {
+                        let Some(reply) = reply else { return Ok(()) };
+                        let fresh = activity(&desired.borrow(), now_ms());
+                        let permitted = !reply.done.is_closed() && requests.get(&reply.user).is_some_and(|(session, until)| session == &reply.session && Some(session.as_str()) == fresh["party"]["id"].as_str() && *until > now_ms());
+                        if !permitted || responders.len() >= 8 { let _ = reply.done.send(false); continue; }
+                        requests.remove(&reply.user);
+                        let token = nonce();
+                        let command = if reply.accept { "SEND_ACTIVITY_JOIN_INVITE" } else { "CLOSE_ACTIVITY_JOIN_REQUEST" };
+                        write(&mut w, 1, &json!({"cmd":command,"nonce":token,"args":{"user_id":reply.user}})).await?;
+                        responders.insert(token, reply.done);
+                    }
                     _ = tick.tick() => if !acknowledged && last_send.elapsed() > Duration::from_secs(8) { return Err(invalid()); },
                 }
             };
             match op {
+                1 if frame["nonce"].as_str() == Some(&ask) => {
+                    asks_enabled = frame["cmd"] == "SUBSCRIBE" && frame["evt"] != "ERROR";
+                }
+                1 if frame["nonce"]
+                    .as_str()
+                    .is_some_and(|nonce| responders.contains_key(nonce)) =>
+                {
+                    if let Some(response) =
+                        frame["nonce"].as_str().and_then(|n| responders.remove(n))
+                    {
+                        let _ = response.send(
+                            matches!(
+                                frame["cmd"].as_str(),
+                                Some("SEND_ACTIVITY_JOIN_INVITE" | "CLOSE_ACTIVITY_JOIN_REQUEST")
+                            ) && frame["evt"] != "ERROR",
+                        );
+                    }
+                }
+                1 if asks_enabled
+                    && acknowledged
+                    && frame["cmd"] == "DISPATCH"
+                    && frame["evt"] == "ACTIVITY_JOIN_REQUEST" =>
+                {
+                    let current = activity(&desired.borrow(), now_ms());
+                    if let (Some(session), Some(user)) = (
+                        current["party"]["id"].as_str(),
+                        frame["data"]["user"]["id"]
+                            .as_str()
+                            .filter(|u| valid_app_id(u)),
+                    ) {
+                        if requests.len() < 8 && !requests.contains_key(user) {
+                            let name = frame["data"]["user"]["username"]
+                                .as_str()
+                                .filter(|n| {
+                                    n.len() <= 32
+                                        && !n.is_empty()
+                                        && n.bytes().all(|c| {
+                                            c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_')
+                                        })
+                                })
+                                .unwrap_or("Pessoa no Discord");
+                            requests
+                                .insert(user.to_owned(), (session.to_owned(), now_ms() + 60_000));
+                            notify(Notice::Request {
+                                session,
+                                user,
+                                name,
+                            });
+                        }
+                    }
+                }
                 1 if frame["nonce"].as_str() == Some(&subscription) => {
                     subscribed = frame["cmd"] == "SUBSCRIBE" && frame["evt"] != "ERROR";
                     if acknowledged {
@@ -215,6 +383,7 @@ mod ipc {
         scope: String,
         id: String,
         mut desired: watch::Receiver<Activity>,
+        mut replies: mpsc::Receiver<Reply>,
     ) {
         loop {
             let pipe = (0..10).find_map(|n| {
@@ -224,23 +393,38 @@ mod ipc {
             });
             let mut status = "waiting";
             if let Some(stream) = pipe {
-                let result = connected(stream, &id, &mut desired, |event| match event {
-                    Notice::Status(s) => {
-                        let _ = app.emit_to(
-                            "main",
-                            "aurora-discord-status",
-                            json!({"scope":scope,"status":s}),
-                        );
-                    }
-                    Notice::Join(session) => {
-                        crate::show_launcher(&app);
-                        let _ = app.emit_to(
-                            "main",
-                            "aurora-discord-join",
-                            json!({"scope":scope,"sessionId":session}),
-                        );
-                    }
-                })
+                let result = connected(
+                    stream,
+                    &id,
+                    &mut desired,
+                    &mut replies,
+                    |event| match event {
+                        Notice::Request {
+                            session,
+                            user,
+                            name,
+                        } => {
+                            crate::show_launcher(&app);
+                            let _ = app.emit_to("main", "aurora-discord-request",
+                            json!({"scope":scope,"sessionId":session,"userId":user,"name":name}));
+                        }
+                        Notice::Status(s) => {
+                            let _ = app.emit_to(
+                                "main",
+                                "aurora-discord-status",
+                                json!({"scope":scope,"status":s}),
+                            );
+                        }
+                        Notice::Join(session) => {
+                            crate::show_launcher(&app);
+                            let _ = app.emit_to(
+                                "main",
+                                "aurora-discord-join",
+                                json!({"scope":scope,"sessionId":session}),
+                            );
+                        }
+                    },
+                )
                 .await;
                 if result.is_ok() {
                     return;
@@ -270,20 +454,55 @@ mod ipc {
             } else {
                 running.take();
                 let (desired, rx) = watch::channel(activity);
+                let (replies, incoming) = mpsc::channel(8);
                 let task = tauri::async_runtime::spawn(run(
                     window.app_handle().clone(),
                     scope.clone(),
                     id.clone(),
                     rx,
+                    incoming,
                 ));
                 *running = Some(Running {
                     scope,
                     id,
                     desired,
+                    replies,
                     task,
                 });
             }
             Ok(())
+        }
+        pub(super) async fn reply(
+            &self,
+            scope: &str,
+            session: String,
+            user: String,
+            accept: bool,
+        ) -> Result<(), &'static str> {
+            let (done, answered) = oneshot::channel();
+            {
+                let running = self.0.lock().map_err(|_| "discord_unavailable")?;
+                let r = running
+                    .as_ref()
+                    .filter(|r| r.scope == scope)
+                    .ok_or("discord_request_expired")?;
+                r.replies
+                    .try_send(Reply {
+                        session,
+                        user,
+                        accept,
+                        done,
+                    })
+                    .map_err(|_| "discord_unavailable")?;
+            }
+            if matches!(
+                timeout(Duration::from_secs(5), answered).await,
+                Ok(Ok(true))
+            ) {
+                Ok(())
+            } else {
+                Err("discord_request_expired")
+            }
         }
         pub(super) fn clear(&self, scope: &str) {
             if let Ok(mut r) = self.0.lock() {
@@ -297,6 +516,22 @@ mod ipc {
     mod tests {
         use super::*;
         const SESSION: &str = "aaaaaaaa-1111-4111-8111-111111111111";
+        #[test]
+        fn discord_ambiguous_games_have_generic_activity_and_the_renderer_cannot_supply_game_details(
+        ) {
+            let value: Activity =
+                serde_json::from_value(json!({"playing":true,"party":null})).unwrap();
+            assert_eq!(
+                activity(&value, 1_800_000_000_000),
+                json!({"details":"Jogando Minecraft"})
+            );
+            for private in [
+                json!({"playing":true,"party":null,"game":{"profile":"personal instance"}}),
+                json!({"playing":true,"party":null,"server":"hidden.local"}),
+            ] {
+                assert!(serde_json::from_value::<Activity>(private).is_err());
+            }
+        }
         #[tokio::test]
         async fn discord_protocol_handshake_presence_join_and_clear() {
             let path = format!(r"\\?\pipe\aurora-discord-test-{}", Uuid::new_v4());
@@ -307,6 +542,11 @@ mod ipc {
             let client = ClientOptions::new().open(&path).unwrap();
             mock.connect().await.unwrap();
             let (tx, mut rx) = watch::channel(Activity {
+                game: Some(GameDetail {
+                    started_at_ms: 1_700_000_000_123,
+                    profile: Some(("1.20.1", "fabric")),
+                }),
+                hidden: false,
                 playing: true,
                 party: Some(Party {
                     session_id: SESSION.into(),
@@ -316,10 +556,12 @@ mod ipc {
                 }),
             });
             let (events, mut notices) = tokio::sync::mpsc::unbounded_channel();
+            let (answer, mut replies) = mpsc::channel(8);
             let task = tokio::spawn(async move {
-                connected(client, "100000000000000000", &mut rx, |n| {
+                connected(client, "100000000000000000", &mut rx, &mut replies, |n| {
                     let _ = events.send(match n {
                         Notice::Join(s) | Notice::Status(s) => s.to_owned(),
+                        Notice::Request { name, .. } => name.to_owned(),
                     });
                 })
                 .await
@@ -334,7 +576,18 @@ mod ipc {
             let (_, sub) = read(&mut mock).await.unwrap();
             assert_eq!(sub["evt"], "ACTIVITY_JOIN");
             write(&mut mock, 1, &sub).await.unwrap();
+            let (_, ask) = read(&mut mock).await.unwrap();
+            assert_eq!(ask["evt"], "ACTIVITY_JOIN_REQUEST");
+            write(&mut mock, 1, &ask).await.unwrap();
             let (_, set) = read(&mut mock).await.unwrap();
+            assert_eq!(
+                set["args"]["activity"]["timestamps"]["start"],
+                1_700_000_000
+            );
+            assert_eq!(
+                set["args"]["activity"]["details"],
+                "Minecraft 1.20.1 · Fabric"
+            );
             assert_eq!(
                 set["args"]["activity"]["secrets"]["join"],
                 format!("aurora-v1:{SESSION}")
@@ -350,12 +603,48 @@ mod ipc {
             write(&mut mock,1,&json!({"cmd":"DISPATCH","evt":"ACTIVITY_JOIN","data":{"secret":"https://invalid.example"}})).await.unwrap();
             write(&mut mock,1,&json!({"cmd":"DISPATCH","evt":"ACTIVITY_JOIN","data":{"secret":format!("aurora-v1:{SESSION}")}})).await.unwrap();
             assert_eq!(notices.recv().await.unwrap(), SESSION);
+            let user = "123456789012345678";
+            for (accept, command) in [
+                (true, "SEND_ACTIVITY_JOIN_INVITE"),
+                (false, "CLOSE_ACTIVITY_JOIN_REQUEST"),
+            ] {
+                write(&mut mock, 1, &json!({"cmd":"DISPATCH","evt":"ACTIVITY_JOIN_REQUEST","data":{"user":{"id":user,"username":"Pessoa"}}})).await.unwrap();
+                assert_eq!(notices.recv().await.unwrap(), "Pessoa");
+                let (done, ack) = oneshot::channel();
+                answer
+                    .send(Reply {
+                        session: SESSION.into(),
+                        user: user.into(),
+                        accept,
+                        done,
+                    })
+                    .await
+                    .unwrap();
+                let (_, outbound) = read(&mut mock).await.unwrap();
+                assert_eq!(outbound["cmd"], command);
+                assert_eq!(outbound["args"], json!({"user_id":user}));
+                write(&mut mock, 1, &outbound).await.unwrap();
+                assert_eq!(ack.await, Ok(true));
+            }
+            let (done, ack) = oneshot::channel();
+            answer
+                .send(Reply {
+                    session: SESSION.into(),
+                    user: user.into(),
+                    accept: true,
+                    done,
+                })
+                .await
+                .unwrap();
+            assert_eq!(ack.await, Ok(false), "no unsolicited invitation");
             tx.send_replace(Activity {
+                game: None,
+                hidden: true,
                 playing: false,
                 party: None,
             });
             let (_, idle) = read(&mut mock).await.unwrap();
-            assert_eq!(idle["args"]["activity"], json!({"details":"No launcher"}));
+            assert_eq!(idle["args"], json!({"pid":std::process::id()}));
             drop(tx);
             assert!(task.await.unwrap().is_ok());
             assert!(read(&mut mock).await.is_err());
@@ -368,6 +657,8 @@ mod ipc {
             assert!(read(&mut r).await.is_err());
             for (current, expires) in [(1, 100), (2, 101)] {
                 let a = Activity {
+                    game: None,
+                    hidden: false,
                     playing: true,
                     party: Some(Party {
                         session_id: SESSION.into(),
@@ -391,29 +682,67 @@ pub(crate) struct DiscordState {
 }
 
 #[tauri::command]
-pub(crate) fn discord_set_presence(
+pub(crate) async fn discord_set_presence(
     window: tauri::WebviewWindow,
-    state: tauri::State<DiscordState>,
+    state: tauri::State<'_, DiscordState>,
+    running: tauri::State<'_, crate::commands::RunningInstances>,
     scope: String,
     application_id: String,
     activity: Activity,
 ) -> Result<(), &'static str> {
-    if window.label() != "main" || !valid_session(&scope) || !valid_app_id(&application_id) {
+    if window.label() != "main"
+        || !valid_session(&scope)
+        || !valid_app_id(&application_id)
+        || discord_default_application_id().await.as_deref() != Some(application_id.as_str())
+    {
         return Err("discord_invalid_request");
     }
     #[cfg(all(windows, feature = "connect-lab"))]
     {
+        let mut activity = activity;
+        if activity.playing && !activity.hidden {
+            activity.game = running.discord_game();
+        }
         state.set(&window, scope, application_id, activity)
     }
     #[cfg(not(all(windows, feature = "connect-lab")))]
     {
         let _ = (
+            running,
             state,
+            activity.hidden,
             activity.playing,
             activity
                 .party
                 .map(|p| (p.session_id, p.current, p.max, p.expires_at_ms)),
         );
+        Err("discord_unavailable")
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn discord_reply_to_request(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, DiscordState>,
+    scope: String,
+    session_id: String,
+    user_id: String,
+    accept: bool,
+) -> Result<(), &'static str> {
+    if window.label() != "main"
+        || !valid_session(&scope)
+        || !valid_session(&session_id)
+        || !valid_app_id(&user_id)
+    {
+        return Err("discord_invalid_request");
+    }
+    #[cfg(all(windows, feature = "connect-lab"))]
+    {
+        state.reply(&scope, session_id, user_id, accept).await
+    }
+    #[cfg(not(all(windows, feature = "connect-lab")))]
+    {
+        let _ = (state, accept);
         Err("discord_unavailable")
     }
 }

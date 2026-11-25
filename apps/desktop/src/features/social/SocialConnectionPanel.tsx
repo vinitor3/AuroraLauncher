@@ -1,3 +1,4 @@
+import type { SocialPlayTarget } from "../connect-game-launch/socialPlay";
 import { useEffect, useState } from "react";
 import type { SocialService, SocialSession } from "../../shared/social";
 import { socialGameTarget, socialRuntimeLabels, socialStageText } from "./connect-types";
@@ -21,7 +22,7 @@ function NativeVoiceLimits() {
 
 /** Presentation only: the App-owned controller and native manager survive tabs. */
 export function SocialConnectionPanel({ connection, ownSession, now, catalogNow = now, onOpenConnectedGame, onPrepareDedicatedServer, service, instanceNames }: {
-  connection: SocialConnectionControls; ownSession?: SocialSession | null; now: number; catalogNow?: number; onOpenConnectedGame?: () => void; onPrepareDedicatedServer?: () => void; service?: SocialService | null; instanceNames?: Record<string, string>;
+  connection: SocialConnectionControls; ownSession?: SocialSession | null; now: number; catalogNow?: number; onOpenConnectedGame?: (target: SocialPlayTarget) => void; onPrepareDedicatedServer?: () => void; service?: SocialService | null; instanceNames?: Record<string, string>;
 }) {
   const { state, controller } = connection;
   const snapshot = state.snapshot, social = snapshot?.social;
@@ -139,7 +140,7 @@ export function SocialConnectionPanel({ connection, ownSession, now, catalogNow 
     </div>}
     <div className="social-actions">
       {canOpenGame && <button onClick={() => {
-        if (canOpenGame && social?.expiresAtMs && social.expiresAtMs > Date.now()) onOpenConnectedGame?.();
+        if (canOpenGame && social?.expiresAtMs && social.expiresAtMs > Date.now() && snapshot?.operationId) onOpenConnectedGame?.({ operationId: snapshot.operationId, sessionId: social.sessionId });
       }}>Abrir Minecraft</button>}
       {!active && <button disabled={!state.available || state.pending || !hostEligible || retiredOwnSession || ((discovery || useVoice || state.maxSessionSeconds === 14400) && !sourceReady)} onClick={() => {
         if (!hostEligible || retiredOwnSession || !ownSession || !(ownSession.expiresAtMs > (service?.now ? service.now() : Date.now()))) return;

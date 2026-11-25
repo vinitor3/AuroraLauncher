@@ -3229,7 +3229,7 @@ test("guidance failed capability only offers observation and cleanup until the a
     assert.equal(nextStep(), "Acompanhe ou encerre a tentativa identificada.");
     assert.match(guidanceText(), /disponibilidade do Connect não pôde ser confirmada/);
     assert.match(guidanceText(), /Atualizar estado consulta somente a tentativa/);
-    assert.doesNotMatch(container.textContent, /autorizar|copiar|revise e autorize/i);
+    assert.doesNotMatch(container.textContent, /autorizar|copiar (?:convite|endereço)|revise e autorize/i);
     assert.equal(container.querySelector(".connect-guidance details"), null);
     assert.equal(container.querySelector("form"), null);
     assert.equal(container.querySelector(".connect-consent"), null);
@@ -3243,7 +3243,7 @@ test("guidance failed capability only offers observation and cleanup until the a
   await click("Encerrar Connect");
   assert.equal(nextStep(), "Reabra o aplicativo para verificar o Connect.");
   assert.match(container.textContent, /Recursos liberados/);
-  assert.doesNotMatch(container.textContent, /autorizar|copiar|revise e autorize/i);
+  assert.doesNotMatch(container.textContent, /autorizar|copiar (?:convite|endereço)|revise e autorize/i);
   assert.deepEqual(copied, []);
   assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot", "connect_snapshot", "connect_stop"]);
 });
@@ -3281,14 +3281,12 @@ for (const phase of ["closed", "failed"]) test(`online compact mode preserves te
   if (phase === "failed") assert.match(container.textContent, /Não foi possível confirmar a continuidade da sessão a tempo/);
   assert.equal(container.querySelector("form.connect-form"), null);
   assert.equal(container.querySelectorAll("#connect-social-title").length, 1);
-  assert.deepEqual([...container.querySelectorAll("button")].map(element => element.textContent), phase === "failed" ? ["Preparar para IA", "Atualizar estado"] : ["Atualizar estado"]);
+  assert.deepEqual([...container.querySelectorAll("button")].map(element => element.textContent), phase === "failed" ? ["Copiar erro", "Atualizar estado"] : ["Atualizar estado"]);
   assert.deepEqual(copied, []);
   if (phase === "failed") {
-    await click("Preparar para IA");
-    const dialog = document.querySelector("dialog");
-    const copyButton = [...dialog.querySelectorAll("button")].find(item => item.textContent === "Copiar para minha IA");
-    await act(async () => copyButton.click());
-    assert.match(copied.at(-1), /servidor de Minecraft Java[\s\S]*continuidade da sessão a tempo/);
+    await click("Copiar erro");
+    assert.equal(document.querySelector("dialog"), null);
+    assert.match(copied.at(-1), /continuidade da sessão a tempo/);
     assert.doesNotMatch(copied.at(-1), /11111111|127\.0\.0\.1|connect_social_continuity_lost/);
   }
   assert.deepEqual(calls.map(call => call.command), ["connect_capabilities", "connect_snapshot"]);

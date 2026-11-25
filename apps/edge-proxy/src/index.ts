@@ -1,17 +1,11 @@
+import { publicInvitePage } from "./publicInvite.ts";
 import { SkinService } from "./skins/SkinService.ts";
 import { SkinApiError } from "./skins/http.ts";
 import { skinImageUrl, type PlayerSkinEnv } from "./skins/models.ts";
-import { handleProjectTranslation } from "./translation.ts";
-import { aiFailureResponse, GeminiFailure } from "./gemini.ts";
 import { readDoctorJson, withDoctorAbort } from "../../../shared/doctorTransport.ts";
 
 export interface Env extends PlayerSkinEnv {
   FIREBASE_PROJECT_ID: string;
-  GEMINI_API_KEY?: string;
-  GEMINI_API_KEY_2?: string;
-  GEMINI_API_KEY_3?: string;
-  GEMINI_KEY_ORDER?: string;
-  GEMINI_FALLBACK_MODEL?: string;
   CURSEFORGE_API_KEY: string;
   mcstat_API_KEY?: string;
   MCSTAT_API_KEY?: string;
@@ -2075,6 +2069,9 @@ export default {
       });
     }
     const url = new URL(request.url);
+    if ((request.method === "GET" || request.method === "HEAD") && url.pathname.startsWith("/join/")) {
+      return publicInvitePage(request, url);
+    }
     if (request.method === "GET" && url.pathname === "/health") {
       return json({ status: "ok", service: "aurora-api", revision: auroraApiRevision });
     }
@@ -2098,16 +2095,9 @@ export default {
       return await mcstatSkinAsset(url.pathname);
     }
     if (request.method !== "POST") return error("Rota não encontrada.", 404);
-    if (!["/v1/curseforge", "/v1/appearance", "/v1/translate"].includes(url.pathname)) return error("Rota não encontrada.", 404);
-    const translationDeadline = url.pathname === "/v1/translate"
-      ? AbortSignal.any([request.signal, AbortSignal.timeout(35_000)]) : undefined;
+    if (!["/v1/curseforge", "/v1/appearance"].includes(url.pathname)) return error("Rota não encontrada.", 404);
     try {
-      if (translationDeadline && (request.headers.get("Authorization")?.length ?? 0) > 16_384) {
-        return error("A sessão Aurora não é válida.", 401);
-      }
-      const claims = translationDeadline
-        ? await withDoctorAbort(verifyFirebaseToken(request, env, translationDeadline), translationDeadline)
-        : await verifyFirebaseToken(request, env);
+      const claims = await verifyFirebaseToken(request, env);
       const userId = claims.user_id ?? claims.sub;
       if (url.pathname === "/v1/curseforge") {
         // CurseForge update scans are deliberately split into <=4 projects so
@@ -2115,21 +2105,13 @@ export default {
         // authenticated route its own bounded budget; appearance requests
         // keep the stricter shared budget below.
         enforceRateLimit(`curseforge:${userId}`, 48);
-      } else if (url.pathname === "/v1/translate") {
-        enforceRateLimit(`translation:${userId}`, 24);
       } else {
         enforceRateLimit(userId);
       }
-      if (url.pathname === "/v1/translate") return await handleProjectTranslation(request, env, translationDeadline);
       if (url.pathname === "/v1/curseforge") return await curseForgeCatalog(request, env, userId);
       if (url.pathname === "/v1/appearance") return await uploadAppearance(request, env, userId);
       return error("Rota não encontrada.", 404);
     } catch (cause) {
-      if (translationDeadline) {
-        if (translationDeadline.aborted) return aiFailureResponse(new GeminiFailure("timeout", 504));
-        if (cause instanceof PublicError && cause.status === 429) return aiFailureResponse(new GeminiFailure("quota", 429));
-        return aiFailureResponse(new GeminiFailure("session", 401));
-      }
       const message = cause instanceof Error ? cause.message : "Não foi possível concluir a solicitação.";
       const status = cause instanceof PublicError
         ? cause.status

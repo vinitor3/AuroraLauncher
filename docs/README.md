@@ -11,7 +11,7 @@
 | Recuperar a senha | Em **Recuperação da conta**, vincule e confirme seu e-mail enquanto tem acesso. Depois, use **Esqueci minha senha** na tela de entrada. O nick no jogo continua o mesmo. |
 | Mudar o tema | Abra **Personalização**, escolha ou edite um tema e salve. Use a **Prévia de 10 s** e confirme. `Ctrl+Shift+F12` restaura a aparência padrão. |
 | Jogar com amigos | Abra o mundo para LAN e anuncie em **Amigos e comunidade → Compartilhar mundo**. Num anúncio privado, abra **Convites** e clique em **Convidar** ao lado do amigo. Quem recebe usa **Entrar** e segue as etapas da sessão. |
-| Entender um erro | Abra o diagnóstico da instância ou a ajuda para copiar um resumo. Confira o texto e cole na IA ou no atendimento de sua preferência. |
+| Entender um erro | No console da instância, escolha **Log do jogo** ou **Último crash** e copie o texto. Para um arquivo de servidor, use **Copiar log ou crash** na barra lateral. |
 
 ## Referência técnica
 

@@ -1,62 +1,83 @@
 import type { DoctorReport } from "../doctor/types";
 
-export const supportSources = ["Launcher", "Minecraft", "Servidor"] as const;
-export type SupportSource = (typeof supportSources)[number];
+export type SupportSource = "Launcher" | "Minecraft" | "Servidor";
+const limit = 64 * 1024;
+const omitted = "\n[… trecho omitido …]\n";
+const sensitive = /(?:token|password|passwd|senha|authorization|cookie|session[_-]?id|credential|secret|api[_ -]?key|private[_ -]?key|bearer\s|--username|--uuid|invitation|convite|webhook|<[^>\s]+>\s|\[chat\]|eyJ[A-Za-z0-9_-]+\.|^[A-Za-z0-9+/=]{48,}$)/i;
+const parserDiagnostic = /\b(unexpected token)\b([ \t]+(?:BEGIN_OBJECT|END_OBJECT|BEGIN_ARRAY|END_ARRAY|END_DOCUMENT|NAME|STRING|NUMBER|BOOLEAN|NULL)\b)?.*$/i;
 
-// Emit only known labels and bounded version/exit numbers. Server logs may
-// contain arbitrary chat, launch credentials, invitations and private paths.
-const signals: [RegExp, string][] = [
-  [/OutOfMemoryError|Java heap space|could not reserve enough space/i, "Memória insuficiente na JVM"],
-  [/UnsupportedClassVersionError|compiled by a more recent version/i, "Versão incompatível do Java (UnsupportedClassVersionError)"],
-  [/ClassNotFoundException|NoClassDefFoundError/i, "Classe ausente (ClassNotFoundException / NoClassDefFoundError)"],
-  [/MixinApplyError|InvalidMixinException|MixinTransformerError|mixin apply.*failed/i, "Falha ao aplicar um mixin"],
-  [/incompatible mod set|incompatible mods|incompatible version/i, "Versões incompatíveis de mods ou loader"],
-  [/missing (?:required |mandatory )?dependenc|requires.+which is missing/i, "Dependência obrigatória ausente"],
-  [/duplicate mods?|duplicate mod id/i, "Mod duplicado"],
-  [/ZipException|invalid (?:loc|cen) header/i, "Arquivo ZIP ou JAR inválido (ZipException)"],
-  [/failed to bind to port|BindException|address already in use/i, "Falha ao abrir a porta de rede"],
-  [/UnknownHostException|unresolvedaddress/i, "Falha ao resolver o endereço de rede"],
-  [/SocketTimeoutException|timed? out|tempo limite/i, "Tempo limite de conexão excedido"],
-  [/ConnectException|connection refused|conexão recusada/i, "Conexão recusada"],
-  [/connection reset|SocketException|Broken pipe/i, "Conexão interrompida"],
-  [/SSLHandshakeException|PKIX path building failed/i, "Falha na validação do certificado TLS"],
-  [/server watchdog|a single server tick took/i, "O watchdog detectou um tick de servidor muito longo"],
-  [/ticking (?:entity|block entity)/i, "Falha ao atualizar entidade ou bloco"],
-  [/NullPointerException/i, "NullPointerException"],
-  [/StackOverflowError/i, "StackOverflowError"],
-  [/AccessDeniedException|permission denied|acesso negado/i, "Acesso ao arquivo ou recurso negado"],
-  [/FileNotFoundException|NoSuchFileException/i, "Arquivo não encontrado"],
-  [/GLFW error|Failed to create window|pixel format not accelerated/i, "Falha gráfica ao iniciar o jogo"],
-  [/failed to verify username|authentication servers are down|invalid session/i, "Falha de autenticação da sessão"],
-  [/failed to synchronize registry|mismatched mod channel|registry remapping failed/i, "Cliente e servidor divergiram ao sincronizar mods ou registros"],
-];
-
-export function technicalSignals(log: string): string[] {
-  // Bound work even on huge pasted crash reports. Preserve header and tail.
-  const sample = log.length > 65536 ? log.slice(0, 32768) + "\n" + log.slice(-32768) : log;
-  const result: string[] = [];
-  const version = /\bMinecraft(?: Version)?[:\s]+(\d{1,2}\.\d{1,2}(?:\.\d{1,2})?)\b/i.exec(sample);
-  const exit = /\b(?:exit code|código de saída)[:\s]+(-?\d{1,10})\b/i.exec(sample);
-  if (version) result.push("Minecraft " + version[1]);
-  if (exit) result.push("Código de saída " + exit[1]);
-  for (const [matches, label] of signals) if (matches.test(sample)) result.push(label);
-  return result;
+export function supportExcerpt(raw: string): string {
+  if (raw.includes("\0")) return "";
+  const text = raw.replace(/-----BEGIN [^\r\n]*?-----[\s\S]*?(?:-----END [^\r\n]*?-----|$)/g, "")
+    .split(/\r?\n/).filter(line => !sensitive.test(line.replace(parserDiagnostic, "")))
+    // Parsers can quote arbitrary input after this message, including credentials.
+    .map(line => line.replace(parserDiagnostic, "$1$2")
+      .replace(/(?:https?|wss?|ftp):\/\/\S+/gi, "[URL]")
+      .replace(/\b[\w.%+-]+@[\w.-]+\.[a-z]{2,}\b/gi, "[e-mail]")
+      .replace(/(?:[a-z]:[\\/]|\\\\|\/(?:Users|home|mnt|private|var|tmp)\/)[^\r\n]*/gi, "[caminho]")
+      .replace(/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b/g, "[endereço]")
+      .replace(/(?<!\w)(?=[a-f0-9:]*:[a-f0-9:]*:)[a-f0-9:]{3,}(?!\w)/gi, "[endereço]")
+      .replace(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi, "[ID]"))
+    .join("\n").trim();
+  return text.length <= limit ? text : text.slice(0, limit / 2) + omitted + text.slice(-limit / 2);
 }
 
-// Only run when the player explicitly adds an excerpt to the editable message.
-export function supportExcerpt(raw: string): string {
-  const input = raw.slice(-65536);
-  if (/-----BEGIN [^-]*(?:PRIVATE KEY|CERTIFICATE)-----/i.test(input)) return "";
-  const sensitive = /(?:token|password|passwd|senha|authorization|cookie|sessionid|credential|secret|api[_ -]?key|private[_ -]?key|bearer\s|--username|--uuid|invitation|convite|webhook|<[^>\s]+>\s|\[chat\]|eyJ[A-Za-z0-9_-]+\.)/i;
-  const lines = input.split(/\r?\n/).slice(-40).filter(line => line.trim() && !sensitive.test(line));
-  return lines.map(line => line
-    .replace(/(?:https?|wss?|ftp):\/\/\S+/gi, "[URL]")
-    .replace(/\b[\w.%+-]+@[\w.-]+\.[a-z]{2,}\b/gi, "[e-mail]")
-    .replace(/(?:[a-z]:[\\/]|\\\\|\/(?:Users|home|mnt|private|var|tmp)\/)[^\r\n]*/gi, "[caminho]")
-    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b/g, "[endereço]")
-    .replace(/(?<!\w)(?=[a-f0-9:]*:[a-f0-9:]*:)[a-f0-9:]{3,}(?!\w)/gi, "[endereço]")
-    .replace(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi, "[ID]")
-    .slice(0, 320)).join("\n").slice(-4000).trim();
+type LogEncoding = "utf-8" | "utf-16le" | "utf-16be";
+const invalidText = "O arquivo contém dados binários ou uma codificação de texto não reconhecida.";
+
+function logEncoding(bytes: Uint8Array): LogEncoding {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be";
+  // BOM-less Java and Windows logs commonly start with ASCII text. Require
+  // printable ASCII code units with consistently aligned zero bytes.
+  const pairs = Math.min(128, Math.floor(bytes.length / 2));
+  let little = 0, big = 0;
+  const printable = (byte: number) => (byte >= 32 && byte <= 126) || byte === 9 || byte === 10 || byte === 13;
+  for (let i = 0; i < pairs * 2; i += 2) {
+    if (bytes[i + 1] === 0 && printable(bytes[i])) little++;
+    if (bytes[i] === 0 && printable(bytes[i + 1])) big++;
+  }
+  if (pairs >= 8 && little >= pairs * .7 && big === 0) return "utf-16le";
+  if (pairs >= 8 && big >= pairs * .7 && little === 0) return "utf-16be";
+  return "utf-8";
+}
+
+function decodeLog(bytes: Uint8Array, encoding: LogEncoding, partialEnd = false): string {
+  let text: string;
+  try {
+    text = new TextDecoder(encoding, { fatal: true }).decode(bytes, { stream: partialEnd });
+  } catch {
+    throw new Error(invalidText);
+  }
+  if (/[\u0000-\u0008\u000b\u000e-\u001a\u001c-\u001f\u007f]/.test(text)) throw new Error(invalidText);
+  return text;
+}
+
+export async function readSupportFile(file: File): Promise<string> {
+  const maxBytes = 512 * 1024;
+  if (!/\.(?:log|txt|crash)$/i.test(file.name)) throw new Error("Escolha um arquivo .log, .txt ou .crash.");
+  const clipped = file.size > maxBytes;
+  const firstBytes = new Uint8Array(await file.slice(0, clipped ? maxBytes / 2 : file.size).arrayBuffer());
+  const encoding = logEncoding(firstBytes);
+  if (encoding !== "utf-8" && file.size % 2 !== 0) throw new Error(invalidText);
+  const head = decodeLog(firstBytes, encoding, clipped);
+  if (!clipped) return supportExcerpt(head);
+  let lastBytes = new Uint8Array(await file.slice(-maxBytes / 2).arrayBuffer());
+  if (encoding === "utf-8") {
+    let offset = 0;
+    while (offset < 3 && (lastBytes[offset] & 0xc0) === 0x80) offset++;
+    lastBytes = lastBytes.subarray(offset);
+  } else {
+    const unit = new DataView(lastBytes.buffer).getUint16(0, encoding === "utf-16le");
+    if (unit >= 0xdc00 && unit <= 0xdfff) lastBytes = lastBytes.subarray(2);
+  }
+  const tail = decodeLog(lastBytes, encoding);
+  // Drop incomplete lines and PEM fragments crossing either read boundary.
+  const first = head.slice(0, Math.max(0, head.lastIndexOf("\n")));
+  const end = tail.indexOf("\n");
+  const last = end === -1 ? "" : tail.slice(end + 1).replace(/^[\s\S]*?-----END [^\r\n]*?-----/, "");
+  const parts = [supportExcerpt(first), supportExcerpt(last)].filter(Boolean);
+  return parts.length ? supportExcerpt(parts.join(omitted)) : "";
 }
 
 export function formatDoctorContext(report: DoctorReport): string {
@@ -73,15 +94,4 @@ export function formatDoctorContext(report: DoctorReport): string {
     ...report.issues.map(issue => `${issue.kind === "fact" ? "Fato observado" : "Hipótese"} · ${issue.title}. ${issue.explanation}`),
     ...report.limitations,
   ].filter(Boolean).join("\n");
-}
-
-export function buildSupportPrompt(source: SupportSource, context: string, log: string) {
-  const findings = technicalSignals(log);
-  return [
-    `Preciso de ajuda com ${source === "Launcher" ? "o Aurora Launcher" : source === "Minecraft" ? "o Minecraft Java" : "um servidor de Minecraft Java"}.`,
-    "Explique em português o que os dados permitem concluir, quais informações ainda faltam e qual teste reversível posso fazer primeiro.",
-    context,
-    findings.length ? "Sinais encontrados no texto local:\n" + findings.map(item => "• " + item).join("\n")
-      : log.trim() ? "Nenhum sinal técnico reconhecido. Descreva aqui o erro observado." : "",
-  ].filter(Boolean).join("\n\n");
 }

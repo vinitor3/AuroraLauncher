@@ -2,7 +2,7 @@
 
 O Aurora Core é o mod-base obrigatório para as instâncias Fabric/Forge suportadas pelo Aurora. O Launcher escolhe o artefato pela matriz central, valida assinatura e hash, instala Core → Skins e só então inicia o IPC.
 
-O Assistente permanece no Aurora Launcher; o mod Companion e sua integração in-game foram retirados. O Core não oferece página de Assistente nem substitui a ponte removida. Veja [IPC do Core](core-ipc.md).
+O Core se comunica com o launcher pelo [IPC local](core-ipc.md).
 
 ## APIs públicas
 

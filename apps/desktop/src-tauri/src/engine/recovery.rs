@@ -584,8 +584,7 @@ pub(crate) fn verify(p: &Path, file: &RecoveryFile) -> Result<()> {
 }
 fn identity(instance: &Instance, create: bool) -> Result<Option<Identity>> {
     let p = path(instance.root(), IDENTITY)?;
-    let filesystem_identity =
-        super::ai_tools::instance_identity(instance).map_err(|_| RecoveryError::Identity)?;
+    let filesystem_identity = filesystem_identity(instance)?;
     if p.exists() {
         let id: Identity = parse(&read_bounded(&p, 4096)?)?;
         valid_id(&id.uuid)?;
@@ -1258,7 +1257,51 @@ pub struct RecoveryObservation {
 }
 
 pub fn filesystem_identity(instance: &Instance) -> Result<String> {
-    super::ai_tools::instance_identity(instance).map_err(|_| RecoveryError::Identity)
+    for path in instance.root().ancestors() {
+        let metadata = fs::symlink_metadata(path).map_err(|_| RecoveryError::Identity)?;
+        if !metadata.is_dir() || metadata_is_link(&metadata) {
+            return Err(RecoveryError::Identity);
+        }
+    }
+    #[cfg(windows)]
+    let identity = {
+        use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+        #[repr(C)]
+        struct Info {
+            values: [u32; 13],
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetFileInformationByHandle(handle: *mut std::ffi::c_void, info: *mut Info) -> i32;
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(0x0220_0000)
+            .open(instance.root())
+            .map_err(|_| RecoveryError::Identity)?;
+        let mut info = Info { values: [0; 13] };
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+            return Err(RecoveryError::Identity);
+        }
+        format!(
+            "windows:{}:{}:{}:{}:{}",
+            info.values[7], info.values[11], info.values[12], info.values[1], info.values[2]
+        )
+    };
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = fs::metadata(instance.root()).map_err(|_| RecoveryError::Identity)?;
+        format!(
+            "unix:{}:{}:{:?}",
+            metadata.dev(),
+            metadata.ino(),
+            metadata.created().ok()
+        )
+    };
+    #[cfg(not(any(windows, unix)))]
+    let identity = return Err(RecoveryError::Identity);
+    Ok(format!("{:x}", Sha256::digest(identity.as_bytes())))
 }
 
 pub fn identity_lookup(instance: &Instance) -> Result<Option<String>> {

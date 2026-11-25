@@ -22,4 +22,6 @@ Na tela de entrada, **Esqueci minha senha** envia um link de uso único ao e-mai
 
 Use o provedor **E-mail/senha**, a proteção contra enumeração de e-mails, um domínio autorizado para as ações e os modelos de confirmação de troca de e-mail e redefinição de senha. O manipulador padrão do Firebase conclui as ações no navegador. [Documentação do Firebase Auth](https://firebase.google.com/docs/auth/custom-email-handler)
 
+No projeto oficial, o nome de remetente publicado no modelo de verificação é **Aurora Smart Launcher**. A página dos links de conta fica em **auroralauncher.firebaseapp.com**. O Firebase fornece o assunto e o corpo desse modelo. O vínculo de um endereço a um nick usa a operação `VERIFY_AND_CHANGE_EMAIL`, que a API administrativa não expõe como modelo separado. [Modelos disponíveis na Identity Platform](https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/Config#SendEmail)
+
 As chaves públicas identificam o projeto e podem estar no aplicativo. Nunca adicione chaves de conta de serviço, credenciais administrativas ou tokens privados ao cliente.

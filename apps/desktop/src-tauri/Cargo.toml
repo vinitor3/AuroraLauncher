@@ -1,6 +1,6 @@
 [package]
 name = "aurora-launcher-core"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 edition = "2021"
 description = "Aurora Smart Launcher - Module A engine"
 license = "GPL-3.0-only"
@@ -8,7 +8,7 @@ license = "GPL-3.0-only"
 [features]
 # Distribution opt-in. Reuses the authenticated engines, not their cfg(test) fixtures.
 connect-online = ["connect-lab", "connect-voice-lab"]
-connect-lab = ["dep:aurora-connect-lab", "dep:tokio", "dep:tokio-util", "dep:windows-sys", "dep:toml"]
+connect-lab = ["dep:aurora-connect-lab", "dep:tokio-util", "dep:windows-sys", "dep:toml"]
 connect-voice-lab = ["dep:toml"]
 
 [dependencies]
@@ -28,10 +28,11 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 fs2 = "0.4"
 toml = { version = "=0.9.12", optional = true, default-features = false, features = ["parse", "serde", "std"] }
 aurora-connect-lab = { path = "../../connect-lab", optional = true }
-tokio = { version = "1", optional = true, features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
 tokio-util = { version = "0.7", optional = true, features = ["rt"] }
 
 [target.'cfg(windows)'.dependencies]
+dirs = "6"
 windows-sys = { version = "=0.61.2", optional = true, features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security", "Win32_Storage_FileSystem", "Win32_Networking_WinSock", "Win32_NetworkManagement_IpHelper"] }
 
 [build-dependencies]

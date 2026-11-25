@@ -8,10 +8,12 @@ mod commands;
 mod commands_native_voice;
 mod connect_commands;
 mod discord;
+mod discord_mods;
 mod doctor_runs;
 mod launcher_sessions;
 mod manual_downloads;
 mod player_profiles;
+mod public_invites;
 mod themes;
 mod voice_announcement_commands;
 
@@ -98,8 +100,21 @@ fn create_launcher_tray(app: &tauri::App) -> tauri::Result<()> {
 }
 
 fn main() {
+    let context = tauri::generate_context!();
+    #[cfg(windows)]
+    let invitation = public_invites::from_arguments(std::env::args_os().skip(1));
+    #[cfg(windows)]
+    if let (Some(id), Some(data)) = (invitation, dirs::data_dir()) {
+        let data = data.join(&context.config().identifier);
+        if tauri::async_runtime::block_on(public_invites::windows::forward(&data, id)) {
+            return;
+        }
+    }
     tauri::Builder::default()
-        .setup(|app| {
+        .manage(public_invites::PendingInvite::default())
+        .setup(move |app| {
+            #[cfg(windows)]
+            public_invites::windows::initialize(app, invitation);
             // Only the isolated debug social profile accepts its parent's public
             // authority pin. It is never read from WebView state or an IPC call.
             let connect = {
@@ -175,7 +190,6 @@ fn main() {
         .manage(doctor_runs::DoctorRuns::default())
         .manage(manual_downloads::ManualDownloads::default())
         .manage(themes::ThemeState::default())
-        .manage(aurora_launcher_core::engine::ai_tools::AiToolBroker::default())
         .manage(aurora_launcher_core::engine::connect_discovery::DiscoveryManager::default())
         .manage(
             aurora_launcher_core::engine::connect_voice_desktop::VoiceAnnouncementManager::default(
@@ -183,6 +197,8 @@ fn main() {
         )
         .invoke_handler(tauri::generate_handler![
             discord::discord_default_application_id,
+            discord::discord_reply_to_request,
+            commands::discord_instance_has_presence_mod,
             discord::discord_set_presence,
             discord::discord_clear_presence,
             voice_announcement_commands::voice_announcement_capabilities,
@@ -252,6 +268,7 @@ fn main() {
             connect_commands::connect_probe_status,
             connect_commands::connect_stop,
             launcher_sessions::launcher_auth_scope,
+            public_invites::take_public_invite,
             launcher_request_exit,
             themes::themes_load,
             themes::themes_save,
@@ -321,10 +338,6 @@ fn main() {
             commands::cancel_instance_launch,
             commands::read_latest_doctor_run,
             commands::analyze_instance,
-            commands::confirm_ai_tool,
-            commands::revoke_ai_tool_plan,
-            commands::prepare_ai_tool_undo,
-            commands::ai_tool_history,
             commands::list_running_instances,
             commands::poll_ipc_events,
             commands::validate_appearance_url,
@@ -345,7 +358,7 @@ fn main() {
             commands::load_firebase_config,
             commands::save_firebase_config,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("erro ao preparar o Aurora Smart Launcher")
         .run(|app, event| {
             if matches!(event, RunEvent::Exit) {

@@ -105,7 +105,7 @@ export function DiagnosticLabView({ instanceId, busy, runningIds, javaExecutable
     subscribe<DoctorRun>("aurora-doctor-run", (run) => {
       if (run.instanceId === selectedContext.current) { setLatestRun(run); invalidatePreview(); }
     });
-    for (const event of ["aurora-recovery-changed", "aurora-ai-tool-changed", "aurora-diagnostic-lab-changed"]) {
+    for (const event of ["aurora-recovery-changed", "aurora-diagnostic-lab-changed"]) {
       subscribe<{ instanceId: string }>(event, (payload) => {
         if (payload.instanceId === instanceId || payload.instanceId === selectedContext.current) invalidatePreview();
       });

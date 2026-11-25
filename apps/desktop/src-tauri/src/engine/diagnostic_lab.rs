@@ -168,9 +168,7 @@ fn record(instance: &Instance) -> Result<Record> {
     if rec.environment.instance_uuid == rec.environment.origin_uuid {
         return Err(RecoveryError::Identity);
     }
-    if super::ai_tools::instance_identity(instance).map_err(|_| RecoveryError::Identity)?
-        != rec.filesystem_identity
-    {
+    if super::recovery::filesystem_identity(instance)? != rec.filesystem_identity {
         return Err(RecoveryError::Identity);
     }
     let deleting = marker(data(instance)?, instance.id().as_str(), "deleting.json")?.exists();
@@ -869,8 +867,7 @@ pub fn create(
     env.instance_uuid = recovery::capture_observation(&test, &test_guard)?.instance_uuid;
     let rec = Record {
         version: 1,
-        filesystem_identity: super::ai_tools::instance_identity(&test)
-            .map_err(|_| RecoveryError::Identity)?,
+        filesystem_identity: super::recovery::filesystem_identity(&test)?,
         environment: env.clone(),
         baseline_settings: settings(source, &baseline)?,
         baseline,
@@ -1060,8 +1057,7 @@ pub fn begin_runtime_copy(
     environment.instance_uuid = recovery::capture_observation(&instance, &guard)?.instance_uuid;
     let record = Record {
         version: 1,
-        filesystem_identity: super::ai_tools::instance_identity(&instance)
-            .map_err(|_| RecoveryError::Identity)?,
+        filesystem_identity: super::recovery::filesystem_identity(&instance)?,
         environment: environment.clone(),
         baseline,
         baseline_settings: Vec::new(),

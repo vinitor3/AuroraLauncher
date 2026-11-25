@@ -61,7 +61,7 @@ export function ConnectPanel({ status, busy, onInvite }: {
 }
 ```
 
-Autenticação, convites, autorização de participantes, endereços, códigos de sessão, rede e sua confirmação permanecem na implementação de Connect. Nunca acrescente esses valores ao documento de aparência ou às instruções copiadas para uma IA externa. O tema não muda o destino de um botão nem concede uma operação nova.
+Autenticação, convites, autorização de participantes, endereços, códigos de sessão, rede e sua confirmação permanecem na implementação de Connect. Nunca acrescente esses valores ao documento de aparência. O tema não muda o destino de um botão nem concede uma operação nova.
 
 ## Tokens e funcionamento antes do provider
 

@@ -2,13 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import type { ConnectSnapshot } from "../connect/types";
 import { ReadyCopyPicker } from "./ReadyCopyPicker";
+import type { SocialPlayRequest } from "./socialPlay";
 import {
   isReadyGameError, readyGameCapabilitySupports, readyGameContextFingerprint, readyGameError, readyGameSnapshotFrom,
   sameReadyGameContext, validReadyGameContext, type ReadyGameLaunchCapability, type ReadyGameLaunchContext,
   type ReadyGameLaunchReview, type ReadyGameLaunchSnapshot,
 } from "./types";
 
-type Props = { capability?: ReadyGameLaunchCapability; session?: ConnectSnapshot; launchContext?: ReadyGameLaunchContext; observeExisting?: boolean; sessionStale?: boolean; onChooseSource?: () => void; revealRequest?: number; revealReady?: boolean };
+type Props = { capability?: ReadyGameLaunchCapability; session?: ConnectSnapshot; launchContext?: ReadyGameLaunchContext; observeExisting?: boolean; sessionStale?: boolean; onChooseSource?: () => void; revealRequest?: number; revealReady?: boolean; socialPlay?: SocialPlayRequest };
 type Action = "prepare" | "confirm" | "cancel";
 const active = (snapshot?: ReadyGameLaunchSnapshot) => !!snapshot && ["preparing", "reviewed", "starting"].includes(snapshot.phase);
 const hostPlayer = (session?: ConnectSnapshot) => session?.role === "host" && session.social?.role === "host"
@@ -22,7 +23,7 @@ const connected = (session?: ConnectSnapshot) => !!session?.tcpAddress
 const date = (value: number) => new Date(value).toLocaleTimeString("pt-BR");
 const readClocks = () => ({ wall: Date.now(), monotonic: performance.now() });
 
-export function ConnectGameLaunchPanel({ capability, session, launchContext: sourceLaunchContext, observeExisting = false, sessionStale = false, onChooseSource, revealRequest = 0, revealReady = true }: Props) {
+export function ConnectGameLaunchPanel({ capability, session, launchContext: sourceLaunchContext, observeExisting = false, sessionStale = false, onChooseSource, revealRequest = 0, revealReady = true, socialPlay }: Props) {
   const operationId = session?.operationId ?? undefined;
   const heading = useRef<HTMLHeadingElement>(null);
   const revealed = useRef(0);
@@ -31,6 +32,7 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
   const [snapshot, setSnapshot] = useState<ReadyGameLaunchSnapshot>();
   const [selectedId, setSelectedId] = useState("");
   const [copyJava, setCopyJava] = useState<{ id: string; source: string; path: string }>();
+  const suggestion = useRef<{ gesture: SocialPlayRequest; id: string } | undefined>(undefined);
   const launchContext = sourceLaunchContext && copyJava && selectedId === copyJava.id && sourceLaunchContext.sourceInstanceId === copyJava.source
     ? { ...sourceLaunchContext, javaExecutable: copyJava.path } : sourceLaunchContext;
   const fingerprint = readyGameContextFingerprint(launchContext);
@@ -213,7 +215,20 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
     if (sessionStale || !capability || !connected(session) || !supportedReview) setAcknowledged(false);
   }, [sessionStale, capability, supportedReview, session?.phase, session?.transportState, session?.cleanupState, session?.tcpAddress]);
   const currentReview = review && supportedReview && review.instanceId === selectedId && reviewCurrent(review, session, now);
-  const canConfirm = !!capability && connected(session) && !sessionStale && !!currentReview && acknowledged && !pending && !uncertain && !warning;
+  const social = session?.social;
+  const matchingGesture = socialPlay && revealReady && !sessionStale && connected(session) && social?.readyGameLaunchAvailable
+    && socialPlay.operationId === operationId && socialPlay.sessionId === social.sessionId && socialPlay.contextKey === sourceLaunchContext?.contextKey
+    && (social.stage === "connected" || hostPlayer(session) && social.stage === "waitingGuest") ? socialPlay : undefined;
+  // The button itself authorizes this exact displayed review. Additional files and voice still require their explicit consent.
+  const playButton = !!matchingGesture && !!review && !social?.voiceProfile && !review.voice;
+  const canConfirm = !!capability && connected(session) && !sessionStale && !!currentReview && (acknowledged || playButton) && !pending && !uncertain && !warning;
+
+  useEffect(() => {
+    const next = suggestion.current;
+    if (!next) return;
+    suggestion.current = undefined;
+    if (next.gesture === matchingGesture && next.id === selectedId && snapshot?.phase === "idle" && !social?.voiceProfile && canStartNew) prepare();
+  }, [matchingGesture, selectedId, snapshot?.phase, social?.voiceProfile, canStartNew]);
 
   function prepare() {
     if (!canStartNew || !selectedId || !operationId || !validReadyGameContext(launchContext)) return;
@@ -256,6 +271,13 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
     {uncertain && <p role="status">Aguardando uma observação que confirme o resultado. Nenhum lançamento será repetido automaticamente.</p>}
     {pending && <p role="status">{pending === "prepare" ? "Conferindo a cópia…" : pending === "confirm" ? "Iniciando a cópia…" : "Cancelando o preparo…"}</p>}
     {launchContext && <ReadyCopyPicker sourceInstanceId={launchContext.sourceInstanceId} contextKey={launchContext.contextKey}
+      socialPlay={snapshot?.phase === "idle" ? matchingGesture : undefined}
+      onSuggested={(id, java, gesture) => {
+        if (gesture !== matchingGesture) return;
+        suggestion.current = { gesture, id };
+        setSelectedId(id); setCopyJava(java ? { id, source: launchContext.sourceInstanceId, path: java } : undefined);
+        setAcknowledged(false);
+      }}
       connectOperationId={operationId} requiredProfile={session?.social?.runtimeProfile} voiceProfile={session?.social?.voiceProfile} disabled={!canChooseCopy} selectedId={selectedId}
       runtimes={capability && (capability.schemaVersion === 1 ? [capability] : capability.runtimes)}
       onSelect={(id, java) => {
@@ -289,11 +311,12 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
       <p>O jogo pode gravar dados nesta cópia, no cache de aparência do launcher e nos registros do Doctor e logs. Iniciar o processo não confirma entrada no mundo, áudio ou compatibilidade de contas.</p>
       {!currentReview && <p role="status">Esta revisão venceu ou mudou. Prepare uma nova revisão.</p>}
       {!supportedReview && <p role="status">Esta versão do launcher não oferece o perfil desta cópia. Atualize os dados ou cancele o preparo.</p>}
-      <label className="connect-consent"><input type="checkbox" checked={acknowledged} disabled={!currentReview || !!pending || uncertain || !capability || !connected(session) || sessionStale || !!warning}
+      {!playButton && <label className="connect-consent"><input type="checkbox" checked={acknowledged} disabled={!currentReview || !!pending || uncertain || !capability || !connected(session) || sessionStale || !!warning}
         onChange={event => setAcknowledged(event.target.checked)} />{review.voice?.mods.some(mod => mod.action === "install")
           ? "Autorizo instalar os mods listados nesta cópia de teste e abrir a cópia para tentar entrar nesta conexão."
-          : "Autorizo abrir esta cópia com os dados acima e tentar entrar nesta conexão."}</label>
-      <button className="primary" type="button" disabled={!canConfirm} onClick={confirm}>Iniciar cópia e tentar entrar</button>
+          : "Autorizo abrir esta cópia com os dados acima e tentar entrar nesta conexão."}</label>}
+      {playButton && <p>Ao clicar em Jogar agora, você autoriza abrir esta cópia no servidor e com o perfil mostrados acima.</p>}
+      <button className="primary" type="button" disabled={!canConfirm} onClick={confirm}>{playButton ? "Jogar agora" : "Iniciar cópia e tentar entrar"}</button>
     </section>}
     {snapshot?.phase === "starting" && <p role="status">A criação do processo está em andamento. Consulte o resultado antes de tentar outro lançamento.</p>}
     {snapshot?.phase === "started" && snapshot.result && <p role="status">A cópia foi iniciada e registrada no Doctor. Confira a entrada no mundo no Minecraft. Encerrar o Connect não fecha o jogo; saia pelo menu quando terminar.</p>}

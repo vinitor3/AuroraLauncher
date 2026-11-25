@@ -37,6 +37,18 @@ pub struct LauncherSessions {
 #[derive(Default)]
 pub struct LauncherSessionState(Mutex<Option<LauncherSessions>>);
 
+impl LauncherSessionState {
+    pub fn primary_for_invites(&self, directory: &Path) -> Result<bool, String> {
+        let mut sessions = self.0.lock().map_err(|_| SESSION_ERROR.to_owned())?;
+        if sessions.is_none() {
+            *sessions = Some(LauncherSessions::acquire(directory)?);
+        }
+        Ok(sessions
+            .as_ref()
+            .is_some_and(|sessions| sessions.main.persistent))
+    }
+}
+
 impl LauncherSessions {
     pub fn acquire(data_directory: &Path) -> Result<Self, String> {
         let directory = data_directory.join("launcher-sessions");

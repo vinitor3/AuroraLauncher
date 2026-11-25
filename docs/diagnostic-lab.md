@@ -10,11 +10,11 @@ As mudanças comparam hashes e o inventário das tentativas registradas. A tela 
 
 **Revisar restauração** abre a prévia já existente de Recuperação. Confirmar exige revisar o escopo e reconhecer que mundos não estão incluídos. O backend revalida o ponto e o estado atual e mantém a proteção para desfazer. A observação do Doctor não modifica o escopo dos pontos manuais. Falha ao salvar histórico não autoriza inventar uma associação nem deve impedir uma inicialização saudável.
 
-Históricos anteriores sem identidade verificável não são promovidos a evidência de mudanças. O diagnóstico original continua com seu comportamento compatível para registros legados. Novos registros acompanham a identidade física persistente da pasta em renomeações; exclusão e recriação não herdam tentativas. O inventário detalhado fica em armazenamento local separado do JSON sanitizado compartilhado com Gemini.
+Históricos anteriores sem identidade verificável não são promovidos a evidência de mudanças. O diagnóstico original continua com seu comportamento compatível para registros legados. Novos registros acompanham a identidade física persistente da pasta em renomeações; exclusão e recriação não herdam tentativas. O inventário detalhado fica em armazenamento local separado do relatório que a pessoa pode copiar.
 
 ## Criar e usar uma cópia
 
-No gerenciamento, abra **Cópias de teste**, ou use o acesso pelo Doctor. Feche o jogo da origem, escolha criar e aguarde as etapas de verificação e cópia. A origem permanece bloqueada contra instalações, updates, ações do Assistente e outra inicialização durante a captura. Processos Minecraft externos também são verificados antes e depois de adquirir o bloqueio.
+No gerenciamento, abra **Cópias de teste**, ou use o acesso pelo Doctor. Feche o jogo da origem, escolha criar e aguarde as etapas de verificação e cópia. A origem permanece bloqueada contra instalações, atualizações e outra inicialização durante a captura. Processos Minecraft externos também são verificados antes e depois de adquirir o bloqueio.
 
 A cópia recebe identificador reservado `aurora-test-<uuid>`, pasta própria em `instances`, identidade de recuperação nova, registros de tentativas e logs próprios. Sua proveniência registra o UUID da origem, nome na criação e fingerprint usado na captura. Renomear a origem não altera a associação; recriar uma pasta com o mesmo nome não a recupera. O identificador da cópia é conservado, mesmo que o nome de apresentação seja editado.
 

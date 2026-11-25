@@ -13,7 +13,6 @@ async function request<T>(
   path: string,
   body: Record<string, unknown>,
   timeoutMs = 25_000,
-  signal?: AbortSignal,
 ): Promise<T> {
   const user = services.auth.currentUser;
   if (!user) throw new Error("Entre na sua conta Aurora para continuar.");
@@ -26,10 +25,9 @@ async function request<T>(
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (cause) {
-    if (signal?.aborted) throw new DOMException("Tradução cancelada.", "AbortError");
     if (cause instanceof DOMException && cause.name === "TimeoutError") {
       throw new Error("O serviço Aurora demorou para responder. Tente novamente.");
     }
@@ -38,14 +36,6 @@ async function request<T>(
   const payload = await response.json().catch(() => null) as { error?: string } & T | null;
   if (!response.ok) throw new Error(payload?.error ?? "O serviço Aurora não está disponível agora.");
   return payload as T;
-}
-
-export async function translateProjectSegments(services: FirebaseServices, segments: string[], signal: AbortSignal) {
-  const result = await request<{ translations?: unknown }>(services, "/v1/translate", {
-    targetLanguage: "pt-BR",
-    segments,
-  }, 50_000, signal);
-  return result?.translations;
 }
 
 export async function uploadAuroraAppearanceImage(

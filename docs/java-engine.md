@@ -54,4 +54,4 @@ Doctor registra a memória efetiva da execução; a análise sem uma execução 
 
 `LaunchSettingsPanel` usa tokens semânticos `--theme-*` com fallbacks oficiais e o identificador estável `data-theme-surface="java-memory-settings"`. A integração segue `docs/theme-integration.md` na entrega de temas: cores/apresentação não alteram settings, permissões ou comandos. Não há alteração do schema JSONC, IDs de navegação nem migração de temas salvos. O editor da instância e o painel global chamam o backend nativo. Os comandos globais recebem a memória máxima e a opção de incluir as personalizações. O diretório e a revisão são definidos pelo backend.
 
-Assistente desktop, IPC e Core 1.1.5/Skins 0.3.1 foram preservados. Build/testes sintéticos não homologam Minecraft, loaders, Gemini, voz ou microfone. Evidências e roteiro restante: [tarefa Java/engine](https://github.com/vinitor3/AuroraLauncher/blob/088bf5b435b1b63e842c11ff1c01648b5e38bced/docs/task-java-engine.md).
+Consulte a [matriz de compatibilidade](../scripts/active-mod-matrix.json) para identificar as versões de Minecraft e Java cobertas pela distribuição.

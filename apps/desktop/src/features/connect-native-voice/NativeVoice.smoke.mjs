@@ -15,7 +15,8 @@ Object.defineProperty(globalThis, "navigator", { configurable: true, value: { us
 const modules = new Map();
 async function sourceModule(source) {
   if (modules.has(source.href)) return modules.get(source.href);
-  let code = ts.transpileModule(await readFile(source, "utf8"), { fileName: fileURLToPath(source), compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX } }).outputText;
+  let code = ts.transpileModule(await readFile(source, "utf8"), { fileName: fileURLToPath(source), compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX } }).outputText
+    .replace(/^import ["'][^"']+\.css["'];?$/gm, "");
   for (const { fileName: specifier } of ts.preProcessFile(code).importedFiles) {
     const dependency = specifier.startsWith(".") ? ["", ".ts", ".tsx"].map(ext => new URL(specifier + ext, source)).find(url => existsSync(fileURLToPath(url))) : undefined;
     const resolved = dependency ? await sourceModule(dependency) : pathToFileURL(require.resolve(specifier)).href;

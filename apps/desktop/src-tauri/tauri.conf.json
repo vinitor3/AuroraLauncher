@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Aurora Smart Launcher",
-  "version": "0.2.0-beta.2",
+  "version": "0.2.0-beta.3",
   "identifier": "com.aurora.smartlauncher",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -24,6 +24,9 @@
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://api.modrinth.com https://aurora-api.aurora-edge-proxy.workers.dev https://aurora-connect-social.aurora-edge-proxy.workers.dev https://minotar.net"
     }
+  },
+  "plugins": {
+    "deep-link": { "desktop": { "schemes": ["aurora-connect"] } }
   },
   "bundle": {
     "active": true,

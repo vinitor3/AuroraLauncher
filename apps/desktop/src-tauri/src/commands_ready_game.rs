@@ -642,6 +642,7 @@ impl PreparedReadyGame for DesktopPrepared {
                     process_id,
                     RunningInstance {
                         doctor: Some((doctor_app, run_id.clone())),
+                        started_at_ms: doctor_runs::now_ms(),
                         instance_id: result_instance.clone(),
                         child,
                         status_runtime,

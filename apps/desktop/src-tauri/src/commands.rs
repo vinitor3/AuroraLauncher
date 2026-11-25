@@ -12,10 +12,6 @@ use std::time::Duration;
 use crate::doctor_runs::{self, DoctorRuns};
 use aurora_launcher_core::engine::launch_settings::{self, LaunchSettings, LaunchSettingsOverview};
 use aurora_launcher_core::engine::{
-    ai_history,
-    ai_tools::{AiToolBroker, AiToolHistoryEntry, AiToolPlan},
-};
-use aurora_launcher_core::engine::{
     analyze_instance as analyze_doctor, canonical_launch_failure, snapshot_logs, DoctorContext,
     DoctorReport, DoctorRun,
 };
@@ -231,6 +227,8 @@ pub struct IpcSessions(Mutex<BTreeMap<u32, IpcServer>>);
 
 struct RunningInstance {
     doctor: Option<(AppHandle, String)>,
+    #[cfg(all(windows, feature = "connect-lab"))]
+    started_at_ms: u64,
     instance_id: String,
     child: Child,
     #[cfg(all(windows, feature = "connect-lab"))]
@@ -242,6 +240,25 @@ struct RunningInstance {
 
 #[derive(Default)]
 pub struct RunningInstances(Mutex<BTreeMap<u32, RunningInstance>>);
+
+#[cfg(all(windows, feature = "connect-lab"))]
+impl RunningInstances {
+    pub(crate) fn discord_game(&self) -> Option<crate::discord::GameDetail> {
+        let mut table = self.0.lock().ok()?;
+        if table.len() != 1 {
+            return None;
+        }
+        let game = table.values_mut().next()?;
+        if game.child.try_wait().ok()?.is_some() {
+            return None;
+        }
+        let profile = game.status_runtime.as_ref().map(|p| p.summary());
+        Some(crate::discord::GameDetail {
+            started_at_ms: game.started_at_ms,
+            profile: profile.map(|p| (p.minecraft_version, p.loader)),
+        })
+    }
+}
 
 #[cfg(all(windows, feature = "connect-lab"))]
 impl RunningInstances {
@@ -1936,6 +1953,20 @@ pub async fn rebind_instance_key(
 }
 
 #[tauri::command]
+pub async fn discord_instance_has_presence_mod(
+    app: AppHandle,
+    id: String,
+) -> Result<bool, &'static str> {
+    let id = InstanceId::parse(id).map_err(|_| "discord_mods_unavailable")?;
+    let instance = layout(&app)
+        .map_err(|_| "discord_mods_unavailable")?
+        .open(id);
+    tauri::async_runtime::spawn_blocking(move || crate::discord_mods::has_presence(instance.root()))
+        .await
+        .map_err(|_| "discord_mods_unavailable")?
+}
+
+#[tauri::command]
 pub fn list_instance_content(app: AppHandle, id: String) -> Result<InstanceContentSummary, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
     let instance = layout(&app)?.open(id);
@@ -2172,49 +2203,15 @@ pub fn open_instance_folder(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn read_instance_log(app: AppHandle, id: String) -> Result<InstanceLogSummary, String> {
+pub fn read_instance_log(
+    app: AppHandle,
+    id: String,
+    crash: Option<bool>,
+) -> Result<InstanceLogSummary, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
-    let directory = layout(&app)?.open(id).root().join("logs");
-    if !directory.is_dir() {
-        return Ok(InstanceLogSummary {
-            filename: "latest.log".to_owned(),
-            lines: Vec::new(),
-        });
-    }
-    let newest = fs::read_dir(directory)
-        .map_err(|error| format!("não foi possível ler os logs: {error}"))?
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let metadata = entry.metadata().ok()?;
-            metadata
-                .is_file()
-                .then_some((metadata.modified().ok()?, entry.path()))
-        })
-        .max_by_key(|(modified, _)| *modified)
-        .map(|(_, path)| path);
-    let Some(path) = newest else {
-        return Ok(InstanceLogSummary {
-            filename: "latest.log".to_owned(),
-            lines: Vec::new(),
-        });
-    };
-    let contents = fs::read_to_string(&path)
-        .map_err(|error| format!("não foi possível abrir o log: {error}"))?;
-    let mut lines = contents
-        .lines()
-        .rev()
-        .take(500)
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    lines.reverse();
-    Ok(InstanceLogSummary {
-        filename: path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("latest.log")
-            .to_owned(),
-        lines,
-    })
+    let (filename, lines) =
+        aurora_launcher_core::engine::console_log(&layout(&app)?.open(id), crash.unwrap_or(false))?;
+    Ok(InstanceLogSummary { filename, lines })
 }
 
 #[tauri::command]
@@ -2634,126 +2631,8 @@ pub async fn analyze_instance(
         if current_run_id != observed_run_id {
             return Err("Uma nova execução começou durante a análise. Analise novamente.".into());
         }
-        if ai_history::record_diagnosis(&instance, &report).is_err() {
-            report.limitations.push("O diagnóstico foi concluído, mas não foi possível registrar o histórico local.".into());
-            report.sanitized_json.clear();
-            report.sanitized_json = serde_json::to_string_pretty(&report).map_err(|_| "Falha ao gerar relatório sanitizado.")?;
-        } else {
-            let _ = app.emit("aurora-ai-history-changed", serde_json::json!({"instanceId":instance.id().as_str()}));
-        }
         Ok(report)
     }).await.map_err(|_| "Não foi possível concluir a análise local. Tente novamente.".to_owned())?
-}
-
-#[tauri::command]
-pub async fn confirm_ai_tool(
-    window: tauri::WebviewWindow,
-    plan_id: String,
-    digest: String,
-) -> Result<AiToolHistoryEntry, String> {
-    let app = window.app_handle().clone();
-    let owner = window.label().to_owned();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut selected = None;
-        let applied =
-            app.state::<AiToolBroker>()
-                .confirm(&owner, &plan_id, &digest, |instance| {
-                    if instance_is_running(
-                        &app.state::<RunningInstances>(),
-                        instance.id().as_str(),
-                    )? {
-                        return Err("Feche o Minecraft antes de confirmar a alteração.".into());
-                    }
-                    ensure_no_external_instance_game(instance.root())?;
-                    selected = Some(instance.clone());
-                    Ok(())
-                })?;
-        let instance = selected.ok_or("Não foi possível identificar a ação concluída.")?;
-        let receipt = applied.receipt;
-        let recorded = ai_history::record_action(
-            &instance,
-            receipt.action_id.as_deref().ok_or("Ação inválida.")?,
-            &receipt.title,
-            &receipt.status,
-            receipt.undo_available,
-            &applied.action_kind,
-            &applied.target_name,
-        )
-        .unwrap_or(receipt);
-        let _ = app.emit(
-            "aurora-ai-tool-changed",
-            serde_json::json!({"instanceId":instance.id().as_str(),"status":recorded.status}),
-        );
-        let _ = app.emit(
-            "aurora-ai-history-changed",
-            serde_json::json!({"instanceId":instance.id().as_str()}),
-        );
-        Ok(recorded)
-    })
-    .await
-    .map_err(|_| {
-        "Não foi possível concluir a ação. Consulte o histórico antes de tentar novamente."
-            .to_owned()
-    })?
-}
-
-#[tauri::command]
-pub fn revoke_ai_tool_plan(window: tauri::WebviewWindow, plan_id: String) -> Result<(), String> {
-    window
-        .app_handle()
-        .state::<AiToolBroker>()
-        .revoke(window.label(), &plan_id)
-}
-
-#[tauri::command]
-pub async fn prepare_ai_tool_undo(
-    window: tauri::WebviewWindow,
-    id: String,
-    action_id: String,
-) -> Result<AiToolPlan, String> {
-    let app = window.app_handle().clone();
-    let owner = window.label().to_owned();
-    tauri::async_runtime::spawn_blocking(move || {
-        let instance =
-            layout(&app)?.open(InstanceId::parse(id).map_err(|_| "Instância inválida.")?);
-        app.state::<AiToolBroker>()
-            .prepare_undo(&instance, &owner, &action_id)
-    })
-    .await
-    .map_err(|_| "Não foi possível preparar a restauração.".to_owned())?
-}
-
-#[tauri::command]
-pub async fn ai_tool_history(
-    window: tauri::WebviewWindow,
-    id: String,
-) -> Result<Vec<AiToolHistoryEntry>, String> {
-    let app = window.app_handle().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let instance =
-            layout(&app)?.open(InstanceId::parse(id).map_err(|_| "Instância inválida.")?);
-        let mut entries = ai_history::read_history(&instance).unwrap_or_default();
-        for journal in app.state::<AiToolBroker>().history(&instance)? {
-            if let Some(entry) = entries
-                .iter_mut()
-                .find(|entry| entry.action_id == journal.action_id)
-            {
-                if entry.status != journal.status {
-                    entry.assessment = Some("inconclusive".into());
-                    entry.summary = journal.summary.clone();
-                }
-                entry.status = journal.status;
-                entry.undo_available = journal.undo_available;
-            } else {
-                entries.push(journal);
-            }
-        }
-        entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at_ms));
-        entries.truncate(64);
-        Ok(entries)
-    })
-    .await
-    .map_err(|_| "Não foi possível consultar o histórico local.".to_owned())?
 }
 
 #[tauri::command]
@@ -3049,6 +2928,8 @@ fn launch_instance_tracked(
         process_id,
         RunningInstance {
             doctor: Some((app.clone(), doctor_run.run_id.clone())),
+            #[cfg(all(windows, feature = "connect-lab"))]
+            started_at_ms: doctor_runs::now_ms(),
             instance_id,
             child,
             #[cfg(all(windows, feature = "connect-lab"))]
@@ -3700,6 +3581,8 @@ mod tests {
             process_id,
             super::RunningInstance {
                 doctor: None,
+                #[cfg(all(windows, feature = "connect-lab"))]
+                started_at_ms: 0,
                 instance_id: "locked-game".to_owned(),
                 child,
                 #[cfg(all(windows, feature = "connect-lab"))]

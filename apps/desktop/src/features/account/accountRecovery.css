@@ -12,3 +12,18 @@
 .account-recovery-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .account-recovery-dialog h2 { margin: 0; }
 .account-recovery-dialog p { line-height: 1.5; overflow-wrap: anywhere; }
+.recovery-inbox { padding: 1rem 0 .45rem; }
+.recovery-inbox h3 { margin: 0 0 .5rem; font-size: 1.2rem; }
+.recovery-inbox h3:focus-visible { outline-offset: .25rem; }
+.recovery-inbox p, .recovery-help p { line-height: 1.5; }
+.recovery-inbox small { display: block; line-height: 1.55; }
+.recovery-inbox bdi { font-weight: 650; overflow-wrap: anywhere; }
+.recovery-destination {
+  display: grid; gap: .2rem; padding: .75rem .9rem;
+  border-inline-start: 3px solid var(--theme-accent, #c6a1ff);
+  background: var(--theme-panel, #282237);
+  color: var(--theme-text, #f3eef9); border-radius: 0 .45rem .45rem 0;
+  overflow-wrap: anywhere;
+}
+.recovery-destination span { font-size: .8rem; }
+.recovery-help summary { cursor: pointer; font-size: .9rem; }

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { readyGameError, type ReadyGameRuntime } from "./types";
+import type { SocialPlayRequest } from "./socialPlay";
 
 const idPattern = /^aurora-test-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -37,8 +38,10 @@ const profileId = (runtime: ReadyGameRuntime) => runtime.loader === "fabric"
   : `${runtime.minecraftVersion}-forge-${runtime.loaderVersion}`;
 type Props = { sourceInstanceId: string; contextKey?: string; connectOperationId?: string; requiredProfile?: string;
   voiceProfile?: "svc" | "plasmo";
+  socialPlay?: SocialPlayRequest;
+  onSuggested?: (id: string, java: string | undefined, gesture: SocialPlayRequest) => void;
   disabled: boolean; selectedId: string; onSelect: (id: string, java?: string) => void; runtimes?: readonly ReadyGameRuntime[] };
-export function ReadyCopyPicker({ sourceInstanceId, contextKey, connectOperationId, requiredProfile, voiceProfile, disabled, selectedId, onSelect, runtimes = [] }: Props) {
+export function ReadyCopyPicker({ sourceInstanceId, contextKey, connectOperationId, requiredProfile, voiceProfile, socialPlay, onSuggested, disabled, selectedId, onSelect, runtimes = [] }: Props) {
   const [copies, setCopies] = useState<ReadyCopy[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -49,14 +52,14 @@ export function ReadyCopyPicker({ sourceInstanceId, contextKey, connectOperation
   const [cancelRequested, setCancelRequested] = useState(false);
   const epoch = useRef(0);
   const mounted = useRef(false);
-  const current = useRef({ sourceInstanceId, connectOperationId, requiredProfile, disabled, onSelect });
-  current.current = { sourceInstanceId, connectOperationId, requiredProfile, disabled, onSelect };
+  const current = useRef({ sourceInstanceId, connectOperationId, requiredProfile, disabled, onSelect, socialPlay, onSuggested });
+  current.current = { sourceInstanceId, connectOperationId, requiredProfile, disabled, onSelect, socialPlay, onSuggested };
   useEffect(() => {
     mounted.current = true; epoch.current++; setCopies([]); setLoaded(false); setBusy(false); setError(""); setTarget(""); setApproved(false);
     current.current.onSelect("");
     return () => { mounted.current = false; epoch.current++; };
   }, [sourceInstanceId, contextKey, connectOperationId, requiredProfile]);
-  async function load() {
+  async function load(gesture?: SocialPlayRequest) {
     if (disabled || busy || install || !sourceInstanceId) return;
     const request = ++epoch.current;
     const source = sourceInstanceId;
@@ -66,11 +69,24 @@ export function ReadyCopyPicker({ sourceInstanceId, contextKey, connectOperation
       && !current.current.disabled;
     try {
       const next = readyCopiesFrom(await invoke<unknown>("diagnostic_lab_list", { id: source }));
-      if (live()) { setCopies(next); setLoaded(true); }
+      if (live()) {
+        setCopies(next); setLoaded(true);
+        if (gesture && current.current.socialPlay === gesture && next.length === 1
+          && (next[0].originInstanceId === source || next[0].id === source)) {
+          current.current.onSuggested?.(next[0].id, next[0].java, gesture);
+        }
+      }
     } catch {
       if (live()) setError("Não foi possível conferir as cópias de teste. Atualize a lista antes de selecionar.");
     } finally { if (mounted.current && request === epoch.current) setBusy(false); }
   }
+  useEffect(() => {
+    let active = true;
+    if (socialPlay && !disabled && !busy && !install && sourceInstanceId) queueMicrotask(() => {
+      if (active && current.current.socialPlay === socialPlay && socialPlay.claimCopyLookup()) void load(socialPlay);
+    });
+    return () => { active = false; };
+  }, [socialPlay, disabled, busy, install, sourceInstanceId]);
   const offered = requiredProfile ? runtimes.filter(runtime => profileId(runtime) === requiredProfile) : runtimes;
   const selectedProfile = requiredProfile && offered.length ? requiredProfile : target;
   const targetRuntime = offered.find(runtime => profileId(runtime) === selectedProfile);
@@ -112,6 +128,7 @@ export function ReadyCopyPicker({ sourceInstanceId, contextKey, connectOperation
     {busy && <p role="status">Conferindo as cópias disponíveis…</p>}
     {error && <p role="alert">{error}</p>}
     {loaded && copies.length === 0 && <p>Nenhuma cópia pronta disponível para esta instância. Prepare uma cópia de runtime abaixo ou use Cópias de teste para partir do modpack existente.</p>}
+    {socialPlay && loaded && copies.length > 1 && !selectedId && <p>Esta instância tem várias cópias. Selecione a que deseja usar e revise a entrada.</p>}
     {copies.length > 0 && <label>Cópia de teste para abrir<select value={selectedId} disabled={disabled || busy || !!install} onChange={event => {
       const id = event.target.value;
       const copy = copies.find(item => item.id === id);

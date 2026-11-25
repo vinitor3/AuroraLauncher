@@ -180,7 +180,7 @@ export async function linkAuroraRecoveryEmail(services: FirebaseServices, uid: s
   try {
     await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, password));
     if (services.auth.currentUser !== user) throw new Error("A conta mudou. Entre novamente.");
-    services.auth.languageCode = "pt";
+    services.auth.languageCode = "pt-BR";
     await verifyBeforeUpdateEmail(user, email);
   } catch (error) {
     const code = authCode(error);
@@ -193,7 +193,7 @@ export async function linkAuroraRecoveryEmail(services: FirebaseServices, uid: s
 
 export async function resetAuroraPassword(services: FirebaseServices, input: string) {
   const email = personalEmail(input);
-  services.auth.languageCode = "pt";
+  services.auth.languageCode = "pt-BR";
   try {
     await sendPasswordResetEmail(services.auth, email);
   } catch (error) {
@@ -201,6 +201,22 @@ export async function resetAuroraPassword(services: FirebaseServices, input: str
     if (["auth/user-not-found", "auth/user-disabled", "auth/too-many-requests"].includes(String(authCode(error)))) return;
     throw new Error("Não foi possível solicitar a recuperação. Confira a conexão e tente novamente.");
   }
+}
+
+function readLegacySkinFavorites(value: unknown): AuroraSkinFavorite[] {
+  if (!Array.isArray(value)) return [];
+  const favorites: AuroraSkinFavorite[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || typeof item.id !== "string" || !item.id.trim()
+      || typeof item.name !== "string" || typeof item.skinUrl !== "string") continue;
+    try {
+      const url = new URL(item.skinUrl);
+      if (url.protocol !== "https:" || url.username || url.password) continue;
+      favorites.push({ id: item.id, name: item.name, skinUrl: url.href, skinModel: item.skinModel === "slim" ? "slim" : "classic" });
+      if (favorites.length === 24) break;
+    } catch { /* A malformed favorite must not prevent other skins from migrating. */ }
+  }
+  return favorites;
 }
 
 export async function loadAuroraProfile(services: FirebaseServices, user: User): Promise<AuroraUserProfile> {
@@ -211,7 +227,7 @@ export async function loadAuroraProfile(services: FirebaseServices, user: User):
     ...data,
     uid: user.uid,
     skinModel: data.skinModel === "slim" ? "slim" : "classic",
-    skinFavorites: Array.isArray(data.skinFavorites) ? data.skinFavorites.slice(0, 24) : [],
+    skinFavorites: readLegacySkinFavorites(data.skinFavorites),
   } as AuroraUserProfile;
 }
 

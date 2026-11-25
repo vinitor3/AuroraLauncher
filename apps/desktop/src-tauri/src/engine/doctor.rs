@@ -494,6 +494,96 @@ fn open_file(instance: &Instance, relative: &str) -> Result<File, String> {
     Ok(file)
 }
 
+/// Read a bounded preview for the instance console, including active Java logs.
+pub fn console_log(instance: &Instance, crash: bool) -> Result<(String, Vec<String>), String> {
+    use super::recovery::{pin_directory, single_link};
+    let (folder, extension, empty_name) = if crash {
+        ("crash-reports", "txt", "Último crash")
+    } else {
+        ("logs", "log", "latest.log")
+    };
+    let directory = secure_path(instance, folder)?;
+    if !directory.exists() {
+        return Ok((empty_name.into(), Vec::new()));
+    }
+    let _pinned = pin_directory(&directory).map_err(|_| SAFE_READ_ERROR)?;
+    let mut newest = None;
+    for entry in fs::read_dir(directory).map_err(|_| SAFE_READ_ERROR)? {
+        let entry = entry.map_err(|_| SAFE_READ_ERROR)?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some(extension) {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if crash && !name.starts_with("crash-") {
+            continue;
+        }
+        let meta = fs::symlink_metadata(path).map_err(|_| SAFE_READ_ERROR)?;
+        if !meta.is_file() || metadata_is_link(&meta) {
+            continue;
+        }
+        let candidate = (meta.modified().map_err(|_| SAFE_READ_ERROR)?, name);
+        if newest.as_ref().is_none_or(|previous| candidate > *previous) {
+            newest = Some(candidate);
+        }
+    }
+    let Some((_, filename)) = newest else {
+        return Ok((empty_name.into(), Vec::new()));
+    };
+    let mut file = open_file(instance, &format!("{folder}/{filename}"))?;
+    if !single_link(&file).map_err(|_| SAFE_READ_ERROR)? {
+        return Err(SAFE_READ_ERROR.into());
+    }
+    let size = file.metadata().map_err(|_| SAFE_READ_ERROR)?.len();
+    let mut bytes = Vec::new();
+    let head_size = if crash && size > MAX_LOG_BYTES {
+        MAX_LOG_BYTES / 2
+    } else {
+        0
+    };
+    if head_size > 0 {
+        file.by_ref()
+            .take(head_size)
+            .read_to_end(&mut bytes)
+            .map_err(|_| SAFE_READ_ERROR)?;
+    }
+    let head = decode_log(&bytes);
+    bytes.clear();
+    let start = size.saturating_sub(MAX_LOG_BYTES - head_size);
+    file.seek(SeekFrom::Start(start))
+        .map_err(|_| SAFE_READ_ERROR)?;
+    file.take(MAX_LOG_BYTES - head_size)
+        .read_to_end(&mut bytes)
+        .map_err(|_| SAFE_READ_ERROR)?;
+    let tail = decode_log(&bytes);
+    let total = tail.lines().count();
+    let mut lines = Vec::new();
+    let keep_head = crash && (head_size > 0 || total > 500);
+    if keep_head {
+        let first = if head_size > 0 { &head } else { &tail };
+        lines.extend(first.lines().take(250).map(str::to_owned));
+    }
+    let tail_limit = if keep_head { 250 } else { 500 };
+    if start > 0 || total > tail_limit {
+        lines.push("[… trecho omitido …]".into());
+    }
+    // A crash can be one long serialized line. Its suffix may contain the only
+    // copy of the exception, even though the byte window starts mid-line.
+    let skip_partial = start > 0 && !(crash && total == 1);
+    lines.extend(
+        tail.lines()
+            .skip(
+                total
+                    .saturating_sub(tail_limit)
+                    .max(usize::from(skip_partial)),
+            )
+            .map(str::to_owned),
+    );
+    Ok((filename, lines))
+}
+
 fn read_segment(
     instance: &Instance,
     relative: &str,

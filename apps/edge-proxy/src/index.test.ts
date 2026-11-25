@@ -9,7 +9,7 @@ const mcstatKey = "test-mcstat-key";
 const env = {
   CURSEFORGE_API_KEY: apiKey,
   FIREBASE_PROJECT_ID: "test-project",
-  GEMINI_API_KEY: "test-gemini-key",
+
 } as never;
 const envWithMcstat = { ...env, mcstat_API_KEY: mcstatKey } as never;
 const originalFetch = globalThis.fetch;

@@ -5,6 +5,7 @@ import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, us
 import { lazy, Suspense } from "react";
 import { drawSkinFace } from "./lib/skinFace";
 import { CapePanel, useWardrobeCape } from "./features/skins/CapeWardrobe";
+import { ProjectDialog } from "./features/catalog/ProjectDialog";
 import { SkinPreview } from "./features/skins/SkinPreview";
 import { SkinThumbnail } from "./features/skins/SkinThumbnail";
 import { StartupScreen } from "./features/auth/StartupScreen";
@@ -24,6 +25,7 @@ import { browserLauncherAuthScope, prepareLauncherServices } from "./lib/launche
 import {
   bundledFirebaseConfig,
   socialFeatureBuild,
+  socialLabBuild,
   createFirebaseServices,
   clearRemoteSkinLibrary,
   loadAuroraProfile,
@@ -57,7 +59,7 @@ import { observeDownloadProgress, type DownloadProgress } from "./lib/downloadPr
 import { OnlineSkinSearch } from "./features/skins/OnlineSkinSearch";
 import { ContentUpdatesView } from "./features/content-updates/ContentUpdatesView";
 import { UpdateReviewDialog } from "./features/content-updates/UpdateReviewDialog";
-import { SupportContextButton, SupportDialog } from "./features/support/SupportContextButton";
+import { SupportContextButton } from "./features/support/SupportContextButton";
 import { DoctorView } from "./features/doctor/DoctorView";
 import { RecoveryView } from "./features/recovery/RecoveryView";
 import { DiagnosticLabView } from "./features/diagnostic-lab/DiagnosticLabView";
@@ -66,7 +68,9 @@ import { NativeVoicePanel } from "./features/connect-native-voice/NativeVoicePan
 import { ExitLauncherButton } from "./features/connect/ExitLauncherButton";
 import { useFriendInbox } from "./features/social/useFriendInbox";
 import { SocialView } from "./features/social/SocialView";
+import { socialPlayRequest, type SocialPlayRequest } from "./features/connect-game-launch/socialPlay";
 import { useDiscordPresence } from "./features/social/useDiscordPresence";
+import { usePublicInvite } from "./features/social/usePublicInvite";
 import { SocialBuildBanner } from "./features/social/SocialBuildBanner";
 import { createSocialConnectController, emptySocialConnectState, type SocialConnectController, type SocialConnectState } from "./features/social/connect-controller";
 import { createSocialFirebaseService } from "./lib/socialFirebase";
@@ -752,7 +756,10 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [modrinthTotalHits, setModrinthTotalHits] = useState(0);
   const [modrinthPage, setModrinthPage] = useState(0);
   const [modrinthPageSize, setModrinthPageSize] = useState(10);
-  const [selectedModrinthPack, setSelectedModrinthPack] = useState<CatalogPack>();
+  const [packInstallTarget, setPackInstallTarget] = useState("");
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState("");
+  const catalogRequest = useRef(0);
   const [modpackVersionFilter, setModpackVersionFilter] = useState(minecraftVersion);
   const [modpackLoaderFilter, setModpackLoaderFilter] = useState<"" | LoaderChoice>("");
   const [modpackCategoryFilter, setModpackCategoryFilter] = useState("");
@@ -801,7 +808,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [availableJavaMajors, setAvailableJavaMajors] = useState(FALLBACK_JAVA_MAJORS);
   const [javaLtsMajors, setJavaLtsMajors] = useState([8, 11, 17, 21, 25]);
   const [notice, setNotice] = useState("Preparando o núcleo Aurora…");
-  const [supportNotice, setSupportNotice] = useState<{ owner: string; text: string }>();
   const [noticeHovered, setNoticeHovered] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>();
   const [coreConnection, setCoreConnection] = useState<CoreConnection>();
@@ -861,11 +867,13 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [connectVisited, setConnectVisited] = useState(false);
   const [dedicatedRevealRequest, setDedicatedRevealRequest] = useState(0);
   const [gameRevealRequest, setGameRevealRequest] = useState(0);
+  const [socialPlay, setSocialPlay] = useState<SocialPlayRequest>();
   const [connectViewReady, setConnectViewReady] = useState(false);
   useEffect(() => { if (activeSection === "connect") setConnectVisited(true); }, [activeSection]);
   const [connectAvailable, setConnectAvailable] = useState(false);
   const voice = useVoiceAnnouncement();
   const [signingOut, setSigningOut] = useState(false);
+  useEffect(() => { if (activeSection !== "connect" || signingOut) setSocialPlay(undefined); }, [activeSection, signingOut, profile?.uid]);
   const friendInbox = useFriendInbox(signingOut ? null : baseSocialService);
   const [friendInboxReveal, setFriendInboxReveal] = useState(0);
   const signOutPending = useRef(false);
@@ -882,7 +890,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     signOutPending.current = true;
     socialConnectOwner.current?.invalidate();
     setSigningOut(true);
-    setSupportNotice(undefined);
     try {
       await withVoiceAnnouncementLogout(voice, async () => {
         if (isTauri()) await stopConnectForAccountTransition(invoke);
@@ -902,10 +909,14 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   }
   const [catalogSource, setCatalogSource] = useState<CatalogSource>("modrinth");
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [instanceLog, setInstanceLog] = useState<{ id: string; log: InstanceLog }>();
+  const [instanceLog, setInstanceLog] = useState<{ id: string; owner: string; crash: boolean; log: InstanceLog }>();
+  const logRequest = useRef(0);
+  useEffect(() => { logRequest.current++; setInstanceLog(undefined); }, [profile?.uid]);
   const [runningInstances, setRunningInstances] = useState<RunningInstance[]>([]);
-  const discord = useDiscordPresence(socialService && !signingOut && connectAccountBarrier === "idle" ? profile?.uid : undefined,
-    runningInstances.length > 0, socialConnection?.state, () => setActiveSection("social"));
+  const inviteAccount = socialService && !socialLabBuild && !signingOut && connectAccountBarrier === "idle" ? profile?.uid : undefined;
+  const revealSocial = () => { setThemesOpen(false); setActiveSection("social"); };
+  const discord = useDiscordPresence(inviteAccount, runningInstances, socialConnection?.state, revealSocial);
+  const publicInvite = usePublicInvite(inviteAccount, revealSocial);
   const [renameDraft, setRenameDraft] = useState("");
   const [launcherBusy, setBusy] = useState(false);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
@@ -983,11 +994,9 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   useEffect(() => {
     if (!editingInstance) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || updatesApplying) return;
-      if (updateReview) return;
+      if (event.key !== "Escape" || updatesApplying || updateReview || projectDetail) return;
       event.preventDefault();
-      if (projectDetail) closeProjectDetail();
-      else if (!busy) closeInstanceEditor();
+      if (!busy) closeInstanceEditor();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -1107,26 +1116,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     });
     return () => { disposed = true; stopListening?.(); };
   }, []);
-  useEffect(() => {
-    if (!profile?.uid) return;
-    let disposed = false;
-    let stopListening: (() => void) | undefined;
-    void listen<{ instanceId: string; status?: string }>("aurora-ai-tool-changed", (event) => {
-      if (disposed) return;
-      const { instanceId, status: actionStatus } = event.payload;
-      setNotice(actionStatus === "applied" ? `Alteração confirmada aplicada em “${instanceId}”. Analise novamente para conferir o resultado.`
-        : actionStatus === "undone" ? `Alteração desfeita em “${instanceId}”. O histórico local foi atualizado.`
-          : `Há uma operação pendente em “${instanceId}”. Confira o histórico e revise a recuperação antes de tentar novamente.`);
-      if (activeInstanceRef.current.editingInstance !== instanceId) return;
-      const editorGeneration = editorOpenRequestRef.current.generation;
-      invalidateContentUpdatePlan();
-      setSelectedContentNames([]);
-      void invoke<InstanceContent>("list_instance_content", { id: instanceId }).then((content) => {
-        if (!disposed && activeInstanceRef.current.editingInstance === instanceId && editorOpenRequestRef.current.generation === editorGeneration) setInstanceContent(content);
-      }).catch(() => undefined);
-    }).then((stop) => { if (disposed) stop(); else stopListening = stop; }).catch(() => undefined);
-    return () => { disposed = true; stopListening?.(); };
-  }, [profile?.uid]);
   useEffect(() => observeDownloadProgress(listen, setDownloadProgress), []);
   useEffect(() => {
     let disposed = false;
@@ -1533,8 +1522,10 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     requestedSource: CatalogSource = catalogSource,
     requestedCategory = modpackCategoryFilter,
   ) {
+    const request = ++catalogRequest.current;
     void loadCatalogCategories(requestedSource, "modpack");
-    setBusy(true);
+    setCatalogLoading(true);
+    setCatalogError("");
     try {
       let items: CatalogPack[];
       let totalHits: number;
@@ -1568,23 +1559,25 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           .filter((pack) => !pack.curseForgeHasOnlyUnsupportedLoaders);
         totalHits = result.pagination?.totalCount ?? items.length;
       }
+      if (request !== catalogRequest.current) return;
       setModrinthPacks(items);
+      setPackVersions((current) => Object.fromEntries(items.map((pack) => [
+        pack.projectId,
+        modpackVersionFilter && pack.versions.includes(modpackVersionFilter)
+          ? modpackVersionFilter
+          : current[pack.projectId] || preferredPackVersion(pack, minecraftVersion),
+      ])));
       setModrinthTotalHits(totalHits);
       setModrinthPage(page);
-      setSelectedModrinthPack(items[0]);
-      setPackVersions((current) => {
-        const next = { ...current };
-        for (const pack of items) {
-          if (!next[pack.projectId]) next[pack.projectId] = preferredPackVersion(pack, minecraftVersion);
-        }
-        return next;
-      });
-      setNotice(`${totalHits.toLocaleString("pt-BR")} modpack(s) encontrado(s) no ${requestedSource === "modrinth" ? "Modrinth" : "CurseForge"}.`);
     } catch (error) {
+      if (request !== catalogRequest.current) return;
       setModrinthPacks([]);
-      setSelectedModrinthPack(undefined);
-      setNotice(`Não foi possível consultar ${requestedSource === "modrinth" ? "Modrinth" : "CurseForge"}: ${errorMessage(error)}`);
-    } finally { setBusy(false); }
+      setModrinthTotalHits(0);
+      setModrinthPage(0);
+      setCatalogError(`Não foi possível consultar ${requestedSource === "modrinth" ? "Modrinth" : "CurseForge"}: ${errorMessage(error)}`);
+    } finally {
+      if (request === catalogRequest.current) setCatalogLoading(false);
+    }
   }
 
   async function installCurseForgePack(pack: CatalogPack, id: string) {
@@ -1709,19 +1702,19 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     return result;
   }
 
-  async function installModrinth(pack: CatalogPack) {
-    if (!targetInstance) {
+  async function installModrinth(pack: CatalogPack, destination: string) {
+    if (!destination) {
       setNotice("Escolha uma instância antes de instalar o modpack.");
       return;
     }
-    if (editingInstance === targetInstance) invalidateContentUpdatePlan();
+    if (editingInstance === destination) invalidateContentUpdatePlan();
     setBusy(true);
     setNotice(`Preparando “${pack.title}”. O Aurora vai baixar e verificar todos os arquivos do modpack…`);
     try {
-      const result = await installPackIntoInstance(pack, targetInstance);
+      const result = await installPackIntoInstance(pack, destination);
       setInstalledVersionId(result.minecraft.versionId);
       setInstalledMinecraftVersion(result.minecraftVersion);
-      await completeInstanceInstall(targetInstance, `“${result.name}” instalado! Abra sua instância “${targetInstance}” para jogar (${result.minecraftVersion}, ${result.loader}).`);
+      await completeInstanceInstall(destination, `“${result.name}” instalado! Abra sua instância “${destination}” para jogar (${result.minecraftVersion}, ${result.loader}).`);
     } catch (error) {
       setDownloadProgress(undefined);
       setNotice(`Não foi possível instalar “${pack.title}”: ${String(error)}`);
@@ -1843,16 +1836,20 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       if (editorIsCurrent()) setNotice(`Não foi possível abrir o conteúdo da instância: ${String(error)}`);
     }
   }
-  async function openInstanceLog(id: string) {
+  async function openInstanceLog(id: string, crash = false) {
+    const owner = profile?.uid;
+    if (!owner) return;
+    const request = ++logRequest.current;
     setActiveSection("instances");
     await selectInstance(id);
     setBusy(true);
     try {
-      const log = await invoke<InstanceLog>("read_instance_log", { id });
-      setInstanceLog({ id, log });
-      setNotice(log.lines.length ? `Exibindo ${log.filename}.` : "Ainda não há logs nesta instância.");
+      const log = await invoke<InstanceLog>("read_instance_log", { id, crash });
+      if (request !== logRequest.current) return;
+      setInstanceLog({ id, owner, crash, log });
+      setNotice(log.lines.length ? `Exibindo ${log.filename}.` : crash ? "Esta instância ainda não tem um relatório de crash." : "Ainda não há logs nesta instância.");
     } catch (error) {
-      setNotice(`Não foi possível abrir o log: ${String(error)}`);
+      if (request === logRequest.current) setNotice(`Não foi possível abrir o log: ${String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -3411,7 +3408,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                 setThemesOpen(false);
                 setActiveSection(section);
                 if (section === "social" && friendInbox && friendInbox.count > 0) setFriendInboxReveal(value => value + 1);
-                if (section === "discover" && modrinthPacks.length === 0) void loadModrinthPage(0);
+                if (section === "discover" && !catalogLoading && modrinthPacks.length === 0) void loadModrinthPage(0);
               }}
               type="button"
             >
@@ -3421,7 +3418,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <SupportContextButton className="secondary compact sidebar-action" label="Ajuda com IA" />
+          <SupportContextButton className="secondary compact sidebar-action" label="Copiar log ou crash" />
           <button className="text-button sidebar-action" disabled={signingOut} aria-haspopup="dialog" onClick={() => setRecoverySettingsUid(profile.uid)}>Recuperação da conta</button>
           {!signingOut && recoverySettingsUid === profile.uid && <RecoveryEmailDialog key={profile.uid} services={services} uid={profile.uid} close={() => setRecoverySettingsUid(undefined)} />}
           <button className="text-button sidebar-action" disabled={signingOut} onClick={() => void signOutWithConnectCleanup()} type="button">{signingOut ? "Encerrando conexão…" : "Sair da conta"}</button>
@@ -3452,14 +3449,17 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           <div className="workspace-main">
         {socialService && activeSection === "social" && !signingOut && <div className="section-social"><SocialBuildBanner /><SocialView key={profile.uid} service={socialService} accountId={profile.uid} nickname={profile.username}
           inbox={friendInbox} revealInboxRequest={friendInboxReveal} instanceNames={Object.fromEntries(instances.map(instance => [instance.id, instance.displayName || instance.id]))}
-          connection={socialConnection} discord={discord}
-          onOpenConnectedGame={connectAvailable ? () => { setGameRevealRequest(value => value + 1); setActiveSection("connect"); } : undefined}
+          connection={socialConnection} discord={discord} publicInvite={publicInvite}
+          onOpenConnectedGame={connectAvailable ? target => {
+            setSocialPlay(connectLaunchContext ? socialPlayRequest(target, connectLaunchContext.contextKey) : undefined);
+            setGameRevealRequest(value => value + 1); setActiveSection("connect");
+          } : undefined}
           onOpenManualConnect={connectAvailable && connectAccountBarrier === "idle" && !signingOut ? () => { setManualConnectRequested(true); setActiveSection("connect"); } : undefined}
           onPrepareDedicatedServer={connectAvailable && socialConnection?.state.maxSessionSeconds === 14400 ? () => { setDedicatedRevealRequest(value => value + 1); setActiveSection("connect"); } : undefined}
           currentModpack={runningInstances.length === 1 ? instances.find(item => item.id === runningInstances[0].instanceId)?.displayName || runningInstances[0].instanceId : undefined} /></div>}
         {connectAvailable && (connectVisited || activeSection === "connect") && <div className="section-connect" hidden={activeSection !== "connect"} inert={signingOut || activeSection !== "connect"}>
           {socialFeatureBuild && <button className="secondary compact" type="button" onClick={() => setActiveSection("social")}>Voltar para amigos e comunidade</button>}
-          <ConnectView manualControls={!socialFeatureBuild || manualConnectRequested} launchContext={connectLaunchContext} onInitialReadReady={setConnectViewReady} onChooseSource={() => setActiveSection("instances")} gameRevealRequest={gameRevealRequest} gameRevealReady={!signingOut && activeSection === "connect"} /><NativeVoicePanel disabled={signingOut} revealRequest={dedicatedRevealRequest} revealReady={connectViewReady && activeSection === "connect"} /></div>}
+          <ConnectView manualControls={!socialFeatureBuild || manualConnectRequested} launchContext={connectLaunchContext} onInitialReadReady={setConnectViewReady} onChooseSource={() => setActiveSection("instances")} gameRevealRequest={gameRevealRequest} gameRevealReady={!signingOut && activeSection === "connect"} socialPlay={socialPlay} /><NativeVoicePanel disabled={signingOut} revealRequest={dedicatedRevealRequest} revealReady={connectViewReady && activeSection === "connect"} /></div>}
         <article className="panel instances section-instances">
           <div className="panel-heading">
             <div>
@@ -3591,12 +3591,21 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
               <h2>Modpacks</h2>
             </div>
           </div>
-          <div aria-label="Fonte do catálogo" className="catalog-tabs" role="tablist">
-            <button aria-selected={catalogSource === "modrinth"} className={catalogSource === "modrinth" ? "selected compact" : "secondary compact"} onClick={() => { setCatalogSource("modrinth"); setModpackCategoryFilter(""); void loadModrinthPage(0, modrinthPageSize, "modrinth", ""); }} role="tab" type="button">Modrinth</button>
-            <button aria-selected={catalogSource === "curseforge"} className={catalogSource === "curseforge" ? "selected compact" : "secondary compact"} onClick={() => { setCatalogSource("curseforge"); setModpackCategoryFilter(""); void loadModrinthPage(0, modrinthPageSize, "curseforge", ""); }} role="tab" type="button">CurseForge</button>
+          <div aria-label="Fonte do catálogo" className="catalog-tabs" role="group">
+            {(["modrinth", "curseforge"] as const).map((source) => <button key={source}
+              aria-pressed={catalogSource === source} className={catalogSource === source ? "selected compact" : "secondary compact"}
+              onClick={() => {
+                if (source === catalogSource) return;
+                setCatalogSource(source);
+                setModpackCategoryFilter("");
+                setModrinthPacks([]);
+                setModrinthTotalHits(0);
+                setModrinthPage(0);
+                void loadModrinthPage(0, modrinthPageSize, source, "");
+              }} type="button">{source === "modrinth" ? "Modrinth" : "CurseForge"}</button>)}
           </div>
           <form onSubmit={searchModrinth} className="catalog-search-bar">
-            <input value={modpackQuery} onChange={(event) => setModpackQuery(event.target.value)} placeholder={`Buscar modpack no ${catalogSource === "modrinth" ? "Modrinth" : "CurseForge"}`} />
+            <input aria-label="Buscar modpacks" value={modpackQuery} onChange={(event) => setModpackQuery(event.target.value)} placeholder={`Buscar modpack no ${catalogSource === "modrinth" ? "Modrinth" : "CurseForge"}`} />
             <label>Mostrar<select value={modrinthPageSize} onChange={(event) => { const size = Number(event.target.value); setModrinthPageSize(size); void loadModrinthPage(0, size); }}><option value={10}>10</option><option value={20}>20</option><option value={30}>30</option><option value={50}>50</option></select></label>
             <button disabled={busy} type="submit">Buscar</button>
           </form>
@@ -3607,28 +3616,30 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
             <label>Ordenar<select value={modpackSort} onChange={(event) => setModpackSort(event.target.value as ContentSort)}><option value="popular">Mais baixados</option><option value="relevance">Relevância</option><option value="updated">Atualizados</option></select></label>
             <button className="secondary compact" disabled={busy} onClick={() => void loadModrinthPage(0)} type="button">Aplicar filtros</button>
           </div>
-          {modrinthPacks.length > 0 && (
-            <div className="catalog-browser">
-              <div className="pack-compact-list">
-                {modrinthPacks.map((pack) => (
-                  <button aria-haspopup="dialog" className={selectedModrinthPack?.projectId === pack.projectId ? "pack-row selected" : "pack-row"} key={pack.projectId} onClick={() => { setSelectedModrinthPack(pack); void openModpackDetail(pack); }} type="button">
-                    {pack.iconUrl ? <img className="pack-icon" src={pack.iconUrl} alt="" /> : <span className="orb">◈</span>}
-                    <span><strong>{pack.title}</strong><small>{pack.author || pack.loaders.join(", ")} · {pack.downloads.toLocaleString("pt-BR")} downloads</small></span>
+          <div className="catalog-browser" aria-busy={catalogLoading}>
+            {modrinthPacks.length > 0 ? (
+              <ul className="pack-compact-list" key={`${catalogSource}-${modrinthPage}`} aria-label="Resultados de modpacks">
+                {modrinthPacks.map((pack) => <li key={pack.projectId}>
+                  <button aria-haspopup="dialog" className="pack-row" disabled={catalogLoading} onClick={() => { setPackInstallTarget(targetInstance); void openModpackDetail(pack); }} type="button">
+                    {pack.iconUrl ? <img className="pack-icon" src={pack.iconUrl} alt="" decoding="async" loading="lazy" /> : <span aria-hidden="true" className="orb">◈</span>}
+                    <span className="pack-row-copy"><strong>{pack.title}</strong>
+                      <small>{[pack.author, pack.loaders.join(" · "), `${pack.downloads.toLocaleString("pt-BR")} downloads`].filter(Boolean).join(" · ")}</small>
+                    </span>
                   </button>
-                ))}
+                </li>)}
+              </ul>
+            ) : (
+              <div className="editor-empty discover-empty" role="status">
+                <strong>{catalogLoading ? "Carregando catálogo…" : catalogError || "Nenhum modpack compatível"}</strong>
+                {!catalogLoading && !catalogError && <p>Altere a busca ou os filtros.</p>}
               </div>
-              {selectedModrinthPack && <aside className="pack-detail">
-                {selectedModrinthPack.iconUrl ? <img className="pack-detail-icon" src={selectedModrinthPack.iconUrl} alt="" /> : <div className="orb large">◈</div>}
-                <div><p className="eyebrow">{selectedModrinthPack.source === "modrinth" ? "MODRINTH" : "CURSEFORGE"} · {selectedModrinthPack.author}</p><h2>{selectedModrinthPack.title}</h2></div>
-                <p>{selectedModrinthPack.description || "Sem descrição publicada."}</p>
-                <div className="pack-badges">{selectedModrinthPack.loaders.map((loader) => <span key={loader}>{loader}</span>)}<span>{selectedModrinthPack.downloads.toLocaleString("pt-BR")} downloads</span></div>
-                <label>Versão do Minecraft<select value={packVersions[selectedModrinthPack.projectId] ?? preferredPackVersion(selectedModrinthPack, minecraftVersion)} onChange={(event) => setPackVersions((current) => ({ ...current, [selectedModrinthPack.projectId]: event.target.value }))}>{(selectedModrinthPack.versions.length ? selectedModrinthPack.versions : [minecraftVersion]).map((version) => <option key={version} value={version}>{version}</option>)}</select></label>
-                <div className="pack-detail-actions"><button className="secondary" disabled={busy || !targetInstance} onClick={() => void installModrinth(selectedModrinthPack)} type="button">{selectedModrinthPack.source === "curseforge" ? "Baixar tudo na selecionada" : "Instalar na selecionada"}</button><button disabled={busy} onClick={() => void createAndInstallModrinth(selectedModrinthPack)} type="button">{selectedModrinthPack.source === "curseforge" ? "Criar e baixar tudo" : "Criar e instalar"}</button></div>
-              </aside>}
-            </div>
-          )}
-          {modrinthPacks.length === 0 && <div className="editor-empty discover-empty"><span>{busy ? "…" : "⌕"}</span><strong>{busy ? "Carregando catálogo" : "Nenhum modpack compatível"}</strong><p>Os mais baixados aparecem automaticamente; altere os filtros para refinar.</p></div>}
-          <div className="catalog-pagination"><button className="secondary compact" disabled={busy || modrinthPage === 0} onClick={() => void loadModrinthPage(modrinthPage - 1)} type="button">← Anterior</button><span>Página {modrinthPage + 1} de {Math.max(1, Math.ceil(modrinthTotalHits / modrinthPageSize))}</span><button className="secondary compact" disabled={busy || (modrinthPage + 1) * modrinthPageSize >= modrinthTotalHits} onClick={() => void loadModrinthPage(modrinthPage + 1)} type="button">Próxima →</button></div>
+            )}
+          </div>
+          <nav className="catalog-pagination" aria-label="Paginação de modpacks">
+            <button className="secondary compact" disabled={catalogLoading || modrinthPage === 0} onClick={() => void loadModrinthPage(modrinthPage - 1)} type="button">← Anterior</button>
+            <span role="status">{catalogLoading ? "Buscando…" : modrinthTotalHits ? `Página ${modrinthPage + 1} de ${Math.ceil(modrinthTotalHits / modrinthPageSize)}` : "Sem resultados"}</span>
+            <button className="secondary compact" disabled={catalogLoading || (modrinthPage + 1) * modrinthPageSize >= modrinthTotalHits} onClick={() => void loadModrinthPage(modrinthPage + 1)} type="button">Próxima →</button>
+          </nav>
         </article>
         {editingInstance && (
             <section aria-label={`Editor da instância ${editingInstance}`} aria-modal="true" className="editor-panel theme-protected" role="dialog">
@@ -3822,7 +3833,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
             />
           )}
           {projectDetail && (
-            <section aria-label={`Página de ${projectDetail.title}`} aria-modal="true" className="project-detail-modal" role="dialog">
+            <ProjectDialog title={projectDetail.title} onClose={closeProjectDetail}>
               <header className="project-detail-header">
                 <div className="project-detail-identity">
                   {projectDetail.iconUrl ? <img alt="" src={projectDetail.iconUrl} /> : <span>◈</span>}
@@ -3833,27 +3844,43 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
               <div className="project-detail-scroll">
                 {projectDetail.gallery[0] && <img className="project-hero" src={projectDetail.gallery[0]} alt={`Destaque de ${projectDetail.title}`} />}
                 <Suspense fallback={<p role="status">Carregando descrição…</p>}>
-                  <ProjectDescription services={services} summary={projectDetail.summary} body={projectDetail.body} bodyFormat={projectDetail.bodyFormat} loading={detailLoading} />
+                  <ProjectDescription summary={projectDetail.summary} body={projectDetail.body} bodyFormat={projectDetail.bodyFormat} loading={detailLoading} />
                 </Suspense>
               </div>
-              <footer className="project-detail-actions">
+              <footer className={projectDetail.kind === "modpack" ? "project-detail-actions modpack-install-actions" : "project-detail-actions"}>
                 {projectDetail.websiteUrl && <a href={projectDetail.websiteUrl} rel="noreferrer" target="_blank">Abrir site oficial</a>}
                 {projectDetail.kind === "content" && <small>Instalação compatível com Minecraft {installedMinecraftVersion || minecraftVersion}{contentType === "mod" && instanceLoader() ? ` · ${instanceLoader()}` : ""}</small>}
-                {projectDetail.kind === "modpack" && projectDetail.pack && <label className="detail-version-select">Versão<select value={packVersions[projectDetail.pack.projectId] ?? preferredPackVersion(projectDetail.pack, minecraftVersion)} onChange={(event) => setPackVersions((current) => ({ ...current, [projectDetail.pack!.projectId]: event.target.value }))}>{(projectDetail.pack.versions.length ? projectDetail.pack.versions : [minecraftVersion]).map((version) => <option key={version} value={version}>{version}</option>)}</select></label>}
+                {projectDetail.kind === "modpack" && projectDetail.pack && <label className="detail-version-select">Minecraft<select disabled={busy} value={packVersions[projectDetail.pack.projectId] ?? preferredPackVersion(projectDetail.pack, minecraftVersion)} onChange={(event) => setPackVersions((current) => ({ ...current, [projectDetail.pack!.projectId]: event.target.value }))}>{(projectDetail.pack.versions.length ? projectDetail.pack.versions : [minecraftVersion]).map((version) => <option key={version} value={version}>{version}</option>)}</select></label>}
                 <span />
-                {projectDetail.kind === "content" && projectDetail.content && <button disabled={busy} onClick={() => void installContent(projectDetail.content!)} type="button">{contentType === "mod" ? "Instalar com dependências" : "Instalar na instância"}</button>}
-                {projectDetail.kind === "modpack" && projectDetail.pack && <><button className="secondary" disabled={busy || !targetInstance} onClick={() => void installModrinth(projectDetail.pack!)} type="button">{projectDetail.source === "curseforge" ? "Baixar tudo na selecionada" : "Instalar na selecionada"}</button><button disabled={busy} onClick={() => void createAndInstallModrinth(projectDetail.pack!)} type="button">{projectDetail.source === "curseforge" ? "Criar e baixar tudo" : "Criar e instalar"}</button></>}
+                {projectDetail.kind === "content" && projectDetail.content && <button disabled={busy} onClick={() => { closeProjectDetail(); void installContent(projectDetail.content!); }} type="button">{contentType === "mod" ? "Instalar com dependências" : "Instalar na instância"}</button>}
+                {projectDetail.kind === "modpack" && projectDetail.pack && <>
+                  <label className="detail-destination-select">Destino<select disabled={busy} value={packInstallTarget} onChange={(event) => setPackInstallTarget(event.target.value)}>
+                    <option value="">Nova instância</option>
+                    {instances.map((instance) => <option key={instance.id} value={instance.id}>{instance.displayName ? `${instance.displayName} (${instance.id})` : instance.id}</option>)}
+                  </select></label>
+                  <button disabled={busy} onClick={() => {
+                    closeProjectDetail();
+                    if (packInstallTarget) void installModrinth(projectDetail.pack!, packInstallTarget);
+                    else void createAndInstallModrinth(projectDetail.pack!);
+                  }} type="button">
+                    {packInstallTarget ? "Instalar na instância" : "Criar e instalar"}
+                  </button>
+                </>}
               </footer>
-            </section>
+            </ProjectDialog>
           )}
-          {instanceLog && (
+          {instanceLog?.owner === profile.uid && (
             <section className="log-panel">
               <div className="panel-heading">
                 <div><p className="eyebrow">CONSOLE DA INSTÂNCIA</p><h2>{instanceLog.id} · {instanceLog.log.filename}</h2></div>
-                <button className="secondary compact" onClick={() => setInstanceLog(undefined)} type="button">Fechar console</button>
+                <button className="secondary compact" onClick={() => { logRequest.current++; setInstanceLog(undefined); }} type="button">Fechar console</button>
               </div>
-              {instanceLog.log.lines.length > 0 && <SupportContextButton key={instanceLog.id} source="Minecraft" log={instanceLog.log.lines.join("\n")} />}
-              {instanceLog.log.lines.length === 0 ? <p className="muted">Nenhuma linha de log foi gerada ainda.</p> : (
+              <div className="form-actions" aria-label="Origem do registro">
+                <button type="button" className="secondary compact" disabled={busy} aria-pressed={!instanceLog.crash} onClick={() => void openInstanceLog(instanceLog.id)}>Log do jogo</button>
+                <button type="button" className="secondary compact" disabled={busy} aria-pressed={instanceLog.crash} onClick={() => void openInstanceLog(instanceLog.id, true)}>Último crash</button>
+                {instanceLog.log.lines.length > 0 && <SupportContextButton key={instanceLog.id + instanceLog.log.filename} label={instanceLog.crash ? "Copiar crash" : "Copiar log"} source="Minecraft" log={instanceLog.log.lines.join("\n")} />}
+              </div>
+              {instanceLog.log.lines.length === 0 ? <p className="muted">{instanceLog.crash ? "Esta instância ainda não tem um relatório de crash." : "Nenhuma linha de log foi gerada ainda."}</p> : (
                 <pre aria-label="Últimas linhas do log" className="log-viewer">
                   {instanceLog.log.lines.map((line, index) => <code className={/\b(error|exception|failed|fatal)\b/i.test(line) ? "log-error" : /\b(warn|warning)\b/i.test(line) ? "log-warning" : /\b(joined|loaded|starting|done)\b/i.test(line) ? "log-success" : ""} key={`${index}-${line.slice(0, 24)}`}>{line}{"\n"}</code>)}
                 </pre>
@@ -4017,7 +4044,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           )}
         </aside>
       )}
-      {supportNotice?.owner === profile.uid && <SupportDialog source="Launcher" log={supportNotice.text} close={() => setSupportNotice(undefined)} />}
       {notice && (
         <aside
           className="notice-toast"
@@ -4026,7 +4052,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           aria-live="polite"
         >
           <span>{notice}</span>
-          {/erro|falh|inválid|não foi possível|incompatível|indisponível/i.test(notice) && <button className="secondary compact" type="button" onClick={() => setSupportNotice({ owner: profile.uid, text: notice })}>Preparar para IA</button>}
+          {/erro|falh|inválid|não foi possível|incompatível|indisponível/i.test(notice) && <SupportContextButton key={notice} label="Copiar erro" source="Launcher" log={notice} />}
           <button aria-label="Fechar mensagem" onClick={() => setNotice("")} type="button">×</button>
         </aside>
       )}

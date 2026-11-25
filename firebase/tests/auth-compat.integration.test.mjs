@@ -72,12 +72,14 @@ test("normal launcher registration, login, existing profile and appearance remai
     await env.withSecurityRulesDisabled(async context => {
       await setDoc(doc(context.firestore(), "users", uid), { ...profile, role: "CREATOR",
         createdAt: new Date("2026-01-01T00:00:00Z"), legacyField: true,
-        skinFavorites: [{ id: "old", name: "Old", skinUrl: "https://example.invalid/old.png", skinModel: "classic" }],
+        skinFavorites: [null, {}, { id: "invalid", name: "Unreadable", skinUrl: "invalid" },
+          { id: "private", name: "Private", skinUrl: "https://user:pass@example.invalid/skin.png" },
+          { id: "old", name: "Old", skinUrl: "https://example.invalid/old.png" }],
       });
     });
     const legacy = await functions.loadAuroraProfile(services, returned.user);
     assert.equal(legacy.role, "CREATOR");
-    assert.equal(legacy.skinFavorites.length, 1);
+    assert.deepEqual(legacy.skinFavorites, [{ id: "old", name: "Old", skinUrl: "https://example.invalid/old.png", skinModel: "classic" }]);
     await functions.saveAuroraAppearance(services, legacy, { avatarUrl: null, skinUrl: null, capeUrl: null, skinModel: "classic" });
     await functions.clearRemoteSkinLibrary(services, legacy);
     assert.deepEqual((await functions.loadAuroraProfile(services, returned.user)).skinFavorites, []);
@@ -89,6 +91,7 @@ test("normal launcher registration, login, existing profile and appearance remai
     assert.equal((await recoveryCodes(projectId)).some(code => code.newEmail === realEmail), false);
     await functions.linkAuroraRecoveryEmail(services, uid, password, realEmail);
     const change = (await recoveryCodes(projectId)).find(code => code.requestType === "VERIFY_AND_CHANGE_EMAIL" && (code.email === realEmail || code.newEmail === realEmail));
+    assert.equal(auth.languageCode, "pt-BR");
     assert.ok(change, "Firebase must issue a confirmation to the new address");
     assert.equal(auth.currentUser.email, profile.email, "an unconfirmed address cannot become the account login");
     await applyActionCode(auth, change.oobCode);
@@ -106,6 +109,7 @@ test("normal launcher registration, login, existing profile and appearance remai
     await functions.resetAuroraPassword(services, `unknown-${crypto.randomUUID()}@example.com`);
     await functions.resetAuroraPassword(services, realEmail);
     const reset = (await recoveryCodes(projectId)).find(code => code.requestType === "PASSWORD_RESET" && code.email === realEmail);
+    assert.equal(auth.languageCode, "pt-BR");
     assert.ok(reset, "Firebase must issue a password reset for the verified address");
     assert.equal(await verifyPasswordResetCode(auth, reset.oobCode), realEmail);
     const newPassword = "new-unique-local-recovery-fixture";

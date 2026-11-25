@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { buildThemeAiPrompt, DEFAULT_THEME, formatThemeCode, inspectGif, parseTheme, THEME_EXAMPLES, type AuroraTheme, type ThemeAsset, type ThemeLibrary } from "./model";
+import { DEFAULT_THEME, formatThemeCode, inspectGif, parseTheme, THEME_EXAMPLES, type AuroraTheme, type ThemeAsset, type ThemeLibrary } from "./model";
 import { ThemeVisualEditor } from "./ThemeVisualEditor";
 import "./manager.css";
 
@@ -310,15 +310,6 @@ export function ThemeManager({ library, instances, selectedInstanceId, busy, err
     }, "Não foi possível preparar a imagem decorativa.");
   }
 
-  async function copyInstructions() {
-    await perform(async () => {
-      let theme = { ...DEFAULT_THEME, id: "meu-tema", name: "Meu tema" };
-      try { theme = readTheme(); } catch { /* Instructions remain available while repairing an invalid draft. */ }
-      await navigator.clipboard.writeText(buildThemeAiPrompt(theme));
-      setMessage("Instruções copiadas. Cole em uma IA de sua escolha, peça as mudanças e traga o JSON de volta.");
-    }, "Não foi possível copiar. Permita o acesso à área de transferência e tente novamente.");
-  }
-
   async function exportDocument() {
     await perform(async () => {
       const theme = readTheme();
@@ -378,7 +369,7 @@ export function ThemeManager({ library, instances, selectedInstanceId, busy, err
     </div>
 
     <div className="theme-manager-editor">
-      <div className="theme-manager-section-heading"><div><h3>Monte seu tema</h3><p>Organize visualmente ou edite o código comentado. Os dois modos trabalham no mesmo tema.</p></div><button className="secondary compact" disabled={locked} onClick={() => { void copyInstructions(); }} type="button">Copiar instruções para IA</button></div>
+      <div className="theme-manager-section-heading"><div><h3>Monte seu tema</h3><p>Organize visualmente ou edite o código comentado. Os dois modos trabalham no mesmo tema.</p></div></div>
       <div className="theme-manager-examples" role="group" aria-label="Modelos de tema"><span>Começar com</span><button className="secondary compact" disabled={locked} onClick={() => openDocument({ ...DEFAULT_THEME, id: "meu-tema", name: "Meu tema" })} type="button">Novo tema</button>{THEME_EXAMPLES.map((theme) => <button className="secondary compact" disabled={locked} key={theme.id} onClick={() => openDocument(theme)} type="button">{theme.name}</button>)}</div>
       {replacement && <div className="theme-manager-replace" role="alertdialog" aria-labelledby={`${id}-replace-title`}><strong id={`${id}-replace-title`}>Você tem alterações não salvas</strong><p>Abrir “{replacement.theme.name}” substituirá o rascunho atual.</p><div><button className="secondary compact" ref={keepEditingButton} disabled={locked} type="button" onClick={() => setReplacement(null)}>Continuar editando</button><button className="danger compact" disabled={locked} type="button" onClick={() => applyDocument(replacement.theme, replacement.message)}>Descartar rascunho e abrir</button></div></div>}
       <div className="theme-manager-mode" role="tablist" aria-label="Modo de edição"><button id={`${id}-visual-tab`} type="button" role="tab" aria-selected={mode === "visual"} aria-controls={`${id}-visual-panel`} disabled={locked} className={mode === "visual" ? "is-selected" : ""} onClick={() => switchMode("visual")}>Editor visual</button><button id={`${id}-code-tab`} type="button" role="tab" aria-selected={mode === "code"} aria-controls={`${id}-code-panel`} disabled={locked} className={mode === "code" ? "is-selected" : ""} onClick={() => switchMode("code")}>Código comentado</button><span>{dirty ? "Alterações não salvas" : "Rascunho sincronizado"}</span></div>

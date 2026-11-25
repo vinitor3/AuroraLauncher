@@ -140,10 +140,8 @@ try {
         verifyReport({ ...uiShared, sanitizedJson: sharedField.value });
         ensure(document.querySelectorAll("details.doctor-issue").length === uiShared.issues.length, "DOCTOR_UI_ISSUE_COUNT");
         ensure(document.querySelector(".doctor-result-summary"), "DOCTOR_UI_SUMMARY_MISSING");
-        ensure([...document.querySelectorAll(".doctor-gemini button")].some((button) => button.textContent.trim() === "Explicar com Gemini"), "DOCTOR_GEMINI_EXPLICIT_ACTION_MISSING");
-        ensure(!document.querySelector(".doctor-gemini-result"), "DOCTOR_GEMINI_UNREQUESTED_RESULT");
         ensure(!document.querySelector("details.doctor-share")?.open && !document.querySelector("details.doctor-coverage")?.open, "DOCTOR_DETAILS_NOT_COLLAPSED");
-        return { ...output, ui: "PASS", uiIssueCount: uiShared.issues.length, uiLogCount: uiShared.logs.length, uiSanitizedReport: true, geminiExplicitAction: true, compactDetails: true };
+        return { ...output, ui: "PASS", uiIssueCount: uiShared.issues.length, uiLogCount: uiShared.logs.length, uiSanitizedReport: true, compactDetails: true };
       } catch (error) {
         // Return only codes authored in this script, never native error text.
         const code = typeof error?.message === "string" && /^[A-Z][A-Z_]+$/.test(error.message) ? error.message : "OPERATION_FAILED";
