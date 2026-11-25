@@ -4,10 +4,13 @@
 | --- | --- |
 | Instalar um modpack | Pesquise em **Descobrir**, confira o jogo e o loader e escolha a instância. |
 | Atualizar mods | Abra **Editar** na instância e consulte as atualizações compatíveis. Revise a seleção antes de aplicar. |
+| Resolver teclas em conflito | Na biblioteca, abra **Teclas** na instância e selecione uma sobreposição. Com o jogo fechado, use **Alterar** e **Salvar tecla**. Em um perfil Forge compatível, escolha também **Alt**, **Ctrl** ou **Shift**. Assim, C e Alt + C podem acionar dois comandos do pack. |
 | Ajustar a RAM | Em **Java & engine**, escolha o padrão. Em **Editar → Memória**, personalize um modpack. |
 | Mudar a skin | No **Guarda-roupa**, escolha um PNG local ou uma skin do catálogo. Confira a prévia e o modelo e equipe a skin. Na busca, digite o número da página para pular direto a ela. |
+| Equipar uma capa | No **Guarda-roupa**, importe a textura PNG em formato 64 × 32 ou múltiplo, confira a prévia e equipe. Ative o compartilhamento se quiser mostrá-la aos jogadores compatíveis. |
+| Recuperar a senha | Em **Recuperação da conta**, vincule e confirme seu e-mail enquanto tem acesso. Depois, use **Esqueci minha senha** na tela de entrada. O nick no jogo continua o mesmo. |
 | Mudar o tema | Abra **Personalização**, escolha ou edite um tema e salve. Use a **Prévia de 10 s** e confirme. `Ctrl+Shift+F12` restaura a aparência padrão. |
-| Jogar com amigos | Abra seu mundo para LAN no Minecraft iniciado pelo Aurora. Em **Amigos e comunidade → Compartilhar mundo**, encontre-o e escolha quem pode ver o convite. O botão de amigos mostra pedidos pendentes. |
+| Jogar com amigos | Abra o mundo para LAN e anuncie em **Amigos e comunidade → Compartilhar mundo**. Num anúncio privado, abra **Convites** e clique em **Convidar** ao lado do amigo. Quem recebe usa **Entrar** e segue as etapas da sessão. |
 | Entender um erro | Abra o diagnóstico da instância ou a ajuda para copiar um resumo. Confira o texto e cole na IA ou no atendimento de sua preferência. |
 
 ## Referência técnica

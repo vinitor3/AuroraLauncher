@@ -1,0 +1,131 @@
+{
+  "version": "0.3.4",
+  "coreMinimum": "1.1.3",
+  "coreBundled": "1.1.7",
+  "serverRequiresCore": false,
+  "protocol": 1,
+  "evidence": "docs/engineering/COMPATIBILITY_MATRIX.md",
+  "artifacts": [
+    {
+      "path": "1.12.2/forge/aurora-skins-forge-1.12.2-0.3.4.jar",
+      "minecraft": "1.12.2",
+      "loader": "forge",
+      "javaRuntime": 8,
+      "sha256": "6d0187fa8e0a47d4b1baed11f09f6a15fc30202c8ef5f21fc48e261985a8326a",
+      "size": 141366,
+      "selectedLoaderVersion": "14.23.5.2860",
+      "coreMinimum": "1.1.3",
+      "buildLoaderVersion": "14.23.5.2860"
+    },
+    {
+      "path": "1.16.5/fabric/aurora-skins-fabric-1.16.5-0.3.4.jar",
+      "minecraft": "1.16.5",
+      "loader": "fabric",
+      "javaRuntime": 8,
+      "sha256": "af86142ea88c359afb7262e2026335f5b4accbbb9d5c214db0cdf21d76d88bec",
+      "size": 274751,
+      "selectedLoaderVersion": "0.13.3",
+      "coreMinimum": "1.1.3",
+      "buildLoaderVersion": "0.16.14"
+    },
+    {
+      "path": "1.16.5/forge/aurora-skins-forge-1.16.5-0.3.4.jar",
+      "minecraft": "1.16.5",
+      "loader": "forge",
+      "javaRuntime": 8,
+      "sha256": "45282204e1c41e2bc21a2f2e4d0298ffbe8bd235c8b98752d785e8ccb3be3eb7",
+      "size": 136167,
+      "selectedLoaderVersion": "36.2.42",
+      "coreMinimum": "1.1.3",
+      "buildLoaderVersion": "36.2.42"
+    },
+    {
+      "path": "1.19.2/fabric/aurora-skins-fabric-1.19.2-0.3.4.jar",
+      "minecraft": "1.19.2",
+      "loader": "fabric",
+      "javaRuntime": 17,
+      "sha256": "232a27dac5d657044d440c0f4ab3e80b080acf2353fda5b6e1499ce761039524",
+      "size": 336227,
+      "selectedLoaderVersion": "0.16.14",
+      "coreMinimum": "1.1.3",
+      "buildLoaderVersion": "0.16.14"
+    },
+    {
+      "path": "1.19.2/forge/aurora-skins-forge-1.19.2-0.3.4.jar",
+      "minecraft": "1.19.2",
+      "loader": "forge",
+      "javaRuntime": 17,
+      "sha256": "df53bf83f25899e9757e2679cc17bd2ac59730e3ba2054293762d553b8a090f8",
+      "size": 136616,
+      "selectedLoaderVersion": "43.4.16",
+      "coreMinimum": "1.1.3",
+      "buildLoaderVersion": "43.4.16"
+    },
+    {
+      "path": "1.20.1/fabric/aurora-skins-fabric-1.20.1-0.3.4.jar",
+      "minecraft": "1.20.1",
+      "loader": "fabric",
+      "javaRuntime": 17,
+      "sha256": "0b2c1526ffe10bc16a76fe8b72bbdbbde111d7c67fa372e367e98c2a6f6778c7",
+      "size": 344941,
+      "selectedLoaderVersion": "0.16.14",
+      "coreMinimum": "1.1.3",
+      "buildLoaderVersion": "0.16.14"
+    },
+    {
+      "path": "1.20.1/forge/aurora-skins-forge-1.20.1-0.3.4.jar",
+      "minecraft": "1.20.1",
+      "loader": "forge",
+      "javaRuntime": 17,
+      "sha256": "f87aba0574ba30f3a990cac16ff1f35d37f9ebfd4dc42612aaea4c0153456e2a",
+      "size": 136517,
+      "selectedLoaderVersion": "47.4.23",
+      "coreMinimum": "1.1.3",
+      "buildLoaderVersion": "47.4.23"
+    },
+    {
+      "path": "1.21.1/fabric/aurora-skins-fabric-1.21.1-0.3.4.jar",
+      "minecraft": "1.21.1",
+      "loader": "fabric",
+      "javaRuntime": 21,
+      "sha256": "f2c4e313f51fdead0597d559d5ae03a3c8632020d0227d1b3b2761ecd10bf288",
+      "size": 405174,
+      "selectedLoaderVersion": "0.16.14",
+      "coreMinimum": "1.1.3",
+      "buildLoaderVersion": "0.16.14"
+    },
+    {
+      "path": "1.21.1/forge/aurora-skins-forge-1.21.1-0.3.4.jar",
+      "minecraft": "1.21.1",
+      "loader": "forge",
+      "javaRuntime": 21,
+      "sha256": "0673bf4ad2e13e402ea7c1577a7c9bca4545bdb487c70f2c059cefb8930553e9",
+      "size": 124105,
+      "selectedLoaderVersion": "52.1.12",
+      "coreMinimum": "1.1.3",
+      "buildLoaderVersion": "52.1.12"
+    },
+    {
+      "path": "1.21.11/fabric/aurora-skins-fabric-1.21.11-0.3.4.jar",
+      "minecraft": "1.21.11",
+      "loader": "fabric",
+      "javaRuntime": 21,
+      "sha256": "ecda9cc036386989644b8339d2b3396fb059c2be259837ae4cfee192446904c5",
+      "size": 429175,
+      "selectedLoaderVersion": "0.20.1",
+      "coreMinimum": "1.1.7",
+      "buildLoaderVersion": "0.20.1"
+    },
+    {
+      "path": "26.3/fabric/aurora-skins-fabric-26.3-0.3.4.jar",
+      "minecraft": "26.3",
+      "loader": "fabric",
+      "javaRuntime": 25,
+      "sha256": "3d1ef8a809403f00f00dfb83a3504b89e2cf3381490b1b1f5ba477c03f1ec3a3",
+      "size": 425794,
+      "selectedLoaderVersion": "0.20.1",
+      "coreMinimum": "1.1.7",
+      "buildLoaderVersion": "0.20.1"
+    }
+  ]
+}

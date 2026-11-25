@@ -17,6 +17,7 @@ public final class SkinSyncClientBridge {
         if (sync != null) return;
         sync = new SkinSyncClient(runtime, new SkinSyncClient.Listener() {
             @Override public void apply(UUID player, byte[] png, SkinModel model) { AuroraSkinManager.setRemoteSkin(player, png, model); }
+            @Override public void cape(UUID player, byte[] png) { AuroraSkinManager.setRemoteCape(player, png); }
             @Override public void remove(UUID player) { AuroraSkinManager.removeRemoteSkin(player); }
             @Override public void clear() { AuroraSkinManager.clearRemoteSkins(); }
         }, action -> Minecraft.getInstance().execute(action));

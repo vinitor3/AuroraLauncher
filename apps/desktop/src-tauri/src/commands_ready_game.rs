@@ -249,7 +249,10 @@ fn check_cancel(cancel: &CancellationToken) -> Result<(), Error> {
         Ok(())
     }
 }
-fn appearance(app: &AppHandle, request: &ReadyGameLaunchRequest) -> Result<Option<PathBuf>, Error> {
+fn appearance(
+    app: &AppHandle,
+    request: &ReadyGameLaunchRequest,
+) -> Result<(Option<PathBuf>, Option<PathBuf>), Error> {
     for value in [&request.appearance.skin_url, &request.appearance.cape_url]
         .into_iter()
         .flatten()
@@ -258,16 +261,19 @@ fn appearance(app: &AppHandle, request: &ReadyGameLaunchRequest) -> Result<Optio
             return Err(Error::InvalidRequest);
         }
     }
-    let skin = request
-        .appearance
-        .skin_file
-        .as_deref()
-        .map(|path| local_appearance_path(app, Some(path), "skin").ok_or(Error::InvalidRequest))
-        .transpose()?;
-    if let Some(path) = &skin {
-        doctor_runs::check_path(path).map_err(|_| Error::InvalidRequest)?;
-    }
-    Ok(skin)
+    let selected = |value: Option<&str>, kind: &str| -> Result<Option<PathBuf>, Error> {
+        let path = value
+            .map(|value| local_appearance_path(app, Some(value), kind).ok_or(Error::InvalidRequest))
+            .transpose()?;
+        if let Some(file) = &path {
+            doctor_runs::check_path(file).map_err(|_| Error::InvalidRequest)?;
+        }
+        Ok(path)
+    };
+    Ok((
+        selected(request.appearance.skin_file.as_deref(), "skin")?,
+        selected(request.appearance.cape_file.as_deref(), "cape")?,
+    ))
 }
 struct ReadyGameInspection {
     instance: aurora_launcher_core::engine::Instance,
@@ -275,6 +281,7 @@ struct ReadyGameInspection {
     proof: ReadyRuntime,
     java: JavaRuntime,
     skin: Option<PathBuf>,
+    cape: Option<PathBuf>,
     settings: ReadyLaunchSettings,
 }
 
@@ -315,7 +322,7 @@ fn inspect(
     {
         return Err(Error::JavaUnavailable);
     }
-    let skin = appearance(app, request)?;
+    let (skin, cape) = appearance(app, request)?;
     // First verify the installed runtime shape and pin the executable/runtime
     // files, then run the bounded -version probe while those pins are retained.
     let selected_profile = select_ready_profile(&instance)?;
@@ -327,7 +334,7 @@ fn inspect(
         &guard,
         &request.source_instance_id,
         &java_path,
-        skin.as_deref(),
+        (skin.as_deref(), cape.as_deref()),
         endpoint,
         selected_profile.descriptor().java_major,
         voice_profile,
@@ -365,6 +372,7 @@ fn inspect(
         proof,
         java,
         skin,
+        cape,
         settings,
     })
 }
@@ -476,6 +484,7 @@ impl PreparedReadyGame for DesktopPrepared {
             mut proof,
             java,
             skin,
+            cape,
             settings,
         } = inspect(
             &self.app,
@@ -531,6 +540,15 @@ impl PreparedReadyGame for DesktopPrepared {
                 "-Daurora.profile.skinFile={}",
                 java_property_path(&path)
             ));
+        }
+        if let Some(path) = cape {
+            spec.jvm_args.push(format!(
+                "-Daurora.profile.capeFile={}",
+                java_property_path(&path)
+            ));
+            if self.request.appearance.share_cape == Some(true) {
+                spec.jvm_args.push("-Daurora.profile.shareCape=true".into());
+            }
         }
         if let Some(url) = &self.request.appearance.cape_url {
             spec.jvm_args

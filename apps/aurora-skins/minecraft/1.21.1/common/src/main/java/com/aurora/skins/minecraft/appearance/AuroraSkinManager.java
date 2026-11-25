@@ -40,10 +40,18 @@ public final class AuroraSkinManager {
     private static final java.util.concurrent.atomic.AtomicLong LOAD_REQUEST = new java.util.concurrent.atomic.AtomicLong();
     private static volatile AuroraSkinsRuntime runtime;
     private static volatile ResourceLocation skin;
+    private static volatile ResourceLocation cape;
     private static volatile String model = "classic";
     // A request owns its texture, so a delayed release can never remove a newer upload.
     private static final Map<UUID, RemoteSkin> REMOTE = new HashMap<>();
     private static final java.util.concurrent.atomic.AtomicLong REMOTE_REQUEST = new java.util.concurrent.atomic.AtomicLong();
+    private static final com.aurora.skins.sync.RemoteCapes<ResourceLocation> REMOTE_CAPES =
+        new com.aurora.skins.sync.RemoteCapes<>((player, png) -> {
+            NativeImage image = NativeImage.read(new ByteArrayInputStream(png));
+            ResourceLocation location = ResourceLocation.fromNamespaceAndPath("aurora_skins", "capes/" + player + "/" + REMOTE_REQUEST.incrementAndGet());
+            Minecraft.getInstance().getTextureManager().register(location, new DynamicTexture(image));
+            return location;
+        }, AuroraSkinManager::release);
     private static final ExecutorService REMOTE_IO = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
         new ArrayBlockingQueue<>(MAX_REMOTE_PLAYERS), runnable -> {
             Thread thread = new Thread(runnable, "Aurora-Skins-Remote-IO");
@@ -57,6 +65,7 @@ public final class AuroraSkinManager {
         if (runtime == skinsRuntime) return;
         if (runtime != null) shutdown();
         runtime = skinsRuntime;
+        loadCape(skinsRuntime);
         skinsRuntime.addListener(LISTENER);
         SkinEntry active = skinsRuntime.active();
         if (active != null) load(active);
@@ -64,6 +73,34 @@ public final class AuroraSkinManager {
 
     public static ResourceLocation skin() { return skin; }
     public static String model() { return model; }
+
+    public static ResourceLocation cape(UUID playerId) {
+        return playerId != null && isLocalPlayer(playerId) ? cape : REMOTE_CAPES.get(playerId);
+    }
+
+    public static void setRemoteCape(UUID playerId, byte[] png) {
+        if (runtime != null && playerId != null && !isLocalPlayer(playerId)) REMOTE_CAPES.update(playerId, png);
+    }
+
+    private static void loadCape(AuroraSkinsRuntime owner) {
+        IO.execute(() -> {
+            try {
+                byte[] png = com.aurora.skins.ProfileCape.readSelected();
+                if (png == null) return;
+                NativeImage image = NativeImage.read(new ByteArrayInputStream(png));
+                Minecraft.getInstance().execute(() -> {
+                    synchronized (AuroraSkinManager.class) {
+                        if (runtime != owner) { image.close(); return; }
+                        ResourceLocation location = ResourceLocation.fromNamespaceAndPath("aurora_skins", "profile/cape");
+                        Minecraft.getInstance().getTextureManager().register(location, new DynamicTexture(image));
+                        cape = location;
+                    }
+                });
+            } catch (Exception error) {
+                System.err.println("[Aurora Skins] Capa indisponível: " + error.getClass().getSimpleName());
+            }
+        });
+    }
 
     public static synchronized ResourceLocation skin(UUID playerId) {
         if (playerId == null) return null;
@@ -80,14 +117,18 @@ public final class AuroraSkinManager {
         return remote == null || remote.texture == null ? null : remote.publishedModel;
     }
 
-    /** Apply only the skin; vanilla still owns the player's cape and elytra. */
     public static synchronized PlayerSkin overrideSkin(UUID playerId, PlayerSkin original) {
-        ResourceLocation texture = skin(playerId);
-        if (texture == null) return original;
-        PlayerSkin.Model selectedModel = "slim".equals(model(playerId)) ? PlayerSkin.Model.SLIM : PlayerSkin.Model.WIDE;
-        return new PlayerSkin(texture, null, original == null ? null : original.capeTexture(),
+        var texture = skin(playerId);
+        var selectedCape = cape(playerId);
+        if (texture == null && (selectedCape == null || original == null)) return original;
+        var selectedModel = texture == null ? original.model()
+            : ("slim".equals(model(playerId)) ? PlayerSkin.Model.SLIM : PlayerSkin.Model.WIDE);
+        return new PlayerSkin(texture == null ? original.texture() : texture,
+            texture == null ? original.textureUrl() : null,
+            selectedCape != null ? selectedCape : original == null ? null : original.capeTexture(),
             original == null ? null : original.elytraTexture(), selectedModel, false);
     }
+
     private static boolean isLocalPlayer(UUID playerId) {
         Minecraft minecraft = Minecraft.getInstance();
         return minecraft.player != null && playerId.equals(minecraft.player.getUUID());
@@ -146,6 +187,7 @@ public final class AuroraSkinManager {
     public static synchronized void clearRemoteSkins() {
         for (RemoteSkin remote : REMOTE.values()) release(remote.texture);
         REMOTE.clear();
+        REMOTE_CAPES.clear();
         ((ThreadPoolExecutor) REMOTE_IO).getQueue().clear();
     }
 
@@ -211,6 +253,8 @@ public final class AuroraSkinManager {
         skin = null;
         model = "classic";
         release(previous);
+        release(cape);
+        cape = null;
         clearRemoteSkins();
     }
 

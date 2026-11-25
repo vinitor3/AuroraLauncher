@@ -120,6 +120,7 @@ function launchSetup(overrides = {}) {
     wardrobeLoading: false,
     wardrobeReadyOwner: "current",
     targetInstance: "instance",
+    capeWardrobe: { ready: true, share: false, active: { path: "C:/appearance/current/cape.png", url: null } },
     runningInstances: [],
     localSkinPath: "C:/appearance/current/skin.png",
     equippedSkin: { skinModel: "slim" },
@@ -161,6 +162,8 @@ test("ready launch supplies restored local PNG and equipped model rather than st
   await run.context.launchMinecraft();
   const launch = run.invocations.find(([command]) => command === "launch_instance")[1];
   assert.equal(launch.skinFile, "C:/appearance/current/skin.png");
+  assert.equal(launch.capeFile, "C:/appearance/current/cape.png");
+  assert.equal(launch.shareCape, false);
   assert.equal(launch.skinModel, "slim");
   assert.equal(launch.runId, "test-launch-run");
   assert.equal(run.doctor.failure, undefined);

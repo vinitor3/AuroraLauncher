@@ -307,7 +307,7 @@ pub fn inspect_ready_runtime(
         guard,
         source_id,
         java,
-        skin_file,
+        (skin_file, None),
         endpoint,
         observed_java,
         None,
@@ -438,7 +438,7 @@ pub fn inspect_ready_runtime_for_voice(
     guard: &InstanceMutationGuard,
     source_id: &str,
     java: &Path,
-    skin_file: Option<&Path>,
+    appearance_files: (Option<&Path>, Option<&Path>),
     endpoint: SocketAddr,
     observed_java: u32,
     voice: Option<NativeVoiceProfile>,
@@ -702,8 +702,13 @@ pub fn inspect_ready_runtime_for_voice(
     } else {
         pin_java_runtime(&mut reader, java, observed_java)?;
     }
-    if let Some(path) = skin_file {
-        reader.read(path, "selected-local-skin".into(), 5 * 1024 * 1024)?;
+    for (selection, label) in [
+        (appearance_files.0, "selected-local-skin"),
+        (appearance_files.1, "selected-local-cape"),
+    ] {
+        if let Some(path) = selection {
+            reader.read(path, label.into(), 5 * 1024 * 1024)?;
+        }
     }
     if cancelled() {
         return Err(Error::Cancelled);

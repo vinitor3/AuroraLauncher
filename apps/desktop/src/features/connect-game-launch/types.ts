@@ -30,15 +30,15 @@ const voiceFabricApi: Record<string, readonly [string, number]> = {
 type RuntimeTarget = typeof runtimeTargets[number];
 export type ReadyGameRuntime = {
   minecraftVersion: RuntimeTarget[0]; loader: RuntimeTarget[1]; loaderVersion: RuntimeTarget[2];
-  javaMajor: RuntimeTarget[3]; coreVersion: "1.1.7"; skinsVersion: "0.3.3";
+  javaMajor: RuntimeTarget[3]; coreVersion: "1.1.7"; skinsVersion: "0.3.4";
 };
 export type ReadyGameLaunchCapability = {
   schemaVersion: 1; instanceScope: "diagnosticCopy"; maxPlanSeconds: 60;
   minecraftVersion: "1.21.1"; loader: "fabric"; loaderVersion: "0.16.14";
-  javaMajor: 21; coreVersion: "1.1.7"; skinsVersion: "0.3.3";
+  javaMajor: 21; coreVersion: "1.1.7"; skinsVersion: "0.3.4";
 } | { schemaVersion: 2 | 3; instanceScope: "diagnosticCopy"; maxPlanSeconds: 60; runtimes: ReadyGameRuntime[] };
 export type ReadyGameAppearance = {
-  skinUrl: string | null; skinFile: string | null; capeUrl: string | null; skinModel: "classic" | "slim" | null;
+  skinUrl: string | null; skinFile: string | null; capeUrl: string | null; capeFile?: string | null; shareCape?: boolean | null; skinModel: "classic" | "slim" | null;
 };
 export type ReadyGameLaunchContext = {
   sourceInstanceId: string; contextKey: string; javaExecutable: string; nickname: string;
@@ -100,7 +100,7 @@ const exact = (value: Record<string, unknown>, fields: string[]) => Object.keys(
 const invalid = (): never => { throw new Error("Invalid ready game launch projection"); };
 const runtimeFields = ["minecraftVersion", "loader", "loaderVersion", "javaMajor", "coreVersion", "skinsVersion"];
 const validRuntime = (value: Record<string, unknown>, targets: readonly RuntimeTarget[] = runtimeTargets) =>
-  value.coreVersion === "1.1.7" && value.skinsVersion === "0.3.3"
+  value.coreVersion === "1.1.7" && value.skinsVersion === "0.3.4"
   && targets.some(([minecraftVersion, loader, loaderVersion, javaMajor]) =>
     value.minecraftVersion === minecraftVersion && value.loader === loader
     && value.loaderVersion === loaderVersion && value.javaMajor === javaMajor);
@@ -126,7 +126,9 @@ export function readyGameCapabilitySupports(capability: ReadyGameLaunchCapabilit
     && profile.coreVersion === runtime.coreVersion && profile.skinsVersion === runtime.skinsVersion);
 }
 function appearanceFrom(value: unknown): ReadyGameAppearance {
-  if (!object(value) || !exact(value, ["skinUrl", "skinFile", "capeUrl", "skinModel"])
+  if (!object(value) || !exact(value, ["skinUrl", "skinFile", "capeUrl", "skinModel", ...["capeFile", "shareCape"].filter(key => Object.hasOwn(value, key))])
+    || !(value.shareCape == null || typeof value.shareCape === "boolean")
+    || !(value.capeFile == null || text(value.capeFile, 4096))
     || !(value.skinUrl === null || text(value.skinUrl, 2048)) || !(value.skinFile === null || text(value.skinFile, 4096))
     || !(value.capeUrl === null || text(value.capeUrl, 2048)) || ![null, "classic", "slim"].includes(value.skinModel as string | null)) return invalid();
   return value as ReadyGameAppearance;
@@ -143,7 +145,7 @@ function reviewFrom(value: unknown): ReadyGameLaunchReview {
     || !integer(value.expiresAtMs) || !integer(value.sessionExpiresAtMs) || value.expiresAtMs === 0 || value.expiresAtMs > value.sessionExpiresAtMs
     || !validRuntime(value)
     || typeof value.gameAddress !== "string" || !/^127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(value.gameAddress) || Number(value.gameAddress.slice(10)) > 65535
-    || value.coreVersion !== "1.1.7" || !hash(value.coreSha256) || value.skinsVersion !== "0.3.3" || !hash(value.skinsSha256)) return invalid();
+    || value.coreVersion !== "1.1.7" || !hash(value.coreSha256) || value.skinsVersion !== "0.3.4" || !hash(value.skinsSha256)) return invalid();
   if (Object.hasOwn(value, "voice")) {
     const voice = value.voice;
     if (!object(voice) || !exact(voice, ["profile", "mods"])) return invalid();
@@ -192,9 +194,9 @@ export function sameReadyGameContext(review: ReadyGameLaunchContext, context: Re
   return validReadyGameContext(context) && review.sourceInstanceId === context.sourceInstanceId && review.contextKey === context.contextKey
     && review.javaExecutable === context.javaExecutable && review.nickname === context.nickname
     && review.appearance.skinUrl === context.appearance.skinUrl && review.appearance.skinFile === context.appearance.skinFile
-    && review.appearance.capeUrl === context.appearance.capeUrl && review.appearance.skinModel === context.appearance.skinModel;
+    && !!review.appearance.shareCape === !!context.appearance.shareCape && (review.appearance.capeFile ?? null) === (context.appearance.capeFile ?? null) && review.appearance.capeUrl === context.appearance.capeUrl && review.appearance.skinModel === context.appearance.skinModel;
 }
 export function readyGameContextFingerprint(context: ReadyGameLaunchContext | undefined) {
   return validReadyGameContext(context) ? JSON.stringify([context.sourceInstanceId, context.contextKey, context.javaExecutable, context.nickname,
-    context.appearance.skinUrl, context.appearance.skinFile, context.appearance.capeUrl, context.appearance.skinModel]) : "";
+    context.appearance.skinUrl, context.appearance.skinFile, context.appearance.capeFile, !!context.appearance.shareCape, context.appearance.capeUrl, context.appearance.skinModel]) : "";
 }

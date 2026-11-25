@@ -16,6 +16,12 @@ public abstract class AbstractClientPlayerMixin {
         if (location != null) callback.setReturnValue(location);
     }
 
+    @Inject(method = "getCloakTextureLocation", at = @At("HEAD"), cancellable = true, require = 1)
+    private void auroraSkins$cape(CallbackInfoReturnable<ResourceLocation> callback) {
+        ResourceLocation cape = AuroraSkinManager.cape(((AbstractClientPlayer) (Object) this).getUUID());
+        if (cape != null) callback.setReturnValue(cape);
+    }
+
     @Inject(method = "getModelName", at = @At("HEAD"), cancellable = true, require = 1)
     private void auroraSkins$model(CallbackInfoReturnable<String> callback) {
         String model = AuroraSkinManager.model(((AbstractClientPlayer) (Object) this).getUUID());

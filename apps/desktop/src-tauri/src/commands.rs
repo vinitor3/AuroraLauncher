@@ -113,6 +113,8 @@ pub struct JavaRuntimeSummary {
 #[serde(rename_all = "camelCase")]
 pub struct AppearanceImageSummary {
     url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    local_path: Option<String>,
     data_base64: String,
 }
 
@@ -1892,6 +1894,48 @@ pub async fn apply_instance_modpack_update(
 }
 
 #[tauri::command]
+pub async fn instance_keymap(
+    app: AppHandle,
+    id: String,
+) -> Result<aurora_launcher_core::engine::keybindings::KeyMap, String> {
+    let instance = layout(&app)?.open(InstanceId::parse(id).map_err(|e| e.to_string())?);
+    tauri::async_runtime::spawn_blocking(move || {
+        aurora_launcher_core::engine::keybindings::inspect(&instance)
+    })
+    .await
+    .map_err(|_| "Não foi possível ler os controles.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn rebind_instance_key(
+    app: AppHandle,
+    running: tauri::State<'_, RunningInstances>,
+    id: String,
+    revision: String,
+    action: String,
+    input: String,
+    modifier: Option<String>,
+) -> Result<aurora_launcher_core::engine::keybindings::KeyMap, String> {
+    let instance = layout(&app)?.open(InstanceId::parse(id.as_str()).map_err(|e| e.to_string())?);
+    if instance_is_running(&running, &id)? {
+        return Err("Feche o Minecraft antes de mudar os controles.".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = acquire_idle_instance(&instance)?;
+        ensure_no_external_instance_game(instance.root())?;
+        aurora_launcher_core::engine::keybindings::rebind(
+            &instance,
+            &revision,
+            &action,
+            &input,
+            modifier.as_deref(),
+        )
+    })
+    .await
+    .map_err(|_| "Não foi possível alterar os controles.".to_owned())?
+}
+
+#[tauri::command]
 pub fn list_instance_content(app: AppHandle, id: String) -> Result<InstanceContentSummary, String> {
     let id = InstanceId::parse(id).map_err(|error| error.to_string())?;
     let instance = layout(&app)?.open(id);
@@ -2724,6 +2768,8 @@ pub async fn launch_instance(
     skin_url: Option<String>,
     skin_file: Option<String>,
     cape_url: Option<String>,
+    cape_file: Option<String>,
+    share_cape: Option<bool>,
     skin_model: Option<String>,
     run_id: Option<String>,
 ) -> Result<LaunchSummary, String> {
@@ -2740,6 +2786,8 @@ pub async fn launch_instance(
             skin_url,
             skin_file,
             cape_url,
+            cape_file,
+            share_cape,
             skin_model,
             run_id,
         )
@@ -2761,6 +2809,8 @@ fn launch_instance_inner(
     skin_url: Option<String>,
     skin_file: Option<String>,
     cape_url: Option<String>,
+    cape_file: Option<String>,
+    share_cape: Option<bool>,
     skin_model: Option<String>,
     run_id: Option<String>,
 ) -> Result<LaunchSummary, String> {
@@ -2792,6 +2842,8 @@ fn launch_instance_inner(
         skin_url,
         skin_file,
         cape_url,
+        cape_file,
+        share_cape,
         skin_model,
         &mut run,
     );
@@ -2832,6 +2884,8 @@ fn launch_instance_tracked(
     skin_url: Option<String>,
     skin_file: Option<String>,
     cape_url: Option<String>,
+    cape_file: Option<String>,
+    share_cape: Option<bool>,
     skin_model: Option<String>,
     doctor_run: &mut DoctorRun,
 ) -> Result<LaunchSummary, String> {
@@ -2923,6 +2977,15 @@ fn launch_instance_tracked(
                 "-Daurora.profile.skinFile={}",
                 java_property_path(&path)
             ));
+        }
+        if let Some(path) = local_appearance_path(&app, cape_file.as_deref(), "cape") {
+            spec.jvm_args.push(format!(
+                "-Daurora.profile.capeFile={}",
+                java_property_path(&path)
+            ));
+            if share_cape == Some(true) {
+                spec.jvm_args.push("-Daurora.profile.shareCape=true".into());
+            }
         }
         if let Some(url) = public_profile_url(cape_url.as_deref()) {
             spec.jvm_args
@@ -3064,6 +3127,7 @@ pub async fn load_appearance_url(
         let (url, bytes) = download_appearance_url_blocking(&url, &kind)?;
         Ok(AppearanceImageSummary {
             url,
+            local_path: None,
             data_base64: format!("data:image/png;base64,{}", STANDARD.encode(bytes)),
         })
     })
@@ -3092,6 +3156,7 @@ pub fn load_local_appearance(
     png_dimensions(&bytes)?;
     Ok(AppearanceImageSummary {
         url: String::new(),
+        local_path: Some(path.display().to_string()),
         data_base64: format!("data:image/png;base64,{}", STANDARD.encode(bytes)),
     })
 }
@@ -3125,19 +3190,22 @@ pub fn save_local_appearance(
             "a skin precisa ter 64x64 ou 64x32 pixels; esta imagem tem {width}x{height}"
         ));
     }
+    if kind == "cape" && (!(64..=1024).contains(&width) || width % 64 != 0 || height != width / 2) {
+        return Err("Use uma textura de capa 64×32 ou um múltiplo até 1024×512.".into());
+    }
     let directory = data_directory(&app)?.join("appearance").join(user_id);
     fs::create_dir_all(&directory)
         .map_err(|error| format!("não foi possível preparar a aparência local: {error}"))?;
     let destination = directory.join(format!("{kind}.png"));
-    let temporary = directory.join(format!("{kind}.png.aurora-writing"));
-    fs::write(&temporary, bytes)
-        .map_err(|error| format!("não foi possível salvar a aparência local: {error}"))?;
-    if destination.exists() {
-        fs::remove_file(&destination)
-            .map_err(|error| format!("não foi possível atualizar a aparência local: {error}"))?;
+    let temporary = directory.join(format!("{}.aurora-writing", uuid::Uuid::new_v4()));
+    if let Err(error) =
+        fs::write(&temporary, bytes).and_then(|()| fs::rename(&temporary, &destination))
+    {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!(
+            "não foi possível salvar a aparência local: {error}"
+        ));
     }
-    fs::rename(&temporary, &destination)
-        .map_err(|error| format!("não foi possível concluir a aparência local: {error}"))?;
     Ok(destination.display().to_string())
 }
 

@@ -2643,12 +2643,7 @@ fn snapshot_instance_paths(
             .parent()
             .ok_or_else(|| ContentUpdateError::UnsafeFilename(entry.relative.clone()))?;
         fs::create_dir_all(parent).map_err(|cause| io_error(parent, cause))?;
-        fs::copy(&source, &destination).map_err(|cause| io_error(&destination, cause))?;
-        let copied = File::open(&destination).map_err(|cause| io_error(&destination, cause))?;
-        copied
-            .sync_all()
-            .map_err(|cause| io_error(&destination, cause))?;
-        verify_sha1(&destination, &entry.sha1)?;
+        copy_snapshot_file(&source, &destination, entry)?;
     }
     Ok(entries)
 }
@@ -2760,25 +2755,46 @@ fn restore_snapshot_file(
         .ok_or_else(|| ContentUpdateError::UnsafeFilename(entry.relative.clone()))?;
     fs::create_dir_all(parent).map_err(|cause| io_error(parent, cause))?;
     let temporary = parent.join(format!(".aurora-restore-{}", Uuid::new_v4().simple()));
-    fs::copy(&source, &temporary).map_err(|cause| io_error(&temporary, cause))?;
-    let restored = File::open(&temporary).map_err(|cause| io_error(&temporary, cause))?;
-    restored
-        .sync_all()
-        .map_err(|cause| io_error(&temporary, cause))?;
-    if temporary
-        .metadata()
-        .map_err(|cause| io_error(&temporary, cause))?
-        .len()
-        != entry.size
-    {
-        let _ = fs::remove_file(&temporary);
-        return Err(ContentUpdateError::Integrity(entry.relative.clone()));
-    }
-    verify_sha1(&temporary, &entry.sha1)?;
+    copy_snapshot_file(&source, &temporary, entry)?;
     if destination.exists() {
+        let _ = fs::remove_file(&temporary);
         return Err(ContentUpdateError::Stale(entry.relative.clone()));
     }
-    fs::rename(&temporary, destination).map_err(|cause| io_error(destination, cause))
+    if let Err(cause) = fs::rename(&temporary, destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(io_error(destination, cause));
+    }
+    Ok(())
+}
+
+fn copy_snapshot_file(
+    source: &Path,
+    destination: &Path,
+    entry: &SnapshotEntry,
+) -> Result<(), ContentUpdateError> {
+    let mut input = File::open(source).map_err(|cause| io_error(source, cause))?;
+    let permissions = input
+        .metadata()
+        .map_err(|cause| io_error(source, cause))?
+        .permissions();
+    let mut output = File::create_new(destination).map_err(|cause| io_error(destination, cause))?;
+    let result = (|| {
+        let copied =
+            io::copy(&mut input, &mut output).map_err(|cause| io_error(destination, cause))?;
+        if copied != entry.size {
+            return Err(ContentUpdateError::Integrity(entry.relative.clone()));
+        }
+        verify_sha1(destination, &entry.sha1)?;
+        output
+            .set_permissions(permissions)
+            .and_then(|_| output.sync_all())
+            .map_err(|cause| io_error(destination, cause))
+    })();
+    drop(output);
+    if result.is_err() {
+        let _ = fs::remove_file(destination);
+    }
+    result
 }
 
 pub fn acquire_instance_mutation_lock(
@@ -3427,6 +3443,21 @@ mod tests {
             assert!(!download_url_allowed(&parsed, DownloadSource::Modrinth));
             assert!(!download_url_allowed(&parsed, DownloadSource::AuroraWorker));
         }
+    }
+
+    #[test]
+    fn modpack_snapshot_saves_and_restores_a_real_file() {
+        let (root, instance) = test_instance("pack-snapshot");
+        let marker = instance.root().join("aurora-modpack.json");
+        fs::write(&marker, b"previous inventory").unwrap();
+        let snapshot = root.join("snapshot");
+        let paths = vec!["aurora-modpack.json".to_string()];
+        let entries = snapshot_instance_paths(&instance, &snapshot, &paths).unwrap();
+        assert_eq!(entries.len(), 1);
+        fs::remove_file(&marker).unwrap();
+        restore_snapshot_file(&snapshot, &entries[0], &marker).unwrap();
+        assert_eq!(fs::read(&marker).unwrap(), b"previous inventory");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

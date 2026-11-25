@@ -14,6 +14,7 @@ final class LegacySkinClientNetwork {
         if(sync!=null) return;
         sync=new SkinSyncClient(runtime,new SkinSyncClient.Listener(){
             @Override public void apply(UUID id,byte[] png,SkinModel model){ LegacySkinManager.setRemoteSkin(id,png,model); }
+            @Override public void cape(UUID id, byte[] png){ LegacySkinManager.setRemoteCape(id, png); }
             @Override public void remove(UUID id){ LegacySkinManager.removeRemoteSkin(id); }
             @Override public void clear(){ LegacySkinManager.clearRemoteSkins(); }
         },LegacyMinecraft::execute);

@@ -1,5 +1,13 @@
 # Aurora Connect — amigos, sessões públicas e entrada simples
 
+## Convites no Aurora e no Discord
+
+Em **Amigos e comunidade → Convites**, quem recebeu um convite privado pode escolher **Entrar** ou **Recusar convite**. Para convidar, salve um anúncio privado com entrada aberta e selecione um amigo ou busque o nick completo. O botão aparece quando o serviço de convites está disponível para essa conta e esse executável.
+
+No Windows, abra o aplicativo Discord e **Convites → Presença no Discord**. Se a distribuição não trouxer um ID, informe o **Application ID** de um aplicativo que você administra no Discord Developer Portal. Clique em **Ativar no Discord** e confira a confirmação na tela. O ajuste é individual por conta e computador. Quem distribui o launcher pode definir o ID público próprio em `AURORA_DISCORD_APPLICATION_ID` durante a compilação do executável.
+
+A atividade mostra o launcher ou o Minecraft. Durante a hospedagem de um mundo público com vaga, o convite do Discord referencia o anúncio público. Com os dois launchers abertos e a presença habilitada, o convidado pode abrir o convite no Discord, conferir o mundo no Aurora e escolher **Entrar** ou **Pedir para entrar**. A entrada passa pelas permissões atuais do Aurora. Convites para mundos privados continuam na caixa da conta Aurora. [Documentação do Discord RPC](https://docs.discord.com/developers/topics/rpc)
+
 ## Jogar com amigos e compartilhar um mundo LAN
 
 O botão **Amigos e comunidade** exibe o número de pedidos de amizade recebidos e ainda válidos na conta conectada. O indicador acompanha a caixa de entrada mesmo quando outra seção está aberta. Abra **Meus amigos** para aceitar ou recusar os pedidos. Em **Encontrar mundos**, use **Comunidade** ou **Dos amigos** e escolha **Entrar** ou **Pedir para entrar**, conforme a preferência do anfitrião.

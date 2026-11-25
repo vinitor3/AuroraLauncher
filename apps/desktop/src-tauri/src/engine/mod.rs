@@ -43,6 +43,7 @@ mod external_downloads;
 mod instance;
 mod ipc;
 mod jre;
+pub mod keybindings;
 mod launch;
 pub mod launch_settings;
 mod minecraft;

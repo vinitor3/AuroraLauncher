@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { test } from "node:test";
 import { initializeTestEnvironment, assertFails } from "@firebase/rules-unit-testing";
 import { initializeApp, deleteApp } from "firebase/app";
-import { connectAuthEmulator, getAuth } from "firebase/auth";
+import { applyActionCode, confirmPasswordReset, connectAuthEmulator, getAuth, verifyPasswordResetCode } from "firebase/auth";
 import { collection, connectFirestoreEmulator, doc, getDocFromServer, getDocs, getFirestore, setDoc, terminate } from "firebase/firestore";
 
 const desktopRequire = createRequire(new URL("../../apps/desktop/package.json", import.meta.url));
@@ -22,6 +22,12 @@ async function realLauncherFunctions() {
   for (const sdk of ["firebase/app", "firebase/auth", "firebase/firestore", "firebase/storage"])
     code = code.replace(JSON.stringify(sdk), JSON.stringify(import.meta.resolve(sdk)));
   return import(dataUrl(code));
+}
+
+async function recoveryCodes(projectId) {
+  const response = await fetch(`http://127.0.0.1:9187/emulator/v1/projects/${projectId}/oobCodes`);
+  assert.equal(response.status, 200);
+  return (await response.json()).oobCodes ?? [];
 }
 
 test("normal launcher registration, login, existing profile and appearance remain compatible with online rules", { timeout: 30000 }, async () => {
@@ -75,6 +81,39 @@ test("normal launcher registration, login, existing profile and appearance remai
     await functions.saveAuroraAppearance(services, legacy, { avatarUrl: null, skinUrl: null, capeUrl: null, skinModel: "classic" });
     await functions.clearRemoteSkinLibrary(services, legacy);
     assert.deepEqual((await functions.loadAuroraProfile(services, returned.user)).skinFavorites, []);
+
+    const realEmail = `recovery-${crypto.randomUUID()}@example.com`;
+    await assert.rejects(functions.resetAuroraPassword(services, profile.email), /e-mail pessoal/);
+    await assert.rejects(functions.linkAuroraRecoveryEmail(services, "another-uid", password, realEmail));
+    await assert.rejects(functions.linkAuroraRecoveryEmail(services, uid, "invalid-fixture-password", realEmail));
+    assert.equal((await recoveryCodes(projectId)).some(code => code.newEmail === realEmail), false);
+    await functions.linkAuroraRecoveryEmail(services, uid, password, realEmail);
+    const change = (await recoveryCodes(projectId)).find(code => code.requestType === "VERIFY_AND_CHANGE_EMAIL" && (code.email === realEmail || code.newEmail === realEmail));
+    assert.ok(change, "Firebase must issue a confirmation to the new address");
+    assert.equal(auth.currentUser.email, profile.email, "an unconfirmed address cannot become the account login");
+    await applyActionCode(auth, change.oobCode);
+    await assert.rejects(applyActionCode(auth, change.oobCode), "the change-email code is single-use");
+    await functions.logoutAuroraUser(services);
+    const migrated = await functions.loginAuroraUser(services, realEmail, password);
+    assert.equal(migrated.user.uid, uid);
+    assert.equal(functions.verifiedAuroraEmail(migrated.user), realEmail);
+    assert.equal((await functions.loadAuroraProfile(services, migrated.user)).role, "CREATOR");
+    const publicProfile = await getDocFromServer(doc(db, "publicProfiles", uid));
+    assert.equal(JSON.stringify(publicProfile.data()).includes(realEmail), false);
+    assert.equal((await getDocFromServer(doc(db, "usernames", nickname.toLowerCase()))).data().uid, uid);
+    await functions.logoutAuroraUser(services);
+    await assert.rejects(functions.loginAuroraUser(services, nickname, password));
+    await functions.resetAuroraPassword(services, `unknown-${crypto.randomUUID()}@example.com`);
+    await functions.resetAuroraPassword(services, realEmail);
+    const reset = (await recoveryCodes(projectId)).find(code => code.requestType === "PASSWORD_RESET" && code.email === realEmail);
+    assert.ok(reset, "Firebase must issue a password reset for the verified address");
+    assert.equal(await verifyPasswordResetCode(auth, reset.oobCode), realEmail);
+    const newPassword = "new-unique-local-recovery-fixture";
+    await confirmPasswordReset(auth, reset.oobCode, newPassword);
+    await assert.rejects(confirmPasswordReset(auth, reset.oobCode, password));
+    await assert.rejects(functions.loginAuroraUser(services, realEmail, password));
+    const restored = await functions.loginAuroraUser(services, realEmail, newPassword);
+    assert.equal(restored.user.uid, uid);
     await functions.logoutAuroraUser(services);
 
     const unavailable = `Taken_${crypto.randomUUID().replaceAll("-", "").slice(0, 8)}`;

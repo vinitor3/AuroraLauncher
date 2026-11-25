@@ -6,7 +6,7 @@ import ts from "typescript";
 const source = await readFile(new URL("./types.ts", import.meta.url), "utf8");
 const code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
 const types = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
-const previous = { minecraftVersion: "1.21.1", loader: "fabric", loaderVersion: "0.16.14", javaMajor: 21, coreVersion: "1.1.7", skinsVersion: "0.3.3" };
+const previous = { minecraftVersion: "1.21.1", loader: "fabric", loaderVersion: "0.16.14", javaMajor: 21, coreVersion: "1.1.7", skinsVersion: "0.3.4" };
 const added = { ...previous, minecraftVersion: "1.20.1", javaMajor: 17 };
 const legacy = { schemaVersion: 1, instanceScope: "diagnosticCopy", maxPlanSeconds: 60, ...previous };
 const current = { schemaVersion: 2, instanceScope: "diagnosticCopy", maxPlanSeconds: 60, runtimes: [previous, added] };
@@ -86,7 +86,7 @@ test("schema3 requires each exact matrix target and keeps older capabilities clo
   const matrix = JSON.parse(await readFile(new URL("../../../../../scripts/active-mod-matrix.json", import.meta.url), "utf8"));
   const runtimes = matrix.targets.filter(target => target.connectReady !== false).map(target => ({
     minecraftVersion: target.minecraft, loader: target.loader, loaderVersion: target.loaderVersion,
-    javaMajor: target.javaRuntime, coreVersion: "1.1.7", skinsVersion: "0.3.3",
+    javaMajor: target.javaRuntime, coreVersion: "1.1.7", skinsVersion: "0.3.4",
   }));
   const full = { ...current, schemaVersion: 3, runtimes };
   assert.deepEqual(types.readyGameCapabilityFrom(full), full);

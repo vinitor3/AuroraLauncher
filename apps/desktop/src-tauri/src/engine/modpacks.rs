@@ -1,6 +1,6 @@
 //! Catálogo e instalação segura de modpacks públicos do Modrinth.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
@@ -24,6 +24,7 @@ use super::{
 
 const MODRINTH_API: &str = "https://api.modrinth.com/v2";
 const MAX_MRPACK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_PACK_INDEX_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_PACK_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_PACK_TOTAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const MAX_OVERRIDE_FILES: usize = 10_000;
@@ -856,7 +857,7 @@ fn install_modrinth_modpack_selected_with_progress<F, P>(
     required_loader: Option<&str>,
     pack_version_id: Option<&str>,
     forge_java: Option<&Path>,
-    mut preflight: P,
+    preflight: P,
     mut progress: F,
 ) -> Result<ModpackInstallSummary, ModpackError>
 where
@@ -933,27 +934,24 @@ where
         progress(ModpackProgress::transfer(item.map_total(3.0, 15.0)))
     })?;
     progress(ModpackProgress::stage("Verificando o pacote", 15.0));
-    let result = (|| {
-        let mutable_paths = planned_pack_paths(&temporary_pack)?;
-        preflight(&mutable_paths)?;
-        install_pack_archive(
-            instance,
-            &temporary_pack,
-            &client,
-            project_id,
-            minecraft_version,
-            selected,
-            required_loader,
-            forge_java,
-            &mut progress,
-        )
-    })();
+    let result = install_pack_archive(
+        instance,
+        &temporary_pack,
+        &client,
+        project_id,
+        minecraft_version,
+        selected,
+        required_loader,
+        forge_java,
+        preflight,
+        &mut progress,
+    );
     let _ = fs::remove_file(&temporary_pack);
     result
 }
 
 #[allow(clippy::too_many_arguments)]
-fn install_pack_archive<F>(
+fn install_pack_archive<F, P>(
     instance: &Instance,
     pack_path: &Path,
     client: &Client,
@@ -962,25 +960,15 @@ fn install_pack_archive<F>(
     selected_version: &Value,
     required_loader: Option<&str>,
     forge_java: Option<&Path>,
+    mut preflight: P,
     progress: &mut F,
 ) -> Result<ModpackInstallSummary, ModpackError>
 where
     F: FnMut(ModpackProgress),
+    P: FnMut(&[PathBuf]) -> Result<(), ModpackError>,
 {
-    instance
-        .ensure_layout()
-        .map_err(|error| ModpackError::Io(io::Error::other(error)))?;
-    let managed_paths = planned_pack_paths(pack_path)?;
     let mut archive = ZipArchive::new(File::open(pack_path)?)?;
-    let mut index_contents = String::new();
-    archive
-        .by_name("modrinth.index.json")?
-        .read_to_string(&mut index_contents)?;
-    let index: Value =
-        serde_json::from_str(&index_contents).map_err(|_| ModpackError::InvalidResponse)?;
-    if index["formatVersion"].as_u64() != Some(1) {
-        return Err(ModpackError::InvalidResponse);
-    }
+    let index = read_pack_index(&mut archive)?;
     let indexed_minecraft = index
         .pointer("/dependencies/minecraft")
         .and_then(Value::as_str)
@@ -1009,6 +997,12 @@ where
     if required_loader.is_some_and(|required| required != loader) {
         return Err(ModpackError::UnsupportedLoader(loader.to_owned()));
     }
+
+    let plan = client_pack_plan(&mut archive, &index, instance.root())?;
+    preflight(&plan.managed_paths)?;
+    instance
+        .ensure_layout()
+        .map_err(|error| ModpackError::Io(io::Error::other(error)))?;
 
     progress(ModpackProgress::stage(
         format!("Preparando Minecraft {minecraft_version} com {loader}"),
@@ -1040,44 +1034,9 @@ where
         35.0,
     ));
 
-    let files = index["files"]
-        .as_array()
-        .ok_or(ModpackError::InvalidResponse)?;
-    let mut pack_downloads = Vec::with_capacity(files.len());
-    let mut total_download_bytes = 0u64;
-    for file in files {
-        let relative =
-            safe_modpack_install_path(file["path"].as_str().ok_or(ModpackError::InvalidResponse)?)?;
-        let url = file["downloads"]
-            .as_array()
-            .and_then(|downloads| {
-                downloads
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .find(|url| url.starts_with("https://"))
-            })
-            .ok_or(ModpackError::MissingDownload)?;
-        let label = relative.display().to_string();
-        let file_size = file["fileSize"]
-            .as_u64()
-            .filter(|size| *size <= MAX_PACK_FILE_BYTES)
-            .ok_or(ModpackError::InvalidResponse)?;
-        total_download_bytes = total_download_bytes
-            .checked_add(file_size)
-            .filter(|total| *total <= MAX_PACK_TOTAL_BYTES)
-            .ok_or(ModpackError::InvalidResponse)?;
-        pack_downloads.push(modrinth_download_request(
-            url,
-            &instance.root().join(&relative),
-            &label,
-            file.pointer("/hashes/sha1").and_then(Value::as_str),
-            file.pointer("/hashes/sha512").and_then(Value::as_str),
-            Some(file_size),
-        )?);
-    }
     let batch = download_many(
         client,
-        pack_downloads,
+        plan.downloads,
         DEFAULT_DOWNLOAD_CONCURRENCY,
         |item| progress(ModpackProgress::transfer(item.map_total(35.0, 95.0))),
     )?;
@@ -1087,7 +1046,7 @@ where
         "Aplicando configurações do modpack",
         97.0,
     ));
-    let override_files = extract_overrides(&mut archive, instance.root())?;
+    let override_files = extract_overrides(&mut archive, instance.root(), &plan.overrides)?;
     let name = index["name"]
         .as_str()
         .unwrap_or("Modpack Modrinth")
@@ -1102,7 +1061,8 @@ where
     let version_number = selected_version["version_number"]
         .as_str()
         .ok_or(ModpackError::InvalidResponse)?;
-    let owned_files = managed_paths
+    let owned_files = plan
+        .managed_paths
         .iter()
         .filter(|relative| relative.as_path() != Path::new("aurora-modpack.json"))
         .map(|relative| {
@@ -1135,9 +1095,12 @@ where
         "versionId": minecraft.version_id,
         "ownedFiles": owned_files,
     });
-    fs::write(
-        instance.root().join("aurora-modpack.json"),
-        serde_json::to_vec_pretty(&marker).map_err(|_| ModpackError::InvalidResponse)?,
+    let marker = serde_json::to_vec_pretty(&marker).map_err(|_| ModpackError::InvalidResponse)?;
+    write_pack_file(
+        instance.root(),
+        Path::new("aurora-modpack.json"),
+        &marker[..],
+        marker.len() as u64,
     )?;
 
     let summary = ModpackInstallSummary {
@@ -1193,14 +1156,7 @@ fn modrinth_download_request(
     sha512: Option<&str>,
     expected_size: Option<u64>,
 ) -> Result<DownloadRequest, ModpackError> {
-    let parsed = Url::parse(url).map_err(|_| ModpackError::MissingDownload)?;
-    let host_is_modrinth = parsed
-        .host_str()
-        .map(str::to_ascii_lowercase)
-        .is_some_and(|host| host == "cdn.modrinth.com" || host.ends_with(".modrinth.com"));
-    if !safe_redirect_target(&parsed) || !host_is_modrinth {
-        return Err(ModpackError::MissingDownload);
-    }
+    let parsed = modrinth_url(url).ok_or(ModpackError::MissingDownload)?;
     content_download_request(
         parsed.as_str(),
         destination,
@@ -1209,6 +1165,11 @@ fn modrinth_download_request(
         sha512,
         expected_size,
     )
+}
+
+fn modrinth_url(value: &str) -> Option<Url> {
+    let url = Url::parse(value).ok()?;
+    (safe_redirect_target(&url) && url.host_str()?.ends_with(".modrinth.com")).then_some(url)
 }
 
 fn get_json(client: &Client, url: &str) -> Result<Value, ModpackError> {
@@ -1277,7 +1238,8 @@ fn windows_component_safe(value: &str) -> bool {
 }
 
 fn safe_modpack_install_path(value: &str) -> Result<PathBuf, ModpackError> {
-    let path = safe_relative_path(value)?;
+    let normalized = value.replace('\\', "/");
+    let path: PathBuf = safe_relative_path(&normalized)?.components().collect();
     let first = path
         .components()
         .next()
@@ -1290,6 +1252,8 @@ fn safe_modpack_install_path(value: &str) -> Result<PathBuf, ModpackError> {
     if matches!(
         first.as_str(),
         ".aurora"
+            | ".aurora-modpack.mrpack"
+            | "aurora-modpack.json"
             | "assets"
             | "libraries"
             | "versions"
@@ -1303,61 +1267,182 @@ fn safe_modpack_install_path(value: &str) -> Result<PathBuf, ModpackError> {
     ) {
         return Err(ModpackError::UnsafePath(value.to_owned()));
     }
-    Ok(path)
+    Ok(path.components().collect())
 }
 
-fn planned_pack_paths(pack_path: &Path) -> Result<Vec<PathBuf>, ModpackError> {
-    let mut archive = ZipArchive::new(File::open(pack_path)?)?;
-    let mut paths = HashMap::new();
-    {
-        let mut index_contents = String::new();
-        archive
-            .by_name("modrinth.index.json")?
-            .read_to_string(&mut index_contents)?;
-        let index: Value =
-            serde_json::from_str(&index_contents).map_err(|_| ModpackError::InvalidResponse)?;
-        if index["formatVersion"].as_u64() != Some(1) {
-            return Err(ModpackError::InvalidResponse);
-        }
-        let files = index["files"]
-            .as_array()
-            .ok_or(ModpackError::InvalidResponse)?;
-        for file in files {
-            insert_planned_path(
-                &mut paths,
-                safe_modpack_install_path(
-                    file["path"].as_str().ok_or(ModpackError::InvalidResponse)?,
-                )?,
-            )?;
-        }
+fn read_pack_index(archive: &mut ZipArchive<File>) -> Result<Value, ModpackError> {
+    let entry = archive.by_name("modrinth.index.json")?;
+    if entry.size() > MAX_PACK_INDEX_BYTES {
+        return Err(ModpackError::InvalidResponse);
     }
-    for index in 0..archive.len() {
-        let entry = archive.by_index(index)?;
-        let name = entry.name().replace('\\', "/");
-        let Some(relative) = name.strip_prefix("overrides/") else {
-            continue;
-        };
-        if relative.is_empty() || entry.is_dir() {
-            continue;
-        }
-        insert_planned_path(&mut paths, safe_modpack_install_path(relative)?)?;
+    let mut bytes = Vec::new();
+    entry
+        .take(MAX_PACK_INDEX_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_PACK_INDEX_BYTES {
+        return Err(ModpackError::InvalidResponse);
     }
-    insert_planned_path(&mut paths, PathBuf::from("aurora-modpack.json"))?;
-    let mut paths = paths.into_values().collect::<Vec<_>>();
-    paths.sort();
-    Ok(paths)
+    let index: Value = serde_json::from_slice(&bytes).map_err(|_| ModpackError::InvalidResponse)?;
+    if index["formatVersion"].as_u64() != Some(1) {
+        return Err(ModpackError::InvalidResponse);
+    }
+    Ok(index)
 }
 
-fn insert_planned_path(
-    paths: &mut HashMap<String, PathBuf>,
+struct ClientPackPlan {
+    downloads: Vec<DownloadRequest>,
+    overrides: Vec<(PathBuf, usize)>,
+    managed_paths: Vec<PathBuf>,
+}
+
+enum PackSource {
+    Download(DownloadRequest),
+    CommonOverride(usize),
+    ClientOverride(usize),
+}
+
+impl PackSource {
+    fn layer(&self) -> u8 {
+        match self {
+            Self::Download(_) => 0,
+            Self::CommonOverride(_) => 1,
+            Self::ClientOverride(_) => 2,
+        }
+    }
+}
+
+fn client_file_enabled(file: &Value) -> Result<bool, ModpackError> {
+    let side = match file.get("env") {
+        Some(Value::Object(env)) => env.get("client"),
+        None | Some(Value::Null) => None,
+        _ => return Err(ModpackError::InvalidResponse),
+    };
+    match side {
+        None => Ok(true),
+        // The existing one-click installer includes compatible optional files.
+        Some(Value::String(value)) if value == "required" || value == "optional" => Ok(true),
+        Some(Value::String(value)) if value == "unsupported" => Ok(false),
+        _ => Err(ModpackError::InvalidResponse),
+    }
+}
+
+fn add_pack_source(
+    files: &mut BTreeMap<String, (PathBuf, PackSource)>,
     path: PathBuf,
+    source: PackSource,
 ) -> Result<(), ModpackError> {
     let key = path.to_string_lossy().to_lowercase();
-    if paths.get(&key).is_some_and(|existing| existing != &path) {
-        return Err(ModpackError::UnsafePath(path.display().to_string()));
+    if let Some((existing_path, existing)) = files.get(&key) {
+        if path != *existing_path || source.layer() == existing.layer() {
+            return Err(ModpackError::UnsafePath(path.display().to_string()));
+        }
+        if source.layer() < existing.layer() {
+            return Ok(());
+        }
     }
-    paths.insert(key, path);
+    files.insert(key, (path, source));
     Ok(())
+}
+
+fn client_pack_plan(
+    archive: &mut ZipArchive<File>,
+    index: &Value,
+    root: &Path,
+) -> Result<ClientPackPlan, ModpackError> {
+    let mut files = BTreeMap::new();
+    let mut total_download_bytes = 0u64;
+    for file in index["files"]
+        .as_array()
+        .ok_or(ModpackError::InvalidResponse)?
+    {
+        if !client_file_enabled(file)? {
+            continue;
+        }
+        let relative =
+            safe_modpack_install_path(file["path"].as_str().ok_or(ModpackError::InvalidResponse)?)?;
+        let url = file["downloads"]
+            .as_array()
+            .and_then(|urls| urls.iter().filter_map(Value::as_str).find_map(modrinth_url))
+            .ok_or(ModpackError::MissingDownload)?;
+        let size = file["fileSize"]
+            .as_u64()
+            .filter(|size| *size <= MAX_PACK_FILE_BYTES)
+            .ok_or(ModpackError::InvalidResponse)?;
+        total_download_bytes = total_download_bytes
+            .checked_add(size)
+            .filter(|total| *total <= MAX_PACK_TOTAL_BYTES)
+            .ok_or(ModpackError::InvalidResponse)?;
+        let request = modrinth_download_request(
+            url.as_str(),
+            &root.join(&relative),
+            &relative.to_string_lossy(),
+            file.pointer("/hashes/sha1").and_then(Value::as_str),
+            file.pointer("/hashes/sha512").and_then(Value::as_str),
+            Some(size),
+        )?;
+        add_pack_source(&mut files, relative, PackSource::Download(request))?;
+    }
+    let mut override_count = 0;
+    let mut override_bytes = 0u64;
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i)?;
+        let name = entry.name().replace('\\', "/");
+        let Some((layer, path)) = name.split_once('/') else {
+            continue;
+        };
+        if entry.is_dir() || path.is_empty() {
+            continue;
+        }
+        let source = match layer {
+            "overrides" => PackSource::CommonOverride(i),
+            "client-overrides" => PackSource::ClientOverride(i),
+            _ => continue,
+        };
+        if entry.size() > MAX_OVERRIDE_FILE_BYTES || override_count >= MAX_OVERRIDE_FILES {
+            return Err(ModpackError::InvalidResponse);
+        }
+        override_count += 1;
+        override_bytes = override_bytes
+            .checked_add(entry.size())
+            .filter(|total| *total <= MAX_OVERRIDE_TOTAL_BYTES)
+            .ok_or(ModpackError::InvalidResponse)?;
+        add_pack_source(&mut files, safe_modpack_install_path(path)?, source)?;
+    }
+
+    let mut plan = ClientPackPlan {
+        downloads: Vec::new(),
+        overrides: Vec::new(),
+        managed_paths: Vec::with_capacity(files.len() + 1),
+    };
+    for (path, _) in files.values() {
+        if path
+            .ancestors()
+            .skip(1)
+            .any(|parent| files.contains_key(&parent.to_string_lossy().to_lowercase()))
+        {
+            return Err(ModpackError::UnsafePath(path.display().to_string()));
+        }
+        check_pack_destination(root, path)?;
+    }
+    for (path, source) in files.into_values() {
+        plan.managed_paths.push(path.clone());
+        match source {
+            PackSource::Download(request) => plan.downloads.push(request),
+            PackSource::CommonOverride(i) | PackSource::ClientOverride(i) => {
+                plan.overrides.push((path, i))
+            }
+        }
+    }
+    let marker = PathBuf::from("aurora-modpack.json");
+    check_pack_destination(root, &marker)?;
+    plan.managed_paths.push(marker);
+    plan.managed_paths.sort();
+    Ok(plan)
+}
+
+fn check_pack_destination(root: &Path, relative: &Path) -> Result<(), ModpackError> {
+    super::content_updates::ensure_no_symlink_components(root, &relative.to_string_lossy())
+        .map_err(|error| ModpackError::UpdatePreparation(error.to_string()))
 }
 
 fn content_download_request(
@@ -1398,42 +1483,48 @@ fn sha1_file(path: &Path) -> Option<String> {
 fn extract_overrides(
     archive: &mut ZipArchive<File>,
     instance_root: &Path,
+    overrides: &[(PathBuf, usize)],
 ) -> Result<usize, ModpackError> {
-    let mut extracted = 0usize;
-    let mut total_bytes = 0u64;
-    for index in 0..archive.len() {
-        let entry = archive.by_index(index)?;
-        let name = entry.name().replace('\\', "/");
-        let Some(relative) = name.strip_prefix("overrides/") else {
-            continue;
-        };
-        if relative.is_empty() || entry.is_dir() {
-            continue;
-        }
-        if extracted >= MAX_OVERRIDE_FILES || entry.size() > MAX_OVERRIDE_FILE_BYTES {
-            return Err(ModpackError::InvalidResponse);
-        }
-        total_bytes = total_bytes
-            .checked_add(entry.size())
-            .filter(|total| *total <= MAX_OVERRIDE_TOTAL_BYTES)
-            .ok_or(ModpackError::InvalidResponse)?;
-        let relative = safe_modpack_install_path(relative)?;
-        let destination = instance_root.join(relative);
-        let parent = destination
-            .parent()
-            .ok_or_else(|| ModpackError::UnsafePath(name))?;
-        fs::create_dir_all(parent)?;
-        let mut output = File::create(destination)?;
+    for (relative, index) in overrides {
+        let entry = archive.by_index(*index)?;
         let expected = entry.size();
-        let mut limited = entry.take(expected.saturating_add(1));
-        let copied = io::copy(&mut limited, &mut output)?;
-        if copied != expected {
+        write_pack_file(instance_root, relative, entry, expected)?;
+    }
+    Ok(overrides.len())
+}
+
+fn write_pack_file(
+    root: &Path,
+    relative: &Path,
+    source: impl Read,
+    expected: u64,
+) -> Result<(), ModpackError> {
+    check_pack_destination(root, relative)?;
+    let destination = root.join(relative);
+    let parent = destination
+        .parent()
+        .ok_or_else(|| ModpackError::UnsafePath(relative.display().to_string()))?;
+    fs::create_dir_all(parent)?;
+    let temporary = parent.join(format!(".aurora-{}.tmp", uuid::Uuid::new_v4()));
+    let mut output = File::create_new(&temporary)?;
+    let result = (|| {
+        if io::copy(&mut source.take(expected + 1), &mut output)? != expected {
             return Err(ModpackError::InvalidResponse);
         }
-        extracted += 1;
+        output.sync_all()?;
+        drop(output);
+        check_pack_destination(root, relative)?;
+        super::launch_settings::atomic_replace(&temporary, &destination)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    Ok(extracted)
+    result
 }
+
+#[cfg(test)]
+mod client_pack_tests;
 
 #[cfg(test)]
 mod tests {

@@ -73,7 +73,7 @@ fn ready_runtime_measure_existing_copy_without_launch() {
         &guard,
         origin.id().as_str(),
         &java,
-        None,
+        (None, None),
         "127.0.0.1:1".parse().unwrap(),
         profile.descriptor().java_major,
         Some(NativeVoiceProfile::SimpleVoiceChat),

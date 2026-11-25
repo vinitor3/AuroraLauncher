@@ -31,6 +31,10 @@ pub struct ReadyGameAppearance {
     pub skin_url: Option<String>,
     pub skin_file: Option<String>,
     pub cape_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cape_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_cape: Option<bool>,
     pub skin_model: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -74,6 +78,11 @@ impl ReadyGameLaunchRequest {
             || self
                 .appearance
                 .skin_file
+                .as_ref()
+                .is_some_and(|v| !bounded(v, 4096))
+            || self
+                .appearance
+                .cape_file
                 .as_ref()
                 .is_some_and(|v| !bounded(v, 4096))
             || self

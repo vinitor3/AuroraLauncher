@@ -23,7 +23,9 @@ async function sourceModule(source) {
   } }).outputText.replace(/^import ["'][^"']+\.css["'];?$/gm, "");
   for (const { fileName: specifier } of ts.preProcessFile(output).importedFiles) {
     const dependency = specifier.startsWith(".") ? ["", ".ts", ".tsx"].map(ext => new URL(specifier + ext, source)).find(url => existsSync(fileURLToPath(url))) : undefined;
-    const resolved = specifier === "@tauri-apps/api/core" ? "data:text/javascript,export const invoke=(...args)=>globalThis.__socialDiscoveryInvoke(...args)" : dependency ? await sourceModule(dependency) : pathToFileURL(require.resolve(specifier)).href;
+    const resolved = specifier === "@tauri-apps/api/core" ? "data:text/javascript,export const isTauri=()=>true;export const invoke=(...args)=>globalThis.__socialDiscoveryInvoke(...args)"
+      : specifier === "@tauri-apps/api/event" ? "data:text/javascript,export const listen=(...args)=>globalThis.__discordListen(...args)"
+      : dependency ? await sourceModule(dependency) : pathToFileURL(require.resolve(specifier)).href;
     output = output.replaceAll(`from "${specifier}"`, `from ${JSON.stringify(resolved)}`);
   }
   const url = `data:text/javascript;base64,${Buffer.from(output).toString("base64")}`;
@@ -36,6 +38,8 @@ const { SocialConnectionPanel } = await import(await sourceModule(new URL("./Soc
 const { SocialOrganizationPanel } = await import(await sourceModule(new URL("./SocialOrganizationPanel.tsx", import.meta.url)));
 const { socialArtwork } = await import(await sourceModule(new URL("./presentation.ts", import.meta.url)));
 const { useFriendInbox } = await import(await sourceModule(new URL("./useFriendInbox.ts", import.meta.url)));
+const { useDiscordPresence } = await import(await sourceModule(new URL("./useDiscordPresence.ts", import.meta.url)));
+const { discordActivity, validDiscordId } = await import(await sourceModule(new URL("./discordModel.ts", import.meta.url)));
 const actualNow = Date.now;
 const fixedNow = 1_800_000_000_000;
 const person = { uid: "friend-uid", nickname: "Aventureiro", avatarUrl: "https://attacker.example/avatar.png", expiresAtMs: fixedNow + 7 * 86_400_000 };
@@ -70,6 +74,78 @@ beforeEach(() => { Date.now = () => fixedNow; calls = []; handlers = {}; state =
   globalThis.__socialDiscoveryInvoke = async (name, args) => { calls.push({ name, args }); if (handlers[name]) return handlers[name](args); throw new Error("Unexpected discovery call"); };
 });
 afterEach(async () => { await act(async () => root.unmount()); Date.now = actualNow; });
+
+const discordId = "aaaaaaaa-1111-4111-8111-111111111111";
+test("only a live public host with a free seat announces a join reference; no identities or endpoints leave the launcher", () => {
+  const social = { sessionId: discordId, role: "host", visibility: "public", stage: "waitingGuest", expiresAtMs: fixedNow + 60000, gameTarget: "127.0.0.1:27000" };
+  const snapshot = { operationId: "ignored", role: "host", cleanupState: "notStarted", phase: "listening", social };
+  const projection = (change = {}) => discordActivity(true, { available: true, snapshot: { ...snapshot, social: { ...social, ...change } } }, fixedNow);
+  assert.deepEqual(projection(), { playing:true, party:{ sessionId:discordId, current:1, max:2, expiresAtMs:fixedNow+60000 } });
+  for (const invalid of [{role:"guest"}, {stage:"hostReview"}, {visibility:"friends"}, {visibility:"private"}, {sessionId:"malformed"}, {expiresAtMs:fixedNow}, {stage:"connected"}, { participants: [{state:"connected",accountId:"private"}] }])
+    assert.deepEqual(projection(invalid), { playing:true, party:null });
+  assert.equal(validDiscordId("18446744073709551615"), true);
+  for (const id of ["18446744073709551616", "0", "bot token", "12345678901234567.0"]) assert.equal(validDiscordId(id),false);
+});
+test("Discord consent is off by default, uses a local per-account scope and retires listeners and activity on logout", async () => {
+  const values = new Map(), listeners = new Map(), sent = [];
+  let result, reveals = 0;
+  globalThis.localStorage = { getItem: k => values.get(k), setItem: (k, v) => values.set(k,v) };
+  globalThis.__discordListen = async (event, callback) => { listeners.set(event,callback); return () => listeners.delete(event); };
+  globalThis.__socialDiscoveryInvoke = async (command,args) => { sent.push({ command,args }); return command === "discord_default_application_id" ? null : undefined; };
+  function Hook({uid}) { result = useDiscordPresence(uid,true,undefined,() => { reveals++; }); return null; }
+  const draw = uid => act(async () => root.render(createElement(Hook,{uid})));
+  await draw("one");
+  assert.equal(result.settings.enabled,false); assert.equal(listeners.size,0);
+  await act(async () => result.configure({enabled:true,applicationId:"invalid"}));
+  assert.equal(listeners.size,0);
+  await act(async () => result.configure({enabled:true,applicationId:"100000000000000000"}));
+  const set = sent.find(m => m.command === "discord_set_presence").args;
+  assert.deepEqual(set.activity,{playing:true,party:null}); assert.equal(listeners.size,2);
+  const receive = listeners.get("aurora-discord-join");
+  await act(async () => receive({payload:{scope:"retired",sessionId:discordId}}));
+  await act(async () => receive({payload:{scope:set.scope,sessionId:"wrong"}}));
+  assert.equal(reveals,0);
+  await act(async () => receive({payload:{scope:set.scope,sessionId:discordId}}));
+  assert.equal(result.sessionId,discordId); assert.equal(reveals,1);
+  await draw("two");
+  assert.equal(result.settings.enabled,false); assert.equal(result.sessionId,null); assert.equal(listeners.size,0);
+  assert.deepEqual(sent.at(-1),{command:"discord_clear_presence",args:{scope:set.scope}});
+  await act(async () => receive({payload:{scope:set.scope,sessionId:discordId}}));
+  assert.equal(reveals,1);
+  delete globalThis.localStorage; delete globalThis.__discordListen;
+});
+const discordFixture = () => ({ settings: { enabled: true, applicationId: "" }, defaultId: "", status: "Ativa",
+  sessionId: discordId, configure() {}, dismiss() { calls.push({ name: "dismiss" }); } });
+test("a Discord invite requires explicit confirmation and a fresh authorized public projection", async () => {
+  const session = { ...baseSession, id: discordId };
+  let current = session, reads = 0;
+  service.resolvePublicSession = async id => { assert.equal(id, discordId); reads++; return current; };
+  service.capabilities.join = true; handlers.prepareJoin = async () => {};
+  await render({ discord: discordFixture() });
+  assert.equal(reads, 1); assert.equal(count("prepareJoin"), 0);
+  current = { ...session, visibility: "private" };
+  await click("Entrar pelo convite do Discord");
+  assert.equal(reads, 2); assert.equal(count("prepareJoin"), 0);
+  assert.match(container.textContent, /indisponível para sua conta/);
+  current = session;
+  await click("Entrar pelo convite do Discord");
+  assert.deepEqual(calls.filter(c => c.name === "prepareJoin").map(c => c.args), [[discordId]]);
+  assert.equal(count("dismiss"), 1);
+});
+test("Discord invite preserves host approval and never exposes an inaccessible public listing", async () => {
+  let requests = 0;
+  service.capabilities.join = true;
+  service.resolvePublicSession = async () => ({ ...baseSession, id: discordId, joinPolicy: "approval" });
+  service.organization = { joinRequestStatus: async () => "none", requestJoin: async () => { requests++; } };
+  await render({ discord: discordFixture() });
+  await click("Pedir para entrar pelo Discord");
+  assert.equal(requests, 1); assert.equal(count("prepareJoin"), 0); assert.equal(count("dismiss"), 0);
+  service = makeService();
+  service.resolvePublicSession = async () => null;
+  await render({ discord: discordFixture() });
+  assert.equal(buttons("Pedir para entrar pelo Discord").length, 0);
+  assert.match(container.textContent, /indisponível para sua conta/);
+});
 
 test("unavailable service performs no reads, mutations or automatic social activation", async () => {
   await render({ service: null });

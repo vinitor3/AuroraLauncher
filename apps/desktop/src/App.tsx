@@ -4,9 +4,11 @@ import { listen } from "@tauri-apps/api/event";
 import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { lazy, Suspense } from "react";
 import { drawSkinFace } from "./lib/skinFace";
+import { CapePanel, useWardrobeCape } from "./features/skins/CapeWardrobe";
 import { SkinPreview } from "./features/skins/SkinPreview";
 import { SkinThumbnail } from "./features/skins/SkinThumbnail";
 import { StartupScreen } from "./features/auth/StartupScreen";
+import { PasswordResetForm, RecoveryEmailDialog } from "./features/account/AccountRecovery";
 import { useThemes } from "./features/themes/ThemeProvider";
 import { ThemeManager } from "./features/themes/ThemeManager";
 import { ThemeScene, ThemeDecorations } from "./features/themes/ThemeScene";
@@ -64,6 +66,7 @@ import { NativeVoicePanel } from "./features/connect-native-voice/NativeVoicePan
 import { ExitLauncherButton } from "./features/connect/ExitLauncherButton";
 import { useFriendInbox } from "./features/social/useFriendInbox";
 import { SocialView } from "./features/social/SocialView";
+import { useDiscordPresence } from "./features/social/useDiscordPresence";
 import { SocialBuildBanner } from "./features/social/SocialBuildBanner";
 import { createSocialConnectController, emptySocialConnectState, type SocialConnectController, type SocialConnectState } from "./features/social/connect-controller";
 import { createSocialFirebaseService } from "./lib/socialFirebase";
@@ -83,6 +86,7 @@ import type {
   UpdateReviewRequest,
 } from "./features/content-updates/types";
 
+const KeymapPanel = lazy(() => import("./features/keymap/KeymapPanel"));
 const ProjectDescription = lazy(() => import("./features/catalog/ProjectDescription").then(module => ({ default: module.ProjectDescription })));
 
 type EngineStatus = { dataDirectory: string; ready: boolean };
@@ -147,7 +151,7 @@ type ModrinthContent = {
   dateModified: string;
 };
 type ContentType = "mod" | "shader" | "resourcepack";
-type EditorView = "installed" | "memory" | "updates" | "discover" | "doctor" | "recovery" | "diagnostic-lab";
+type EditorView = "installed" | "keymap" | "memory" | "updates" | "discover" | "doctor" | "recovery" | "diagnostic-lab";
 type ContentSort = "popular" | "relevance" | "updated";
 type CatalogContent = ModrinthContent & {
   source: CatalogSource;
@@ -258,7 +262,7 @@ const DEFAULT_FORGE_VERSION: Record<string, string> = {
 const INSTALLABLE_VERSIONS = Object.keys(DEFAULT_FORGE_VERSION)
   .sort((left, right) => right.localeCompare(left, "en", { numeric: true }));
 const UPDATE_CONTENT_TYPES: ContentType[] = ["mod", "shader", "resourcepack"];
-const EDITOR_VIEWS: EditorView[] = ["installed", "memory", "updates", "discover", "doctor", "recovery", "diagnostic-lab"];
+const EDITOR_VIEWS: EditorView[] = ["installed", "keymap", "memory", "updates", "discover", "doctor", "recovery", "diagnostic-lab"];
 
 function formatBytes(value?: number) {
   if (!value || value < 1) return "0 B";
@@ -568,19 +572,22 @@ function curseForgeProjectContentType(project: CurseForgeProject | undefined, fa
 
 function AuthScreen({
   authenticate,
+  services,
   independent = false,
 }: {
   authenticate: (mode: AuthMode, nickname: string, password: string) => Promise<void>;
+  services: FirebaseServices;
   independent?: boolean;
 }) {
   const [mode, setMode] = useState<AuthMode>("login");
+  const [recovering, setRecovering] = useState(false);
   const [nickname, setNickname] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!MINECRAFT_NICK_PATTERN.test(nickname)) {
+    if (mode === "register" && !MINECRAFT_NICK_PATTERN.test(nickname)) {
       setMessage("Use um nick Minecraft válido: 3–16 letras, números ou _. Sem espaços, acentos ou símbolos.");
       return;
     }
@@ -600,24 +607,24 @@ function AuthScreen({
         <div className="aurora-mark">✦</div>
         <p className="eyebrow">AURORA SMART LAUNCHER</p>
         <h1>
-          {mode === "login" ? "Bem-vindo de volta." : "Crie sua constelação."}
+          {recovering ? "Recuperar senha" : mode === "login" ? "Bem-vindo de volta." : "Crie sua constelação."}
         </h1>
-        <p className="lede">
-          Entre somente com seu nick e senha. Seu perfil Aurora acompanha suas
-          instâncias.
-        </p>
+        {recovering ? <PasswordResetForm services={services} back={() => setRecovering(false)} /> : <>
+        <p className="lede">{mode === "login" ? "Entre com o e-mail confirmado ou, se ainda não vinculou um e-mail, com seu nick." : "Escolha seu nick no Minecraft. Depois de criar a conta, você poderá confirmar um e-mail para recuperar a senha."}</p>
         {independent && <p className="muted">Esta janela tem uma sessão independente. O login desta janela é temporário e termina quando você encerra este launcher.</p>}
         <div className="auth-tabs">
           <button
             className={mode === "login" ? "selected" : "secondary"}
-            onClick={() => setMode("login")}
+            onClick={() => { setMode("login"); setMessage(""); setPassword(""); }}
+            disabled={busy}
             type="button"
           >
             Entrar
           </button>
           <button
             className={mode === "register" ? "selected" : "secondary"}
-            onClick={() => setMode("register")}
+            onClick={() => { setMode("register"); setNickname(""); setMessage(""); setPassword(""); }}
+            disabled={busy}
             type="button"
           >
             Criar conta
@@ -625,10 +632,11 @@ function AuthScreen({
         </div>
         <form onSubmit={submit} className="auth-form">
           <label>
-            Nick
+            {mode === "login" ? "Nick ou e-mail confirmado" : "Nick"}
             <input
               value={nickname}
               onChange={(event) => {
+                if (mode === "login") { setNickname(event.target.value); return; }
                 const next = sanitizeMinecraftNickname(event.target.value);
                 setNickname(next);
                 if (next !== event.target.value) {
@@ -638,12 +646,12 @@ function AuthScreen({
               placeholder="Aurora_Player"
               autoComplete="username"
               minLength={3}
-              maxLength={16}
-              pattern="[A-Za-z0-9_]{3,16}"
-              title="3–16 letras, números ou _. Sem espaços e símbolos."
+              maxLength={mode === "login" ? 254 : 16}
+              pattern={mode === "register" ? "[A-Za-z0-9_]{3,16}" : undefined}
+              title={mode === "register" ? "3–16 letras, números ou _." : undefined}
               required
             />
-            <small className="field-hint">Esse será exatamente o nome usado dentro do Minecraft.</small>
+            {mode === "register" && <small className="field-hint">Esse será exatamente o nome usado dentro do Minecraft.</small>}
           </label>
           <label>
             Senha
@@ -668,6 +676,8 @@ function AuthScreen({
                 : "Criar conta Aurora"}
           </button>
         </form>
+        {mode === "login" && <button type="button" disabled={busy} className="text-button" onClick={() => { setPassword(""); setMessage(""); setRecovering(true); }}>Esqueci minha senha</button>}
+        </>}
       </section>
     </main>
   );
@@ -714,6 +724,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   }
   const [sessionStartup, setSessionStartup] = useState<SessionStartupState<AuroraUserProfile>>({ phase: "loading" });
   const [sessionRetry, setSessionRetry] = useState(0);
+  const [recoverySettingsUid, setRecoverySettingsUid] = useState<string>();
   const sessionController = useRef<ReturnType<typeof startSessionStartup> | undefined>(undefined);
   const [connectAccountBarrier, setConnectAccountBarrier] = useState<"idle" | "closing" | "blocked">("idle");
   const socialConnectOwner = useRef<SocialConnectController | undefined>(undefined);
@@ -795,7 +806,9 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>();
   const [coreConnection, setCoreConnection] = useState<CoreConnection>();
   const [skinUrl, setSkinUrl] = useState("");
-  const [capeUrl, setCapeUrl] = useState("");
+  const capeWardrobe = useWardrobeCape(services, profile, (owner, url) => {
+    setProfileState(current => current?.uid === owner ? { ...current, capeUrl: url } : current);
+  });
   const [skinModel, setSkinModel] = useState<"classic" | "slim">("classic");
   const [favoriteName, setFavoriteName] = useState("");
   const [favoriteSearch, setFavoriteSearch] = useState("");
@@ -808,7 +821,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   function setSelectedLocalSkinId(id: string) { selectedSkinIdRef.current = id; setSelectedSkinIdState(id); }
   const [localSkinPath, setLocalSkinPath] = useState("");
   const [equippedSkin, setEquippedSkin] = useState<EquippedSkinView>();
-  const [wardrobeView, setWardrobeView] = useState<"explore" | "library" | "import" | "equipped">("explore");
+  const [wardrobeView, setWardrobeView] = useState<"explore" | "library" | "import" | "equipped" | "cape">("explore");
   const [wardrobeLoading, setWardrobeLoading] = useState(false);
   const [wardrobeReadyOwner, setWardrobeReadyOwner] = useState("");
   const [wardrobeRetry, setWardrobeRetry] = useState(0);
@@ -891,6 +904,8 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [instanceLog, setInstanceLog] = useState<{ id: string; log: InstanceLog }>();
   const [runningInstances, setRunningInstances] = useState<RunningInstance[]>([]);
+  const discord = useDiscordPresence(socialService && !signingOut && connectAccountBarrier === "idle" ? profile?.uid : undefined,
+    runningInstances.length > 0, socialConnection?.state, () => setActiveSection("social"));
   const [renameDraft, setRenameDraft] = useState("");
   const [launcherBusy, setBusy] = useState(false);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
@@ -1204,10 +1219,9 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         const next = await saveAuroraAppearance(services, profile, {
           avatarUrl: profile.skinUrl,
           skinUrl: profile.skinUrl,
-          capeUrl: profile.capeUrl,
           skinModel: profile.skinModel,
         });
-        if (!cancelled && isCurrentSkinOwner(profile.uid)) setProfile(next);
+        if (!cancelled && isCurrentSkinOwner(profile.uid)) setProfileState(current => current?.uid === next.uid ? { ...next, capeUrl: current.capeUrl } : current);
       } catch {
         // O perfil continua utilizável; uma nova tentativa ocorre quando a skin for equipada novamente.
       }
@@ -1232,10 +1246,9 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         const next = await saveAuroraAppearance(services, profile, {
           avatarUrl: skinUrl,
           skinUrl,
-          capeUrl: profile.capeUrl,
           skinModel: equippedSkin?.skinModel ?? profile.skinModel,
         });
-        if (!cancelled && isCurrentSkinOwner(profile.uid)) setProfile(next);
+        if (!cancelled && isCurrentSkinOwner(profile.uid)) setProfileState(current => current?.uid === next.uid ? { ...next, capeUrl: current.capeUrl } : current);
       } catch {
         // A skin continua equipada localmente; o usuário pode sincronizá-la novamente no guarda-roupa.
       }
@@ -1253,7 +1266,6 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     setLocalSkinPath("");
     setSkinUrl("");
     setSkinModel(profile?.skinModel ?? "classic");
-    setCapeUrl(profile?.capeUrl ?? "");
     setFavoriteName("");
     setFavoriteSearch("");
     setWardrobeView("explore");
@@ -2864,8 +2876,8 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     }
   }
   async function launchMinecraft(instanceId = targetInstance) {
-    if (!profile || wardrobeLoading || wardrobeReadyOwner !== profile.uid || !isCurrentSkinOwner(profile.uid)) {
-      setNotice("Aguarde a recuperação da sua skin antes de iniciar Minecraft.");
+    if (!profile || !capeWardrobe.ready || wardrobeLoading || wardrobeReadyOwner !== profile.uid || !isCurrentSkinOwner(profile.uid)) {
+      setNotice("Aguarde a recuperação da aparência antes de iniciar Minecraft.");
       return;
     }
     if (!instanceId) {
@@ -2937,7 +2949,9 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         nickname: profile?.username ?? "",
         skinUrl: profile?.skinUrl ?? null,
         skinFile: localSkinPath || null,
-        capeUrl: profile?.capeUrl ?? null,
+        capeFile: capeWardrobe.active?.path || null,
+        shareCape: capeWardrobe.share,
+        capeUrl: capeWardrobe.active?.url || null,
         skinModel: localSkinPath ? equippedSkin?.skinModel ?? profile?.skinModel ?? null : profile?.skinModel ?? null,
       });
       setRunningInstances((current) => [
@@ -3033,18 +3047,14 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         if (isCurrentSkinOwner(ownerId)) setNotice("Skin equipada neste computador. Clique em Aplicar skin para tentar a sincronização online novamente.");
         return;
       }
-      const equippedCapeUrl = capeUrl
-        ? await invoke<string>("validate_appearance_url", { url: capeUrl, kind: "cape" })
-        : "";
       if (!isCurrentSkinOwner(ownerId)) return;
       const next = await saveAuroraAppearance(services, profile, {
         avatarUrl: equippedAvatarUrl || null,
         skinUrl: equippedSkinUrl || null,
-        capeUrl: equippedCapeUrl || null,
         skinModel,
       });
       if (isCurrentSkinOwner(ownerId)) {
-        setProfile(next);
+        setProfileState(current => current?.uid === next.uid ? { ...next, capeUrl: current.capeUrl } : current);
         await refreshLocalSkinLibrary(ownerId, selected.id);
         if (!isCurrentSkinOwner(ownerId)) return;
         setNotice("Skin equipada, guardada neste computador e sincronizada online.");
@@ -3071,31 +3081,24 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       }
     }
   }
-  async function uploadAppearance(kind: "skin" | "cape", file?: File) {
+  async function importSkinFile(file?: File) {
     if (!profile || !services || !file) return;
     setBusy(true);
     try {
-      await validateAppearanceFile(kind, file);
-      if (kind === "skin") {
-        const local = await saveLocalSkin({
-          ownerId: profile.uid,
-          name: importSkinName.trim() || file.name.replace(/\.png$/i, "") || "Minha skin",
-          skinModel,
-          image: file,
-        });
-        if (!isCurrentSkinOwner(profile.uid)) return;
-        await refreshLocalSkinLibrary(profile.uid, local.id);
-        if (!isCurrentSkinOwner(profile.uid)) return;
-        setWardrobeView("library");
-        setImportSkinName("");
-        setFavoriteName(local.name);
-        setNotice("Skin adicionada à biblioteca local. Clique em Aplicar skin para aplicá-la.");
-      } else {
-        const url = await uploadAppearanceImage(kind, file);
-        if (!isCurrentSkinOwner(profile.uid)) return;
-        setCapeUrl(url);
-        setNotice("Capa enviada. Clique em Aplicar skin para salvar a aparência.");
-      }
+      await validateAppearanceFile("skin", file);
+      const local = await saveLocalSkin({
+        ownerId: profile.uid,
+        name: importSkinName.trim() || file.name.replace(/\.png$/i, "") || "Minha skin",
+        skinModel,
+        image: file,
+      });
+      if (!isCurrentSkinOwner(profile.uid)) return;
+      await refreshLocalSkinLibrary(profile.uid, local.id);
+      if (!isCurrentSkinOwner(profile.uid)) return;
+      setWardrobeView("library");
+      setImportSkinName("");
+      setFavoriteName(local.name);
+      setNotice("Skin adicionada à biblioteca local. Clique em Aplicar skin para aplicá-la.");
     } catch (error) {
       if (isCurrentSkinOwner(profile.uid)) setNotice(`Não foi possível adicionar a imagem: ${String(error)}`);
     } finally {
@@ -3287,7 +3290,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       setBusy(false);
     }
   }
-  const connectAppearanceReady = !!profile && !wardrobeLoading
+  const connectAppearanceReady = !!profile && capeWardrobe.ready && !wardrobeLoading
     && wardrobeReadyOwner === profile.uid && isCurrentSkinOwner(profile.uid) && !signingOut
     && connectAccountBarrier === "idle";
   const connectLaunchContext = useMemo(() => {
@@ -3299,12 +3302,14 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
       appearance: {
         skinUrl: profile.skinUrl ?? null,
         skinFile: localSkinPath || null,
-        capeUrl: profile.capeUrl ?? null,
+        capeFile: capeWardrobe.active?.path || null,
+        shareCape: capeWardrobe.share,
+        capeUrl: capeWardrobe.active?.url || null,
         skinModel: localSkinPath ? equippedSkin?.skinModel ?? profile.skinModel ?? null : profile.skinModel ?? null,
       },
       contextKey: crypto.randomUUID(),
     };
-  }, [connectAppearanceReady, profile?.uid, profile?.username, profile?.skinUrl, profile?.capeUrl,
+  }, [connectAppearanceReady, profile?.uid, profile?.username, profile?.skinUrl, capeWardrobe.active, capeWardrobe.share,
     profile?.skinModel, targetInstance, javaPath, localSkinPath, equippedSkin?.skinModel]);
   if (connectAccountBarrier === "blocked") return <StartupScreen
     error="A sessão mudou, mas o encerramento do Connect ainda não foi confirmado. Tente concluir o encerramento antes de continuar."
@@ -3318,12 +3323,14 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
     || profile.uid !== sessionStartup.profile.uid
     || profile.uid !== services.auth.currentUser?.uid)) return <StartupScreen />;
   if (sessionStartup.phase !== "ready" || !profile)
-    return <AuthScreen independent={!services.authScope.persistent} authenticate={async (mode, nickname, password) => {
+    return <AuthScreen services={services} independent={!services.authScope.persistent} authenticate={async (mode, nickname, password) => {
       const controller = sessionController.current;
       if (!controller) throw new Error("A sessão ainda está sendo preparada. Tente novamente.");
-      await controller.authenticate(() => mode === "login"
-        ? loginAuroraUser(services, nickname, password)
-        : registerAuroraUser(services, nickname, password));
+      await controller.authenticate(async () => {
+        if (mode === "login") { await loginAuroraUser(services, nickname, password); return; }
+        const credential = await registerAuroraUser(services, nickname, password);
+        setRecoverySettingsUid(credential.user.uid);
+      });
     }} />;
   const filteredInstances = instances.filter((instance) =>
     `${instance.displayName ?? ""} ${instance.id}`.toLocaleLowerCase().includes(instanceFilter.trim().toLocaleLowerCase()),
@@ -3415,6 +3422,8 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
         </nav>
         <div className="sidebar-bottom">
           <SupportContextButton className="secondary compact sidebar-action" label="Ajuda com IA" />
+          <button className="text-button sidebar-action" disabled={signingOut} aria-haspopup="dialog" onClick={() => setRecoverySettingsUid(profile.uid)}>Recuperação da conta</button>
+          {!signingOut && recoverySettingsUid === profile.uid && <RecoveryEmailDialog key={profile.uid} services={services} uid={profile.uid} close={() => setRecoverySettingsUid(undefined)} />}
           <button className="text-button sidebar-action" disabled={signingOut} onClick={() => void signOutWithConnectCleanup()} type="button">{signingOut ? "Encerrando conexão…" : "Sair da conta"}</button>
           <ExitLauncherButton disabled={signingOut || updatesApplying || recoveryBusy} />
         </div>
@@ -3443,7 +3452,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
           <div className="workspace-main">
         {socialService && activeSection === "social" && !signingOut && <div className="section-social"><SocialBuildBanner /><SocialView key={profile.uid} service={socialService} accountId={profile.uid} nickname={profile.username}
           inbox={friendInbox} revealInboxRequest={friendInboxReveal} instanceNames={Object.fromEntries(instances.map(instance => [instance.id, instance.displayName || instance.id]))}
-          connection={socialConnection}
+          connection={socialConnection} discord={discord}
           onOpenConnectedGame={connectAvailable ? () => { setGameRevealRequest(value => value + 1); setActiveSection("connect"); } : undefined}
           onOpenManualConnect={connectAvailable && connectAccountBarrier === "idle" && !signingOut ? () => { setManualConnectRequested(true); setActiveSection("connect"); } : undefined}
           onPrepareDedicatedServer={connectAvailable && socialConnection?.state.maxSessionSeconds === 14400 ? () => { setDedicatedRevealRequest(value => value + 1); setActiveSection("connect"); } : undefined}
@@ -3513,7 +3522,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                   <div className="instance-actions">
                     <button
                       className="compact"
-                      disabled={busy || wardrobeLoading || wardrobeReadyOwner !== profile.uid || !instance.hasInstalledVersion || isRunning}
+                      disabled={busy || !capeWardrobe.ready || wardrobeLoading || wardrobeReadyOwner !== profile.uid || !instance.hasInstalledVersion || isRunning}
                       title={wardrobeLoading || wardrobeReadyOwner !== profile.uid ? "Recuperando sua skin…" : undefined}
                       onClick={(event) => { event.stopPropagation(); void launchMinecraft(instance.id); }}
                       type="button"
@@ -3523,6 +3532,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                     <button className="secondary compact" onClick={(event) => { event.stopPropagation(); void openEditor(instance.id); }} type="button">
                       Editar
                     </button>
+                    <button className="secondary compact" aria-label={`Mapa de teclas de ${instance.displayName || instance.id}`} onClick={(event) => { event.stopPropagation(); void openEditor(instance.id, "keymap"); }} type="button">Teclas</button>
                     <button className="secondary compact" disabled={busy} onClick={(event) => { event.stopPropagation(); void openInstanceLog(instance.id); }} type="button">Logs</button>
                     <button className="danger compact" disabled={busy || isRunning} onClick={(event) => { event.stopPropagation(); void deleteInstance(instance.id); }} type="button">
                       Excluir
@@ -3646,6 +3656,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
               </div>
               <div className="editor-view-tabs" role="tablist" aria-label="Conteúdo da instância" inert={recoveryBusy}>
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "installed"} className={editorView === "installed" ? "active" : ""} id="editor-view-tab-installed" onClick={() => activateEditorView("installed")} onKeyDown={(event) => handleEditorViewKeyDown(event, "installed")} role="tab" tabIndex={editorView === "installed" ? 0 : -1} type="button">Instalados</button>
+                <button aria-controls="editor-view-panel" aria-selected={editorView === "keymap"} className={editorView === "keymap" ? "active" : ""} id="editor-view-tab-keymap" onClick={() => activateEditorView("keymap")} onKeyDown={(event) => handleEditorViewKeyDown(event, "keymap")} role="tab" tabIndex={editorView === "keymap" ? 0 : -1} type="button">Teclas</button>
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "memory"} className={editorView === "memory" ? "active" : ""} id="editor-view-tab-memory" onClick={() => activateEditorView("memory")} onKeyDown={(event) => handleEditorViewKeyDown(event, "memory")} role="tab" tabIndex={editorView === "memory" ? 0 : -1} type="button">Memória</button>
                 <button aria-controls="editor-view-panel" aria-label={updateTabLabel} aria-selected={editorView === "updates"} className={editorView === "updates" ? "active" : ""} id="editor-view-tab-updates" onClick={() => activateEditorView("updates")} onKeyDown={(event) => handleEditorViewKeyDown(event, "updates")} role="tab" tabIndex={editorView === "updates" ? 0 : -1} type="button">Atualizações{updateTabBadge && <span aria-hidden="true" className={`tab-count ${updatesScanning ? "scanning" : updateScanIssueCount > 0 || (totalAvailableUpdates === 0 && totalUpdateAttention > 0) ? "attention" : ""}`}>{updateTabBadge}</span>}</button>
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "discover"} className={editorView === "discover" ? "active" : ""} id="editor-view-tab-discover" onClick={() => activateEditorView("discover")} onKeyDown={(event) => handleEditorViewKeyDown(event, "discover")} role="tab" tabIndex={editorView === "discover" ? 0 : -1} type="button">＋ Adicionar</button>
@@ -3654,7 +3665,11 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                 <button aria-controls="editor-view-panel" aria-selected={editorView === "diagnostic-lab"} className={editorView === "diagnostic-lab" ? "active" : ""} id="editor-view-tab-diagnostic-lab" onClick={() => activateEditorView("diagnostic-lab")} onKeyDown={(event) => handleEditorViewKeyDown(event, "diagnostic-lab")} role="tab" tabIndex={editorView === "diagnostic-lab" ? 0 : -1} type="button">Ambiente de teste</button>
               </div>
               <div aria-labelledby={`editor-view-tab-${editorView}`} className="editor-body" id="editor-view-panel" role="tabpanel" tabIndex={0}>
-                {editorView === "memory" ? (
+                {editorView === "keymap" ? (
+                  <Suspense fallback={<p role="status">Carregando mapa de teclas…</p>}>
+                    <KeymapPanel key={editingInstance} instanceId={editingInstance} running={runningInstances.some(game => game.instanceId === editingInstance)} />
+                  </Suspense>
+                ) : editorView === "memory" ? (
                   <LaunchSettingsPanel key={editingInstance} instanceId={editingInstance}
                     busy={busy || recoveryBusy || !!voice?.isBlocking()}
                     running={runningInstances.some(running => running.instanceId === editingInstance)} />
@@ -3889,12 +3904,14 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                 <button className={wardrobeView === "explore" ? "compact" : "secondary compact"} aria-pressed={wardrobeView === "explore"} onClick={() => setWardrobeView("explore")} type="button">Explorar</button>
                 <button className={wardrobeView === "library" ? "compact" : "secondary compact"} aria-pressed={wardrobeView === "library"} onClick={() => { setWardrobeView("library"); setFavoriteSearch(""); }} type="button">Minhas skins <span>({localSkins.length})</span></button>
                 <button className={wardrobeView === "equipped" ? "compact" : "secondary compact"} aria-pressed={wardrobeView === "equipped"} onClick={showEquippedSkin} type="button">Equipada</button>
+                <button className={wardrobeView === "cape" ? "compact" : "secondary compact"} aria-pressed={wardrobeView === "cape"} onClick={() => setWardrobeView("cape")} type="button">Capa</button>
                 <button className={wardrobeView === "import" ? "compact" : "secondary compact"} aria-pressed={wardrobeView === "import"} onClick={() => setWardrobeView("import")} type="button">Importar</button>
               </nav>
             </div>
             <div className="wardrobe-layout">
               <div className="wardrobe-controls">
                 {wardrobeLoading && <p className="muted" role="status">Recuperando sua biblioteca e a skin equipada…</p>}
+                {wardrobeView === "cape" && <CapePanel wardrobe={capeWardrobe} />}
                 {wardrobeView === "explore" && (
                   <OnlineSkinSearch disabled={busy || wardrobeLoading} workerUrl={workerUrl} onSelect={(skin) => void selectOnlineSkin(skin)} />
                 )}
@@ -3916,7 +3933,7 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                     <button aria-pressed={skinAddMode === "url"} className={skinAddMode === "url" ? "compact" : "secondary compact"} onClick={() => setSkinAddMode("url")} type="button">URL da imagem</button>
                   </div>
                   <label>Nome da skin (opcional)<input value={importSkinName} disabled={busy || wardrobeLoading} onChange={(event) => setImportSkinName(event.target.value)} maxLength={32} placeholder="Minha skin" /></label>
-                  {skinAddMode === "file" ? <label className="file-input">Escolher arquivo PNG<input accept="image/png" disabled={busy || wardrobeLoading} onChange={(event) => void uploadAppearance("skin", event.target.files?.[0])} type="file" /></label> : <>
+                  {skinAddMode === "file" ? <label className="file-input">Escolher arquivo PNG<input accept="image/png" disabled={busy || wardrobeLoading} onChange={(event) => void importSkinFile(event.target.files?.[0])} type="file" /></label> : <>
                     <label>Link do PNG<input type="url" value={importSkinUrl} disabled={busy || wardrobeLoading} onChange={(event) => setImportSkinUrl(event.target.value)} placeholder="https://…" /></label>
                     <button className="secondary compact" disabled={busy || wardrobeLoading || !importSkinUrl.trim()} onClick={() => void importLinkedSkin()} type="button">Adicionar à biblioteca</button>
                   </>}
@@ -3937,13 +3954,13 @@ function LauncherApp({ services }: { services: FirebaseServices }) {
                   </div>
                 </section>}
               </div>
-              <div className="skin-preview-stage">
+              {wardrobeView !== "cape" && <div className="skin-preview-stage">
                 <h2>Prévia</h2>
                 <SkinPreview skinModel={skinModel} skinUrl={skinUrl} />
                 {skinUrl && <strong>{favoriteName || localSkins.find(skin => skin.id === selectedLocalSkinId)?.name || profile.username}</strong>}
                 <label className="model-row">Modelo<select value={skinModel} disabled={busy || wardrobeLoading || wardrobeView === "equipped"} onChange={(event) => setSkinModel(event.target.value as "classic" | "slim")}><option value="classic">Clássico</option><option value="slim">Slim</option></select></label>
                 <button className="compact theme-surface-action" disabled={busy || wardrobeLoading || !skinUrl.trim()} onClick={() => void saveAppearance({ preventDefault() {} } as FormEvent)} type="button">Aplicar skin</button>
-              </div>
+              </div>}
             </div>
           </ThemeSurface>}
           {coreConnection && (

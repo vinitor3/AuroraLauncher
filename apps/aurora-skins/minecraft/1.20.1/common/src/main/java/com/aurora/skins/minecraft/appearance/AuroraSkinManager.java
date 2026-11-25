@@ -44,10 +44,18 @@ public final class AuroraSkinManager {
     private static final java.util.concurrent.atomic.AtomicLong LOAD_REQUEST = new java.util.concurrent.atomic.AtomicLong();
     private static volatile AuroraSkinsRuntime runtime;
     private static volatile ResourceLocation skin;
+    private static volatile ResourceLocation cape;
     private static volatile String model = "classic";
     // A request owns its texture, so a delayed release can never remove a newer upload.
     private static final Map<UUID, RemoteSkin> REMOTE = new HashMap<>();
     private static final java.util.concurrent.atomic.AtomicLong REMOTE_REQUEST = new java.util.concurrent.atomic.AtomicLong();
+    private static final com.aurora.skins.sync.RemoteCapes<ResourceLocation> REMOTE_CAPES =
+        new com.aurora.skins.sync.RemoteCapes<>((player, png) -> {
+            NativeImage image = NativeImage.read(new ByteArrayInputStream(png));
+            ResourceLocation location = new ResourceLocation("aurora_skins", "capes/" + player + "/" + REMOTE_REQUEST.incrementAndGet());
+            Minecraft.getInstance().getTextureManager().register(location, new DynamicTexture(image));
+            return location;
+        }, AuroraSkinManager::release);
     private static final ExecutorService REMOTE_IO = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
         new ArrayBlockingQueue<>(MAX_REMOTE_PLAYERS), runnable -> {
             Thread thread = new Thread(runnable, "Aurora-Skins-Remote-IO");
@@ -61,6 +69,7 @@ public final class AuroraSkinManager {
         if (runtime == skinsRuntime) return;
         if (runtime != null) shutdown();
         runtime = skinsRuntime;
+        loadCape(skinsRuntime);
         skinsRuntime.addListener(LISTENER);
         SkinEntry active = skinsRuntime.active();
         if (active != null) load(active);
@@ -72,6 +81,34 @@ public final class AuroraSkinManager {
 
     public static ResourceLocation skin() { return skin; }
     public static String model() { return model; }
+
+    public static ResourceLocation cape(UUID playerId) {
+        return playerId != null && isLocalPlayer(playerId) ? cape : REMOTE_CAPES.get(playerId);
+    }
+
+    public static void setRemoteCape(UUID playerId, byte[] png) {
+        if (runtime != null && playerId != null && !isLocalPlayer(playerId)) REMOTE_CAPES.update(playerId, png);
+    }
+
+    private static void loadCape(AuroraSkinsRuntime owner) {
+        IO.execute(() -> {
+            try {
+                byte[] png = com.aurora.skins.ProfileCape.readSelected();
+                if (png == null) return;
+                NativeImage image = NativeImage.read(new ByteArrayInputStream(png));
+                Minecraft.getInstance().execute(() -> {
+                    synchronized (AuroraSkinManager.class) {
+                        if (runtime != owner) { image.close(); return; }
+                        ResourceLocation location = new ResourceLocation("aurora_skins", "profile/cape");
+                        Minecraft.getInstance().getTextureManager().register(location, new DynamicTexture(image));
+                        cape = location;
+                    }
+                });
+            } catch (Exception error) {
+                System.err.println("[Aurora Skins] Capa indisponível: " + error.getClass().getSimpleName());
+            }
+        });
+    }
 
     public static synchronized ResourceLocation skin(UUID playerId) {
         if (playerId == null) return null;
@@ -146,6 +183,7 @@ public final class AuroraSkinManager {
     public static synchronized void clearRemoteSkins() {
         for (RemoteSkin remote : REMOTE.values()) release(remote.texture);
         REMOTE.clear();
+        REMOTE_CAPES.clear();
         ((ThreadPoolExecutor) REMOTE_IO).getQueue().clear();
     }
 
@@ -211,6 +249,8 @@ public final class AuroraSkinManager {
         skin = null;
         model = "classic";
         release(previous);
+        release(cape);
+        cape = null;
         clearRemoteSkins();
     }
 

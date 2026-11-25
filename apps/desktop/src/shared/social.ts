@@ -70,6 +70,7 @@ export type SocialService = {
   publishSession(value: SocialSessionDraft, onlyIfNoLiveSession?: boolean): Promise<string | void>;
   closeSession(): Promise<void>;
   listPublicSessions(cursor?: string | null): Promise<SocialPage>;
+  resolvePublicSession?(sessionId: string): Promise<SocialSession | null>;
   prepareJoin(sessionId: string): Promise<void>;
 };
 

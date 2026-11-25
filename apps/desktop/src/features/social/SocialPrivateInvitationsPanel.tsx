@@ -3,8 +3,9 @@ import type { SocialPerson, SocialPrivateInvitationSnapshot, SocialService, Soci
 import { socialError } from "./presentation";
 
 /** Account discovery UI only; the existing App/native owner performs every join. */
-export function SocialPrivateInvitationsPanel({ service, ownSession, joinEnabled, connectionBusy, onJoin }: {
+export function SocialPrivateInvitationsPanel({ service, ownSession, friends = [], joinEnabled, connectionBusy, onJoin }: {
   service: SocialService; ownSession?: SocialSession | null; joinEnabled: boolean; connectionBusy: boolean;
+  friends?: SocialPerson[];
   onJoin: (session: SocialSession) => Promise<unknown>;
 }) {
   const invitations = service.privateInvitations;
@@ -41,8 +42,15 @@ export function SocialPrivateInvitationsPanel({ service, ownSession, joinEnabled
   }
   const host = !!snapshot && !!ownSession && ownSession.visibility === "private" && ownSession.joinPolicy === "open"
     && ownSession.id === snapshot.sessionId && ownSession.expiresAtMs === snapshot.expiresAtMs && ownSession.expiresAtMs > now;
-  const canInvite = !!result && host && (snapshot!.remainingRecipients > 0 || snapshot!.outgoing.some(item => item.person.uid === result.uid && item.status === "revoked"))
-    && !snapshot!.outgoing.some(item => item.person.uid === result.uid && item.status === "active");
+  function canInvite(person: SocialPerson) {
+    if (!host || !snapshot || !ownSession || !(ownSession.expiresAtMs > clock())) return false;
+    const recipient = snapshot.outgoing.find(item => item.person.uid === person.uid);
+    return recipient ? recipient.status === "revoked" : snapshot.remainingRecipients > 0;
+  }
+  function invite(person: SocialPerson) {
+    if (!invitations || !ownSession || !canInvite(person)) return;
+    void run(() => invitations.invite(ownSession.id, person.uid), "Convite enviado para a conta selecionada.");
+  }
   async function search(event: FormEvent) {
     event.preventDefault(); setResult(null); setSearched(false);
     const query = nickname.trim();
@@ -79,13 +87,12 @@ export function SocialPrivateInvitationsPanel({ service, ownSession, joinEnabled
     {!host ? <p>Salve um anúncio privado com entrada aberta e atualize esta lista antes de convidar.</p> : <>
       <p>Até 8 contas diferentes por anúncio. Revogar não libera esse limite. Um novo anúncio exige novos convites; remover um participante da conexão não é desfeito por reenviar o convite.</p>
       <small>{snapshot.remainingRecipients} novos destinatários restantes. A capacidade da conexão pode ser menor.</small>
+      {friends.length > 0 && <div className="social-actions" aria-label="Convidar amigos">{friends.map(friend =>
+        <button type="button" key={friend.uid} disabled={pending || !canInvite(friend)} onClick={() => invite(friend)}>Convidar {friend.nickname}</button>)}</div>}
       <form className="social-private-search social-search" onSubmit={search}><label>Nick completo do Aurora<input value={nickname} maxLength={16} autoComplete="off" spellCheck={false} disabled={pending}
         onChange={event => { setNickname(event.target.value); setResult(null); setSearched(false); }} /></label><button disabled={pending || !nickname.trim()}>Buscar destinatário</button></form>
       {searched && (result ? <div className="social-notice"><strong>{result.nickname}</strong><p>Esta conta poderá descobrir e solicitar entrada na sessão privada atual.</p>
-        <button disabled={pending || !canInvite} onClick={() => {
-          if (!canInvite || !result || !ownSession || !(ownSession.expiresAtMs > clock())) return;
-          void run(() => invitations.invite(ownSession.id, result.uid), "Convite enviado para a conta selecionada.");
-        }}>Convidar {result.nickname}</button></div> : <p>Nenhuma conta disponível com esse nick.</p>)}
+        <button disabled={pending || !canInvite(result)} onClick={() => invite(result)}>Convidar {result.nickname}</button></div> : <p>Nenhuma conta disponível com esse nick.</p>)}
       <ul className="social-people">{snapshot.outgoing.map(item => <li key={item.person.uid}><div><strong>{item.person.nickname}</strong><small>{item.status === "active" ? "Convite ativo" : "Convite revogado ou recusado"}</small></div>
         <button className="secondary" disabled={pending} onClick={() => {
           if (!ownSession || !(ownSession.expiresAtMs > clock())) return;

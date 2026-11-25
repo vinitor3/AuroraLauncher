@@ -103,6 +103,11 @@ export function createSocialFirebaseService(services: FirebaseServices, options:
     capability();
     return guarded(async check => { const current = () => { check(); capability(true); }; current(); const value = await work(current); current(); return value; });
   }
+  async function publicSession(id: string, index: DocumentData | undefined, check: () => void): Promise<SocialSession | null> {
+    if (!sessionIdValid(id) || index?.schema !== 1 || !(index.expiresAt instanceof Timestamp) || index.expiresAt.toMillis() <= clock.now()) return null;
+    const session = sessionValue(id, await optional("socialSessions", id, check), clock.now());
+    return session?.visibility === "public" && session.expiresAtMs === index.expiresAt.toMillis() ? session : null;
+  }
   async function person(uid: string, check: () => void): Promise<SocialPerson> {
     const profile = await optional("publicProfiles", uid, check);
     let nickname = "Perfil indisponível";
@@ -313,12 +318,14 @@ export function createSocialFirebaseService(services: FirebaseServices, options:
       const items: SocialSession[] = [];
       for (const entry of index.docs) {
         account();
-        const data = entry.data();
-        if (!sessionIdValid(entry.id) || data.schema !== 1 || !(data.expiresAt instanceof Timestamp) || data.expiresAt.toMillis() <= clock.now()) continue;
-        const value = sessionValue(entry.id, await optional("socialSessions", entry.id, check), clock.now());
-        if (value?.visibility === "public") items.push(value);
+        const value = await publicSession(entry.id, entry.data(), check);
+        if (value) items.push(value);
       }
       return { items, nextCursor: index.size === 20 ? index.docs.at(-1)!.id : null };
+    }),
+    resolvePublicSession: id => guarded(async check => {
+      if (!sessionIdValid(id)) return null;
+      return publicSession(id, await optional("socialCatalog", id, check), check);
     }),
     prepareJoin: (_sessionId) => guarded(async (check) => {
       check(); throw new Error("A entrada automática ainda precisa do vínculo seguro entre conta e conexão. Nenhuma conexão foi aberta."); }),

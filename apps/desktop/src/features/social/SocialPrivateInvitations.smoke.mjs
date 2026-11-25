@@ -67,6 +67,18 @@ const search = async (nick = peer.nickname) => {
 beforeEach(() => { root = createRoot(container); });
 afterEach(async () => act(async () => root.unmount()));
 
+test("shortcut shows the inbox and invites an existing friend without nickname search, once per active grant", async () => {
+  const f = fixture(true);
+  f.snapshot.friends = [{ ...peer, presence: null, session: null }];
+  await render(f); await click("Convites");
+  assert.equal(container.querySelector(".social-invitations").hidden, false);
+  assert.equal(container.querySelector(".social-view").dataset.panel, "invites");
+  await click(`Convidar ${peer.nickname}`);
+  assert.deepEqual(f.calls.filter(call => call.name === "invite").map(call => call.args), [[session.id, peer.uid]]);
+  assert.equal(count(f, "search"), 0);
+  assert.equal(button(`Convidar ${peer.nickname}`).disabled, true);
+});
+
 test("online inbox explains Aurora service without changing Minecraft authentication or auto-cleaning", async () => {
   const f = fixture(); f.service.privateInvitations.environment = "online"; await render(f);
   assert.match(container.textContent, /Serviço online do Aurora/);

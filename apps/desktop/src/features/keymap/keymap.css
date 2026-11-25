@@ -1,0 +1,186 @@
+.km-panel {
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  color: var(--theme-text, inherit);
+}
+.km-heading,
+.km-tools,
+.km-find,
+.km-edit {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.km-heading > div:first-child,
+.km-edit > span {
+  flex: 1;
+}
+.km-panel h3,
+.km-panel p {
+  margin: 0;
+}
+.km-heading h3 {
+  font-size: 1.25rem;
+}
+.km-heading p,
+.km-count,
+.km-legend,
+.km-action small {
+  font-size: 0.78rem;
+  color: var(--theme-muted, #adb8c9);
+}
+.km-heading label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.km-heading select {
+  width: auto;
+}
+.km-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.km-legend i {
+  width: 0.65em;
+  height: 0.65em;
+  border-radius: 3px;
+  background: var(--theme-accent, #74c8c2);
+}
+.km-legend b,
+.km-warning {
+  color: var(--warning, #ffc785);
+}
+.km-board {
+  background: var(--theme-panel, #151c29);
+  border: 1px solid var(--theme-border, #445166);
+  padding: 10px;
+  border-radius: 12px;
+  overflow-x: auto;
+}
+.km-row {
+  display: flex;
+  gap: 4px;
+  min-width: 450px;
+}
+.km-row + .km-row {
+  margin-top: 4px;
+}
+.km-row:first-child {
+  margin-bottom: 8px;
+}
+.km-panel button.km-key {
+  flex: 1 1 0;
+  position: relative;
+  min-width: 0;
+  height: 33px;
+  padding: 1px 2px;
+  font-family: inherit;
+  font-size: 0.71rem;
+  line-height: 1.1;
+  font-weight: 600;
+  border-radius: 5px;
+  color: var(--theme-muted, #adb8c9);
+  background: var(--theme-background, #242d3a);
+  border: 1px solid var(--theme-border, #445166);
+  box-shadow: inset 0 -2px 0 #0003;
+}
+.km-panel button.km-used {
+  background: color-mix(
+    in srgb,
+    var(--theme-accent, #74c8c2) 20%,
+    var(--theme-panel, #192432)
+  );
+  color: var(--theme-text, #eef8f8);
+  border-color: color-mix(
+    in srgb,
+    var(--theme-accent, #74c8c2) 56%,
+    var(--theme-panel, #192432)
+  );
+}
+.km-panel button.km-conflict {
+  color: var(--theme-text, #fff1dd);
+  border-color: var(--warning, #ffc785);
+  background: color-mix(
+    in srgb,
+    var(--warning, #ffc785) 24%,
+    var(--theme-panel, #252129)
+  );
+}
+.km-key sup {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font-size: 0.65rem;
+}
+.km-key:focus-visible,
+.km-panel .km-current,
+.km-panel .km-active {
+  outline: 2px solid var(--theme-accent, #74c8c2);
+  outline-offset: 1px;
+}
+.km-extra {
+  font-size: 0.8rem;
+}
+.km-extra summary {
+  cursor: pointer;
+}
+.km-extra > div {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
+  gap: 4px;
+  margin-top: 8px;
+}
+.km-find label {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+  font-size: 0.8rem;
+}
+.km-list {
+  display: grid;
+}
+.km-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--theme-border, #45505c);
+}
+.km-action > div {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.km-action kbd {
+  min-width: 3.8em;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--theme-text, inherit);
+}
+.km-warning {
+  font-size: 0.75rem;
+}
+.km-edit,
+.km-note,
+.km-message {
+  padding: 9px;
+  border-left: 3px solid var(--theme-accent, #74c8c2);
+  background: var(--theme-panel, #18212e);
+}
+@media (max-width: 1000px) {
+  .km-panel {
+    padding: 10px;
+  }
+  .km-action {
+    gap: 6px;
+  }
+  .km-warning {
+    font-size: 0.65rem;
+  }
+}

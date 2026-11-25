@@ -7,6 +7,7 @@
 mod commands;
 mod commands_native_voice;
 mod connect_commands;
+mod discord;
 mod doctor_runs;
 mod launcher_sessions;
 mod manual_downloads;
@@ -168,6 +169,7 @@ fn main() {
             }
         })
         .manage(commands::IpcSessions::default())
+        .manage(discord::DiscordState::default())
         .manage(commands::RunningInstances::default())
         .manage(launcher_sessions::LauncherSessionState::default())
         .manage(doctor_runs::DoctorRuns::default())
@@ -180,6 +182,9 @@ fn main() {
             ),
         )
         .invoke_handler(tauri::generate_handler![
+            discord::discord_default_application_id,
+            discord::discord_set_presence,
+            discord::discord_clear_presence,
             voice_announcement_commands::voice_announcement_capabilities,
             voice_announcement_commands::voice_announcement_snapshot,
             voice_announcement_commands::voice_announcement_inspect,
@@ -302,6 +307,8 @@ fn main() {
             commands::cancel_manual_content_download,
             commands::resolve_content_artwork,
             commands::list_instance_content,
+            commands::instance_keymap,
+            commands::rebind_instance_key,
             commands::set_instance_content_enabled,
             commands::set_instance_content_enabled_bulk,
             commands::remove_instance_content,

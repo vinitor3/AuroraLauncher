@@ -77,7 +77,7 @@ impl ReadyProfile {
             loader_version,
             java_major,
             core_version: "1.1.7",
-            skins_version: "0.3.3",
+            skins_version: "0.3.4",
         }
     }
     #[cfg(feature = "connect-lab")]

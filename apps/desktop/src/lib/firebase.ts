@@ -1,6 +1,6 @@
 import { initializeApp, type FirebaseApp } from "firebase/app";
-import { browserLocalPersistence, browserSessionPersistence, connectAuthEmulator, createUserWithEmailAndPassword, deleteUser, indexedDBLocalPersistence, initializeAuth, inMemoryPersistence, onAuthStateChanged, signInWithEmailAndPassword, signOut, type Auth, type User } from "firebase/auth";
-import { connectFirestoreEmulator, deleteField, doc, getDoc, getFirestore, runTransaction, serverTimestamp, setDoc, updateDoc, type Firestore } from "firebase/firestore";
+import { browserLocalPersistence, browserSessionPersistence, connectAuthEmulator, createUserWithEmailAndPassword, deleteUser, EmailAuthProvider, indexedDBLocalPersistence, initializeAuth, inMemoryPersistence, onAuthStateChanged, reauthenticateWithCredential, sendPasswordResetEmail, signInWithEmailAndPassword, signOut, verifyBeforeUpdateEmail, type Auth, type User } from "firebase/auth";
+import { connectFirestoreEmulator, deleteField, doc, getDoc, getDocFromServer, getFirestore, runTransaction, serverTimestamp, setDoc, updateDoc, type Firestore } from "firebase/firestore";
 import { getDownloadURL, getStorage, ref, uploadBytes, type FirebaseStorage } from "firebase/storage";
 import { validateLauncherAuthScope, type LauncherAuthScope } from "./launcherAuthScope";
 
@@ -144,8 +144,63 @@ export async function registerAuroraUser(services: FirebaseServices, nickname: s
   return credential;
 }
 
-export function loginAuroraUser(services: FirebaseServices, nickname: string, password: string) {
-  return signInWithEmailAndPassword(services.auth, syntheticEmail(normalizeNickname(nickname)), password);
+function personalEmail(input: string) {
+  const email = input.trim();
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || /@aurora\.internal$/i.test(email)) {
+    throw new Error("Informe seu e-mail pessoal.");
+  }
+  return email;
+}
+
+function authCode(error: unknown) {
+  return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+}
+
+export function verifiedAuroraEmail(user: User) {
+  return user.emailVerified && user.email && !/@aurora\.internal$/i.test(user.email) ? user.email : null;
+}
+
+export async function loginAuroraUser(services: FirebaseServices, identifier: string, password: string) {
+  const email = identifier.includes("@") ? personalEmail(identifier) : syntheticEmail(normalizeNickname(identifier));
+  try {
+    return await signInWithEmailAndPassword(services.auth, email, password);
+  } catch (error) {
+    if (["auth/invalid-credential", "auth/wrong-password", "auth/user-not-found", "auth/user-disabled"].includes(String(authCode(error)))) {
+      throw new Error("Confira o nick ou e-mail e a senha.");
+    }
+    throw error;
+  }
+}
+
+export async function linkAuroraRecoveryEmail(services: FirebaseServices, uid: string, password: string, input: string) {
+  const email = personalEmail(input);
+  const user = services.auth.currentUser;
+  if (!user?.email || user.uid !== uid) throw new Error("Entre novamente na sua conta Aurora.");
+  if (email.toLowerCase() === verifiedAuroraEmail(user)?.toLowerCase()) throw new Error("Este e-mail já está confirmado.");
+  try {
+    await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, password));
+    if (services.auth.currentUser !== user) throw new Error("A conta mudou. Entre novamente.");
+    services.auth.languageCode = "pt";
+    await verifyBeforeUpdateEmail(user, email);
+  } catch (error) {
+    const code = authCode(error);
+    if (code === "auth/email-already-in-use" || code === "auth/credential-already-in-use") return;
+    if (code === "auth/wrong-password" || code === "auth/invalid-credential") throw new Error("Confira a senha atual.");
+    if (code === "auth/too-many-requests") throw new Error("Aguarde alguns minutos e tente novamente.");
+    throw new Error("Não foi possível solicitar a confirmação. Confira a conexão e entre novamente.");
+  }
+}
+
+export async function resetAuroraPassword(services: FirebaseServices, input: string) {
+  const email = personalEmail(input);
+  services.auth.languageCode = "pt";
+  try {
+    await sendPasswordResetEmail(services.auth, email);
+  } catch (error) {
+    // Keep the public response identical even on Firebase projects without email enumeration protection.
+    if (["auth/user-not-found", "auth/user-disabled", "auth/too-many-requests"].includes(String(authCode(error)))) return;
+    throw new Error("Não foi possível solicitar a recuperação. Confira a conexão e tente novamente.");
+  }
 }
 
 export async function loadAuroraProfile(services: FirebaseServices, user: User): Promise<AuroraUserProfile> {
@@ -177,7 +232,20 @@ export async function uploadFirebaseAppearanceImage(
   return getDownloadURL(destination);
 }
 
-export type AuroraAppearance = Pick<AuroraUserProfile, "avatarUrl" | "skinUrl" | "capeUrl" | "skinModel">;
+export type AuroraAppearance = Pick<AuroraUserProfile, "avatarUrl" | "skinUrl" | "skinModel">;
+
+export async function saveAuroraCape(services: FirebaseServices, uid: string, url: string | null) {
+  if (services.auth.currentUser?.uid !== uid) throw new Error("Entre novamente na conta para sincronizar a capa.");
+  await updateDoc(doc(services.db, "users", uid), { capeUrl: publicHttpsUrl(url ?? ""), updatedAt: serverTimestamp() });
+}
+
+export async function loadAuroraCape(services: FirebaseServices, uid: string) {
+  if (services.auth.currentUser?.uid !== uid) throw new Error("Entre novamente na conta para recuperar a capa.");
+  const profile = await getDocFromServer(doc(services.db, "users", uid));
+  if (!profile.exists()) throw new Error("Perfil Aurora indisponível.");
+  const value = profile.get("capeUrl");
+  return typeof value === "string" ? publicHttpsUrl(value) : null;
+}
 export type AuroraPublicProfile = Pick<AuroraUserProfile, "uid" | "username" | "avatarUrl" | "skinUrl" | "skinModel">;
 
 function publicHttpsUrl(value: string) {
@@ -200,7 +268,6 @@ export async function saveAuroraAppearance(
   const next = {
     avatarUrl: publicHttpsUrl(appearance.avatarUrl ?? ""),
     skinUrl: publicHttpsUrl(appearance.skinUrl ?? ""),
-    capeUrl: publicHttpsUrl(appearance.capeUrl ?? ""),
     skinModel: appearance.skinModel,
     updatedAt: serverTimestamp(),
   };

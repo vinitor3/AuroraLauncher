@@ -115,10 +115,12 @@ test("SDK friend-only presence and session disappear after reciprocal block; pub
   await assertFails(getDoc(doc(dbFor("c"), "socialSessions", id)));
   await service("a").publishSession(draft);
   assert.equal((await service("c").listPublicSessions()).items.length, 1);
+  assert.equal((await service("c").resolvePublicSession(id))?.id, id);
   await service("b").block("a");
   await assertFails(getDoc(doc(dbFor("b"), "socialSessions", id)));
   await assertFails(getDoc(doc(dbFor("b"), "socialPresence", "a")));
   assert.deepEqual((await service("b").listPublicSessions()).items, []);
+  assert.equal(await service("b").resolvePublicSession(id), null);
   assert.equal((await service("c").listPublicSessions()).items.length, 1);
 });
 test("SDK public/private/close keeps one owner pointer and opaque index atomic", async () => {
@@ -127,9 +129,13 @@ test("SDK public/private/close keeps one owner pointer and opaque index atomic",
   assert.deepEqual(Object.keys(catalog.docs[0].data()).sort(), ["expiresAt", "schema"]);
   await service("a").publishSession({ ...draft, visibility: "private" });
   assert.equal(await ownId("a"), id);
+  assert.equal(await service("a").resolvePublicSession(id), null);
+  assert.equal(await service("b").resolvePublicSession(id), null);
   assert.equal((await service("b").listPublicSessions()).items.length, 0);
   await assertFails(getDoc(doc(dbFor("b"), "socialSessions", id)));
   await service("a").closeSession();
+  assert.equal(await service("b").resolvePublicSession(id), null);
+  assert.equal(await service("b").resolvePublicSession("not-a-public-session"), null);
   assert.equal((await getDoc(doc(dbFor("a"), "socialOwners", "a"))).exists(), false);
 });
 test("rules reject one-sided friendship, self requests, forged actors, auth-only accounts and duplicate requests", async () => {

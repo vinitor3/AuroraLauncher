@@ -37,10 +37,21 @@ final class LegacySkinManager {
     private static final AuroraSkinsRuntime.Listener LISTENER = LegacySkinManager::load;
     private static final AtomicLong LOAD_REQUEST = new AtomicLong();
     private static final LegacyPlayerSkinOverride PLAYER_SKIN = new LegacyPlayerSkinOverride();
+    private static final LegacyCapeOverride PLAYER_CAPE = new LegacyCapeOverride();
+    private static volatile Object cape;
     private static volatile AuroraSkinsRuntime runtime;
     private static volatile Object texture;
     private static volatile String model = "classic";
     private static final Map<UUID, RemoteSkin> REMOTE = new LinkedHashMap<UUID, RemoteSkin>();
+    private static final Map<UUID, LegacyCapeOverride> REMOTE_CAPE_OVERRIDES = new LinkedHashMap<>();
+    private static final com.aurora.skins.sync.RemoteCapes<Object> REMOTE_CAPES =
+        new com.aurora.skins.sync.RemoteCapes<>((player, png) -> {
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(png));
+            Object dynamic = Class.forName("net.minecraft.client.renderer.texture.DynamicTexture")
+                .getConstructor(BufferedImage.class).newInstance(image);
+            Object manager = LegacyMinecraft.invoke(LegacyMinecraft.minecraft(), new String[] {"getTextureManager", "func_110434_K"});
+            return LegacyMinecraft.invoke(manager, new String[] {"getDynamicTextureLocation", "func_110578_a"}, "aurora_cape_" + player, dynamic);
+        }, LegacySkinManager::deleteTexture);
     private static final ThreadPoolExecutor REMOTE_IO = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
         new ArrayBlockingQueue<Runnable>(256), runnable -> {
             Thread thread = new Thread(runnable, "Aurora-Skins-1.12-Remote"); thread.setDaemon(true); return thread;
@@ -55,6 +66,27 @@ final class LegacySkinManager {
     private LegacySkinManager() { }
     static void initialize(AuroraSkinsRuntime value) {
         runtime = value;
+        IO.execute(() -> {
+            try {
+                byte[] png = com.aurora.skins.ProfileCape.readSelected();
+                if (png == null) return;
+                BufferedImage image = ImageIO.read(new ByteArrayInputStream(png));
+                if (image == null) return;
+                LegacyMinecraft.execute(() -> {
+                    if (runtime != value) return;
+                    try {
+                        Object dynamic = Class.forName("net.minecraft.client.renderer.texture.DynamicTexture")
+                            .getConstructor(BufferedImage.class).newInstance(image);
+                        Object manager = LegacyMinecraft.invoke(LegacyMinecraft.minecraft(), new String[] {"getTextureManager", "func_110434_K"});
+                        cape = LegacyMinecraft.invoke(manager, new String[] {"getDynamicTextureLocation", "func_110578_a"}, "aurora_skins_cape", dynamic);
+                    } catch (ReflectiveOperationException error) {
+                        System.err.println("[Aurora Skins] Capa indisponível: " + error.getClass().getSimpleName());
+                    }
+                });
+            } catch (Exception error) {
+                System.err.println("[Aurora Skins] Capa indisponível: " + error.getClass().getSimpleName());
+            }
+        });
         value.addListener(LISTENER);
         if (value.active() != null) load(value.active());
         String localProfile = System.getProperty("aurora.profile.skinFile", "").trim();
@@ -63,7 +95,11 @@ final class LegacySkinManager {
     static void shutdown() {
         if (runtime != null) runtime.removeListener(LISTENER);
         runtime = null; LOAD_REQUEST.incrementAndGet();
-        LegacyMinecraft.execute(() -> { clearRemoteSkins(); PLAYER_SKIN.clear(); deleteTexture(texture); texture = null; });
+        LegacyMinecraft.execute(() -> {
+            clearRemoteSkins(); PLAYER_SKIN.clear(); PLAYER_CAPE.clear();
+            deleteTexture(texture); texture = null;
+            deleteTexture(cape); cape = null;
+        });
     }
     static Object texture() { return texture; }
     static String model() { return model; }
@@ -99,6 +135,13 @@ final class LegacySkinManager {
             });
         } catch (RejectedExecutionException full) { REMOTE.remove(id); }
     }
+    static void setRemoteCape(UUID id, byte[] png) {
+        if (id == null || runtime == null) return;
+        LegacyCapeOverride previous = REMOTE_CAPE_OVERRIDES.remove(id);
+        if (previous != null) previous.clear();
+        REMOTE_CAPES.update(id, png);
+        if (REMOTE_CAPES.get(id) != null) REMOTE_CAPE_OVERRIDES.put(id, new LegacyCapeOverride());
+    }
     static void removeRemoteSkin(UUID id) {
         RemoteSkin previous = REMOTE.remove(id);
         if (previous != null) { previous.override.clear(); deleteTexture(previous.texture); }
@@ -107,6 +150,9 @@ final class LegacySkinManager {
         REMOTE_IO.getQueue().clear();
         for (RemoteSkin value : REMOTE.values()) { value.override.clear(); deleteTexture(value.texture); }
         REMOTE.clear();
+        for (LegacyCapeOverride override : REMOTE_CAPE_OVERRIDES.values()) override.clear();
+        REMOTE_CAPE_OVERRIDES.clear();
+        REMOTE_CAPES.clear();
     }
     private static void applyRemotePlayers() {
         Object minecraft = LegacyMinecraft.minecraft();
@@ -114,6 +160,15 @@ final class LegacySkinManager {
         if (connection == null) { clearRemoteSkins(); return; }
         try {
             Object key = Class.forName("com.mojang.authlib.minecraft.MinecraftProfileTexture$Type").getField("SKIN").get(null);
+            Object capeKey = Class.forName("com.mojang.authlib.minecraft.MinecraftProfileTexture$Type").getField("CAPE").get(null);
+            Object local = LegacyMinecraft.field(minecraft, "player", "field_71439_g");
+            Object localId = LegacyMinecraft.invoke(local, new String[] {"getUniqueID", "func_110124_au"});
+            for (Map.Entry<UUID, LegacyCapeOverride> entry : REMOTE_CAPE_OVERRIDES.entrySet()) {
+                Object info = LegacyMinecraft.invoke(connection, new String[] {"getPlayerInfo", "func_175102_a"}, entry.getKey());
+                if (info == null || entry.getKey().equals(localId)) { entry.getValue().clear(); continue; }
+                LegacyMinecraft.invoke(info, new String[] {"getLocationSkin", "func_178837_g"});
+                entry.getValue().apply(info, capeKey, REMOTE_CAPES.get(entry.getKey()));
+            }
             for (Map.Entry<UUID, RemoteSkin> entry : REMOTE.entrySet()) {
                 RemoteSkin skin = entry.getValue(); if (skin.texture == null) continue;
                 Object info = LegacyMinecraft.invoke(connection, new String[] {"getPlayerInfo", "func_175102_a"}, entry.getKey());
@@ -217,20 +272,20 @@ final class LegacySkinManager {
     static void applyToLocalPlayer() {
         applyRemotePlayers();
         Object location = texture;
-        if (location == null) return;
+        if (location == null && cape == null) return;
         try {
             Object minecraft = LegacyMinecraft.minecraft();
             Object player = LegacyMinecraft.field(minecraft, "player", "field_71439_g");
             Object connection = LegacyMinecraft.invoke(minecraft, new String[] {"getConnection", "func_147114_u"});
             Object uuid = LegacyMinecraft.invoke(player, new String[] {"getUniqueID", "func_110124_au"});
-            if (!(uuid instanceof UUID) || connection == null) { PLAYER_SKIN.clear(); return; }
+            if (!(uuid instanceof UUID) || connection == null) { PLAYER_SKIN.clear(); PLAYER_CAPE.clear(); return; }
             Object info = LegacyMinecraft.invoke(connection, new String[] {"getPlayerInfo", "func_175102_a"}, uuid);
-            if (info == null) { PLAYER_SKIN.clear(); return; }
+            if (info == null) { PLAYER_SKIN.clear(); PLAYER_CAPE.clear(); return; }
             // Start vanilla's texture request, preserving its cape and elytra callbacks.
             LegacyMinecraft.invoke(info, new String[] {"getLocationSkin", "func_178837_g"});
-            Object skinKey = Class.forName("com.mojang.authlib.minecraft.MinecraftProfileTexture$Type")
-                .getField("SKIN").get(null);
-            PLAYER_SKIN.apply(info, skinKey, location, model);
+            Class<?> keys = Class.forName("com.mojang.authlib.minecraft.MinecraftProfileTexture$Type");
+            if (location != null) PLAYER_SKIN.apply(info, keys.getField("SKIN").get(null), location, model);
+            if (cape != null) PLAYER_CAPE.apply(info, keys.getField("CAPE").get(null), cape);
         } catch (Throwable ignored) { }
     }
 

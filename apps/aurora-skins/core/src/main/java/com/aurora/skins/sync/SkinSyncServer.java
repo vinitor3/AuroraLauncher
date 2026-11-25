@@ -9,7 +9,9 @@ public final class SkinSyncServer {
     private final Map<UUID, Peer> peers = new LinkedHashMap<UUID, Peer>();
     private static final class Peer {
         long lastHello, lastPublish = Long.MIN_VALUE;
-        byte[] appearance;
+        byte[] appearance, cape;
+        boolean capes;
+        long lastCape = Long.MIN_VALUE;
         String fingerprint;
     }
 
@@ -28,6 +30,25 @@ public final class SkinSyncServer {
                 send(sender, player, SkinSyncProtocol.hello());
                 for (Map.Entry<UUID, Peer> entry : peers.entrySet()) {
                     if (!entry.getKey().equals(player) && entry.getValue().appearance != null) send(sender, player, entry.getValue().appearance);
+                }
+                return;
+            }
+            if (peer != null && message.kind == SkinSyncProtocol.CAPE_HELLO) {
+                if (peer.capes) return;
+                peer.capes = true;
+                send(sender, player, SkinSyncProtocol.capeHello());
+                for (Map.Entry<UUID, Peer> other : peers.entrySet()) {
+                    if (!other.getKey().equals(player) && other.getValue().cape != null) send(sender, player, other.getValue().cape);
+                }
+                return;
+            }
+            if (peer != null && peer.capes && message.kind == SkinSyncProtocol.CAPE_PUBLISH) {
+                if (peer.lastCape != Long.MIN_VALUE && nowMillis - peer.lastCape < 2000) return;
+                peer.lastCape = nowMillis;
+                byte[] update = SkinSyncProtocol.capeUpdate(player, SkinSyncProtocol.canonicalCape(message.png()));
+                if (!Arrays.equals(peer.cape, update)) {
+                    peer.cape = update;
+                    broadcastCape(player, update, sender);
                 }
                 return;
             }
@@ -55,10 +76,19 @@ public final class SkinSyncServer {
 
     public synchronized void disconnect(UUID player, Sender sender) {
         Peer removed = peers.remove(player);
+        if (removed != null && removed.cape != null) {
+            try { broadcastCape(player, SkinSyncProtocol.capeRemove(player), sender); }
+            catch (IOException impossible) { throw new IllegalStateException(impossible); }
+        }
         if (removed != null && removed.appearance != null) broadcast(player, SkinSyncProtocol.remove(player), sender);
     }
     public synchronized void clear() { peers.clear(); }
     public synchronized int playerCount() { return peers.size(); }
+    private void broadcastCape(UUID except, byte[] packet, Sender sender) {
+        for (Map.Entry<UUID, Peer> peer : peers.entrySet()) {
+            if (!peer.getKey().equals(except) && peer.getValue().capes) send(sender, peer.getKey(), packet);
+        }
+    }
     private void broadcast(UUID except, byte[] packet, Sender sender) {
         for (UUID target : peers.keySet()) if (!target.equals(except)) send(sender, target, packet);
     }

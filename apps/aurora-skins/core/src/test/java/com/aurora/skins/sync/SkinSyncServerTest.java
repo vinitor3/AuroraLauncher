@@ -25,6 +25,32 @@ class SkinSyncServerTest {
         List<byte[]> packets = inbox.get(id); return SkinSyncProtocol.decode(packets.get(packets.size()-1));
     }
 
+    @Test void capesAreOptionalBoundToTheConnectionAndContainOnlyModelPixels() throws Exception {
+        hello(alice); hello(bob); hello(charlie);
+        byte[] cape = SkinSyncProtocol.capePublish(png(32, 0xffbe145e));
+        receive(alice, cape, 11000);
+        assertEquals(1, inbox.get(bob).size());
+        receive(alice, SkinSyncProtocol.capeHello(), 12000);
+        receive(bob, SkinSyncProtocol.capeHello(), 12000);
+        receive(alice, cape, 13000);
+        SkinSyncProtocol.Message update = last(bob);
+        assertEquals(SkinSyncProtocol.CAPE_UPDATE, update.kind);
+        assertEquals(alice, update.player);
+        BufferedImage pixels = ImageIO.read(new ByteArrayInputStream(update.png()));
+        assertEquals(0xffbe145e, pixels.getRGB(5, 9));
+        assertEquals(0, pixels.getRGB(40, 20));
+        assertEquals(1, inbox.get(charlie).size(), "Old clients receive no cape packets");
+        receive(bob, SkinSyncProtocol.capeUpdate(alice, update.png()), 14000);
+        assertEquals(SkinSyncProtocol.CAPE_HELLO, last(alice).kind);
+        receive(charlie, SkinSyncProtocol.capeHello(), 15000);
+        assertEquals(alice, last(charlie).player, "Late peers receive an authenticated snapshot");
+        receive(alice, SkinSyncProtocol.reset(), 16000);
+        assertEquals(SkinSyncProtocol.CAPE_UPDATE, last(bob).kind, "Changing body skin preserves cape");
+        server.disconnect(alice, sender);
+        assertEquals(SkinSyncProtocol.CAPE_REMOVE, last(bob).kind);
+        assertThrows(IOException.class, () -> SkinSyncProtocol.canonicalCape(png(64, 0xff112233)));
+    }
+
     @Test void distributesSkinsByConnectionIdentityAndSnapshotsToLateJoiners() throws Exception {
         hello(alice); hello(bob);
         byte[] skin = png(64,0xff123456);

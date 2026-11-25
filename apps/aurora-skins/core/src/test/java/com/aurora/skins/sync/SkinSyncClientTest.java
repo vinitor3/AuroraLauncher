@@ -95,11 +95,13 @@ class SkinSyncClientTest {
             client.receive(SkinSyncProtocol.hello());
             // Hold a fully prepared outgoing publication on the main thread.
             Runnable stalePublish = main.take();
+            Runnable staleCapeHello = main.take();
             client.receive(SkinSyncProtocol.update(other, SkinModel.SLIM, SkinSyncServerTest.png(64, 0xff111111)));
             Runnable staleUpdate = main.take();
             client.disconnect();
             client.connect(secondWire::add);
             stalePublish.run();
+            staleCapeHello.run();
             staleUpdate.run();
             main.runUntil(() -> !secondWire.isEmpty());
             assertEquals(1, firstWire.size(), "Prepared skin packets must be fenced at the actual send");
@@ -159,6 +161,35 @@ class SkinSyncClientTest {
             assertSame(local, runtime.active());
             assertTrue(view.skins.isEmpty());
             for (byte[] packet : wire) assertEquals(SkinSyncProtocol.HELLO, SkinSyncProtocol.decode(packet).kind);
+        }
+    }
+
+    @Test void capePublicationRequiresUserOptInAndServerCapability() throws Exception {
+        String fileKey = "aurora.profile.capeFile", shareKey = "aurora.profile.shareCape";
+        Path atlas = directory.resolve("cape.png");
+        Files.write(atlas, SkinSyncServerTest.png(32, 0xff4ab1c2));
+        String oldFile = System.setProperty(fileKey, atlas.toAbsolutePath().toString());
+        String oldShare = System.clearProperty(shareKey);
+        try {
+            for (boolean share : new boolean[] { false, true }) {
+                System.setProperty(shareKey, Boolean.toString(share));
+                List<byte[]> wire = new CopyOnWriteArrayList<>();
+                RecordingListener view = new RecordingListener();
+                try (SkinSyncClient client = new SkinSyncClient(runtime("cape-" + share), view, Runnable::run)) {
+                    client.connect(wire::add);
+                    await(() -> !wire.isEmpty());
+                    client.receive(SkinSyncProtocol.hello());
+                    await(() -> wire.stream().anyMatch(p -> p[1] == SkinSyncProtocol.CAPE_HELLO));
+                    assertTrue(wire.stream().noneMatch(p -> p[1] == SkinSyncProtocol.CAPE_PUBLISH));
+                    client.receive(SkinSyncProtocol.capeHello());
+                    client.receive(SkinSyncProtocol.remove(UUID.randomUUID()));
+                    await(() -> view.removals.get() == 1);
+                    assertEquals(share, wire.stream().anyMatch(p -> p[1] == SkinSyncProtocol.CAPE_PUBLISH));
+                }
+            }
+        } finally {
+            if (oldFile == null) System.clearProperty(fileKey); else System.setProperty(fileKey, oldFile);
+            if (oldShare == null) System.clearProperty(shareKey); else System.setProperty(shareKey, oldShare);
         }
     }
 

@@ -1,0 +1,14 @@
+.account-recovery-dialog {
+  width: min(28rem, calc(100vw - 2rem));
+  max-height: 85vh;
+  overflow: auto;
+  border: 1px solid var(--border, #454c67);
+  border-radius: 14px;
+  padding: 1.35rem;
+  color: var(--text, #eef0fc);
+  background: var(--surface, #171b2b);
+}
+.account-recovery-dialog::backdrop { background: rgb(5 7 15 / 75%); }
+.account-recovery-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.account-recovery-dialog h2 { margin: 0; }
+.account-recovery-dialog p { line-height: 1.5; overflow-wrap: anywhere; }

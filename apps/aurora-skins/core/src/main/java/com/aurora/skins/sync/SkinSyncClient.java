@@ -12,6 +12,7 @@ import java.util.function.Consumer;
 public final class SkinSyncClient implements AutoCloseable, AuroraSkinsRuntime.Listener {
     public interface Listener {
         void apply(UUID player, byte[] png, SkinModel model);
+        default void cape(UUID player, byte[] png) { }
         void remove(UUID player);
         void clear();
     }
@@ -23,6 +24,8 @@ public final class SkinSyncClient implements AutoCloseable, AuroraSkinsRuntime.L
     private final java.util.concurrent.atomic.AtomicInteger pendingClientActions = new java.util.concurrent.atomic.AtomicInteger();
     private final Set<UUID> players = new HashSet<UUID>();
     private final Map<UUID, String> fingerprints = new HashMap<UUID, String>();
+    private final Map<UUID, String> capes = new HashMap<UUID, String>();
+    private boolean capeReady;
     private volatile Consumer<byte[]> sender;
     private volatile long generation;
     private volatile boolean ready, closed;
@@ -51,7 +54,7 @@ public final class SkinSyncClient implements AutoCloseable, AuroraSkinsRuntime.L
         final long session = generation;
         submit(() -> {
             if (session != generation) return;
-            players.clear(); fingerprints.clear(); sentSelection = -1; lastPublish = 0; lastHello = 0; helloAttempts = 0;
+            players.clear(); fingerprints.clear(); capes.clear(); capeReady = false; sentSelection = -1; lastPublish = 0; lastHello = 0; helloAttempts = 0;
             pulse(session);
         });
     }
@@ -76,6 +79,21 @@ public final class SkinSyncClient implements AutoCloseable, AuroraSkinsRuntime.L
                         ready = true;
                     }
                     pulse(session);
+                    send(session, SkinSyncProtocol.capeHello());
+                } else if (ready && message.kind == SkinSyncProtocol.CAPE_HELLO && !capeReady) {
+                    capeReady = true;
+                    byte[] pixels = Boolean.getBoolean("aurora.profile.shareCape") ? SkinSyncProtocol.localCape() : null;
+                    if (pixels != null) send(session, SkinSyncProtocol.capePublish(pixels));
+                } else if (capeReady && message.kind == SkinSyncProtocol.CAPE_UPDATE) {
+                    if (!capes.containsKey(message.player) && capes.size() >= SkinSyncProtocol.MAX_PLAYERS) return;
+                    byte[] png = SkinSyncProtocol.canonicalCape(message.png());
+                    String fingerprint = SkinSyncProtocol.hash(png);
+                    if (!fingerprint.equals(capes.put(message.player, fingerprint))) {
+                        dispatch(session, () -> listener.cape(message.player, png));
+                    }
+                } else if (capeReady && message.kind == SkinSyncProtocol.CAPE_REMOVE) {
+                    capes.remove(message.player);
+                    dispatch(session, () -> listener.cape(message.player, null));
                 } else if (ready && message.kind == SkinSyncProtocol.REMOVE) {
                     players.remove(message.player); fingerprints.remove(message.player);
                     dispatch(session, () -> listener.remove(message.player));

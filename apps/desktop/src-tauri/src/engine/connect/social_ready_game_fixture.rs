@@ -70,6 +70,8 @@ impl Fixture {
                 skin_url: None,
                 skin_file: None,
                 cape_url: None,
+                cape_file: None,
+                share_cape: None,
                 skin_model: None,
             },
         }

@@ -274,7 +274,7 @@ export function ConnectGameLaunchPanel({ capability, session, launchContext: sou
         <dt>Jogo e loader</dt><dd>Minecraft {review.minecraftVersion} / {review.loader === "forge" ? "Forge" : "Fabric"} {review.loaderVersion}</dd>
         <dt>Java verificado</dt><dd>{review.javaExecutable} (Java {review.javaMajor})</dd>
         <dt>Apelido</dt><dd>{review.nickname}</dd>
-        <dt>Aparência</dt><dd>{review.appearance.skinFile ? "Skin local selecionada" : review.appearance.skinUrl ? "Skin do perfil selecionada" : "Skin padrão"}; {review.appearance.capeUrl ? "capa do perfil" : "sem capa"}; modelo {review.appearance.skinModel ?? "padrão"}.</dd>
+        <dt>Aparência</dt><dd>{review.appearance.skinFile ? "Skin local selecionada" : review.appearance.skinUrl ? "Skin do perfil selecionada" : "Skin padrão"}; {review.appearance.capeFile || review.appearance.capeUrl ? "capa do perfil" : "capa do Minecraft"}; modelo {review.appearance.skinModel ?? "padrão"}.</dd>
         <dt>Módulos verificados</dt><dd>Core {review.coreVersion}; Skins {review.skinsVersion}</dd>
         <dt>Autorizar até</dt><dd>{date(review.expiresAtMs)}</dd>
         <dt>Conexão termina até</dt><dd>{date(review.sessionExpiresAtMs)}</dd>
