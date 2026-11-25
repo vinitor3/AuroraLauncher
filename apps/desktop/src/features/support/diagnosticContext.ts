@@ -72,10 +72,21 @@ export async function readSupportFile(file: File): Promise<string> {
     if (unit >= 0xdc00 && unit <= 0xdfff) lastBytes = lastBytes.subarray(2);
   }
   const tail = decodeLog(lastBytes, encoding);
-  // Drop incomplete lines and PEM fragments crossing either read boundary.
-  const first = head.slice(0, Math.max(0, head.lastIndexOf("\n")));
-  const end = tail.indexOf("\n");
-  const last = end === -1 ? "" : tail.slice(end + 1).replace(/^[\s\S]*?-----END [^\r\n]*?-----/, "");
+  // Preserve only technical markers from incomplete lines. Copying arbitrary
+  // suffixes could expose values whose credential label was outside the window.
+  const headBreak = head.lastIndexOf("\n");
+  const first = headBreak >= 0 ? head.slice(0, headBreak)
+    : head.match(/^[ \t-]*(?:Minecraft )?Crash Report\b[ \t-]*/i)?.[0].trim() ?? "";
+  const tailBreak = tail.indexOf("\n");
+  const partial = tailBreak < 0 ? tail : tail.slice(0, tailBreak);
+  let cause = "";
+  for (const match of partial.matchAll(/\b(Caused by|Root cause|Suppressed):[ \t]+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)/gi)) {
+    if (match[2].length <= 180 && /(?:Error|Exception|Failure|Crash|Fault|Panic)$/.test(match[2])) {
+      cause = match[1] + ": " + match[2];
+    }
+  }
+  const complete = tailBreak < 0 ? "" : tail.slice(tailBreak + 1);
+  const last = [cause, complete].filter(Boolean).join("\n").replace(/^[\s\S]*?-----END [^\r\n]*?-----/, "");
   const parts = [supportExcerpt(first), supportExcerpt(last)].filter(Boolean);
   return parts.length ? supportExcerpt(parts.join(omitted)) : "";
 }

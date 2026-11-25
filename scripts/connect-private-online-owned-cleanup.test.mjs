@@ -26,6 +26,8 @@ async function fixture(options = {}) {
       data = { access_token: "ACCESS_SECRET_SENTINEL", expires_in: 3600 };
     } else {
       assert.equal(init.headers.Authorization, "Bearer ACCESS_SECRET_SENTINEL");
+      if (url === "https://openidconnect.googleapis.com/v1/userinfo" && options.rejectCached && !calls.some(c => c.url === "https://oauth2.googleapis.com/token"))
+        return new Response("{}", { status: 401, headers: { date: new Date(now).toUTCString() } });
       if (url === "https://openidconnect.googleapis.com/v1/userinfo") data = { email: options.serverEmail ?? cache.user.email, email_verified: true };
       else if (url.endsWith(":testIamPermissions")) data = { permissions: options.noDeletePermission ? ["datastore.entities.get"]
         : JSON.parse(init.body).permissions.filter(permission => !options.noAuthDeletePermission || permission !== "firebaseauth.users.delete") };
@@ -89,6 +91,13 @@ test("only the two new accounts and their exact private session are removed with
   assert.equal(f.owner.result().complete, true);
   for (const file of await readdir(f.owner.directory)) assert.doesNotMatch(await readFile(join(f.owner.directory, file), "utf8"), /ACCESS_SECRET|REFRESH_SECRET|UNRELATED/);
   assert.equal(f.cache.tokens.expires_at, 0, "token refresh never changes the source cache");
+});
+test("preflight renews rejected cached access in memory and only repeats the identity read", async () => {
+  const f = await fixture({ rejectCached: true });
+  await f.owner.preflight();
+  assert.deepEqual(f.calls.slice(0, 3).map(c => new URL(c.url).pathname), ["/v1/userinfo", "/token", "/v1/userinfo"]);
+  assert.equal(f.calls.filter(c => c.url.endsWith(":testIamPermissions")).length, 1);
+  assert.equal(f.cache.tokens.expires_at, now + 3_600_000);
 });
 test("operator, scope permission and refresh errors fail before any destructive request", async () => {
   for (const options of [{ email: "someone@invalid.test" }, { serverEmail: "someone@invalid.test" }, { noDeletePermission: true }, { noAuthDeletePermission: true }, { expired: true, refreshError: true }]) {

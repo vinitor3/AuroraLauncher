@@ -180,7 +180,16 @@ async function createOwner({ runId, rootDirectory, expectedOperator }, dependenc
       catch { fail("owned_cleanup_credentials_unavailable"); }
       if (cache?.user?.email !== expectedOperator) fail("owned_cleanup_account_mismatch");
       refresh = cache.tokens?.refresh_token; access = cache.tokens?.access_token; accessExpiry = cache.tokens?.expires_at ?? 0;
-      const user = await request("https://openidconnect.googleapis.com/v1/userinfo");
+      const userinfo = "https://openidconnect.googleapis.com/v1/userinfo";
+      let user;
+      try { user = await request(userinfo); }
+      catch (error) {
+        if (error.code !== "owned_cleanup_http_401") throw error;
+        // A CLI access token can be rejected before its advertised expiration.
+        // Renew in memory and repeat only this read, before any cloud mutations.
+        access = undefined; accessExpiry = 0;
+        user = await request(userinfo);
+      }
       if (user?.email !== expectedOperator || user.email_verified !== true) fail("owned_cleanup_account_mismatch");
       const requiredPermissions = permissions;
       const allowed = await request(`https://cloudresourcemanager.googleapis.com/v1/projects/${project}:testIamPermissions`, "POST", { permissions: requiredPermissions });

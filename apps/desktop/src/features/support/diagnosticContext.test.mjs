@@ -76,3 +76,18 @@ test("recusa dados binários e UTF-16 incompleto mesmo com uma extensão de log"
     await assert.rejects(readSupportFile(new File([bytes], "servidor.log")), /binários ou uma codificação/);
   }
 });
+
+test("crash externo de linha única preserva só cabeçalho e classe da causa nas bordas", async () => {
+  const head = "---- Minecraft Crash Report ---- Authorization: Bearer PRIVATE_HEADER ";
+  const tail = " PRIVATE_PREFIX Caused by: example.ModFailure: PRIVATE_SUFFIX";
+  for (const eol of ["", "\r\n"]) {
+    const text = head + "frame ".repeat(100000) + tail + eol;
+    for (const bytes of [Buffer.from(text), utf16(text, false, true), utf16(text, true, true)]) {
+      assert.ok(bytes.byteLength > 512 * 1024);
+      const excerpt = await readSupportFile(new File([bytes], "crash.txt"));
+      assert.equal(excerpt, "---- Minecraft Crash Report ----\n[… trecho omitido …]\nCaused by: example.ModFailure");
+    }
+  }
+  const privateLine = "token=" + "x".repeat(600000) + " Caused by: PRIVATE_TOKEN";
+  assert.equal(await readSupportFile(new File([privateLine], "private.log")), "");
+});

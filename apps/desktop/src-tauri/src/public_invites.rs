@@ -79,6 +79,9 @@ pub mod windows {
     use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions};
 
     const EXCHANGE: Duration = Duration::from_millis(600);
+    // WinBase.h. Delete the empty marker when Windows closes our handle,
+    // including after abrupt process termination.
+    const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
 
     // No invitation or account data is written here. The filename advertises a
     // random local pipe only in this user's app directory. The locked file
@@ -86,6 +89,7 @@ pub mod windows {
     struct Registration {
         path: PathBuf,
         marker: Option<File>,
+        endpoint: Uuid,
     }
     impl Drop for Registration {
         fn drop(&mut self) {
@@ -101,30 +105,34 @@ pub mod windows {
         data.join("public-invite-endpoints")
     }
 
+    fn pipe(endpoint: Uuid, first: bool) -> io::Result<NamedPipeServer> {
+        // Default Windows pipe DACL permits write access to its creator/system/
+        // administrators. The client needs write access. Refuse network clients.
+        ServerOptions::new()
+            .first_pipe_instance(first)
+            .reject_remote_clients(true)
+            .in_buffer_size(256)
+            .out_buffer_size(256)
+            .create(name(endpoint))
+    }
     fn register(data: &Path, primary: bool) -> io::Result<(Registration, NamedPipeServer)> {
         let directory = directory(data);
         fs::create_dir_all(&directory)?;
         let endpoint = Uuid::new_v4();
-        // Default Windows pipe DACL permits write access to its creator/system/
-        // administrators. The client needs write access. Refuse network clients.
-        let server = ServerOptions::new()
-            .first_pipe_instance(true)
-            .reject_remote_clients(true)
-            .max_instances(1)
-            .in_buffer_size(256)
-            .out_buffer_size(256)
-            .create(name(endpoint))?;
+        let server = pipe(endpoint, true)?;
         let prefix = if primary { "primary" } else { "session" };
         let path = directory.join(format!("{prefix}-{endpoint}"));
         let marker = OpenOptions::new()
             .create_new(true)
             .write(true)
             .share_mode(0)
+            .custom_flags(FILE_FLAG_DELETE_ON_CLOSE)
             .open(&path)?;
         Ok((
             Registration {
                 path,
                 marker: Some(marker),
+                endpoint,
             },
             server,
         ))
@@ -168,33 +176,34 @@ pub mod windows {
             }
             endpoints.push((role == "primary", endpoint));
         }
-        endpoints.sort_by_key(|(primary, _)| !primary);
-        let sessions = endpoints.iter().filter(|(primary, _)| !primary).count();
-        let attempt = async {
-            for (primary, endpoint) in endpoints {
-                // With several temporary accounts and no remembered account,
-                // let the new primary window present its own confirmation.
-                if !primary && sessions > 1 {
-                    continue;
-                }
-                if matches!(
-                    tokio::time::timeout(EXCHANGE, send(endpoint, id)).await,
-                    Ok(Ok(true))
-                ) {
-                    return true;
-                }
+        let target = endpoints.iter().find(|(primary, _)| *primary).or_else(|| {
+            // An ambiguous destination requires a new window; a slow primary
+            // must never relay its invitation to someone else's active account.
+            if endpoints.len() == 1 {
+                endpoints.first()
+            } else {
+                None
             }
-            false
+        });
+        let Some((_, endpoint)) = target else {
+            return false;
         };
-        tokio::time::timeout(Duration::from_secs(2), attempt)
-            .await
-            .unwrap_or(false)
+        matches!(
+            tokio::time::timeout(Duration::from_secs(2), send(*endpoint, id)).await,
+            Ok(Ok(true))
+        )
     }
 
     async fn serve(server: NamedPipeServer, registration: Registration, receive: impl Fn(Uuid)) {
-        let _registration = registration;
-        let mut server = server;
-        while server.connect().await.is_ok() {
+        let mut listening = server;
+        while listening.connect().await.is_ok() {
+            // Keep a fresh instance of the pipe ready while servicing the
+            // connected client. A closely following activation can connect
+            // before Windows has finished closing the previous handle.
+            let Ok(next) = pipe(registration.endpoint, false) else {
+                break;
+            };
+            let mut server = std::mem::replace(&mut listening, next);
             let exchange = async {
                 let mut bytes = [0; 36];
                 server.read_exact(&mut bytes).await?;
@@ -203,19 +212,12 @@ pub mod windows {
                     receive(id);
                 }
                 server.write_u8(u8::from(id.is_some())).await?;
-                // Wait for the sender to close after reading the acknowledgment
-                // before DisconnectNamedPipe discards unread client data.
+                // Let the sender read the acknowledgment before closing.
                 let mut end = [0];
                 let _ = server.read(&mut end).await?;
                 Ok::<_, io::Error>(())
             };
             let _ = tokio::time::timeout(EXCHANGE, exchange).await;
-            if let Err(error) = server.disconnect() {
-                // A sender can close its handle before DisconnectNamedPipe.
-                if error.raw_os_error() != Some(233) {
-                    break;
-                }
-            }
         }
     }
 
